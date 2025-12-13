@@ -95,6 +95,13 @@ See: `docs/provenance.md`.
 ---
 
 ### Documentation index
-- **Proposal**: `docs/proposal.md`
-- **ADRs**: `docs/adr/`
-- **Backlog**: `docs/backlog/`
+
+| Document | Description |
+|----------|-------------|
+| [Proposal](docs/proposal.md) | Design goals, core concepts, and scope |
+| [ROADMAP](ROADMAP.md) | Prioritized next steps with rationale |
+| [ADRs](docs/adr/) | Architectural decisions and their rationale |
+| [Backlog](docs/backlog/) | Completed and planned work items |
+| [Integrations](docs/integrations/) | AbstractCore integration guide |
+| [Snapshots](docs/snapshots.md) | Named checkpoints for run state |
+| [Provenance](docs/provenance.md) | Tamper-evident ledger documentation |

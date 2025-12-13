@@ -1,0 +1,218 @@
+# AbstractRuntime Roadmap
+
+## Current Status: MVP Complete (v0.1)
+
+AbstractRuntime has a functional MVP kernel with:
+- Durable workflow execution (start/tick/resume)
+- Explicit waiting states (wait_event, wait_until, ask_user)
+- Persistence (in-memory + JSON/JSONL file backends)
+- Snapshots/bookmarks for named checkpoints
+- Tamper-evident provenance (hash-chained ledger)
+- AbstractCore integration (local/remote/hybrid execution modes)
+- Test coverage for core functionality
+
+---
+
+## Why AbstractRuntime Exists
+
+AbstractRuntime is the **durable execution substrate** that sits below both AbstractAgent and AbstractFlow:
+
+```
+AbstractFlow (UI graphs, multi-agent orchestration, templates)
+     │
+AbstractAgent (ReAct, CodeAct, specialized agents like DeepSearch)
+     │
+AbstractRuntime (interrupt/checkpoint/resume, ledger, snapshots)
+     │
+AbstractCore (LLM calls, tool execution, server API)
+```
+
+**Key insight**: You cannot keep Python stacks alive for days. When an agent needs to:
+- Ask a user a question and wait hours/days for a response
+- Wait until a scheduled time
+- Wait for an external job to complete
+
+...you need **durable state that survives process restarts**. This is what AbstractRuntime provides.
+
+**Why not in AbstractFlow?** Because individual agents need these primitives directly. A ReAct agent that calls `ask_user` needs to pause and resume — that's not orchestration, that's the agent itself needing durability.
+
+---
+
+## Phase 1: Core Completeness (Immediate Priority)
+
+### 1.1 Built-in Scheduler (Zero-Config)
+**Priority: Critical** | **Effort: Medium** | **Backlog: 004, 012**
+
+**Why**: The current design punts scheduling to the host. This is a UX problem — every user has to build their own scheduler. **Our design principle: simplify UX as much as possible.**
+
+**Deliverables**:
+- `QueryableRunStore` protocol with `list_due_wait_until()` (backlog 012)
+- Built-in `Scheduler` class with in-process polling
+- Zero-config option: `Runtime(..., auto_scheduler=True)`
+- Event ingestion API: `scheduler.resume_event(wait_key, payload)`
+
+**Success criteria**: 
+- A `wait_until` run automatically resumes when its time arrives (no manual `tick()`)
+- A `wait_event` run can be resumed via simple API call
+
+---
+
+### 1.2 Subworkflow Support
+**Priority: High** | **Effort: Medium** | **Backlog: 011**
+
+**Why**: `EffectType.START_SUBWORKFLOW` exists but has no handler. Without this:
+- Multi-agent orchestration is impossible
+- Workflow composition (DeepSearch as a node) doesn't work
+- AbstractFlow cannot compose agents
+
+**Deliverables**:
+- Workflow registry interface
+- `START_SUBWORKFLOW` effect handler
+- Sync and async subworkflow modes
+- Tests for parent/child workflow interaction
+
+**Success criteria**: A workflow can invoke another workflow by ID and receive its output.
+
+---
+
+### 1.3 Examples and Documentation
+**Priority: High** | **Effort: Low** | **Backlog: 010**
+
+**Why**: The MVP is functional but lacks concrete examples. Developers cannot understand how to build workflows without reading source code.
+
+**Deliverables**:
+- `examples/` directory with runnable workflows
+- ask_user interrupt example (pause for days, resume)
+- wait_until timer example
+- LLM call + tool execution example
+- Subworkflow composition example
+
+**Success criteria**: A developer can copy an example and have a working workflow in 5 minutes.
+
+---
+
+## Phase 2: Production Readiness
+
+### 2.1 Artifact Store
+**Priority: Medium** | **Effort: Medium** | **Backlog: 009**
+
+**Why**: Large payloads (documents, images, tool outputs) embedded in `RunState.vars` cause performance issues. The constraint that vars must be JSON-serializable becomes painful without by-reference storage.
+
+**Deliverables**:
+- `ArtifactStore` interface
+- File-based implementation
+- `ArtifactRef` type for referencing stored artifacts
+- Integration with RunState serialization
+
+**Success criteria**: A workflow can store a 10MB document without bloating the checkpoint.
+
+---
+
+### 2.2 Effect Retries and Idempotency
+**Priority: Medium** | **Effort: Medium** | **Backlog: 013**
+
+**Why**: At-least-once execution is a real risk. If a process crashes after an LLM call but before checkpointing, the call may be duplicated on restart.
+
+**Deliverables**:
+- `EffectPolicy` protocol (max_attempts, backoff, idempotency_key)
+- Ledger-based deduplication
+- Retry logic in runtime loop
+
+**Success criteria**: A workflow survives a crash/restart without duplicating side effects.
+
+---
+
+## Phase 3: Advanced Features
+
+### 3.1 Cryptographic Signatures
+**Priority: Low** | **Effort: High** | **Backlog: 008**
+
+**Why**: The hash chain provides tamper-evidence but not non-forgeability. For high-accountability scenarios (AI fingerprinting, regulatory compliance), cryptographic signatures are needed.
+
+**Dependencies**: 007 (Hash Chain - complete)
+
+**Deliverables**:
+- Ed25519 keypair generation
+- `actor_id` bound to public key
+- Signed `StepRecord` entries
+- Signature verification in `verify_ledger_chain`
+- Key storage patterns (file, OS keychain, Vault)
+
+**Success criteria**: A ledger can prove which actor produced each step.
+
+---
+
+### 3.2 Remote Tool Worker
+**Priority: Low** | **Effort: Medium** | **Backlog: 014**
+
+**Why**: Some deployments need centralized tool execution (thin clients, sandboxed environments). The current passthrough mode requires the host to execute tools; a worker service would handle this automatically.
+
+**Deliverables**:
+- Tool worker API contract
+- `RemoteToolExecutor` implementation
+- Job-based waiting semantics
+
+**Success criteria**: A thin client can run workflows with tools by delegating to a worker service.
+
+---
+
+## Relationship to the Abstract Series
+
+AbstractRuntime is the **durable execution substrate** that enables both agents and memory to have long-running, interruptible workflows.
+
+```
+AbstractFlow (UI graphs, multi-agent orchestration, templates)
+     │
+     ├── AbstractSwarm (swarm of agents - future)
+     │
+AbstractAgent (ReAct, CodeAct, DeepSearch, specialized agents)
+     │
+     ├── AbstractMemory (agentic memory - consolidation, reflection, forgetting)
+     │
+AbstractRuntime (interrupt/checkpoint/resume, ledger, snapshots)
+     │
+AbstractCore (LLM calls, tool execution, server API)
+```
+
+**Why this layering?**
+- **AbstractAgent** needs durability primitives directly (an agent might `ask_user` and wait days)
+- **AbstractMemory** needs the same primitives (memory consolidation might run on a schedule)
+- **AbstractFlow** composes agents and workflows, using AbstractRuntime for execution
+- **AbstractRuntime** provides the substrate; it doesn't know about "agents" or "memory" — just workflows
+
+**Snapshots enable time-travel debugging:**
+- Save a named checkpoint at any point
+- Restore a multi-agent system to a previous state
+- Rebuild context from ledger + snapshot
+
+---
+
+## Decision Log
+
+| Decision | Rationale |
+|----------|-----------|
+| Kernel stays dependency-light | Enables portability, stability, and clear integration boundaries |
+| AbstractCore integration is opt-in | Layered coupling prevents kernel from breaking when AbstractCore changes |
+| Hash chain before signatures | Provides value immediately without key management complexity |
+| Built-in scheduler (not external) | UX principle: simplify as much as possible; zero-config for simple cases |
+| Graph representation for all workflows | A loop is a simple graph; graphs enable visualization, checkpointing, composition |
+
+---
+
+## Timeline (Estimated)
+
+| Phase | Items | Estimate |
+|-------|-------|----------|
+| 1.1 | Scheduler + RunStore Query | 2-3 days |
+| 1.2 | Subworkflow | 2-3 days |
+| 1.3 | Examples | 1-2 days |
+| 2.1 | Artifact Store | 2-3 days |
+| 2.2 | Retries/Idempotency | 3-4 days |
+| 3.1 | Signatures | 1 week |
+| 3.2 | Remote Worker | 3-4 days |
+
+**Phase 1 (Core Completeness)**: ~1 week
+**Phase 2 (Production Readiness)**: ~1 week  
+**Phase 3 (Advanced Features)**: ~2 weeks
+
+Total: ~4 weeks for full roadmap (assuming focused effort).

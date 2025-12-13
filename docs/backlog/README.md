@@ -1,10 +1,42 @@
-## Backlog
+# AbstractRuntime Backlog
 
-This directory contains both:
-- **Legacy backlog files** (kept for historical context): `docs/backlog/00x_*.md`
-- A **reorganized backlog** split into:
-  - `docs/backlog/completed/`
-  - `docs/backlog/planned/`
+This directory contains the organized backlog for AbstractRuntime development.
 
-The reorganized backlog reflects the current implemented state of this repository.
+## Structure
+
+```
+backlog/
+├── completed/     # Implemented and shipped items
+├── planned/       # Items scheduled for future implementation
+├── deprecated/    # Legacy/superseded backlog items (historical reference)
+└── README.md      # This file
+```
+
+## Completed Items
+
+| ID | Title | Description |
+|----|-------|-------------|
+| 001 | Runtime Kernel | Core models, spec, runtime loop (start/tick/resume) |
+| 002 | Persistence and Ledger | RunStore, LedgerStore interfaces + in-memory + JSON backends |
+| 003 | Wait Primitives | wait_event, wait_until, ask_user effect handlers |
+| 005 | AbstractCore Integration | LLM_CALL, TOOL_CALLS handlers + local/remote/hybrid modes |
+| 006 | Snapshots/Bookmarks | Named checkpoints with search |
+| 007 | Provenance Hash Chain | Tamper-evident ledger with HashChainedLedgerStore |
+
+## Planned Items
+
+| ID | Title | Priority | Dependencies |
+|----|-------|----------|--------------|
+| 004 | Scheduler Driver | Medium | 012 |
+| 008 | Signatures and Keys | Low | 007 |
+| 009 | Artifact Store | Medium | - |
+| 010 | Examples and Composition | High | - |
+| 011 | Subworkflow Support | High | - |
+| 012 | RunStore Query + Scheduler Support | Medium | - |
+| 013 | Effect Retries and Idempotency | Medium | - |
+| 014 | Remote Tool Worker Executor | Low | - |
+
+## Plan Reference
+
+See `abstractruntime_docs_final_02a7373b.plan.md` for the documentation finalization plan that guided the initial implementation.
 

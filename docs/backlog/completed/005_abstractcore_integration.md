@@ -17,3 +17,7 @@ Execute `llm_call` and `tool_calls` effects via AbstractCore in multiple topolog
 - Remote mode targets AbstractCore server `/v1/chat/completions`.
 - Tool passthrough returns `WAITING` with `WaitState.details` holding tool calls.
 
+### Related ADRs
+- [ADR 0001: Layered Coupling](../../adr/0001_layered_coupling_with_abstractcore.md) — Why integration is a separate module
+- [ADR 0002: Execution Modes](../../adr/0002_execution_modes_local_remote_hybrid.md) — Why local/remote/hybrid exist
+

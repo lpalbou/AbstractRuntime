@@ -1,7 +1,7 @@
 ## ADR 0002: Execution modes (local, remote, hybrid)
 
 ### Status
-Accepted
+Accepted (2025-12-11)
 
 ### Context
 Agents/workflows must run in multiple deployment topologies:
@@ -24,4 +24,9 @@ AbstractRuntime supports three execution modes:
 - Thin-mode clients can run the workflow logic while delegating inference to a server.
 - Remote mode supports AbstractCore per-request `base_url` routing (dynamic endpoint selection).
 - Tool execution can be gated by trust/sandbox policy outside the router.
+
+### See Also
+- Implementation: [`backlog/completed/005_abstractcore_integration.md`](../backlog/completed/005_abstractcore_integration.md)
+- Integration guide: [`integrations/abstractcore.md`](../integrations/abstractcore.md)
+- Code: `src/abstractruntime/integrations/abstractcore/factory.py`
 

@@ -14,3 +14,9 @@ Add tamper-evident provenance to the ledger.
 - This provides tamper-evidence, not non-forgeability.
 - Signatures are planned as an optional extra.
 
+### Related ADRs
+- [ADR 0003: Provenance Hash Chain](../../adr/0003_provenance_tamper_evident_hash_chain.md) — Why hash chain first, signatures later
+
+### Next Steps
+- [008_signatures_and_keys.md](../planned/008_signatures_and_keys.md) — Cryptographic signatures (planned)
+

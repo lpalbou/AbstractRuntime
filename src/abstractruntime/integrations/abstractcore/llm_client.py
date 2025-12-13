@@ -122,10 +122,12 @@ class LocalAbstractCoreLLMClient:
         llm_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from abstractcore import create_llm
+        from abstractcore.tools.handler import UniversalToolHandler
 
         self._provider = provider
         self._model = model
         self._llm = create_llm(provider, model=model, **(llm_kwargs or {}))
+        self._tool_handler = UniversalToolHandler(model)
 
     def generate(
         self,
@@ -142,15 +144,41 @@ class LocalAbstractCoreLLMClient:
         # do not create new providers per call unless the host explicitly chooses to.
         params.pop("base_url", None)
 
+        # If tools provided, use UniversalToolHandler to format them into prompt
+        # This works for models without native tool support
+        effective_prompt = prompt
+        if tools:
+            from abstractcore.tools import ToolDefinition
+            tool_defs = []
+            for t in tools:
+                tool_defs.append(ToolDefinition(
+                    name=t.get("name", ""),
+                    description=t.get("description", ""),
+                    parameters=t.get("parameters", {}),
+                ))
+            tools_prompt = self._tool_handler.format_tools_prompt(tool_defs)
+            effective_prompt = f"{tools_prompt}\n\nUser request: {prompt}"
+
         resp = self._llm.generate(
-            prompt=prompt,
+            prompt=effective_prompt,
             messages=messages,
             system_prompt=system_prompt,
-            tools=tools,
             stream=False,
             **params,
         )
-        return _normalize_local_response(resp)
+        
+        result = _normalize_local_response(resp)
+        
+        # Parse tool calls from response if tools were provided
+        if tools and result.get("content"):
+            parsed = self._tool_handler.parse_response(result["content"], mode="prompted")
+            if parsed.tool_calls:
+                result["tool_calls"] = [
+                    {"name": tc.name, "arguments": tc.arguments, "call_id": tc.call_id}
+                    for tc in parsed.tool_calls
+                ]
+        
+        return result
 
 
 class HttpxRequestSender:

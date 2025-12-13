@@ -58,6 +58,33 @@ assert state.status.value == "completed"
 
 ---
 
+### Built-in Scheduler
+
+AbstractRuntime includes a zero-config scheduler for automatic run resumption:
+
+```python
+from abstractruntime import create_scheduled_runtime, InMemoryRunStore, InMemoryLedgerStore
+
+sr = create_scheduled_runtime(
+    run_store=InMemoryRunStore(),
+    ledger_store=InMemoryLedgerStore(),
+    workflows=[my_workflow],
+    auto_start=True,
+)
+
+# Start a run - wait_until runs resume automatically
+run_id = sr.start(workflow=my_workflow)
+state = sr.tick(workflow=my_workflow, run_id=run_id)
+
+# Resume wait_event/ask_user runs manually
+state = sr.resume_event(run_id=run_id, wait_key="my_event", payload={"data": "value"})
+
+# Stop scheduler when done
+sr.stop()
+```
+
+---
+
 ### AbstractCore integration (LLM + tools)
 
 AbstractRuntime’s kernel stays dependency-light; AbstractCore integration lives in:

@@ -102,6 +102,16 @@ class Runtime:
     # Public API
     # ---------------------------------------------------------------------
 
+    @property
+    def run_store(self) -> RunStore:
+        """Access the run store."""
+        return self._run_store
+
+    @property
+    def ledger_store(self) -> LedgerStore:
+        """Access the ledger store."""
+        return self._ledger_store
+
     def start(self, *, workflow: WorkflowSpec, vars: Optional[Dict[str, Any]] = None, actor_id: Optional[str] = None) -> str:
         run = RunState.new(workflow_id=workflow.workflow_id, entry_node=workflow.entry_node, vars=vars, actor_id=actor_id)
         self._run_store.save(run)

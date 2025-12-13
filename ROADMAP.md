@@ -9,7 +9,9 @@ AbstractRuntime has a functional MVP kernel with:
 - Snapshots/bookmarks for named checkpoints
 - Tamper-evident provenance (hash-chained ledger)
 - AbstractCore integration (local/remote/hybrid execution modes)
-- Test coverage for core functionality
+- **QueryableRunStore** for listing/filtering runs ✅
+- **Built-in Scheduler** with zero-config operation ✅
+- Test coverage for core functionality (81% overall, 54 tests)
 
 ---
 
@@ -38,26 +40,37 @@ AbstractCore (LLM calls, tool execution, server API)
 
 ---
 
-## Phase 1: Core Completeness (Immediate Priority)
+## Phase 1: Core Completeness ✅ COMPLETE
 
-### 1.1 Built-in Scheduler (Zero-Config)
-**Priority: Critical** | **Effort: Medium** | **Backlog: 004, 012**
+### 1.1 Built-in Scheduler (Zero-Config) ✅
+**Status: COMPLETE** | **Backlog: 004**
 
-**Why**: The current design punts scheduling to the host. This is a UX problem — every user has to build their own scheduler. **Our design principle: simplify UX as much as possible.**
+**What shipped**:
+- `WorkflowRegistry` for mapping workflow_id → WorkflowSpec
+- `Scheduler` class with background polling thread
+- `ScheduledRuntime` convenience wrapper
+- `create_scheduled_runtime()` factory function
+- Event ingestion via `scheduler.resume_event()`
+- Stats tracking and callbacks
 
-**Deliverables**:
-- `QueryableRunStore` protocol with `list_due_wait_until()` (backlog 012)
-- Built-in `Scheduler` class with in-process polling
-- Zero-config option: `Runtime(..., auto_scheduler=True)`
-- Event ingestion API: `scheduler.resume_event(wait_key, payload)`
-
-**Success criteria**: 
-- A `wait_until` run automatically resumes when its time arrives (no manual `tick()`)
-- A `wait_event` run can be resumed via simple API call
+**Usage**:
+```python
+sr = create_scheduled_runtime(
+    run_store=InMemoryRunStore(),
+    ledger_store=InMemoryLedgerStore(),
+    workflows=[my_workflow],
+    auto_start=True,
+)
+run_id = sr.start(workflow=my_workflow)
+# wait_until runs resume automatically
+sr.stop()
+```
 
 ---
 
-### 1.2 Subworkflow Support
+## Phase 2: Composition and Examples (Next Priority)
+
+### 2.1 Subworkflow Support
 **Priority: High** | **Effort: Medium** | **Backlog: 011**
 
 **Why**: `EffectType.START_SUBWORKFLOW` exists but has no handler. Without this:
@@ -75,7 +88,7 @@ AbstractCore (LLM calls, tool execution, server API)
 
 ---
 
-### 1.3 Examples and Documentation
+### 2.2 Examples and Documentation
 **Priority: High** | **Effort: Low** | **Backlog: 010**
 
 **Why**: The MVP is functional but lacks concrete examples. Developers cannot understand how to build workflows without reading source code.
@@ -201,18 +214,19 @@ AbstractCore (LLM calls, tool execution, server API)
 
 ## Timeline (Estimated)
 
-| Phase | Items | Estimate |
-|-------|-------|----------|
-| 1.1 | Scheduler + RunStore Query | 2-3 days |
-| 1.2 | Subworkflow | 2-3 days |
-| 1.3 | Examples | 1-2 days |
-| 2.1 | Artifact Store | 2-3 days |
-| 2.2 | Retries/Idempotency | 3-4 days |
-| 3.1 | Signatures | 1 week |
-| 3.2 | Remote Worker | 3-4 days |
+| Phase | Items | Status |
+|-------|-------|--------|
+| 1.1 | Scheduler + RunStore Query | ✅ Complete |
+| 2.1 | Subworkflow | 2-3 days |
+| 2.2 | Examples | 1-2 days |
+| 3.1 | Artifact Store | 2-3 days |
+| 3.2 | Retries/Idempotency | 3-4 days |
+| 4.1 | Signatures | 1 week |
+| 4.2 | Remote Worker | 3-4 days |
 
-**Phase 1 (Core Completeness)**: ~1 week
-**Phase 2 (Production Readiness)**: ~1 week  
-**Phase 3 (Advanced Features)**: ~2 weeks
+**Phase 1 (Core Completeness)**: ✅ Complete
+**Phase 2 (Composition)**: ~3-5 days
+**Phase 3 (Production Readiness)**: ~1 week  
+**Phase 4 (Advanced Features)**: ~2 weeks
 
-Total: ~4 weeks for full roadmap (assuming focused effort).
+Remaining: ~3-4 weeks for full roadmap.

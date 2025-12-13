@@ -44,6 +44,7 @@ def create_local_runtime(
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
     context: Optional[Any] = None,
+    effect_policy: Optional[Any] = None,
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
@@ -52,7 +53,7 @@ def create_local_runtime(
     tools = tool_executor or AbstractCoreToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
-    return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context)
+    return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context, effect_policy=effect_policy)
 
 
 def create_remote_runtime(

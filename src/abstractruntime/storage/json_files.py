@@ -88,6 +88,7 @@ class JsonFileRunStore(RunStore):
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             actor_id=data.get("actor_id"),
+            parent_run_id=data.get("parent_run_id"),
         )
 
     def _iter_all_runs(self) -> List[RunState]:
@@ -157,6 +158,24 @@ class JsonFileRunStore(RunStore):
         results.sort(key=lambda r: r.waiting.until if r.waiting else "")
 
         return results[:limit]
+
+    def list_children(
+        self,
+        *,
+        parent_run_id: str,
+        status: Optional[RunStatus] = None,
+    ) -> List[RunState]:
+        """List child runs of a parent."""
+        results: List[RunState] = []
+
+        for run in self._iter_all_runs():
+            if run.parent_run_id != parent_run_id:
+                continue
+            if status is not None and run.status != status:
+                continue
+            results.append(run)
+
+        return results
 
 
 class JsonlLedgerStore(LedgerStore):

@@ -77,6 +77,23 @@ class QueryableRunStore(Protocol):
         """
         ...
 
+    def list_children(
+        self,
+        *,
+        parent_run_id: str,
+        status: Optional[RunStatus] = None,
+    ) -> List[RunState]:
+        """List child runs of a parent.
+
+        Args:
+            parent_run_id: The parent run ID
+            status: Optional filter by status
+
+        Returns:
+            List of child RunState objects
+        """
+        ...
+
 
 class LedgerStore(ABC):
     """Append-only journal store."""

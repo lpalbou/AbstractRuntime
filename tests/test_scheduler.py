@@ -571,10 +571,11 @@ class TestScheduledRuntime:
             run_store=InMemoryRunStore(),
             ledger_store=InMemoryLedgerStore(),
             workflows=[wf],
+            auto_start=False,
         )
 
         run_id = sr.start(workflow=wf)
-        state = sr.tick(workflow=wf, run_id=run_id)
+        state = sr.tick(run_id)  # Simplified: no workflow needed
 
         assert state.status == RunStatus.WAITING
 
@@ -586,10 +587,11 @@ class TestScheduledRuntime:
             run_store=InMemoryRunStore(),
             ledger_store=InMemoryLedgerStore(),
             workflows=[wf],
+            auto_start=False,
         )
 
         run_id = sr.start(workflow=wf)
-        sr.tick(workflow=wf, run_id=run_id)
+        sr.tick(run_id)
 
         state = sr.resume_event(
             run_id=run_id,
@@ -622,10 +624,11 @@ class TestScheduledRuntime:
             run_store=InMemoryRunStore(),
             ledger_store=InMemoryLedgerStore(),
             workflows=[wf],
+            auto_start=False,
         )
 
         run_id = sr.start(workflow=wf)
-        sr.tick(workflow=wf, run_id=run_id)
+        sr.tick(run_id)
 
         waiting = sr.find_waiting_runs()
         assert len(waiting) == 1
@@ -639,13 +642,59 @@ class TestScheduledRuntime:
             run_store=InMemoryRunStore(),
             ledger_store=InMemoryLedgerStore(),
             workflows=[wf],
+            auto_start=False,
         )
 
         run_id = sr.start(workflow=wf)
-        sr.tick(workflow=wf, run_id=run_id)
+        sr.tick(run_id)
 
         state = sr.get_state(run_id)
         assert state.run_id == run_id
 
         ledger = sr.get_ledger(run_id)
         assert len(ledger) >= 1
+
+    def test_scheduled_runtime_run_method(self):
+        """ScheduledRuntime.run() does start + tick in one call."""
+        wf = make_wait_event_workflow()
+
+        sr = create_scheduled_runtime(auto_start=False)
+
+        run_id, state = sr.run(wf)
+
+        assert run_id is not None
+        assert state.status == RunStatus.WAITING
+        assert wf.workflow_id in sr.registry
+
+    def test_scheduled_runtime_respond_method(self):
+        """ScheduledRuntime.respond() resumes with auto wait_key lookup."""
+        wf = make_wait_event_workflow()
+
+        sr = create_scheduled_runtime(auto_start=False)
+
+        run_id, state = sr.run(wf)
+        assert state.status == RunStatus.WAITING
+
+        # respond() doesn't need wait_key - it finds it automatically
+        state = sr.respond(run_id, {"value": 42})
+
+        assert state.status == RunStatus.COMPLETED
+        assert state.output["event_data"] == {"value": 42}
+
+    def test_scheduled_runtime_zero_config(self):
+        """ScheduledRuntime works with zero config (all defaults)."""
+        wf = make_wait_event_workflow()
+
+        # Zero config - just works
+        sr = create_scheduled_runtime()
+
+        try:
+            assert sr.is_running  # auto_start=True by default
+
+            run_id, state = sr.run(wf)
+            assert state.status == RunStatus.WAITING
+
+            state = sr.respond(run_id, {"answer": "yes"})
+            assert state.status == RunStatus.COMPLETED
+        finally:
+            sr.stop()

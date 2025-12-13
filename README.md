@@ -63,24 +63,31 @@ assert state.status.value == "completed"
 AbstractRuntime includes a zero-config scheduler for automatic run resumption:
 
 ```python
-from abstractruntime import create_scheduled_runtime, InMemoryRunStore, InMemoryLedgerStore
+from abstractruntime import create_scheduled_runtime
 
-sr = create_scheduled_runtime(
-    run_store=InMemoryRunStore(),
-    ledger_store=InMemoryLedgerStore(),
-    workflows=[my_workflow],
-    auto_start=True,
-)
+# Zero-config: defaults to in-memory storage, auto-starts scheduler
+sr = create_scheduled_runtime()
 
-# Start a run - wait_until runs resume automatically
-run_id = sr.start(workflow=my_workflow)
-state = sr.tick(workflow=my_workflow, run_id=run_id)
+# run() does start + tick in one call
+run_id, state = sr.run(my_workflow)
 
-# Resume wait_event/ask_user runs manually
-state = sr.resume_event(run_id=run_id, wait_key="my_event", payload={"data": "value"})
+# If waiting for user input, respond (auto-finds wait_key)
+if state.status.value == "waiting":
+    state = sr.respond(run_id, {"answer": "yes"})
 
 # Stop scheduler when done
 sr.stop()
+```
+
+For production with persistent storage:
+
+```python
+from abstractruntime import create_scheduled_runtime, JsonFileRunStore, JsonlLedgerStore
+
+sr = create_scheduled_runtime(
+    run_store=JsonFileRunStore("./data"),
+    ledger_store=JsonlLedgerStore("./data"),
+)
 ```
 
 ---

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from ..core.models import RunState, RunStatus, WaitReason
+from ..core.models import RunState, RunStatus, WaitReason, WaitState
 from ..core.runtime import Runtime
 from ..storage.base import QueryableRunStore
 from .registry import WorkflowRegistry
@@ -342,3 +342,90 @@ class Scheduler:
         self._stats.errors.append(f"{utc_now_iso()}: {error}")
         if len(self._stats.errors) > self._max_errors:
             self._stats.errors = self._stats.errors[-self._max_errors :]
+
+    def resume_subworkflow_parent(
+        self,
+        *,
+        child_run_id: str,
+        child_output: Dict[str, Any],
+    ) -> Optional[RunState]:
+        """Resume a parent workflow when its child subworkflow completes.
+
+        This finds the parent waiting on the given child and resumes it
+        with the child's output.
+
+        Args:
+            child_run_id: The completed child run ID.
+            child_output: The child's output to pass to parent.
+
+        Returns:
+            The updated parent RunState, or None if no parent was waiting.
+        """
+        # Find runs waiting for this subworkflow
+        waiting_runs = self._run_store.list_runs(
+            status=RunStatus.WAITING,
+            limit=1000,
+        )
+
+        for run in waiting_runs:
+            if run.waiting is None:
+                continue
+            if run.waiting.reason != WaitReason.SUBWORKFLOW:
+                continue
+            if run.waiting.details is None:
+                continue
+            if run.waiting.details.get("sub_run_id") != child_run_id:
+                continue
+
+            # Found the parent - resume it
+            wait_key = run.waiting.wait_key
+            workflow = self._registry.get_or_raise(run.workflow_id)
+
+            return self._runtime.resume(
+                workflow=workflow,
+                run_id=run.run_id,
+                wait_key=wait_key,
+                payload={"sub_run_id": child_run_id, "output": child_output},
+            )
+
+        return None
+
+    def cancel_with_children(
+        self,
+        run_id: str,
+        *,
+        reason: Optional[str] = None,
+    ) -> List[RunState]:
+        """Cancel a run and all its descendant subworkflows.
+
+        Traverses the parent-child tree and cancels all runs that are
+        still active (RUNNING or WAITING).
+
+        Args:
+            run_id: The root run to cancel.
+            reason: Optional cancellation reason.
+
+        Returns:
+            List of all cancelled RunState objects (including the root).
+        """
+        cancelled: List[RunState] = []
+        to_cancel = [run_id]
+
+        while to_cancel:
+            current_id = to_cancel.pop(0)
+
+            try:
+                state = self._runtime.cancel_run(current_id, reason=reason)
+                if state.status == RunStatus.CANCELLED:
+                    cancelled.append(state)
+            except KeyError:
+                continue
+
+            # Find children using list_children if available
+            if hasattr(self._run_store, "list_children"):
+                children = self._run_store.list_children(parent_run_id=current_id)
+                for child in children:
+                    if child.status in (RunStatus.RUNNING, RunStatus.WAITING):
+                        to_cancel.append(child.run_id)
+
+        return cancelled

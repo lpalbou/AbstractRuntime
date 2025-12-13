@@ -87,6 +87,24 @@ class InMemoryRunStore(RunStore):
 
         return results[:limit]
 
+    def list_children(
+        self,
+        *,
+        parent_run_id: str,
+        status: Optional[RunStatus] = None,
+    ) -> List[RunState]:
+        """List child runs of a parent."""
+        results: List[RunState] = []
+
+        for run in self._runs.values():
+            if run.parent_run_id != parent_run_id:
+                continue
+            if status is not None and run.status != status:
+                continue
+            results.append(run)
+
+        return results
+
 
 class InMemoryLedgerStore(LedgerStore):
     def __init__(self):

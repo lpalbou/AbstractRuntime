@@ -28,6 +28,7 @@ class RunStatus(str, Enum):
     WAITING = "waiting"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class WaitReason(str, Enum):
@@ -35,6 +36,7 @@ class WaitReason(str, Enum):
     UNTIL = "until"         # time-based
     USER = "user"           # human-in-the-loop
     JOB = "job"             # external job completion
+    SUBWORKFLOW = "subworkflow"  # waiting for child workflow
 
 
 class EffectType(str, Enum):
@@ -128,9 +130,10 @@ class RunState:
 
     # Optional provenance fields
     actor_id: Optional[str] = None
+    parent_run_id: Optional[str] = None  # For subworkflow tracking
 
     @classmethod
-    def new(cls, *, workflow_id: str, entry_node: str, actor_id: Optional[str] = None, vars: Optional[Dict[str, Any]] = None) -> "RunState":
+    def new(cls, *, workflow_id: str, entry_node: str, actor_id: Optional[str] = None, vars: Optional[Dict[str, Any]] = None, parent_run_id: Optional[str] = None) -> "RunState":
         return cls(
             run_id=str(uuid.uuid4()),
             workflow_id=workflow_id,
@@ -138,6 +141,7 @@ class RunState:
             current_node=entry_node,
             vars=vars or {},
             actor_id=actor_id,
+            parent_run_id=parent_run_id,
         )
 
 
@@ -167,13 +171,25 @@ class StepRecord:
     # Optional provenance/integrity
     actor_id: Optional[str] = None
 
+    # Retry and idempotency fields
+    attempt: int = 1  # Current attempt number (1-indexed)
+    idempotency_key: Optional[str] = None  # For deduplication on restart
+
     # Tamper-evident chain fields (optional in v0.1; filled by a chained LedgerStore).
     prev_hash: Optional[str] = None
     record_hash: Optional[str] = None
     signature: Optional[str] = None
 
     @classmethod
-    def start(cls, *, run: RunState, node_id: str, effect: Optional[Effect]) -> "StepRecord":
+    def start(
+        cls,
+        *,
+        run: RunState,
+        node_id: str,
+        effect: Optional[Effect],
+        attempt: int = 1,
+        idempotency_key: Optional[str] = None,
+    ) -> "StepRecord":
         return cls(
             run_id=run.run_id,
             step_id=str(uuid.uuid4()),
@@ -185,6 +201,8 @@ class StepRecord:
                 "result_key": effect.result_key,
             } if effect else None,
             actor_id=run.actor_id,
+            attempt=attempt,
+            idempotency_key=idempotency_key,
         )
 
     def finish_success(self, result: Optional[Dict[str, Any]] = None) -> "StepRecord":

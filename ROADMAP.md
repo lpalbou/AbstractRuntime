@@ -11,7 +11,7 @@ AbstractRuntime has a functional MVP kernel with:
 - AbstractCore integration (local/remote/hybrid execution modes)
 - **QueryableRunStore** for listing/filtering runs ✅
 - **Built-in Scheduler** with zero-config operation ✅
-- Test coverage for core functionality (81% overall, 54 tests)
+- Test coverage for core functionality (81% overall, 57 tests)
 
 ---
 
@@ -55,14 +55,16 @@ AbstractCore (LLM calls, tool execution, server API)
 
 **Usage**:
 ```python
-sr = create_scheduled_runtime(
-    run_store=InMemoryRunStore(),
-    ledger_store=InMemoryLedgerStore(),
-    workflows=[my_workflow],
-    auto_start=True,
-)
-run_id = sr.start(workflow=my_workflow)
-# wait_until runs resume automatically
+# Zero-config: defaults to in-memory, auto-starts scheduler
+sr = create_scheduled_runtime()
+
+# run() does start + tick in one call
+run_id, state = sr.run(my_workflow)
+
+# respond() auto-finds wait_key
+if state.status.value == "waiting":
+    state = sr.respond(run_id, {"answer": "yes"})
+
 sr.stop()
 ```
 
@@ -104,9 +106,9 @@ sr.stop()
 
 ---
 
-## Phase 2: Production Readiness
+## Phase 3: Production Readiness
 
-### 2.1 Artifact Store
+### 3.1 Artifact Store
 **Priority: Medium** | **Effort: Medium** | **Backlog: 009**
 
 **Why**: Large payloads (documents, images, tool outputs) embedded in `RunState.vars` cause performance issues. The constraint that vars must be JSON-serializable becomes painful without by-reference storage.
@@ -121,7 +123,7 @@ sr.stop()
 
 ---
 
-### 2.2 Effect Retries and Idempotency
+### 3.2 Effect Retries and Idempotency
 **Priority: Medium** | **Effort: Medium** | **Backlog: 013**
 
 **Why**: At-least-once execution is a real risk. If a process crashes after an LLM call but before checkpointing, the call may be duplicated on restart.
@@ -135,9 +137,9 @@ sr.stop()
 
 ---
 
-## Phase 3: Advanced Features
+## Phase 4: Advanced Features
 
-### 3.1 Cryptographic Signatures
+### 4.1 Cryptographic Signatures
 **Priority: Low** | **Effort: High** | **Backlog: 008**
 
 **Why**: The hash chain provides tamper-evidence but not non-forgeability. For high-accountability scenarios (AI fingerprinting, regulatory compliance), cryptographic signatures are needed.
@@ -155,7 +157,7 @@ sr.stop()
 
 ---
 
-### 3.2 Remote Tool Worker
+### 4.2 Remote Tool Worker
 **Priority: Low** | **Effort: Medium** | **Backlog: 014**
 
 **Why**: Some deployments need centralized tool execution (thin clients, sandboxed environments). The current passthrough mode requires the host to execute tools; a worker service would handle this automatically.

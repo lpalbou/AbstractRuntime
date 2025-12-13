@@ -37,20 +37,18 @@ scheduler.is_running -> bool
 
 **convenience.py** — Zero-config helpers
 ```python
-# Create runtime + scheduler in one call
-sr = create_scheduled_runtime(
-    run_store=InMemoryRunStore(),
-    ledger_store=InMemoryLedgerStore(),
-    workflows=[my_workflow],
-    auto_start=True,
-)
+# Zero-config: defaults to in-memory storage, auto-starts scheduler
+sr = create_scheduled_runtime()
 
-# Use like normal runtime
-run_id = sr.start(workflow=my_workflow)
-state = sr.tick(workflow=my_workflow, run_id=run_id)
+# run() does start + tick in one call
+run_id, state = sr.run(my_workflow)
 
-# Resume events through scheduler
-state = sr.resume_event(run_id=run_id, wait_key="...", payload={...})
+# respond() auto-finds wait_key - no need to specify it
+if state.status.value == "waiting":
+    state = sr.respond(run_id, {"answer": "yes"})
+
+# tick() no longer needs workflow - looks it up from registry
+state = sr.tick(run_id)
 
 # Stop when done
 sr.stop()

@@ -90,19 +90,20 @@ sr.stop()
 
 ---
 
-### 2.2 Examples and Documentation
+### 2.2 Examples and Documentation ✅ COMPLETE
 **Priority: High** | **Effort: Low** | **Backlog: 010**
 
-**Why**: The MVP is functional but lacks concrete examples. Developers cannot understand how to build workflows without reading source code.
+**What shipped**:
+- `examples/` directory with 7 runnable examples
+- 01_hello_world.py - Minimal workflow
+- 02_ask_user.py - Pause/resume with user input
+- 03_wait_until.py - Scheduled resumption
+- 04_multi_step.py - Branching workflow
+- 05_persistence.py - File-based storage
+- 06_llm_integration.py - AbstractCore LLM call
+- 07_react_agent.py - Full ReAct agent with tools
 
-**Deliverables**:
-- `examples/` directory with runnable workflows
-- ask_user interrupt example (pause for days, resume)
-- wait_until timer example
-- LLM call + tool execution example
-- Subworkflow composition example
-
-**Success criteria**: A developer can copy an example and have a working workflow in 5 minutes.
+**Success criteria**: A developer can copy an example and have a working workflow in 5 minutes. ✅
 
 ---
 
@@ -227,8 +228,8 @@ AbstractCore (LLM calls, tool execution, server API)
 | 4.2 | Remote Worker | 3-4 days |
 
 **Phase 1 (Core Completeness)**: ✅ Complete
-**Phase 2 (Composition)**: ~3-5 days
+**Phase 2 (Composition)**: ✅ Examples complete, Subworkflow complete
 **Phase 3 (Production Readiness)**: ~1 week  
 **Phase 4 (Advanced Features)**: ~2 weeks
 
-Remaining: ~3-4 weeks for full roadmap.
+Remaining: ~2-3 weeks for full roadmap.

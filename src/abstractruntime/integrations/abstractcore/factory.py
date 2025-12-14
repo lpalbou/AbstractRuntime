@@ -46,12 +46,30 @@ def create_local_runtime(
     context: Optional[Any] = None,
     effect_policy: Optional[Any] = None,
 ) -> Runtime:
+    """Create a runtime with local LLM execution via AbstractCore.
+    
+    Args:
+        provider: LLM provider (e.g., "ollama", "openai")
+        model: Model name
+        llm_kwargs: Additional kwargs for LLM client
+        run_store: Storage for run state (default: in-memory)
+        ledger_store: Storage for ledger (default: in-memory)
+        tool_executor: Optional custom tool executor. If not provided,
+            tools can be passed via workflow vars["_tools"] or effect payload.
+        context: Optional context object
+        effect_policy: Optional effect policy (retry, etc.)
+    
+    Note:
+        Tools can be provided in three ways (in priority order):
+        1. In the TOOL_CALLS effect payload: {"tool_calls": [...], "tools": [func1, func2]}
+        2. In workflow vars at start: runtime.start(workflow, vars={"_tools": [func1, func2]})
+        3. Via a custom tool_executor
+    """
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
 
     llm_client = LocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
-    tools = tool_executor or AbstractCoreToolExecutor()
-    handlers = build_effect_handlers(llm=llm_client, tools=tools)
+    handlers = build_effect_handlers(llm=llm_client, tools=tool_executor)
 
     return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context, effect_policy=effect_policy)
 

@@ -22,6 +22,18 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 
+def _trace_context(run: RunState) -> Dict[str, str]:
+    ctx: Dict[str, str] = {"run_id": run.run_id}
+    if run.actor_id:
+        ctx["actor_id"] = str(run.actor_id)
+    session_id = getattr(run, "session_id", None)
+    if session_id:
+        ctx["session_id"] = str(session_id)
+    if run.parent_run_id:
+        ctx["parent_run_id"] = str(run.parent_run_id)
+    return ctx
+
+
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
@@ -29,7 +41,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         messages = payload.get("messages")
         system_prompt = payload.get("system_prompt")
         tools = payload.get("tools")
-        params = payload.get("params")
+        raw_params = payload.get("params")
+        params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        # Propagate durable trace context into AbstractCore calls.
+        trace_metadata = params.get("trace_metadata")
+        if not isinstance(trace_metadata, dict):
+            trace_metadata = {}
+        trace_metadata.update(_trace_context(run))
+        params["trace_metadata"] = trace_metadata
 
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")

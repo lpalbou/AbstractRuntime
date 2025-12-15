@@ -146,8 +146,23 @@ class Runtime:
         """Set the effect policy for retry and idempotency."""
         self._effect_policy = policy
 
-    def start(self, *, workflow: WorkflowSpec, vars: Optional[Dict[str, Any]] = None, actor_id: Optional[str] = None, parent_run_id: Optional[str] = None) -> str:
-        run = RunState.new(workflow_id=workflow.workflow_id, entry_node=workflow.entry_node, vars=vars, actor_id=actor_id, parent_run_id=parent_run_id)
+    def start(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        vars: Optional[Dict[str, Any]] = None,
+        actor_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+    ) -> str:
+        run = RunState.new(
+            workflow_id=workflow.workflow_id,
+            entry_node=workflow.entry_node,
+            vars=vars,
+            actor_id=actor_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+        )
         self._run_store.save(run)
         return run.run_id
 
@@ -522,6 +537,7 @@ class Runtime:
             workflow=sub_workflow,
             vars=sub_vars,
             actor_id=run.actor_id,  # Inherit actor from parent
+            session_id=getattr(run, "session_id", None),  # Inherit session from parent
             parent_run_id=run.run_id,  # Track parent for hierarchy
         )
 
@@ -584,4 +600,3 @@ def _set_nested(target: Dict[str, Any], dotted_key: str, value: Any) -> None:
             cur[p] = nxt
         cur = nxt
     cur[parts[-1]] = value
-

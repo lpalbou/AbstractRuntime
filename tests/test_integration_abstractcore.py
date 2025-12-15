@@ -72,6 +72,7 @@ class TestAbstractCoreIntegration:
                 node_id="done",
                 complete_output={
                     "content": response.get("content"),
+                    "trace_id": response.get("trace_id") or (response.get("metadata") or {}).get("trace_id"),
                     "has_response": response.get("content") is not None,
                 },
             )
@@ -93,6 +94,7 @@ class TestAbstractCoreIntegration:
         assert state.status == RunStatus.COMPLETED
         assert state.output["has_response"] is True
         assert state.output["content"] is not None
+        assert state.output["trace_id"]
 
     def test_multi_turn_conversation(self):
         """Execute a multi-turn conversation workflow."""
@@ -132,6 +134,8 @@ class TestAbstractCoreIntegration:
                 complete_output={
                     "answer1": run.vars.get("answer1", {}).get("content"),
                     "answer2": run.vars.get("answer2", {}).get("content"),
+                    "trace1": run.vars.get("answer1", {}).get("trace_id") or (run.vars.get("answer1", {}).get("metadata") or {}).get("trace_id"),
+                    "trace2": run.vars.get("answer2", {}).get("trace_id") or (run.vars.get("answer2", {}).get("metadata") or {}).get("trace_id"),
                 },
             )
 
@@ -152,6 +156,8 @@ class TestAbstractCoreIntegration:
         assert state.status == RunStatus.COMPLETED
         assert state.output["answer1"] is not None
         assert state.output["answer2"] is not None
+        assert state.output["trace1"]
+        assert state.output["trace2"]
 
     def test_llm_with_retry_policy(self):
         """LLM calls work with retry policy."""

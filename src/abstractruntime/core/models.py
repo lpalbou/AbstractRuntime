@@ -130,10 +130,20 @@ class RunState:
 
     # Optional provenance fields
     actor_id: Optional[str] = None
+    session_id: Optional[str] = None
     parent_run_id: Optional[str] = None  # For subworkflow tracking
 
     @classmethod
-    def new(cls, *, workflow_id: str, entry_node: str, actor_id: Optional[str] = None, vars: Optional[Dict[str, Any]] = None, parent_run_id: Optional[str] = None) -> "RunState":
+    def new(
+        cls,
+        *,
+        workflow_id: str,
+        entry_node: str,
+        actor_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        vars: Optional[Dict[str, Any]] = None,
+        parent_run_id: Optional[str] = None,
+    ) -> "RunState":
         return cls(
             run_id=str(uuid.uuid4()),
             workflow_id=workflow_id,
@@ -141,6 +151,7 @@ class RunState:
             current_node=entry_node,
             vars=vars or {},
             actor_id=actor_id,
+            session_id=session_id,
             parent_run_id=parent_run_id,
         )
 
@@ -170,6 +181,7 @@ class StepRecord:
 
     # Optional provenance/integrity
     actor_id: Optional[str] = None
+    session_id: Optional[str] = None
 
     # Retry and idempotency fields
     attempt: int = 1  # Current attempt number (1-indexed)
@@ -201,6 +213,7 @@ class StepRecord:
                 "result_key": effect.result_key,
             } if effect else None,
             actor_id=run.actor_id,
+            session_id=getattr(run, "session_id", None),
             attempt=attempt,
             idempotency_key=idempotency_key,
         )
@@ -235,5 +248,4 @@ class StepRecord:
         self.error = error
         self.ended_at = utc_now().isoformat()
         return self
-
 

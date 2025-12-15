@@ -16,7 +16,7 @@ from .llm_client import (
     LocalAbstractCoreLLMClient,
     RemoteAbstractCoreLLMClient,
 )
-from .tool_executor import AbstractCoreToolExecutor, PassthroughToolExecutor, ToolExecutor
+from .tool_executor import AbstractCoreToolExecutor, MappingToolExecutor, PassthroughToolExecutor, ToolExecutor
 from .effect_handlers import build_effect_handlers
 from .factory import (
     create_hybrid_runtime,
@@ -31,6 +31,7 @@ __all__ = [
     "LocalAbstractCoreLLMClient",
     "RemoteAbstractCoreLLMClient",
     "ToolExecutor",
+    "MappingToolExecutor",
     "AbstractCoreToolExecutor",
     "PassthroughToolExecutor",
 
@@ -41,4 +42,3 @@ __all__ = [
     "create_local_file_runtime",
     "create_remote_file_runtime",
 ]
-

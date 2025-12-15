@@ -399,18 +399,25 @@ class Runtime:
         # correct resume semantics for waiting effects without duplicating payload fields.
         try:
             sig = inspect.signature(handler)
+        except (TypeError, ValueError):
+            sig = None
+
+        if sig is not None:
             params = list(sig.parameters.values())
             has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
             if has_varargs or len(params) >= 3:
                 return handler(run, effect, default_next_node)
             return handler(run, effect)
-        except Exception:
-            # If signature inspection fails, fall back to attempting the new call form,
-            # then the legacy form.
-            try:
-                return handler(run, effect, default_next_node)
-            except TypeError:
+
+        # If signature inspection fails, fall back to attempting the new call form,
+        # then the legacy form (only for arity-mismatch TypeError).
+        try:
+            return handler(run, effect, default_next_node)
+        except TypeError as e:
+            msg = str(e)
+            if "positional" in msg and "argument" in msg and ("given" in msg or "required" in msg):
                 return handler(run, effect)
+            raise
 
     def _apply_resume_payload(self, run: RunState, *, payload: Dict[str, Any], override_node: Optional[str]) -> None:
         run.status = RunStatus.RUNNING
@@ -577,5 +584,4 @@ def _set_nested(target: Dict[str, Any], dotted_key: str, value: Any) -> None:
             cur[p] = nxt
         cur = nxt
     cur[parts[-1]] = value
-
 

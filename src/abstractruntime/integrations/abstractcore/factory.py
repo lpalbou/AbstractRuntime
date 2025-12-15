@@ -54,22 +54,21 @@ def create_local_runtime(
         llm_kwargs: Additional kwargs for LLM client
         run_store: Storage for run state (default: in-memory)
         ledger_store: Storage for ledger (default: in-memory)
-        tool_executor: Optional custom tool executor. If not provided,
-            tools can be passed via workflow vars["_tools"] or effect payload.
+        tool_executor: Optional custom tool executor. If not provided, defaults
+            to `AbstractCoreToolExecutor()` (AbstractCore global tool registry).
         context: Optional context object
         effect_policy: Optional effect policy (retry, etc.)
     
     Note:
-        Tools can be provided in three ways (in priority order):
-        1. In the TOOL_CALLS effect payload: {"tool_calls": [...], "tools": [func1, func2]}
-        2. In workflow vars at start: runtime.start(workflow, vars={"_tools": [func1, func2]})
-        3. Via a custom tool_executor
+        For durable execution, tool callables should never be stored in `RunState.vars`
+        or passed in effect payloads. Prefer `MappingToolExecutor.from_tools([...])`.
     """
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
 
     llm_client = LocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
-    handlers = build_effect_handlers(llm=llm_client, tools=tool_executor)
+    tools = tool_executor or AbstractCoreToolExecutor()
+    handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
     return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context, effect_policy=effect_policy)
 
@@ -165,4 +164,3 @@ def create_remote_file_runtime(
         ledger_store=ledger_store,
         context=context,
     )
-

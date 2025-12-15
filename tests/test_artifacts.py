@@ -572,6 +572,30 @@ class TestArtifactListAll:
             assert len(all_artifacts) == 2
 
 
+class TestArtifactSearch:
+    """Tests for metadata-based search() helper."""
+
+    def test_search_filters(self):
+        store = InMemoryArtifactStore()
+
+        a = store.store(b"a", run_id="run-1", content_type="text/plain", tags={"kind": "note"})
+        store.store(b"b", run_id="run-1", content_type="application/json", tags={"kind": "data"})
+        store.store(b"c", run_id="run-2", content_type="text/plain", tags={"kind": "note"})
+
+        res = store.search(run_id="run-1", content_type="text/plain")
+        assert [m.artifact_id for m in res] == [a.artifact_id]
+
+        res = store.search(tags={"kind": "note"})
+        assert {m.artifact_id for m in res} == {a.artifact_id, store.search(run_id="run-2")[0].artifact_id}
+
+    def test_search_file_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            meta = store.store(b"x", run_id="run-1", content_type="text/plain", tags={"k": "v"})
+            res = store.search(run_id="run-1", tags={"k": "v"})
+            assert [m.artifact_id for m in res] == [meta.artifact_id]
+
+
 class TestArtifactDeleteByRun:
     """Tests for delete_by_run functionality."""
 

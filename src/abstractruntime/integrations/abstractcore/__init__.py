@@ -7,10 +7,12 @@ Provides:
 - Tool executors (executed + passthrough)
 - Effect handlers wiring
 - Convenience runtime factories for local/remote/hybrid modes
+- RuntimeConfig for limits and model capabilities
 
 Importing this module is the explicit opt-in to an AbstractCore dependency.
 """
 
+from ...core.config import RuntimeConfig
 from .llm_client import (
     AbstractCoreLLMClient,
     LocalAbstractCoreLLMClient,
@@ -30,6 +32,7 @@ __all__ = [
     "AbstractCoreLLMClient",
     "LocalAbstractCoreLLMClient",
     "RemoteAbstractCoreLLMClient",
+    "RuntimeConfig",
     "ToolExecutor",
     "MappingToolExecutor",
     "AbstractCoreToolExecutor",

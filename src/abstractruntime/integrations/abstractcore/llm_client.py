@@ -223,6 +223,23 @@ class LocalAbstractCoreLLMClient:
         )
         return _normalize_local_response(resp)
 
+    def get_model_capabilities(self) -> Dict[str, Any]:
+        """Get model capabilities including max_tokens, vision_support, etc.
+
+        Uses AbstractCore's architecture detection system to query model limits
+        and features. This allows the runtime to be aware of model constraints
+        for resource tracking and warnings.
+
+        Returns:
+            Dict with model capabilities. Always includes 'max_tokens' (default 32768).
+        """
+        try:
+            from abstractcore.architectures.detection import get_model_capabilities
+            return get_model_capabilities(self._model)
+        except Exception:
+            # Safe fallback if detection fails
+            return {"max_tokens": 32768}
+
 
 class HttpxRequestSender:
     """Default request sender based on httpx (sync)."""

@@ -50,6 +50,9 @@ class EffectType(str, Enum):
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"
     TOOL_CALLS = "tool_calls"
+    MEMORY_QUERY = "memory_query"
+    MEMORY_TAG = "memory_tag"
+    MEMORY_COMPACT = "memory_compact"
 
     # Composition
     START_SUBWORKFLOW = "start_subworkflow"
@@ -279,4 +282,3 @@ class LimitWarning:
     def __post_init__(self) -> None:
         if self.maximum > 0:
             self.pct = round(self.current / self.maximum * 100, 1)
-

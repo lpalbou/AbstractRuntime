@@ -20,6 +20,7 @@ from ...core.runtime import Runtime
 from ...storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from ...storage.json_files import JsonFileRunStore, JsonlLedgerStore
 from ...storage.base import LedgerStore, RunStore
+from ...storage.artifacts import FileArtifactStore, InMemoryArtifactStore, ArtifactStore
 
 from .effect_handlers import build_effect_handlers
 from .llm_client import LocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
@@ -47,6 +48,7 @@ def create_local_runtime(
     context: Optional[Any] = None,
     effect_policy: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
+    artifact_store: Optional[ArtifactStore] = None,
 ) -> Runtime:
     """Create a runtime with local LLM execution via AbstractCore.
 
@@ -70,6 +72,9 @@ def create_local_runtime(
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
 
+    if artifact_store is None:
+        artifact_store = InMemoryArtifactStore()
+
     llm_client = LocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
     tools = tool_executor or AbstractCoreToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
@@ -89,6 +94,7 @@ def create_local_runtime(
         context=context,
         effect_policy=effect_policy,
         config=config,
+        artifact_store=artifact_store,
     )
 
 
@@ -102,9 +108,13 @@ def create_remote_runtime(
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
     context: Optional[Any] = None,
+    artifact_store: Optional[ArtifactStore] = None,
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
+
+    if artifact_store is None:
+        artifact_store = InMemoryArtifactStore()
 
     llm_client = RemoteAbstractCoreLLMClient(
         server_base_url=server_base_url,
@@ -115,7 +125,13 @@ def create_remote_runtime(
     tools = tool_executor or PassthroughToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
-    return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context)
+    return Runtime(
+        run_store=run_store,
+        ledger_store=ledger_store,
+        effect_handlers=handlers,
+        context=context,
+        artifact_store=artifact_store,
+    )
 
 
 def create_hybrid_runtime(
@@ -127,11 +143,15 @@ def create_hybrid_runtime(
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     context: Optional[Any] = None,
+    artifact_store: Optional[ArtifactStore] = None,
 ) -> Runtime:
     """Remote LLM via AbstractCore server, local tool execution."""
 
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
+
+    if artifact_store is None:
+        artifact_store = InMemoryArtifactStore()
 
     llm_client = RemoteAbstractCoreLLMClient(
         server_base_url=server_base_url,
@@ -142,7 +162,13 @@ def create_hybrid_runtime(
     tools = AbstractCoreToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
-    return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context)
+    return Runtime(
+        run_store=run_store,
+        ledger_store=ledger_store,
+        effect_handlers=handlers,
+        context=context,
+        artifact_store=artifact_store,
+    )
 
 
 def create_local_file_runtime(
@@ -155,6 +181,7 @@ def create_local_file_runtime(
     config: Optional[RuntimeConfig] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
+    artifact_store = FileArtifactStore(base_dir)
     return create_local_runtime(
         provider=provider,
         model=model,
@@ -163,6 +190,7 @@ def create_local_file_runtime(
         ledger_store=ledger_store,
         context=context,
         config=config,
+        artifact_store=artifact_store,
     )
 
 
@@ -176,6 +204,7 @@ def create_remote_file_runtime(
     context: Optional[Any] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
+    artifact_store = FileArtifactStore(base_dir)
     return create_remote_runtime(
         server_base_url=server_base_url,
         model=model,
@@ -184,4 +213,5 @@ def create_remote_file_runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         context=context,
+        artifact_store=artifact_store,
     )

@@ -54,6 +54,7 @@ from .scheduler import (
     ScheduledRuntime,
     create_scheduled_runtime,
 )
+from .memory import ActiveContextPolicy, TimeRange
 
 __all__ = [
     # Core models
@@ -104,7 +105,9 @@ __all__ = [
     "RetryPolicy",
     "NoRetryPolicy",
     "compute_idempotency_key",
+    # Memory
+    "ActiveContextPolicy",
+    "TimeRange",
 ]
-
 
 

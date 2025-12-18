@@ -457,6 +457,9 @@ class Runtime:
         self._handlers[EffectType.WAIT_EVENT] = self._handle_wait_event
         self._handlers[EffectType.WAIT_UNTIL] = self._handle_wait_until
         self._handlers[EffectType.ASK_USER] = self._handle_ask_user
+        self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
+        self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
+        self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
 
     def _find_prior_completed_result(
@@ -720,6 +723,826 @@ class Runtime:
 
         # Unexpected status
         return EffectOutcome.failed(f"Unexpected subworkflow status: {sub_state.status.value}")
+
+    # Built-in memory handlers ---------------------------------------------
+
+    def _handle_memory_query(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle MEMORY_QUERY.
+
+        This effect supports provenance-first recall over archived memory spans stored in ArtifactStore.
+        It is intentionally metadata-first and embedding-free (semantic retrieval belongs in AbstractMemory).
+
+        Payload (all optional unless otherwise stated):
+          - span_id: str | int | list[str|int]  (artifact_id or 1-based index into _runtime.memory_spans)
+          - query: str                          (keyword substring match)
+          - since: str                          (ISO8601, span intersection filter)
+          - until: str                          (ISO8601, span intersection filter)
+          - tags: dict[str,str]                 (span tag filter)
+          - limit_spans: int                    (default 5)
+          - deep: bool                          (default True when query is set; scans archived messages)
+          - deep_limit_spans: int               (default 50)
+          - deep_limit_messages_per_span: int   (default 400)
+          - connected: bool                     (include connected spans via time adjacency + shared tags)
+          - neighbor_hops: int                  (default 1 when connected=True)
+          - connect_by: list[str]               (default ["topic","person"])
+          - max_messages: int                   (default 80; total messages rendered across all spans)
+          - tool_name: str                      (default "recall_memory"; for formatting)
+          - call_id: str                        (tool-call id passthrough)
+        """
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+        runtime_ns = run.vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            run.vars["_runtime"] = runtime_ns
+
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return EffectOutcome.failed(
+                "MEMORY_QUERY requires an ArtifactStore; configure runtime.set_artifact_store(...)"
+            )
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "recall_memory")
+        call_id = str(payload.get("call_id") or "memory")
+
+        query = payload.get("query")
+        query_text = str(query or "").strip()
+        since = payload.get("since")
+        until = payload.get("until")
+        tags = payload.get("tags")
+        tags_dict = dict(tags) if isinstance(tags, dict) else None
+
+        try:
+            limit_spans = int(payload.get("limit_spans", 5) or 5)
+        except Exception:
+            limit_spans = 5
+        if limit_spans < 1:
+            limit_spans = 1
+
+        deep = payload.get("deep")
+        if deep is None:
+            deep_enabled = bool(query_text)
+        else:
+            deep_enabled = bool(deep)
+
+        try:
+            deep_limit_spans = int(payload.get("deep_limit_spans", 50) or 50)
+        except Exception:
+            deep_limit_spans = 50
+        if deep_limit_spans < 1:
+            deep_limit_spans = 1
+
+        try:
+            deep_limit_messages_per_span = int(payload.get("deep_limit_messages_per_span", 400) or 400)
+        except Exception:
+            deep_limit_messages_per_span = 400
+        if deep_limit_messages_per_span < 1:
+            deep_limit_messages_per_span = 1
+
+        connected = bool(payload.get("connected", False))
+        try:
+            neighbor_hops = int(payload.get("neighbor_hops", 1) or 1)
+        except Exception:
+            neighbor_hops = 1
+        if neighbor_hops < 0:
+            neighbor_hops = 0
+
+        connect_by = payload.get("connect_by")
+        if isinstance(connect_by, list):
+            connect_keys = [str(x) for x in connect_by if isinstance(x, (str, int, float)) and str(x).strip()]
+        else:
+            connect_keys = ["topic", "person"]
+
+        try:
+            max_messages = int(payload.get("max_messages", 80) or 80)
+        except Exception:
+            max_messages = 80
+        if max_messages < 1:
+            max_messages = 1
+
+        from ..memory.active_context import ActiveContextPolicy, TimeRange
+
+        spans = ActiveContextPolicy.list_memory_spans_from_run(run)
+
+        # Resolve explicit span ids if provided.
+        span_id_payload = payload.get("span_id")
+        span_ids_payload = payload.get("span_ids")
+        explicit_ids = span_ids_payload if isinstance(span_ids_payload, list) else span_id_payload
+        explicit_resolved: list[str] = []
+        if explicit_ids is not None:
+            if isinstance(explicit_ids, list):
+                explicit_resolved = ActiveContextPolicy.resolve_span_ids_from_spans(explicit_ids, spans)
+            else:
+                explicit_resolved = ActiveContextPolicy.resolve_span_ids_from_spans([explicit_ids], spans)
+
+        selected: list[str] = []
+        if explicit_resolved:
+            selected = list(explicit_resolved)
+        else:
+            time_range = None
+            if since or until:
+                time_range = TimeRange(
+                    start=str(since) if since else None,
+                    end=str(until) if until else None,
+                )
+            matches = ActiveContextPolicy.filter_spans_from_run(
+                run,
+                artifact_store=artifact_store,
+                time_range=time_range,
+                tags=tags_dict,
+                query=query_text or None,
+                limit=limit_spans,
+            )
+            selected = [str(s.get("artifact_id") or "") for s in matches if isinstance(s, dict) and s.get("artifact_id")]
+
+            if deep_enabled and query_text:
+                selected = _dedup_preserve_order(selected + _deep_scan_span_ids(
+                    spans=spans,
+                    artifact_store=artifact_store,
+                    query=query_text,
+                    limit_spans=deep_limit_spans,
+                    limit_messages_per_span=deep_limit_messages_per_span,
+                ))
+
+        if connected and selected:
+            selected = _dedup_preserve_order(
+                _expand_connected_span_ids(
+                    spans=spans,
+                    seed_artifact_ids=selected,
+                    connect_keys=connect_keys,
+                    neighbor_hops=neighbor_hops,
+                    limit=max(limit_spans, len(selected)),
+                )
+            )
+
+        # Render output (provenance + messages).
+        summary_by_artifact = ActiveContextPolicy.summary_text_by_artifact_id_from_run(run)
+        text = _render_memory_query_output(
+            spans=spans,
+            artifact_store=artifact_store,
+            selected_artifact_ids=selected,
+            summary_by_artifact=summary_by_artifact,
+            max_messages=max_messages,
+        )
+
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "output": text,
+                    "error": None,
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
+    def _handle_memory_tag(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle MEMORY_TAG.
+
+        Payload (required unless stated):
+          - span_id: str | int   (artifact_id or 1-based index into `_runtime.memory_spans`)
+          - tags: dict[str,str]  (merged into span["tags"] by default)
+          - merge: bool          (optional, default True; when False, replaces span["tags"])
+          - tool_name: str       (optional; for tool-style output, default "remember")
+          - call_id: str         (optional; passthrough for tool-style output)
+
+        Notes:
+        - This mutates the in-run span index (`_runtime.memory_spans`) only; it does not change artifacts.
+        - Tagging is intentionally JSON-safe (string->string).
+        """
+        import json
+
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+        runtime_ns = run.vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            run.vars["_runtime"] = runtime_ns
+
+        spans = runtime_ns.get("memory_spans")
+        if not isinstance(spans, list):
+            return EffectOutcome.failed("MEMORY_TAG requires _runtime.memory_spans to be a list")
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "remember")
+        call_id = str(payload.get("call_id") or "memory")
+
+        span_id = payload.get("span_id")
+        tags = payload.get("tags")
+        if span_id is None:
+            return EffectOutcome.failed("MEMORY_TAG requires payload.span_id")
+        if not isinstance(tags, dict) or not tags:
+            return EffectOutcome.failed("MEMORY_TAG requires payload.tags as a non-empty dict[str,str]")
+
+        merge = bool(payload.get("merge", True))
+
+        clean_tags: Dict[str, str] = {}
+        for k, v in tags.items():
+            if isinstance(k, str) and isinstance(v, str) and k and v:
+                clean_tags[k] = v
+        if not clean_tags:
+            return EffectOutcome.failed("MEMORY_TAG requires at least one non-empty string tag")
+
+        artifact_id: Optional[str] = None
+        target_index: Optional[int] = None
+
+        if isinstance(span_id, int):
+            idx = span_id - 1
+            if idx < 0 or idx >= len(spans):
+                return EffectOutcome.failed(f"Unknown span index: {span_id}")
+            span = spans[idx]
+            if not isinstance(span, dict):
+                return EffectOutcome.failed(f"Invalid span record at index {span_id}")
+            artifact_id = str(span.get("artifact_id") or "").strip() or None
+            target_index = idx
+        elif isinstance(span_id, str):
+            s = span_id.strip()
+            if not s:
+                return EffectOutcome.failed("MEMORY_TAG requires a non-empty span_id")
+            if s.isdigit():
+                idx = int(s) - 1
+                if idx < 0 or idx >= len(spans):
+                    return EffectOutcome.failed(f"Unknown span index: {s}")
+                span = spans[idx]
+                if not isinstance(span, dict):
+                    return EffectOutcome.failed(f"Invalid span record at index {s}")
+                artifact_id = str(span.get("artifact_id") or "").strip() or None
+                target_index = idx
+            else:
+                artifact_id = s
+        else:
+            return EffectOutcome.failed("MEMORY_TAG requires span_id as str or int")
+
+        if not artifact_id:
+            return EffectOutcome.failed("Could not resolve span_id to an artifact_id")
+
+        if target_index is None:
+            for i, span in enumerate(spans):
+                if not isinstance(span, dict):
+                    continue
+                if str(span.get("artifact_id") or "") == artifact_id:
+                    target_index = i
+                    break
+
+        if target_index is None:
+            return EffectOutcome.failed(f"Unknown span_id: {artifact_id}")
+
+        target = spans[target_index]
+        if not isinstance(target, dict):
+            return EffectOutcome.failed(f"Invalid span record at index {target_index + 1}")
+
+        existing_tags = target.get("tags")
+        if not isinstance(existing_tags, dict):
+            existing_tags = {}
+
+        if merge:
+            merged_tags = dict(existing_tags)
+            merged_tags.update(clean_tags)
+        else:
+            merged_tags = dict(clean_tags)
+
+        target["tags"] = merged_tags
+        target["tagged_at"] = utc_now_iso()
+        if run.actor_id:
+            target["tagged_by"] = str(run.actor_id)
+
+        rendered_tags = json.dumps(merged_tags, ensure_ascii=False, sort_keys=True)
+        text = f"Tagged span_id={artifact_id} tags={rendered_tags}"
+
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "output": text,
+                    "error": None,
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
+    def _handle_memory_compact(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle MEMORY_COMPACT.
+
+        This is a runtime-owned compaction of a run's active context:
+        - archives the compacted messages to ArtifactStore (provenance preserved)
+        - inserts a system summary message that includes `span_id=...` (LLM-visible handle)
+        - updates `_runtime.memory_spans` index with metadata/tags
+
+        Payload (optional unless stated):
+          - preserve_recent: int        (default 6; preserves N most recent non-system messages)
+          - compression_mode: str       ("light"|"standard"|"heavy", default "standard")
+          - focus: str                  (optional; topic to prioritize)
+          - target_run_id: str          (optional; defaults to current run)
+          - tool_name: str              (optional; for tool-style output, default "compact_memory")
+          - call_id: str                (optional)
+        """
+        import json
+        from uuid import uuid4
+
+        from .vars import ensure_namespaces
+        from ..memory.compaction import normalize_messages, split_for_compaction, span_metadata_from_messages
+
+        ensure_namespaces(run.vars)
+
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return EffectOutcome.failed(
+                "MEMORY_COMPACT requires an ArtifactStore; configure runtime.set_artifact_store(...)"
+            )
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "compact_memory")
+        call_id = str(payload.get("call_id") or "memory")
+
+        target_run_id = payload.get("target_run_id")
+        if target_run_id is not None:
+            target_run_id = str(target_run_id).strip() or None
+
+        try:
+            preserve_recent = int(payload.get("preserve_recent", 6) or 6)
+        except Exception:
+            preserve_recent = 6
+        if preserve_recent < 0:
+            preserve_recent = 0
+
+        compression_mode = str(payload.get("compression_mode") or "standard").strip().lower()
+        if compression_mode not in ("light", "standard", "heavy"):
+            compression_mode = "standard"
+
+        focus = payload.get("focus")
+        focus_text = str(focus).strip() if isinstance(focus, str) else ""
+        focus_text = focus_text or None
+
+        # Resolve which run is being compacted.
+        target_run = run
+        if target_run_id and target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
+            target_run = loaded
+        ensure_namespaces(target_run.vars)
+
+        ctx = target_run.vars.get("context")
+        if not isinstance(ctx, dict):
+            return EffectOutcome.failed("MEMORY_COMPACT requires vars.context to be a dict")
+        messages_raw = ctx.get("messages")
+        if not isinstance(messages_raw, list) or not messages_raw:
+            return EffectOutcome.completed(
+                result={
+                    "mode": "executed",
+                    "results": [
+                        {
+                            "call_id": call_id,
+                            "name": tool_name,
+                            "success": True,
+                            "output": "No messages to compact.",
+                            "error": None,
+                        }
+                    ],
+                }
+            )
+
+        now_iso = utc_now_iso
+        messages = normalize_messages(messages_raw, now_iso=now_iso)
+        split = split_for_compaction(messages, preserve_recent=preserve_recent)
+
+        if not split.older_messages:
+            return EffectOutcome.completed(
+                result={
+                    "mode": "executed",
+                    "results": [
+                        {
+                            "call_id": call_id,
+                            "name": tool_name,
+                            "success": True,
+                            "output": f"Nothing to compact (non-system messages <= preserve_recent={preserve_recent}).",
+                            "error": None,
+                        }
+                    ],
+                }
+            )
+
+        # ------------------------------------------------------------------
+        # 1) LLM summary (ledgered via a child run with an LLM_CALL effect)
+        # ------------------------------------------------------------------
+
+        older_text = "\n".join([f"{m.get('role')}: {m.get('content')}" for m in split.older_messages])
+        focus_line = f"Focus: {focus_text}\n" if focus_text else ""
+        mode_line = f"Compression mode: {compression_mode}\n"
+
+        prompt = (
+            "You are compressing older conversation context for an agent runtime.\n"
+            "Write a faithful, compact summary that preserves decisions, constraints, names, file paths, commands, and open questions.\n"
+            "Do NOT invent details. If something is unknown, say so.\n"
+            f"{mode_line}"
+            f"{focus_line}"
+            "Return STRICT JSON with keys: summary (string), key_points (array of strings), confidence (number 0..1).\n\n"
+            "OLDER MESSAGES (to be archived):\n"
+            f"{older_text}\n"
+        )
+
+        # Best-effort output budget for the summary itself.
+        limits = target_run.vars.get("_limits") if isinstance(target_run.vars.get("_limits"), dict) else {}
+        max_out = limits.get("max_output_tokens")
+        try:
+            max_out_tokens = int(max_out) if max_out is not None else None
+        except Exception:
+            max_out_tokens = None
+
+        llm_payload: Dict[str, Any] = {"prompt": prompt}
+        if max_out_tokens is not None:
+            llm_payload["params"] = {"max_tokens": max_out_tokens}
+
+        def llm_node(sub_run: RunState, sub_ctx) -> StepPlan:
+            return StepPlan(
+                node_id="llm",
+                effect=Effect(type=EffectType.LLM_CALL, payload=llm_payload, result_key="_temp.llm"),
+                next_node="done",
+            )
+
+        def done_node(sub_run: RunState, sub_ctx) -> StepPlan:
+            temp = sub_run.vars.get("_temp") if isinstance(sub_run.vars.get("_temp"), dict) else {}
+            return StepPlan(node_id="done", complete_output={"response": temp.get("llm")})
+
+        wf = WorkflowSpec(workflow_id="wf_memory_compact_llm", entry_node="llm", nodes={"llm": llm_node, "done": done_node})
+
+        sub_run_id = self.start(
+            workflow=wf,
+            vars={"context": {"prompt": prompt}, "scratchpad": {}, "_runtime": {}, "_temp": {}, "_limits": dict(limits)},
+            actor_id=run.actor_id,
+            session_id=getattr(run, "session_id", None),
+            parent_run_id=run.run_id,
+        )
+
+        sub_state = self.tick(workflow=wf, run_id=sub_run_id)
+        if sub_state.status == RunStatus.WAITING:
+            return EffectOutcome.failed("MEMORY_COMPACT does not support waiting subworkflows yet")
+        if sub_state.status == RunStatus.FAILED:
+            return EffectOutcome.failed(sub_state.error or "Compaction LLM subworkflow failed")
+        response = (sub_state.output or {}).get("response")
+        if not isinstance(response, dict):
+            response = {}
+
+        content = response.get("content")
+        content_text = "" if content is None else str(content).strip()
+        lowered = content_text.lower()
+        if any(
+            keyword in lowered
+            for keyword in (
+                "operation not permitted",
+                "failed to connect",
+                "connection refused",
+                "timed out",
+                "timeout",
+                "not running",
+                "model not found",
+            )
+        ):
+            return EffectOutcome.failed(f"Compaction LLM unavailable: {content_text}")
+
+        summary_text_out = content_text
+        key_points: list[str] = []
+        confidence: Optional[float] = None
+
+        # Parse JSON if present (support fenced output).
+        if content_text:
+            candidate = content_text
+            if "```" in candidate:
+                # extract first JSON-ish block
+                start = candidate.find("{")
+                end = candidate.rfind("}")
+                if 0 <= start < end:
+                    candidate = candidate[start : end + 1]
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    if parsed.get("summary") is not None:
+                        summary_text_out = str(parsed.get("summary") or "").strip() or summary_text_out
+                    kp = parsed.get("key_points")
+                    if isinstance(kp, list):
+                        key_points = [str(x) for x in kp if isinstance(x, (str, int, float))][:20]
+                    conf = parsed.get("confidence")
+                    if isinstance(conf, (int, float)):
+                        confidence = float(conf)
+            except Exception:
+                pass
+
+        summary_text_out = summary_text_out.strip()
+        if not summary_text_out:
+            summary_text_out = "(summary unavailable)"
+
+        # ------------------------------------------------------------------
+        # 2) Archive older messages + update run state with summary
+        # ------------------------------------------------------------------
+
+        span_meta = span_metadata_from_messages(split.older_messages)
+        artifact_payload = {
+            "messages": split.older_messages,
+            "span": span_meta,
+            "created_at": now_iso(),
+        }
+        artifact_tags: Dict[str, str] = {
+            "kind": "conversation_span",
+            "compression_mode": compression_mode,
+            "preserve_recent": str(preserve_recent),
+        }
+        if focus_text:
+            artifact_tags["focus"] = focus_text
+
+        meta = artifact_store.store_json(artifact_payload, run_id=target_run.run_id, tags=artifact_tags)
+        archived_ref = meta.artifact_id
+
+        summary_message_id = f"msg_{uuid4().hex}"
+        summary_prefix = f"[CONVERSATION HISTORY SUMMARY span_id={archived_ref}]"
+        summary_metadata: Dict[str, Any] = {
+            "message_id": summary_message_id,
+            "kind": "memory_summary",
+            "compression_mode": compression_mode,
+            "preserve_recent": preserve_recent,
+            "source_artifact_id": archived_ref,
+            "source_message_count": int(span_meta.get("message_count") or 0),
+            "source_from_timestamp": span_meta.get("from_timestamp"),
+            "source_to_timestamp": span_meta.get("to_timestamp"),
+            "source_from_message_id": span_meta.get("from_message_id"),
+            "source_to_message_id": span_meta.get("to_message_id"),
+        }
+        if focus_text:
+            summary_metadata["focus"] = focus_text
+
+        summary_message = {
+            "role": "system",
+            "content": f"{summary_prefix}: {summary_text_out}",
+            "timestamp": now_iso(),
+            "metadata": summary_metadata,
+        }
+
+        new_messages = list(split.system_messages) + [summary_message] + list(split.recent_messages)
+        ctx["messages"] = new_messages
+        if isinstance(getattr(target_run, "output", None), dict):
+            target_run.output["messages"] = new_messages
+
+        runtime_ns = target_run.vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            target_run.vars["_runtime"] = runtime_ns
+        spans = runtime_ns.get("memory_spans")
+        if not isinstance(spans, list):
+            spans = []
+            runtime_ns["memory_spans"] = spans
+        spans.append(
+            {
+                "kind": "conversation_span",
+                "artifact_id": archived_ref,
+                "created_at": now_iso(),
+                "summary_message_id": summary_message_id,
+                "from_timestamp": span_meta.get("from_timestamp"),
+                "to_timestamp": span_meta.get("to_timestamp"),
+                "from_message_id": span_meta.get("from_message_id"),
+                "to_message_id": span_meta.get("to_message_id"),
+                "message_count": int(span_meta.get("message_count") or 0),
+                "compression_mode": compression_mode,
+                "focus": focus_text,
+            }
+        )
+
+        if target_run is not run:
+            target_run.updated_at = now_iso()
+            self._run_store.save(target_run)
+
+        out = {
+            "llm_run_id": sub_run_id,
+            "span_id": archived_ref,
+            "summary_message_id": summary_message_id,
+            "preserve_recent": preserve_recent,
+            "compression_mode": compression_mode,
+            "focus": focus_text,
+            "key_points": key_points,
+            "confidence": confidence,
+        }
+        text = f"Compacted {len(split.older_messages)} messages into span_id={archived_ref}."
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "output": text,
+                    "error": None,
+                    "meta": out,
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
+
+def _dedup_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in values:
+        s = str(v or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _span_sort_key(span: dict) -> tuple[str, str]:
+    """Sort key for span adjacency. Prefer from_timestamp, then created_at."""
+    from_ts = str(span.get("from_timestamp") or "")
+    created = str(span.get("created_at") or "")
+    return (from_ts or created, created)
+
+
+def _expand_connected_span_ids(
+    *,
+    spans: list[dict[str, Any]],
+    seed_artifact_ids: list[str],
+    connect_keys: list[str],
+    neighbor_hops: int,
+    limit: int,
+) -> list[str]:
+    """Expand seed spans to include deterministic neighbors (time + shared tags)."""
+    if not spans or not seed_artifact_ids:
+        return list(seed_artifact_ids)
+
+    ordered = [s for s in spans if isinstance(s, dict) and s.get("artifact_id")]
+    ordered.sort(key=_span_sort_key)
+    idx_by_artifact: dict[str, int] = {str(s["artifact_id"]): i for i, s in enumerate(ordered)}
+
+    # Build tag index for requested keys.
+    tag_index: dict[tuple[str, str], list[str]] = {}
+    for s in ordered:
+        tags = s.get("tags") if isinstance(s.get("tags"), dict) else {}
+        for k in connect_keys:
+            v = tags.get(k)
+            if isinstance(v, str) and v:
+                tag_index.setdefault((k, v), []).append(str(s["artifact_id"]))
+
+    out: list[str] = []
+    for aid in seed_artifact_ids:
+        if len(out) >= limit:
+            break
+        out.append(aid)
+
+        idx = idx_by_artifact.get(aid)
+        if idx is not None and neighbor_hops > 0:
+            for delta in range(1, neighbor_hops + 1):
+                for j in (idx - delta, idx + delta):
+                    if 0 <= j < len(ordered):
+                        out.append(str(ordered[j]["artifact_id"]))
+
+        if connect_keys:
+            s = ordered[idx] if idx is not None and 0 <= idx < len(ordered) else None
+            if isinstance(s, dict):
+                tags = s.get("tags") if isinstance(s.get("tags"), dict) else {}
+                for k in connect_keys:
+                    v = tags.get(k)
+                    if isinstance(v, str) and v:
+                        out.extend(tag_index.get((k, v), []))
+
+    return _dedup_preserve_order(out)[:limit]
+
+
+def _deep_scan_span_ids(
+    *,
+    spans: list[dict[str, Any]],
+    artifact_store: Any,
+    query: str,
+    limit_spans: int,
+    limit_messages_per_span: int,
+) -> list[str]:
+    """Fallback keyword scan over archived messages when metadata/summary is insufficient."""
+    q = str(query or "").strip().lower()
+    if not q:
+        return []
+
+    scanned = 0
+    matches: list[str] = []
+    for s in spans:
+        if scanned >= limit_spans:
+            break
+        if not isinstance(s, dict):
+            continue
+        artifact_id = s.get("artifact_id")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            continue
+        scanned += 1
+
+        payload = artifact_store.load_json(artifact_id)
+        if not isinstance(payload, dict):
+            continue
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            continue
+
+        for m in messages[:limit_messages_per_span]:
+            if not isinstance(m, dict):
+                continue
+            content = m.get("content")
+            if not content:
+                continue
+            if q in str(content).lower():
+                matches.append(artifact_id)
+                break
+
+    return _dedup_preserve_order(matches)
+
+
+def _render_memory_query_output(
+    *,
+    spans: list[dict[str, Any]],
+    artifact_store: Any,
+    selected_artifact_ids: list[str],
+    summary_by_artifact: dict[str, str],
+    max_messages: int,
+) -> str:
+    if not selected_artifact_ids:
+        return "No matching memory spans."
+
+    span_by_id: dict[str, dict[str, Any]] = {
+        str(s.get("artifact_id")): s for s in spans if isinstance(s, dict) and s.get("artifact_id")
+    }
+
+    lines: list[str] = []
+    lines.append("Recalled memory spans (provenance-preserving):")
+
+    remaining = int(max_messages)
+    for i, aid in enumerate(selected_artifact_ids, start=1):
+        span = span_by_id.get(aid, {})
+        kind = span.get("kind") or "span"
+        created = span.get("created_at") or ""
+        from_ts = span.get("from_timestamp") or ""
+        to_ts = span.get("to_timestamp") or ""
+        count = span.get("message_count") or ""
+        tags = span.get("tags") if isinstance(span.get("tags"), dict) else {}
+        tags_txt = ", ".join([f"{k}={v}" for k, v in sorted(tags.items()) if isinstance(v, str) and v])
+
+        lines.append("")
+        lines.append(f"[{i}] span_id={aid} kind={kind} msgs={count} created_at={created}")
+        if from_ts or to_ts:
+            lines.append(f"    time_range: {from_ts} .. {to_ts}")
+        if tags_txt:
+            lines.append(f"    tags: {tags_txt}")
+
+        summary = summary_by_artifact.get(aid)
+        if summary:
+            summary_clean = str(summary).strip()
+            if len(summary_clean) > 800:
+                summary_clean = summary_clean[:800] + "…"
+            lines.append(f"    summary: {summary_clean}")
+
+        if remaining <= 0:
+            continue
+
+        payload = artifact_store.load_json(aid)
+        if not isinstance(payload, dict):
+            lines.append("    (artifact payload unavailable)")
+            continue
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            lines.append("    (artifact missing messages)")
+            continue
+
+        # Render messages with a global cap.
+        rendered = 0
+        for m in messages:
+            if remaining <= 0:
+                break
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "unknown")
+            content = str(m.get("content") or "")
+            ts = str(m.get("timestamp") or "")
+            # Keep per-message lines bounded.
+            if len(content) > 1200:
+                content = content[:1200] + "…"
+            prefix = f"    - {role}: "
+            if ts:
+                prefix = f"    - {ts} {role}: "
+            lines.append(prefix + content.replace("\n", "\\n"))
+            rendered += 1
+            remaining -= 1
+
+        total = sum(1 for m in messages if isinstance(m, dict))
+        if rendered < total:
+            lines.append(f"    … ({total - rendered} more messages not shown)")
+
+    if remaining <= 0:
+        lines.append("")
+        lines.append(f"(Output truncated: max_messages={int(max_messages)})")
+
+    return "\n".join(lines)
 
 
 def _set_nested(target: Dict[str, Any], dotted_key: str, value: Any) -> None:

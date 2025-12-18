@@ -107,6 +107,29 @@ class TestRetryLogic:
         assert state.status == RunStatus.FAILED
         assert handler.call_count == 1  # No retry
 
+    def test_handler_exception_does_not_double_invoke(self):
+        """Effect handler exceptions should not trigger a second invocation via compatibility fallbacks."""
+        call_count = 0
+
+        def boom(run: RunState, effect: Effect, default_next_node) -> EffectOutcome:
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("boom")
+
+        workflow = make_effect_workflow()
+
+        runtime = Runtime(
+            run_store=InMemoryRunStore(),
+            ledger_store=InMemoryLedgerStore(),
+            effect_handlers={EffectType.LLM_CALL: boom},
+        )
+
+        run_id = runtime.start(workflow=workflow)
+        state = runtime.tick(workflow=workflow, run_id=run_id)
+
+        assert state.status == RunStatus.FAILED
+        assert call_count == 1
+
     def test_retry_with_policy(self):
         """RetryPolicy enables retries."""
         handler = FailingEffectHandler(fail_count=2)  # Fail twice, succeed on third

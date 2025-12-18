@@ -88,6 +88,7 @@ class JsonFileRunStore(RunStore):
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             actor_id=data.get("actor_id"),
+            session_id=data.get("session_id"),
             parent_run_id=data.get("parent_run_id"),
         )
 
@@ -204,5 +205,4 @@ class JsonlLedgerStore(LedgerStore):
                     continue
                 out.append(json.loads(line))
         return out
-
 

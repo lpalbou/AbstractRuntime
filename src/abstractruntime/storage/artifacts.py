@@ -221,6 +221,37 @@ class ArtifactStore(ABC):
                 count += 1
         return count
 
+    def search(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        content_type: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
+        limit: int = 1000,
+    ) -> List[ArtifactMetadata]:
+        """Filter artifacts by simple metadata fields.
+
+        This is intentionally a *metadata filter*, not semantic search. Semantic/embedding
+        retrieval belongs in AbstractMemory or higher-level components.
+        """
+        if run_id is None:
+            candidates = list(self.list_all(limit=limit))
+        else:
+            candidates = list(self.list_by_run(run_id))
+
+        if content_type is not None:
+            candidates = [m for m in candidates if m.content_type == content_type]
+
+        if tags:
+            candidates = [
+                m
+                for m in candidates
+                if all((m.tags or {}).get(k) == v for k, v in tags.items())
+            ]
+
+        candidates.sort(key=lambda m: m.created_at, reverse=True)
+        return candidates[:limit]
+
     # Convenience methods
 
     def store_text(

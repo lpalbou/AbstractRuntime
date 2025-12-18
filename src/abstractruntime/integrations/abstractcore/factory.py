@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ...core.config import RuntimeConfig
 from ...core.runtime import Runtime
 from ...storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from ...storage.json_files import JsonFileRunStore, JsonlLedgerStore
@@ -45,33 +46,50 @@ def create_local_runtime(
     tool_executor: Optional[ToolExecutor] = None,
     context: Optional[Any] = None,
     effect_policy: Optional[Any] = None,
+    config: Optional[RuntimeConfig] = None,
 ) -> Runtime:
     """Create a runtime with local LLM execution via AbstractCore.
-    
+
     Args:
         provider: LLM provider (e.g., "ollama", "openai")
         model: Model name
         llm_kwargs: Additional kwargs for LLM client
         run_store: Storage for run state (default: in-memory)
         ledger_store: Storage for ledger (default: in-memory)
-        tool_executor: Optional custom tool executor. If not provided,
-            tools can be passed via workflow vars["_tools"] or effect payload.
+        tool_executor: Optional custom tool executor. If not provided, defaults
+            to `AbstractCoreToolExecutor()` (AbstractCore global tool registry).
         context: Optional context object
         effect_policy: Optional effect policy (retry, etc.)
-    
+        config: Optional RuntimeConfig for limits and model capabilities.
+            If not provided, model capabilities are queried from the LLM client.
+
     Note:
-        Tools can be provided in three ways (in priority order):
-        1. In the TOOL_CALLS effect payload: {"tool_calls": [...], "tools": [func1, func2]}
-        2. In workflow vars at start: runtime.start(workflow, vars={"_tools": [func1, func2]})
-        3. Via a custom tool_executor
+        For durable execution, tool callables should never be stored in `RunState.vars`
+        or passed in effect payloads. Prefer `MappingToolExecutor.from_tools([...])`.
     """
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
 
     llm_client = LocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
-    handlers = build_effect_handlers(llm=llm_client, tools=tool_executor)
+    tools = tool_executor or AbstractCoreToolExecutor()
+    handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
-    return Runtime(run_store=run_store, ledger_store=ledger_store, effect_handlers=handlers, context=context, effect_policy=effect_policy)
+    # Query model capabilities and merge into config
+    capabilities = llm_client.get_model_capabilities()
+    if config is None:
+        config = RuntimeConfig(model_capabilities=capabilities)
+    else:
+        # Merge capabilities into provided config
+        config = config.with_capabilities(capabilities)
+
+    return Runtime(
+        run_store=run_store,
+        ledger_store=ledger_store,
+        effect_handlers=handlers,
+        context=context,
+        effect_policy=effect_policy,
+        config=config,
+    )
 
 
 def create_remote_runtime(
@@ -134,6 +152,7 @@ def create_local_file_runtime(
     model: str,
     llm_kwargs: Optional[Dict[str, Any]] = None,
     context: Optional[Any] = None,
+    config: Optional[RuntimeConfig] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
     return create_local_runtime(
@@ -143,6 +162,7 @@ def create_local_file_runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         context=context,
+        config=config,
     )
 
 
@@ -165,4 +185,3 @@ def create_remote_file_runtime(
         ledger_store=ledger_store,
         context=context,
     )
-

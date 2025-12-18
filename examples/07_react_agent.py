@@ -4,7 +4,7 @@
 
 Demonstrates:
 - ReAct (Reason + Act) agent pattern
-- Tool registration and execution
+- Durable tool execution via ToolExecutor
 - Multi-turn LLM conversation
 - Agent completing a task autonomously
 
@@ -21,8 +21,8 @@ import sys
 
 # Check dependencies
 try:
-    from abstractcore.tools import ToolRegistry
-    from abstractruntime.integrations.abstractcore import create_local_runtime
+    from abstractcore.tools import ToolDefinition
+    from abstractruntime.integrations.abstractcore import MappingToolExecutor, create_local_runtime
 except ImportError:
     print("This example requires abstractcore.")
     print("Install with: pip install abstractcore")
@@ -65,26 +65,25 @@ def on_step(step: str, data: dict) -> None:
 
 
 def main():
-    # Create tool registry with filesystem tools
-    tool_registry = ToolRegistry()
-    for tool in ALL_TOOLS:
-        tool_registry.register(tool)
-    
-    # Create runtime with AbstractCore LLM integration
+    tools = list(ALL_TOOLS)
+    tool_executor = MappingToolExecutor.from_tools(tools)
+
+    # Create runtime with AbstractCore LLM integration + durable tool execution
     runtime = create_local_runtime(
         provider="ollama",
         model="qwen3:4b-instruct-2507-q4_K_M",
-        tool_registry=tool_registry,  # Cleaner API
+        tool_executor=tool_executor,
     )
     
     print("Available tools:")
-    for tool in tool_registry.list_tools():
-        print(f"  - {tool.name}: {tool.description[:50]}...")
+    for t in tools:
+        tool_def = getattr(t, "_tool_definition", None) or ToolDefinition.from_function(t)
+        print(f"  - {tool_def.name}: {tool_def.description[:50]}...")
     
     # Create the ReAct agent
     agent = ReactAgent(
         runtime=runtime,
-        tool_registry=tool_registry,
+        tools=tools,
         on_step=on_step,
     )
     

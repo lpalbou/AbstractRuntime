@@ -22,6 +22,18 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 
+def _trace_context(run: RunState) -> Dict[str, str]:
+    ctx: Dict[str, str] = {"run_id": run.run_id}
+    if run.actor_id:
+        ctx["actor_id"] = str(run.actor_id)
+    session_id = getattr(run, "session_id", None)
+    if session_id:
+        ctx["session_id"] = str(session_id)
+    if run.parent_run_id:
+        ctx["parent_run_id"] = str(run.parent_run_id)
+    return ctx
+
+
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
@@ -29,7 +41,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         messages = payload.get("messages")
         system_prompt = payload.get("system_prompt")
         tools = payload.get("tools")
-        params = payload.get("params")
+        raw_params = payload.get("params")
+        params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        # Propagate durable trace context into AbstractCore calls.
+        trace_metadata = params.get("trace_metadata")
+        if not isinstance(trace_metadata, dict):
+            trace_metadata = {}
+        trace_metadata.update(_trace_context(run))
+        params["trace_metadata"] = trace_metadata
 
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")
@@ -50,87 +70,26 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
     return _handler
 
 
-def make_tool_calls_handler(*, tools: ToolExecutor = None) -> EffectHandler:
+def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHandler:
     """Create a TOOL_CALLS effect handler.
-    
-    Tool execution priority:
-    1. Tools from effect payload (payload.tools)
-    2. Tools from run.vars["_tools"] (set at workflow start)
-    3. Fallback to provided ToolExecutor
-    
-    This allows agents to pass tools directly without needing a registry.
+
+    Tool execution is performed exclusively via the host-configured ToolExecutor.
+    This keeps `RunState.vars` and ledger payloads JSON-safe (durable execution).
     """
-    def _execute_tools_directly(tool_calls: list, tool_funcs: list) -> dict:
-        """Execute tools directly from function list."""
-        # Build lookup from tool name to function
-        tool_lookup = {}
-        for t in tool_funcs:
-            if hasattr(t, '_tool_definition'):
-                td = t._tool_definition
-                tool_lookup[td.name] = td.function
-            elif callable(t):
-                # Fallback: use function name
-                tool_lookup[t.__name__] = t
-        
-        results = []
-        for tc in tool_calls:
-            name = tc.get("name", "")
-            args = tc.get("arguments", {})
-            call_id = tc.get("call_id", "")
-            
-            func = tool_lookup.get(name)
-            if func:
-                try:
-                    output = func(**args)
-                    results.append({
-                        "call_id": call_id,
-                        "name": name,
-                        "success": True,
-                        "output": str(output) if output is not None else None,
-                        "error": None,
-                    })
-                except Exception as e:
-                    results.append({
-                        "call_id": call_id,
-                        "name": name,
-                        "success": False,
-                        "output": None,
-                        "error": str(e),
-                    })
-            else:
-                results.append({
-                    "call_id": call_id,
-                    "name": name,
-                    "success": False,
-                    "output": None,
-                    "error": f"Tool '{name}' not found",
-                })
-        
-        return {"mode": "executed", "results": results}
-    
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
         tool_calls = payload.get("tool_calls")
         if not isinstance(tool_calls, list):
             return EffectOutcome.failed("tool_calls requires payload.tool_calls (list)")
 
+        if tools is None:
+            return EffectOutcome.failed(
+                "TOOL_CALLS requires a ToolExecutor; configure Runtime with "
+                "MappingToolExecutor/AbstractCoreToolExecutor/PassthroughToolExecutor."
+            )
+
         try:
-            # Priority 1: Tools from effect payload
-            tool_funcs = payload.get("tools")
-            
-            # Priority 2: Tools from run.vars
-            if not tool_funcs:
-                tool_funcs = run.vars.get("_tools")
-            
-            # If we have tool functions, execute directly
-            if tool_funcs:
-                result = _execute_tools_directly(tool_calls, tool_funcs)
-            # Priority 3: Fallback to ToolExecutor
-            elif tools:
-                result = tools.execute(tool_calls=tool_calls)
-            else:
-                return EffectOutcome.failed("No tools available for execution")
-                
+            result = tools.execute(tool_calls=tool_calls)
         except Exception as e:
             logger.error("TOOL_CALLS execution failed", error=str(e))
             return EffectOutcome.failed(str(e))
@@ -158,4 +117,3 @@ def build_effect_handlers(*, llm: AbstractCoreLLMClient, tools: ToolExecutor = N
         EffectType.LLM_CALL: make_llm_call_handler(llm=llm),
         EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools),
     }
-

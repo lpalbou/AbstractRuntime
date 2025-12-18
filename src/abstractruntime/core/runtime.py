@@ -23,9 +23,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 import inspect
 
+from .config import RuntimeConfig
 from .models import (
     Effect,
     EffectType,
+    LimitWarning,
     RunState,
     RunStatus,
     StepPlan,
@@ -92,6 +94,7 @@ class Runtime:
         workflow_registry: Optional[Any] = None,
         artifact_store: Optional[Any] = None,
         effect_policy: Optional[EffectPolicy] = None,
+        config: Optional[RuntimeConfig] = None,
     ):
         self._run_store = run_store
         self._ledger_store = ledger_store
@@ -99,6 +102,7 @@ class Runtime:
         self._workflow_registry = workflow_registry
         self._artifact_store = artifact_store
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
+        self._config: RuntimeConfig = config or RuntimeConfig()
 
         self._handlers: Dict[EffectType, EffectHandler] = {}
         self._register_builtin_handlers()
@@ -146,8 +150,33 @@ class Runtime:
         """Set the effect policy for retry and idempotency."""
         self._effect_policy = policy
 
-    def start(self, *, workflow: WorkflowSpec, vars: Optional[Dict[str, Any]] = None, actor_id: Optional[str] = None, parent_run_id: Optional[str] = None) -> str:
-        run = RunState.new(workflow_id=workflow.workflow_id, entry_node=workflow.entry_node, vars=vars, actor_id=actor_id, parent_run_id=parent_run_id)
+    @property
+    def config(self) -> RuntimeConfig:
+        """Access the runtime configuration."""
+        return self._config
+
+    def start(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        vars: Optional[Dict[str, Any]] = None,
+        actor_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+    ) -> str:
+        # Initialize vars with _limits from config if not already set
+        vars = dict(vars or {})
+        if "_limits" not in vars:
+            vars["_limits"] = self._config.to_limits_dict()
+
+        run = RunState.new(
+            workflow_id=workflow.workflow_id,
+            entry_node=workflow.entry_node,
+            vars=vars,
+            actor_id=actor_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+        )
         self._run_store.save(run)
         return run.run_id
 
@@ -188,6 +217,126 @@ class Runtime:
 
     def get_ledger(self, run_id: str) -> list[dict[str, Any]]:
         return self._ledger_store.list(run_id)
+
+    # ---------------------------------------------------------------------
+    # Limit Management
+    # ---------------------------------------------------------------------
+
+    def get_limit_status(self, run_id: str) -> Dict[str, Any]:
+        """Get current limit status for a run.
+
+        Returns a structured dict with information about iterations, tokens,
+        and history limits, including whether warning thresholds are reached.
+
+        Args:
+            run_id: The run to check
+
+        Returns:
+            Dict with "iterations", "tokens", and "history" status info
+
+        Raises:
+            KeyError: If run_id not found
+        """
+        run = self.get_state(run_id)
+        limits = run.vars.get("_limits", {})
+
+        def pct(current: int, maximum: int) -> float:
+            return round(current / maximum * 100, 1) if maximum > 0 else 0
+
+        current_iter = int(limits.get("current_iteration", 0) or 0)
+        max_iter = int(limits.get("max_iterations", 25) or 25)
+        tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
+        max_tokens = int(limits.get("max_tokens", 32768) or 32768)
+
+        return {
+            "iterations": {
+                "current": current_iter,
+                "max": max_iter,
+                "pct": pct(current_iter, max_iter),
+                "warning": pct(current_iter, max_iter) >= limits.get("warn_iterations_pct", 80),
+            },
+            "tokens": {
+                "estimated_used": tokens_used,
+                "max": max_tokens,
+                "pct": pct(tokens_used, max_tokens),
+                "warning": pct(tokens_used, max_tokens) >= limits.get("warn_tokens_pct", 80),
+            },
+            "history": {
+                "max_messages": limits.get("max_history_messages", -1),
+            },
+        }
+
+    def check_limits(self, run: RunState) -> list[LimitWarning]:
+        """Check if any limits are approaching or exceeded.
+
+        This is the hybrid enforcement model: the runtime provides warnings,
+        workflow nodes are responsible for enforcement decisions.
+
+        Args:
+            run: The RunState to check
+
+        Returns:
+            List of LimitWarning objects for any limits at warning threshold or exceeded
+        """
+        warnings: list[LimitWarning] = []
+        limits = run.vars.get("_limits", {})
+
+        # Check iterations
+        current = int(limits.get("current_iteration", 0) or 0)
+        max_iter = int(limits.get("max_iterations", 25) or 25)
+        warn_pct = int(limits.get("warn_iterations_pct", 80) or 80)
+
+        if max_iter > 0:
+            if current >= max_iter:
+                warnings.append(LimitWarning("iterations", "exceeded", current, max_iter))
+            elif (current / max_iter * 100) >= warn_pct:
+                warnings.append(LimitWarning("iterations", "warning", current, max_iter))
+
+        # Check tokens
+        tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
+        max_tokens = int(limits.get("max_tokens", 32768) or 32768)
+        warn_tokens_pct = int(limits.get("warn_tokens_pct", 80) or 80)
+
+        if max_tokens > 0 and tokens_used > 0:
+            if tokens_used >= max_tokens:
+                warnings.append(LimitWarning("tokens", "exceeded", tokens_used, max_tokens))
+            elif (tokens_used / max_tokens * 100) >= warn_tokens_pct:
+                warnings.append(LimitWarning("tokens", "warning", tokens_used, max_tokens))
+
+        return warnings
+
+    def update_limits(self, run_id: str, updates: Dict[str, Any]) -> None:
+        """Update limits for a running workflow.
+
+        This allows mid-session updates (e.g., from /max-tokens command).
+        Only allowed limit keys are updated; unknown keys are ignored.
+
+        Args:
+            run_id: The run to update
+            updates: Dict of limit updates (e.g., {"max_tokens": 65536})
+
+        Raises:
+            KeyError: If run_id not found
+        """
+        run = self.get_state(run_id)
+        limits = run.vars.setdefault("_limits", {})
+
+        allowed_keys = {
+            "max_iterations",
+            "max_tokens",
+            "max_output_tokens",
+            "max_history_messages",
+            "warn_iterations_pct",
+            "warn_tokens_pct",
+            "estimated_tokens_used",
+            "current_iteration",
+        }
+
+        for key, value in updates.items():
+            if key in allowed_keys:
+                limits[key] = value
+
+        self._run_store.save(run)
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
@@ -399,18 +548,25 @@ class Runtime:
         # correct resume semantics for waiting effects without duplicating payload fields.
         try:
             sig = inspect.signature(handler)
+        except (TypeError, ValueError):
+            sig = None
+
+        if sig is not None:
             params = list(sig.parameters.values())
             has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
             if has_varargs or len(params) >= 3:
                 return handler(run, effect, default_next_node)
             return handler(run, effect)
-        except Exception:
-            # If signature inspection fails, fall back to attempting the new call form,
-            # then the legacy form.
-            try:
-                return handler(run, effect, default_next_node)
-            except TypeError:
+
+        # If signature inspection fails, fall back to attempting the new call form,
+        # then the legacy form (only for arity-mismatch TypeError).
+        try:
+            return handler(run, effect, default_next_node)
+        except TypeError as e:
+            msg = str(e)
+            if "positional" in msg and "argument" in msg and ("given" in msg or "required" in msg):
                 return handler(run, effect)
+            raise
 
     def _apply_resume_payload(self, run: RunState, *, payload: Dict[str, Any], override_node: Optional[str]) -> None:
         run.status = RunStatus.RUNNING
@@ -515,6 +671,7 @@ class Runtime:
             workflow=sub_workflow,
             vars=sub_vars,
             actor_id=run.actor_id,  # Inherit actor from parent
+            session_id=getattr(run, "session_id", None),  # Inherit session from parent
             parent_run_id=run.run_id,  # Track parent for hierarchy
         )
 
@@ -577,5 +734,3 @@ def _set_nested(target: Dict[str, Any], dotted_key: str, value: Any) -> None:
             cur[p] = nxt
         cur = nxt
     cur[parts[-1]] = value
-
-

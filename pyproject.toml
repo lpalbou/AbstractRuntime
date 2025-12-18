@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.0.1"
+version = "0.2.0"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"

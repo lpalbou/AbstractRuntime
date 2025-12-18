@@ -32,7 +32,7 @@ def _parse_iso(ts: str) -> datetime:
 
 @dataclass(frozen=True)
 class TimeRange:
-    """A closed-open interval [start, end] in ISO8601 strings.
+    """A closed interval [start, end] in ISO8601 strings.
 
     If start or end is None, the range is unbounded on that side.
     """
@@ -57,11 +57,11 @@ class TimeRange:
         range_start = _parse_iso(self.start) if self.start else None
         range_end = _parse_iso(self.end) if self.end else None
 
-        # Intersection test for closed-open ranges:
-        # span_end > range_start AND span_start < range_end
-        if range_start is not None and not (span_end > range_start):
+        # Intersection test for closed ranges:
+        # span_end >= range_start AND span_start <= range_end
+        if range_start is not None and span_end < range_start:
             return False
-        if range_end is not None and not (span_start < range_end):
+        if range_end is not None and span_start > range_end:
             return False
         return True
 
@@ -145,6 +145,25 @@ class ActiveContextPolicy:
             return []
 
         summary_by_artifact = ActiveContextPolicy.summary_text_by_artifact_id_from_run(run)
+        note_by_artifact: Dict[str, str] = {}
+        for span in spans:
+            if not isinstance(span, dict):
+                continue
+            if str(span.get("kind") or "") != "memory_note":
+                continue
+            artifact_id = str(span.get("artifact_id") or "")
+            if not artifact_id:
+                continue
+            # Notes are small; for keyword filtering, we can load their text safely.
+            try:
+                payload = artifact_store.load_json(artifact_id)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            note = payload.get("note")
+            if isinstance(note, str) and note.strip():
+                note_by_artifact[artifact_id] = note.strip()
 
         def _artifact_meta(artifact_id: str) -> Optional[ArtifactMetadata]:
             try:
@@ -175,7 +194,10 @@ class ActiveContextPolicy:
 
             if lowered_query:
                 haystack = ActiveContextPolicy._span_haystack(
-                    span=span, meta=meta, summary=summary_by_artifact.get(artifact_id)
+                    span=span,
+                    meta=meta,
+                    summary=summary_by_artifact.get(artifact_id),
+                    note=note_by_artifact.get(artifact_id),
                 )
                 if lowered_query not in haystack:
                     continue
@@ -451,10 +473,13 @@ class ActiveContextPolicy:
         span: Dict[str, Any],
         meta: Optional[ArtifactMetadata],
         summary: Optional[str],
+        note: Optional[str] = None,
     ) -> str:
         parts: List[str] = []
         if summary:
             parts.append(summary)
+        if note:
+            parts.append(note)
         for k in ("kind", "compression_mode", "focus", "from_timestamp", "to_timestamp"):
             v = span.get(k)
             if isinstance(v, str) and v:

@@ -53,6 +53,7 @@ class EffectType(str, Enum):
     MEMORY_QUERY = "memory_query"
     MEMORY_TAG = "memory_tag"
     MEMORY_COMPACT = "memory_compact"
+    MEMORY_NOTE = "memory_note"
 
     # Composition
     START_SUBWORKFLOW = "start_subworkflow"

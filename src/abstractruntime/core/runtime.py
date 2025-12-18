@@ -460,6 +460,7 @@ class Runtime:
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
+        self._handlers[EffectType.MEMORY_NOTE] = self._handle_memory_note
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
 
     def _find_prior_completed_result(
@@ -1344,6 +1345,145 @@ class Runtime:
         }
         return EffectOutcome.completed(result=result)
 
+    def _handle_memory_note(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle MEMORY_NOTE.
+
+        Store a small, durable memory note (key insight/decision) with tags and provenance sources.
+
+        Payload:
+          - note: str                (required)
+          - tags: dict[str,str]      (optional)
+          - sources: dict            (optional)
+              - run_id: str          (optional; defaults to current run_id)
+              - span_ids: list[str]  (optional; referenced span ids)
+              - message_ids: list[str] (optional; referenced message ids)
+          - tool_name: str           (optional; default "remember_note")
+          - call_id: str             (optional; passthrough)
+        """
+        import json
+
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+        runtime_ns = run.vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            run.vars["_runtime"] = runtime_ns
+
+        spans = runtime_ns.get("memory_spans")
+        if not isinstance(spans, list):
+            spans = []
+            runtime_ns["memory_spans"] = spans
+
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return EffectOutcome.failed(
+                "MEMORY_NOTE requires an ArtifactStore; configure runtime.set_artifact_store(...)"
+            )
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "remember_note")
+        call_id = str(payload.get("call_id") or "memory")
+
+        note = payload.get("note")
+        note_text = str(note or "").strip()
+        if not note_text:
+            return EffectOutcome.failed("MEMORY_NOTE requires payload.note (non-empty string)")
+
+        tags = payload.get("tags")
+        clean_tags: Dict[str, str] = {}
+        if isinstance(tags, dict):
+            for k, v in tags.items():
+                if isinstance(k, str) and isinstance(v, str) and k and v:
+                    if k == "kind":
+                        continue
+                    clean_tags[k] = v
+
+        sources = payload.get("sources")
+        sources_dict = dict(sources) if isinstance(sources, dict) else {}
+
+        def _norm_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            out: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        out.append(s)
+                elif isinstance(item, int):
+                    out.append(str(item))
+            # preserve order but dedup
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for s in out:
+                if s in seen:
+                    continue
+                seen.add(s)
+                deduped.append(s)
+            return deduped
+
+        source_run_id = str(sources_dict.get("run_id") or run.run_id).strip() or run.run_id
+        span_ids = _norm_list(sources_dict.get("span_ids"))
+        message_ids = _norm_list(sources_dict.get("message_ids"))
+
+        created_at = utc_now_iso()
+        artifact_payload: Dict[str, Any] = {
+            "note": note_text,
+            "sources": {"run_id": source_run_id, "span_ids": span_ids, "message_ids": message_ids},
+            "created_at": created_at,
+        }
+        if run.actor_id:
+            artifact_payload["actor_id"] = str(run.actor_id)
+        session_id = getattr(run, "session_id", None)
+        if session_id:
+            artifact_payload["session_id"] = str(session_id)
+
+        artifact_tags: Dict[str, str] = {"kind": "memory_note"}
+        artifact_tags.update(clean_tags)
+        meta = artifact_store.store_json(artifact_payload, run_id=run.run_id, tags=artifact_tags)
+        artifact_id = meta.artifact_id
+
+        preview = note_text
+        if len(preview) > 160:
+            preview = preview[:157] + "…"
+
+        span_record: Dict[str, Any] = {
+            "kind": "memory_note",
+            "artifact_id": artifact_id,
+            "created_at": created_at,
+            # Treat notes as point-in-time spans for time-range filtering.
+            "from_timestamp": created_at,
+            "to_timestamp": created_at,
+            "message_count": 0,
+            "note_preview": preview,
+        }
+        if clean_tags:
+            span_record["tags"] = dict(clean_tags)
+        if span_ids or message_ids:
+            span_record["sources"] = {"run_id": source_run_id, "span_ids": span_ids, "message_ids": message_ids}
+        if run.actor_id:
+            span_record["created_by"] = str(run.actor_id)
+
+        spans.append(span_record)
+
+        rendered_tags = json.dumps(clean_tags, ensure_ascii=False, sort_keys=True) if clean_tags else "{}"
+        text = f"Stored memory_note span_id={artifact_id} tags={rendered_tags}"
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "output": text,
+                    "error": None,
+                    "meta": {"span_id": artifact_id, "created_at": created_at},
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
 
 def _dedup_preserve_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -1509,6 +1649,32 @@ def _render_memory_query_output(
         if not isinstance(payload, dict):
             lines.append("    (artifact payload unavailable)")
             continue
+        if kind == "memory_note" or "note" in payload:
+            note = str(payload.get("note") or "").strip()
+            if note:
+                if len(note) > 2400:
+                    note = note[:2400] + "…"
+                lines.append("    note: " + note.replace("\n", "\\n"))
+            else:
+                lines.append("    (note payload missing note text)")
+
+            sources = payload.get("sources")
+            if isinstance(sources, dict):
+                src_run = sources.get("run_id")
+                span_ids = sources.get("span_ids")
+                msg_ids = sources.get("message_ids")
+                if isinstance(src_run, str) and src_run:
+                    lines.append(f"    sources.run_id: {src_run}")
+                if isinstance(span_ids, list) and span_ids:
+                    cleaned = [str(x) for x in span_ids if isinstance(x, (str, int))]
+                    if cleaned:
+                        lines.append(f"    sources.span_ids: {', '.join(cleaned[:12])}")
+                if isinstance(msg_ids, list) and msg_ids:
+                    cleaned = [str(x) for x in msg_ids if isinstance(x, (str, int))]
+                    if cleaned:
+                        lines.append(f"    sources.message_ids: {', '.join(cleaned[:12])}")
+            continue
+
         messages = payload.get("messages")
         if not isinstance(messages, list):
             lines.append("    (artifact missing messages)")

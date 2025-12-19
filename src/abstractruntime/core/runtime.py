@@ -95,6 +95,7 @@ class Runtime:
         artifact_store: Optional[Any] = None,
         effect_policy: Optional[EffectPolicy] = None,
         config: Optional[RuntimeConfig] = None,
+        chat_summarizer: Optional[Any] = None,
     ):
         self._run_store = run_store
         self._ledger_store = ledger_store
@@ -103,6 +104,7 @@ class Runtime:
         self._artifact_store = artifact_store
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
+        self._chat_summarizer = chat_summarizer
 
         self._handlers: Dict[EffectType, EffectHandler] = {}
         self._register_builtin_handlers()
@@ -1133,113 +1135,139 @@ class Runtime:
             )
 
         # ------------------------------------------------------------------
-        # 1) LLM summary (ledgered via a child run with an LLM_CALL effect)
+        # 1) LLM summary - use integration layer summarizer if available
         # ------------------------------------------------------------------
+        #
+        # When chat_summarizer is injected (from AbstractCore integration layer),
+        # use it for adaptive chunking based on max_tokens. This handles cases
+        # where the environment can't use the model's full context window
+        # (e.g., GPU memory constraints).
+        #
+        # When max_tokens == -1 (AUTO): Uses model's full capability
+        # When max_tokens > 0: Chunks messages if they exceed the limit
 
-        older_text = "\n".join([f"{m.get('role')}: {m.get('content')}" for m in split.older_messages])
-        focus_line = f"Focus: {focus_text}\n" if focus_text else ""
-        mode_line = f"Compression mode: {compression_mode}\n"
+        sub_run_id: Optional[str] = None  # Track for provenance if using fallback
 
-        prompt = (
-            "You are compressing older conversation context for an agent runtime.\n"
-            "Write a faithful, compact summary that preserves decisions, constraints, names, file paths, commands, and open questions.\n"
-            "Do NOT invent details. If something is unknown, say so.\n"
-            f"{mode_line}"
-            f"{focus_line}"
-            "Return STRICT JSON with keys: summary (string), key_points (array of strings), confidence (number 0..1).\n\n"
-            "OLDER MESSAGES (to be archived):\n"
-            f"{older_text}\n"
-        )
-
-        # Best-effort output budget for the summary itself.
-        limits = target_run.vars.get("_limits") if isinstance(target_run.vars.get("_limits"), dict) else {}
-        max_out = limits.get("max_output_tokens")
-        try:
-            max_out_tokens = int(max_out) if max_out is not None else None
-        except Exception:
-            max_out_tokens = None
-
-        llm_payload: Dict[str, Any] = {"prompt": prompt}
-        if max_out_tokens is not None:
-            llm_payload["params"] = {"max_tokens": max_out_tokens}
-
-        def llm_node(sub_run: RunState, sub_ctx) -> StepPlan:
-            return StepPlan(
-                node_id="llm",
-                effect=Effect(type=EffectType.LLM_CALL, payload=llm_payload, result_key="_temp.llm"),
-                next_node="done",
-            )
-
-        def done_node(sub_run: RunState, sub_ctx) -> StepPlan:
-            temp = sub_run.vars.get("_temp") if isinstance(sub_run.vars.get("_temp"), dict) else {}
-            return StepPlan(node_id="done", complete_output={"response": temp.get("llm")})
-
-        wf = WorkflowSpec(workflow_id="wf_memory_compact_llm", entry_node="llm", nodes={"llm": llm_node, "done": done_node})
-
-        sub_run_id = self.start(
-            workflow=wf,
-            vars={"context": {"prompt": prompt}, "scratchpad": {}, "_runtime": {}, "_temp": {}, "_limits": dict(limits)},
-            actor_id=run.actor_id,
-            session_id=getattr(run, "session_id", None),
-            parent_run_id=run.run_id,
-        )
-
-        sub_state = self.tick(workflow=wf, run_id=sub_run_id)
-        if sub_state.status == RunStatus.WAITING:
-            return EffectOutcome.failed("MEMORY_COMPACT does not support waiting subworkflows yet")
-        if sub_state.status == RunStatus.FAILED:
-            return EffectOutcome.failed(sub_state.error or "Compaction LLM subworkflow failed")
-        response = (sub_state.output or {}).get("response")
-        if not isinstance(response, dict):
-            response = {}
-
-        content = response.get("content")
-        content_text = "" if content is None else str(content).strip()
-        lowered = content_text.lower()
-        if any(
-            keyword in lowered
-            for keyword in (
-                "operation not permitted",
-                "failed to connect",
-                "connection refused",
-                "timed out",
-                "timeout",
-                "not running",
-                "model not found",
-            )
-        ):
-            return EffectOutcome.failed(f"Compaction LLM unavailable: {content_text}")
-
-        summary_text_out = content_text
-        key_points: list[str] = []
-        confidence: Optional[float] = None
-
-        # Parse JSON if present (support fenced output).
-        if content_text:
-            candidate = content_text
-            if "```" in candidate:
-                # extract first JSON-ish block
-                start = candidate.find("{")
-                end = candidate.rfind("}")
-                if 0 <= start < end:
-                    candidate = candidate[start : end + 1]
+        if self._chat_summarizer is not None:
+            # Use AbstractCore's BasicSummarizer with adaptive chunking
             try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict):
-                    if parsed.get("summary") is not None:
-                        summary_text_out = str(parsed.get("summary") or "").strip() or summary_text_out
-                    kp = parsed.get("key_points")
-                    if isinstance(kp, list):
-                        key_points = [str(x) for x in kp if isinstance(x, (str, int, float))][:20]
-                    conf = parsed.get("confidence")
-                    if isinstance(conf, (int, float)):
-                        confidence = float(conf)
-            except Exception:
-                pass
+                summarizer_result = self._chat_summarizer.summarize_chat_history(
+                    messages=split.older_messages,
+                    preserve_recent=0,  # Already split; don't preserve again
+                    focus=focus_text,
+                    compression_mode=compression_mode,
+                )
+                summary_text_out = summarizer_result.get("summary", "(summary unavailable)")
+                key_points = list(summarizer_result.get("key_points") or [])
+                confidence = summarizer_result.get("confidence")
+            except Exception as e:
+                return EffectOutcome.failed(f"Summarizer failed: {e}")
+        else:
+            # Fallback: Original prompt-based approach (for non-AbstractCore runtimes)
+            older_text = "\n".join([f"{m.get('role')}: {m.get('content')}" for m in split.older_messages])
+            focus_line = f"Focus: {focus_text}\n" if focus_text else ""
+            mode_line = f"Compression mode: {compression_mode}\n"
 
-        summary_text_out = summary_text_out.strip()
-        if not summary_text_out:
-            summary_text_out = "(summary unavailable)"
+            prompt = (
+                "You are compressing older conversation context for an agent runtime.\n"
+                "Write a faithful, compact summary that preserves decisions, constraints, names, file paths, commands, and open questions.\n"
+                "Do NOT invent details. If something is unknown, say so.\n"
+                f"{mode_line}"
+                f"{focus_line}"
+                "Return STRICT JSON with keys: summary (string), key_points (array of strings), confidence (number 0..1).\n\n"
+                "OLDER MESSAGES (to be archived):\n"
+                f"{older_text}\n"
+            )
+
+            # Best-effort output budget for the summary itself.
+            limits = target_run.vars.get("_limits") if isinstance(target_run.vars.get("_limits"), dict) else {}
+            max_out = limits.get("max_output_tokens")
+            try:
+                max_out_tokens = int(max_out) if max_out is not None else None
+            except Exception:
+                max_out_tokens = None
+
+            llm_payload: Dict[str, Any] = {"prompt": prompt}
+            if max_out_tokens is not None:
+                llm_payload["params"] = {"max_tokens": max_out_tokens}
+
+            def llm_node(sub_run: RunState, sub_ctx) -> StepPlan:
+                return StepPlan(
+                    node_id="llm",
+                    effect=Effect(type=EffectType.LLM_CALL, payload=llm_payload, result_key="_temp.llm"),
+                    next_node="done",
+                )
+
+            def done_node(sub_run: RunState, sub_ctx) -> StepPlan:
+                temp = sub_run.vars.get("_temp") if isinstance(sub_run.vars.get("_temp"), dict) else {}
+                return StepPlan(node_id="done", complete_output={"response": temp.get("llm")})
+
+            wf = WorkflowSpec(workflow_id="wf_memory_compact_llm", entry_node="llm", nodes={"llm": llm_node, "done": done_node})
+
+            sub_run_id = self.start(
+                workflow=wf,
+                vars={"context": {"prompt": prompt}, "scratchpad": {}, "_runtime": {}, "_temp": {}, "_limits": dict(limits)},
+                actor_id=run.actor_id,
+                session_id=getattr(run, "session_id", None),
+                parent_run_id=run.run_id,
+            )
+
+            sub_state = self.tick(workflow=wf, run_id=sub_run_id)
+            if sub_state.status == RunStatus.WAITING:
+                return EffectOutcome.failed("MEMORY_COMPACT does not support waiting subworkflows yet")
+            if sub_state.status == RunStatus.FAILED:
+                return EffectOutcome.failed(sub_state.error or "Compaction LLM subworkflow failed")
+            response = (sub_state.output or {}).get("response")
+            if not isinstance(response, dict):
+                response = {}
+
+            content = response.get("content")
+            content_text = "" if content is None else str(content).strip()
+            lowered = content_text.lower()
+            if any(
+                keyword in lowered
+                for keyword in (
+                    "operation not permitted",
+                    "failed to connect",
+                    "connection refused",
+                    "timed out",
+                    "timeout",
+                    "not running",
+                    "model not found",
+                )
+            ):
+                return EffectOutcome.failed(f"Compaction LLM unavailable: {content_text}")
+
+            summary_text_out = content_text
+            key_points: list[str] = []
+            confidence: Optional[float] = None
+
+            # Parse JSON if present (support fenced output).
+            if content_text:
+                candidate = content_text
+                if "```" in candidate:
+                    # extract first JSON-ish block
+                    start = candidate.find("{")
+                    end = candidate.rfind("}")
+                    if 0 <= start < end:
+                        candidate = candidate[start : end + 1]
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict):
+                        if parsed.get("summary") is not None:
+                            summary_text_out = str(parsed.get("summary") or "").strip() or summary_text_out
+                        kp = parsed.get("key_points")
+                        if isinstance(kp, list):
+                            key_points = [str(x) for x in kp if isinstance(x, (str, int, float))][:20]
+                        conf = parsed.get("confidence")
+                        if isinstance(conf, (int, float)):
+                            confidence = float(conf)
+                except Exception:
+                    pass
+
+            summary_text_out = summary_text_out.strip()
+            if not summary_text_out:
+                summary_text_out = "(summary unavailable)"
 
         # ------------------------------------------------------------------
         # 2) Archive older messages + update run state with summary

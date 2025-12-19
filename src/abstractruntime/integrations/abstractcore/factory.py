@@ -25,6 +25,7 @@ from ...storage.artifacts import FileArtifactStore, InMemoryArtifactStore, Artif
 from .effect_handlers import build_effect_handlers
 from .llm_client import LocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
 from .tool_executor import AbstractCoreToolExecutor, PassthroughToolExecutor, ToolExecutor
+from .summarizer import AbstractCoreChatSummarizer
 
 
 def _default_in_memory_stores() -> tuple[RunStore, LedgerStore]:
@@ -87,6 +88,14 @@ def create_local_runtime(
         # Merge capabilities into provided config
         config = config.with_capabilities(capabilities)
 
+    # Create chat summarizer with token limits from config
+    # This enables adaptive chunking during MEMORY_COMPACT
+    summarizer = AbstractCoreChatSummarizer(
+        llm=llm_client._llm,  # Use the underlying AbstractCore LLM instance
+        max_tokens=config.max_tokens if config.max_tokens is not None else -1,
+        max_output_tokens=config.max_output_tokens if config.max_output_tokens is not None else -1,
+    )
+
     return Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
@@ -95,6 +104,7 @@ def create_local_runtime(
         effect_policy=effect_policy,
         config=config,
         artifact_store=artifact_store,
+        chat_summarizer=summarizer,
     )
 
 

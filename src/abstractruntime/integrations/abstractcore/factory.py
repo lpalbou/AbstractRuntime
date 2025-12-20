@@ -23,7 +23,7 @@ from ...storage.base import LedgerStore, RunStore
 from ...storage.artifacts import FileArtifactStore, InMemoryArtifactStore, ArtifactStore
 
 from .effect_handlers import build_effect_handlers
-from .llm_client import LocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
+from .llm_client import MultiLocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
 from .tool_executor import AbstractCoreToolExecutor, PassthroughToolExecutor, ToolExecutor
 from .summarizer import AbstractCoreChatSummarizer
 
@@ -76,7 +76,7 @@ def create_local_runtime(
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
 
-    llm_client = LocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
+    llm_client = MultiLocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
     tools = tool_executor or AbstractCoreToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 

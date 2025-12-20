@@ -289,11 +289,15 @@ class Scheduler:
 
         resumed_count = 0
         for run in due_runs:
+            # Record resumption immediately to avoid a race where the run completes
+            # (via runtime.tick) before the main thread observes updated stats.
+            self._stats.runs_resumed += 1
+            resumed_count += 1
             try:
                 self._resume_wait_until(run)
-                resumed_count += 1
-                self._stats.runs_resumed += 1
             except Exception as e:
+                self._stats.runs_resumed -= 1
+                resumed_count -= 1
                 logger.error("Failed to resume run %s: %s", run.run_id, e)
                 self._stats.runs_failed += 1
                 self._record_error(f"Run {run.run_id}: {e}")

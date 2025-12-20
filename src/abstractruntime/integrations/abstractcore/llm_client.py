@@ -169,6 +169,9 @@ class LocalAbstractCoreLLMClient:
         # `base_url` is a provider construction concern in local mode. We intentionally
         # do not create new providers per call unless the host explicitly chooses to.
         params.pop("base_url", None)
+        # Reserved routing keys (used by MultiLocalAbstractCoreLLMClient).
+        params.pop("_provider", None)
+        params.pop("_model", None)
 
         capabilities: List[str] = []
         get_capabilities = getattr(self._llm, "get_capabilities", None)
@@ -239,6 +242,71 @@ class LocalAbstractCoreLLMClient:
         except Exception:
             # Safe fallback if detection fails
             return {"max_tokens": 32768}
+
+
+class MultiLocalAbstractCoreLLMClient:
+    """Local AbstractCore client with per-request provider/model routing.
+
+    This keeps the same `generate(...)` signature as AbstractCoreLLMClient by
+    using reserved keys in `params`:
+    - `_provider`: override provider for this request
+    - `_model`: override model for this request
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        llm_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self._llm_kwargs = dict(llm_kwargs or {})
+        self._default_provider = provider.strip().lower()
+        self._default_model = model.strip()
+        self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
+        self._default_client = self._get_client(self._default_provider, self._default_model)
+
+        # Provide a stable underlying LLM for components that need one (e.g. summarizer).
+        self._llm = getattr(self._default_client, "_llm", None)
+
+    def _get_client(self, provider: str, model: str) -> LocalAbstractCoreLLMClient:
+        key = (provider.strip().lower(), model.strip())
+        client = self._clients.get(key)
+        if client is None:
+            client = LocalAbstractCoreLLMClient(provider=key[0], model=key[1], llm_kwargs=self._llm_kwargs)
+            self._clients[key] = client
+        return client
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        params = dict(params or {})
+        provider = params.pop("_provider", None)
+        model = params.pop("_model", None)
+
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+
+        client = self._get_client(provider_str, model_str)
+        return client.generate(
+            prompt=prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+            params=params,
+        )
+
+    def get_model_capabilities(self) -> Dict[str, Any]:
+        # Best-effort: use default model capabilities. Per-model limits can be added later.
+        return self._default_client.get_model_capabilities()
 
 
 class HttpxRequestSender:

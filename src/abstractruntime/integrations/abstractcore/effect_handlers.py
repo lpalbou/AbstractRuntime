@@ -40,6 +40,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         prompt = payload.get("prompt")
         messages = payload.get("messages")
         system_prompt = payload.get("system_prompt")
+        provider = payload.get("provider")
+        model = payload.get("model")
         tools = payload.get("tools")
         raw_params = payload.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}
@@ -50,6 +52,14 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
             trace_metadata = {}
         trace_metadata.update(_trace_context(run))
         params["trace_metadata"] = trace_metadata
+
+        # Support per-effect routing: allow the payload to override provider/model.
+        # These reserved keys are consumed by MultiLocalAbstractCoreLLMClient and
+        # ignored by LocalAbstractCoreLLMClient.
+        if isinstance(provider, str) and provider.strip():
+            params["_provider"] = provider.strip()
+        if isinstance(model, str) and model.strip():
+            params["_model"] = model.strip()
 
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")

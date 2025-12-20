@@ -430,7 +430,15 @@ class Runtime:
 
         return run
 
-    def resume(self, *, workflow: WorkflowSpec, run_id: str, wait_key: Optional[str], payload: Dict[str, Any]) -> RunState:
+    def resume(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        run_id: str,
+        wait_key: Optional[str],
+        payload: Dict[str, Any],
+        max_steps: int = 100,
+    ) -> RunState:
         run = self.get_state(run_id)
         if run.status != RunStatus.WAITING or run.waiting is None:
             raise ValueError("Run is not waiting")
@@ -449,7 +457,9 @@ class Runtime:
         run.updated_at = utc_now_iso()
         self._run_store.save(run)
 
-        return self.tick(workflow=workflow, run_id=run_id)
+        if max_steps <= 0:
+            return run
+        return self.tick(workflow=workflow, run_id=run_id, max_steps=max_steps)
 
     # ---------------------------------------------------------------------
     # Internals

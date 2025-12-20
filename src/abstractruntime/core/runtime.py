@@ -422,8 +422,18 @@ class Runtime:
             if plan.effect.result_key and outcome.result is not None:
                 _set_nested(run.vars, plan.effect.result_key, outcome.result)
 
+            # Terminal effect node: treat missing next_node as completion.
+            #
+            # Rationale: StepPlan.complete_output is evaluated *before* effects
+            # execute, so an effectful node cannot both execute an effect and
+            # complete the run in a single StepPlan. Allowing next_node=None
+            # makes "end on an effect node" valid (Blueprint-style UX).
             if not plan.next_node:
-                raise ValueError(f"Node '{plan.node_id}' executed effect but did not specify next_node")
+                run.status = RunStatus.COMPLETED
+                run.output = {"success": True, "result": outcome.result}
+                run.updated_at = utc_now_iso()
+                self._run_store.save(run)
+                return run
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
             self._run_store.save(run)

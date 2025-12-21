@@ -46,6 +46,7 @@ class EffectType(str, Enum):
     WAIT_EVENT = "wait_event"
     WAIT_UNTIL = "wait_until"
     ASK_USER = "ask_user"
+    ANSWER_USER = "answer_user"
 
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"

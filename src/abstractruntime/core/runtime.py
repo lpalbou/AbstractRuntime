@@ -479,6 +479,7 @@ class Runtime:
         self._handlers[EffectType.WAIT_EVENT] = self._handle_wait_event
         self._handlers[EffectType.WAIT_UNTIL] = self._handle_wait_until
         self._handlers[EffectType.ASK_USER] = self._handle_ask_user
+        self._handlers[EffectType.ANSWER_USER] = self._handle_answer_user
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
@@ -653,6 +654,22 @@ class Runtime:
             allow_free_text=allow_free_text,
         )
         return EffectOutcome.waiting(wait)
+
+    def _handle_answer_user(
+        self, run: RunState, effect: Effect, default_next_node: Optional[str]
+    ) -> EffectOutcome:
+        """Handle ANSWER_USER effect.
+
+        This effect is intentionally non-blocking: it completes immediately and
+        returns the message payload so the host UI can render it.
+        """
+        message = effect.payload.get("message")
+        if message is None:
+            # Backward/compat convenience aliases.
+            message = effect.payload.get("text") or effect.payload.get("content")
+        if message is None:
+            return EffectOutcome.failed("answer_user requires payload.message")
+        return EffectOutcome.completed({"message": str(message)})
 
     def _handle_start_subworkflow(
         self, run: RunState, effect: Effect, default_next_node: Optional[str]

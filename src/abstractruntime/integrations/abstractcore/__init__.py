@@ -27,6 +27,7 @@ from .factory import (
     create_remote_file_runtime,
     create_remote_runtime,
 )
+from .observability import attach_global_event_bus_bridge, emit_step_record
 
 __all__ = [
     "AbstractCoreLLMClient",
@@ -44,4 +45,6 @@ __all__ = [
     "create_hybrid_runtime",
     "create_local_file_runtime",
     "create_remote_file_runtime",
+    "attach_global_event_bus_bridge",
+    "emit_step_record",
 ]

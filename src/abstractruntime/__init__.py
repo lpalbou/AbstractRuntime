@@ -33,6 +33,7 @@ from .storage.base import QueryableRunStore
 from .storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from .storage.json_files import JsonFileRunStore, JsonlLedgerStore
 from .storage.ledger_chain import HashChainedLedgerStore, verify_ledger_chain
+from .storage.observable import ObservableLedgerStore, ObservableLedgerStoreProtocol
 from .storage.snapshots import Snapshot, SnapshotStore, InMemorySnapshotStore, JsonSnapshotStore
 from .storage.artifacts import (
     Artifact,
@@ -82,6 +83,8 @@ __all__ = [
     "JsonlLedgerStore",
     "HashChainedLedgerStore",
     "verify_ledger_chain",
+    "ObservableLedgerStore",
+    "ObservableLedgerStoreProtocol",
     "Snapshot",
     "SnapshotStore",
     "InMemorySnapshotStore",
@@ -109,5 +112,4 @@ __all__ = [
     "ActiveContextPolicy",
     "TimeRange",
 ]
-
 

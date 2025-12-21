@@ -318,6 +318,26 @@ class Runtime:
     def get_ledger(self, run_id: str) -> list[dict[str, Any]]:
         return self._ledger_store.list(run_id)
 
+    def subscribe_ledger(
+        self,
+        callback: Callable[[Dict[str, Any]], None],
+        *,
+        run_id: Optional[str] = None,
+    ) -> Callable[[], None]:
+        """Subscribe to ledger append events (in-process only).
+
+        This is an optional capability: not all LedgerStore implementations
+        support subscriptions. When unavailable, wrap the configured store with
+        `abstractruntime.storage.observable.ObservableLedgerStore`.
+        """
+        subscribe = getattr(self._ledger_store, "subscribe", None)
+        if not callable(subscribe):
+            raise RuntimeError(
+                "Configured LedgerStore does not support subscriptions. "
+                "Wrap it with ObservableLedgerStore to enable `subscribe_ledger()`."
+            )
+        return subscribe(callback, run_id=run_id)
+
     # ---------------------------------------------------------------------
     # Trace Helpers (Runtime-Owned)
     # ---------------------------------------------------------------------

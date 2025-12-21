@@ -87,7 +87,11 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
 
 
 def _trace_context(run: RunState) -> Dict[str, str]:
-    ctx: Dict[str, str] = {"run_id": run.run_id}
+    ctx: Dict[str, str] = {
+        "run_id": run.run_id,
+        "workflow_id": str(run.workflow_id),
+        "node_id": str(run.current_node),
+    }
     if run.actor_id:
         ctx["actor_id"] = str(run.actor_id)
     session_id = getattr(run, "session_id", None)

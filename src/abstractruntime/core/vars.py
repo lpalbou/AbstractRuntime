@@ -21,6 +21,7 @@ SCRATCHPAD = "scratchpad"
 RUNTIME = "_runtime"
 TEMP = "_temp"
 LIMITS = "_limits"  # Canonical storage for runtime resource limits
+NODE_TRACES = "node_traces"  # _runtime namespace key for per-node execution traces
 
 
 def ensure_namespaces(vars: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,6 +80,29 @@ def ensure_limits(vars: Dict[str, Any]) -> Dict[str, Any]:
     return get_limits(vars)
 
 
+def get_node_traces(vars: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the runtime-owned per-node trace mapping.
+
+    Stored under `run.vars["_runtime"]["node_traces"]`.
+    This is intended for host UX/debugging and for exposing traces to higher layers.
+    """
+    runtime_ns = get_runtime(vars)
+    traces = runtime_ns.get(NODE_TRACES)
+    if not isinstance(traces, dict):
+        traces = {}
+        runtime_ns[NODE_TRACES] = traces
+    return traces
+
+
+def get_node_trace(vars: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+    """Return a single node trace object (always a dict)."""
+    traces = get_node_traces(vars)
+    trace = traces.get(node_id)
+    if isinstance(trace, dict):
+        return trace
+    return {"node_id": node_id, "steps": []}
+
+
 def _default_limits() -> Dict[str, Any]:
     """Return default limits dict."""
     return {
@@ -91,4 +115,3 @@ def _default_limits() -> Dict[str, Any]:
         "warn_iterations_pct": 80,
         "warn_tokens_pct": 80,
     }
-

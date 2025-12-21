@@ -21,7 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
+import copy
 import inspect
+import json
 
 from .config import RuntimeConfig
 from .models import (
@@ -43,6 +45,102 @@ from ..storage.base import LedgerStore, RunStore
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_runtime_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
+    runtime_ns = vars.get("_runtime")
+    if not isinstance(runtime_ns, dict):
+        runtime_ns = {}
+        vars["_runtime"] = runtime_ns
+    return runtime_ns
+
+
+def _record_node_trace(
+    *,
+    run: RunState,
+    node_id: str,
+    effect: Effect,
+    outcome: "EffectOutcome",
+    idempotency_key: Optional[str],
+    reused_prior_result: bool,
+    max_entries_per_node: int = 100,
+) -> None:
+    """Record a JSON-safe per-node execution trace in run.vars["_runtime"].
+
+    This trace is runtime-owned and durable (stored in RunStore checkpoints).
+    It exists to support higher-level hosts (AbstractFlow, AbstractCode, etc.)
+    that need structured "scratchpad"/debug information without inventing
+    host-specific persistence formats.
+    """
+
+    runtime_ns = _ensure_runtime_namespace(run.vars)
+    traces = runtime_ns.get("node_traces")
+    if not isinstance(traces, dict):
+        traces = {}
+        runtime_ns["node_traces"] = traces
+
+    node_trace = traces.get(node_id)
+    if not isinstance(node_trace, dict):
+        node_trace = {"node_id": node_id, "steps": []}
+        traces[node_id] = node_trace
+
+    steps = node_trace.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+        node_trace["steps"] = steps
+
+    wait_dict: Optional[Dict[str, Any]] = None
+    if outcome.status == "waiting" and outcome.wait is not None:
+        w = outcome.wait
+        wait_dict = {
+            "reason": w.reason.value if hasattr(w.reason, "value") else str(w.reason),
+            "wait_key": w.wait_key,
+            "until": w.until,
+            "resume_to_node": w.resume_to_node,
+            "result_key": w.result_key,
+            "prompt": w.prompt,
+            "choices": w.choices,
+            "allow_free_text": w.allow_free_text,
+            "details": w.details,
+        }
+
+    entry: Dict[str, Any] = {
+        "ts": utc_now_iso(),
+        "node_id": node_id,
+        "status": outcome.status,
+        "idempotency_key": idempotency_key,
+        "reused_prior_result": reused_prior_result,
+        "effect": {
+            "type": effect.type.value,
+            "payload": effect.payload,
+            "result_key": effect.result_key,
+        },
+    }
+    if outcome.status == "completed":
+        entry["result"] = outcome.result
+    elif outcome.status == "failed":
+        entry["error"] = outcome.error
+    elif wait_dict is not None:
+        entry["wait"] = wait_dict
+
+    # Ensure the trace remains JSON-safe even if a handler violates the contract.
+    try:
+        json.dumps(entry)
+    except TypeError:
+        entry = {
+            "ts": entry.get("ts"),
+            "node_id": node_id,
+            "status": outcome.status,
+            "idempotency_key": idempotency_key,
+            "reused_prior_result": reused_prior_result,
+            "effect": {"type": effect.type.value, "result_key": effect.result_key},
+            "error": "non_json_safe_trace_entry",
+        }
+
+    steps.append(entry)
+    if max_entries_per_node > 0 and len(steps) > max_entries_per_node:
+        del steps[: max(0, len(steps) - max_entries_per_node)]
+    node_trace["updated_at"] = utc_now_iso()
 
 
 @dataclass
@@ -221,6 +319,32 @@ class Runtime:
         return self._ledger_store.list(run_id)
 
     # ---------------------------------------------------------------------
+    # Trace Helpers (Runtime-Owned)
+    # ---------------------------------------------------------------------
+
+    def get_node_traces(self, run_id: str) -> Dict[str, Any]:
+        """Return runtime-owned per-node traces for a run.
+
+        Traces are stored in `RunState.vars["_runtime"]["node_traces"]`.
+        Returns a deep copy so callers can safely inspect without mutating the run.
+        """
+        run = self.get_state(run_id)
+        runtime_ns = run.vars.get("_runtime")
+        traces = runtime_ns.get("node_traces") if isinstance(runtime_ns, dict) else None
+        return copy.deepcopy(traces) if isinstance(traces, dict) else {}
+
+    def get_node_trace(self, run_id: str, node_id: str) -> Dict[str, Any]:
+        """Return a single node trace object for a run.
+
+        Returns an empty `{node_id, steps: []}` object when missing.
+        """
+        traces = self.get_node_traces(run_id)
+        trace = traces.get(node_id)
+        if isinstance(trace, dict):
+            return trace
+        return {"node_id": node_id, "steps": []}
+
+    # ---------------------------------------------------------------------
     # Limit Management
     # ---------------------------------------------------------------------
 
@@ -389,6 +513,7 @@ class Runtime:
                 run=run, node_id=plan.node_id, effect=plan.effect
             )
             prior_result = self._find_prior_completed_result(run.run_id, idempotency_key)
+            reused_prior_result = prior_result is not None
 
             if prior_result is not None:
                 # Reuse prior result - skip re-execution
@@ -402,6 +527,15 @@ class Runtime:
                     idempotency_key=idempotency_key,
                     default_next_node=plan.next_node,
                 )
+
+            _record_node_trace(
+                run=run,
+                node_id=plan.node_id,
+                effect=plan.effect,
+                outcome=outcome,
+                idempotency_key=idempotency_key,
+                reused_prior_result=reused_prior_result,
+            )
 
             if outcome.status == "failed":
                 run.status = RunStatus.FAILED

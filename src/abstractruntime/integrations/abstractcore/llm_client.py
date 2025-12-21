@@ -21,6 +21,79 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
+_TOOL_MARKERS = (
+    "<|tool_call|>",
+    "</|tool_call|>",
+    "<tool_call>",
+    "</tool_call>",
+    "<function_call",
+    "</function_call>",
+    "```tool_code",
+    "```tool_call",
+)
+
+
+def _maybe_parse_tool_calls_from_text(
+    *,
+    content: Optional[str],
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Best-effort extraction of tool calls from response content.
+
+    Some provider/model combinations emit tool calls as text tags (e.g. `<tool_call>...</tool_call>`)
+    but fail to populate a structured `tool_calls` field. When that happens, the runtime must still
+    be able to execute tools via the ToolExecutor (ADR-0006).
+
+    Returns:
+        (tool_calls, cleaned_content)
+        - tool_calls: JSON-safe list of tool call dicts when detected, else None
+        - cleaned_content: content with tool-call markup stripped when detected, else None
+    """
+    if not isinstance(content, str) or not content.strip():
+        return None, None
+
+    lower = content.lower()
+    if not any(m in lower for m in _TOOL_MARKERS):
+        return None, None
+
+    try:
+        from abstractcore.tools.parser import parse_tool_calls, clean_tool_syntax
+    except Exception:
+        return None, None
+
+    try:
+        # Force "try all formats" to handle architecture detection mismatches.
+        calls = parse_tool_calls(content, model_name=None)
+    except Exception:
+        calls = []
+
+    if not calls:
+        return None, None
+
+    out_calls: List[Dict[str, Any]] = []
+    for tc in calls:
+        name = getattr(tc, "name", None)
+        arguments = getattr(tc, "arguments", None)
+        call_id = getattr(tc, "call_id", None)
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out_calls.append(
+            {
+                "name": name,
+                "arguments": _jsonable(arguments) if arguments is not None else {},
+                "call_id": str(call_id) if call_id is not None else None,
+            }
+        )
+
+    if not out_calls:
+        return None, None
+
+    try:
+        cleaned = clean_tool_syntax(content, calls)
+    except Exception:
+        cleaned = content
+
+    return out_calls, cleaned
+
 
 @dataclass(frozen=True)
 class HttpResponse:
@@ -207,13 +280,21 @@ class LocalAbstractCoreLLMClient:
             result = _normalize_local_response(resp)
 
             # Parse tool calls from response content.
-            if result.get("content"):
-                parsed = self._tool_handler.parse_response(result["content"], mode="prompted")
+            content = result.get("content")
+            if isinstance(content, str) and content.strip():
+                parsed = self._tool_handler.parse_response(content, mode="prompted")
                 if parsed.tool_calls:
                     result["tool_calls"] = [
                         {"name": tc.name, "arguments": tc.arguments, "call_id": tc.call_id}
                         for tc in parsed.tool_calls
                     ]
+                    result["content"] = parsed.content
+                else:
+                    tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content)
+                    if tool_calls:
+                        result["tool_calls"] = tool_calls
+                        if isinstance(cleaned, str):
+                            result["content"] = cleaned
             return result
 
         resp = self._llm.generate(
@@ -224,7 +305,18 @@ class LocalAbstractCoreLLMClient:
             stream=False,
             **params,
         )
-        return _normalize_local_response(resp)
+        result = _normalize_local_response(resp)
+
+        # Fallback: some providers return tool call tags in content without structured tool_calls.
+        if tools and not result.get("tool_calls"):
+            content = result.get("content")
+            tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content if isinstance(content, str) else None)
+            if tool_calls:
+                result["tool_calls"] = tool_calls
+                if isinstance(cleaned, str):
+                    result["content"] = cleaned
+
+        return result
 
     def get_model_capabilities(self) -> Dict[str, Any]:
         """Get model capabilities including max_tokens, vision_support, etc.

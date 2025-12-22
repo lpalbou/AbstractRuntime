@@ -170,8 +170,9 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
         if not isinstance(tool_calls, list):
             return EffectOutcome.failed("tool_calls requires payload.tool_calls (list)")
         allowed_tools_raw = payload.get("allowed_tools")
-        allowed_tools: Optional[Set[str]] = None
-        if isinstance(allowed_tools_raw, list):
+        allowlist_enabled = isinstance(allowed_tools_raw, list)
+        allowed_tools: Set[str] = set()
+        if allowlist_enabled:
             allowed_tools = {str(t) for t in allowed_tools_raw if isinstance(t, str) and t.strip()}
 
         if tools is None:
@@ -182,7 +183,7 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
 
         filtered_tool_calls = tool_calls
         blocked_by_index: Dict[int, Dict[str, Any]] = {}
-        if allowed_tools:
+        if allowlist_enabled:
             filtered_tool_calls = []
             for idx, tc in enumerate(tool_calls):
                 if not isinstance(tc, dict):

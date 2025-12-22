@@ -861,6 +861,7 @@ class Runtime:
 
         sub_vars = effect.payload.get("vars") or {}
         is_async = bool(effect.payload.get("async", False))
+        include_traces = bool(effect.payload.get("include_traces", False))
         resume_to = effect.payload.get("resume_to_node") or default_next_node
 
         # Start the subworkflow with parent tracking
@@ -886,10 +887,10 @@ class Runtime:
 
         if sub_state.status == RunStatus.COMPLETED:
             # Subworkflow completed - return its output
-            return EffectOutcome.completed({
-                "sub_run_id": sub_run_id,
-                "output": sub_state.output,
-            })
+            result: Dict[str, Any] = {"sub_run_id": sub_run_id, "output": sub_state.output}
+            if include_traces:
+                result["node_traces"] = self.get_node_traces(sub_run_id)
+            return EffectOutcome.completed(result)
 
         if sub_state.status == RunStatus.FAILED:
             # Subworkflow failed - propagate error

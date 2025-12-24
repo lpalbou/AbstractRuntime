@@ -63,6 +63,7 @@ def _record_node_trace(
     outcome: "EffectOutcome",
     idempotency_key: Optional[str],
     reused_prior_result: bool,
+    duration_ms: Optional[float] = None,
     max_entries_per_node: int = 100,
 ) -> None:
     """Record a JSON-safe per-node execution trace in run.vars["_runtime"].
@@ -116,6 +117,9 @@ def _record_node_trace(
             "result_key": effect.result_key,
         },
     }
+    if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
+        # UI/UX consumers use this for per-step timing badges (kept JSON-safe).
+        entry["duration_ms"] = float(duration_ms)
     if outcome.status == "completed":
         entry["result"] = outcome.result
     elif outcome.status == "failed":
@@ -535,6 +539,12 @@ class Runtime:
             prior_result = self._find_prior_completed_result(run.run_id, idempotency_key)
             reused_prior_result = prior_result is not None
 
+            # Measure effect execution duration (wall-clock). This is used for
+            # host-side UX (badges, throughput estimates) and is stored in the
+            # runtime-owned node trace (JSON-safe).
+            import time
+            t0 = time.perf_counter()
+
             if prior_result is not None:
                 # Reuse prior result - skip re-execution
                 outcome = EffectOutcome.completed(prior_result)
@@ -548,6 +558,8 @@ class Runtime:
                     default_next_node=plan.next_node,
                 )
 
+            duration_ms = float((time.perf_counter() - t0) * 1000.0)
+
             _record_node_trace(
                 run=run,
                 node_id=plan.node_id,
@@ -555,6 +567,7 @@ class Runtime:
                 outcome=outcome,
                 idempotency_key=idempotency_key,
                 reused_prior_result=reused_prior_result,
+                duration_ms=duration_ms,
             )
 
             if outcome.status == "failed":

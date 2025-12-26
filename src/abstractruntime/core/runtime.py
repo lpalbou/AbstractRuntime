@@ -40,7 +40,8 @@ from .models import (
 )
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
-from ..storage.base import LedgerStore, RunStore
+from ..storage.base import LedgerStore, RunStore, QueryableRunStore
+from .event_keys import build_event_wait_key
 
 
 def utc_now_iso() -> str:
@@ -647,6 +648,7 @@ class Runtime:
         self._handlers[EffectType.WAIT_UNTIL] = self._handle_wait_until
         self._handlers[EffectType.ASK_USER] = self._handle_ask_user
         self._handlers[EffectType.ANSWER_USER] = self._handle_answer_user
+        self._handlers[EffectType.EMIT_EVENT] = self._handle_emit_event
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
@@ -773,7 +775,23 @@ class Runtime:
     def _handle_wait_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         wait_key = effect.payload.get("wait_key")
         if not wait_key:
-            return EffectOutcome.failed("wait_event requires payload.wait_key")
+            # Allow structured payloads (scope/name) so hosts can compute stable keys.
+            scope = effect.payload.get("scope", "session")
+            name = effect.payload.get("name") or effect.payload.get("event_name")
+            if not isinstance(name, str) or not name.strip():
+                return EffectOutcome.failed("wait_event requires payload.wait_key or payload.name")
+
+            session_id = effect.payload.get("session_id") or run.session_id or run.run_id
+            try:
+                wait_key = build_event_wait_key(
+                    scope=str(scope or "session"),
+                    name=str(name),
+                    session_id=str(session_id) if session_id is not None else None,
+                    workflow_id=run.workflow_id,
+                    run_id=run.run_id,
+                )
+            except Exception as e:
+                return EffectOutcome.failed(f"wait_event invalid payload: {e}")
         resume_to = effect.payload.get("resume_to_node") or default_next_node
         wait = WaitState(
             reason=WaitReason.EVENT,
@@ -782,6 +800,154 @@ class Runtime:
             result_key=effect.result_key,
         )
         return EffectOutcome.waiting(wait)
+
+    def _handle_emit_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Emit a durable event and resume matching WAIT_EVENT runs.
+
+        Payload:
+          - name: str (required)  event name
+          - scope: str (optional, default "session")  "session" | "workflow" | "run" | "global"
+          - session_id: str (optional)  target session id (for cross-workflow targeted delivery)
+          - payload: dict (optional)  event payload delivered to listeners
+          - max_steps: int (optional, default 100)  tick budget per resumed run
+
+        Notes:
+        - This is durable because it resumes WAIT_EVENT runs via Runtime.resume(), which
+          checkpoints run state and appends ledger records for subsequent steps.
+        - Delivery is best-effort and at-least-once; listeners should be idempotent if needed.
+        """
+        name = effect.payload.get("name") or effect.payload.get("event_name")
+        if not isinstance(name, str) or not name.strip():
+            return EffectOutcome.failed("emit_event requires payload.name")
+
+        scope = effect.payload.get("scope", "session")
+        target_session_id = effect.payload.get("session_id")
+        payload = effect.payload.get("payload") or {}
+        if not isinstance(payload, dict):
+            payload = {"value": payload}
+
+        # NOTE: we intentionally resume listeners with max_steps=0 (no execution).
+        # Hosts (web backend, workers, schedulers) should drive RUNNING runs and
+        # stream their StepRecords deterministically (better observability and UX).
+        try:
+            max_steps = int(effect.payload.get("max_steps", 0) or 0)
+        except Exception:
+            max_steps = 0
+        if max_steps < 0:
+            max_steps = 0
+
+        # Determine target scope id (default: current session/run).
+        session_id = target_session_id
+        if session_id is None and str(scope or "session").strip().lower() == "session":
+            session_id = run.session_id or run.run_id
+
+        try:
+            wait_key = build_event_wait_key(
+                scope=str(scope or "session"),
+                name=str(name),
+                session_id=str(session_id) if session_id is not None else None,
+                workflow_id=run.workflow_id,
+                run_id=run.run_id,
+            )
+        except Exception as e:
+            return EffectOutcome.failed(f"emit_event invalid payload: {e}")
+
+        # Wildcard listeners ("*") receive all events within the same scope_id.
+        wildcard_wait_key: Optional[str] = None
+        try:
+            wildcard_wait_key = build_event_wait_key(
+                scope=str(scope or "session"),
+                name="*",
+                session_id=str(session_id) if session_id is not None else None,
+                workflow_id=run.workflow_id,
+                run_id=run.run_id,
+            )
+        except Exception:
+            wildcard_wait_key = None
+
+        if self._workflow_registry is None:
+            return EffectOutcome.failed(
+                "emit_event requires a workflow_registry to resume target runs. "
+                "Set it via Runtime(workflow_registry=...) or runtime.set_workflow_registry(...)."
+            )
+
+        if not isinstance(self._run_store, QueryableRunStore):
+            return EffectOutcome.failed(
+                "emit_event requires a QueryableRunStore to find waiting runs. "
+                "Use InMemoryRunStore/JsonFileRunStore or provide a queryable store."
+            )
+
+        # Find all runs waiting for this event key.
+        candidates = self._run_store.list_runs(
+            status=RunStatus.WAITING,
+            wait_reason=WaitReason.EVENT,
+            limit=10_000,
+        )
+
+        delivered_to: list[str] = []
+        resumed: list[Dict[str, Any]] = []
+        envelope = {
+            "event_id": effect.payload.get("event_id") or None,
+            "name": str(name),
+            "scope": str(scope or "session"),
+            "session_id": str(session_id) if session_id is not None else None,
+            "payload": dict(payload),
+            "emitted_at": utc_now_iso(),
+            "emitter": {
+                "run_id": run.run_id,
+                "workflow_id": run.workflow_id,
+                "node_id": run.current_node,
+            },
+        }
+
+        available_in_session: list[str] = []
+        prefix = f"evt:session:{session_id}:"
+
+        for r in candidates:
+            w = getattr(r, "waiting", None)
+            if w is None:
+                continue
+            wk = getattr(w, "wait_key", None)
+            if isinstance(wk, str) and wk.startswith(prefix):
+                # Help users debug name mismatches (best-effort).
+                suffix = wk[len(prefix) :]
+                if suffix and suffix not in available_in_session and len(available_in_session) < 15:
+                    available_in_session.append(suffix)
+            if wk != wait_key and (wildcard_wait_key is None or wk != wildcard_wait_key):
+                continue
+
+            wf = self._workflow_registry.get(r.workflow_id)
+            if wf is None:
+                # Can't resume without the spec; skip but include diagnostic in result.
+                resumed.append({"run_id": r.run_id, "status": "skipped", "error": "workflow_not_registered"})
+                continue
+
+            try:
+                # Resume using the run's own wait_key (supports wildcard listeners).
+                resume_key = wk if isinstance(wk, str) and wk else None
+                new_state = self.resume(
+                    workflow=wf,
+                    run_id=r.run_id,
+                    wait_key=resume_key,
+                    payload=envelope,
+                    max_steps=max_steps,
+                )
+                delivered_to.append(r.run_id)
+                resumed.append({"run_id": r.run_id, "status": new_state.status.value})
+            except Exception as e:
+                resumed.append({"run_id": r.run_id, "status": "error", "error": str(e)})
+
+        out: Dict[str, Any] = {
+            "wait_key": wait_key,
+            "name": str(name),
+            "scope": str(scope or "session"),
+            "delivered": len(delivered_to),
+            "delivered_to": delivered_to,
+            "resumed": resumed,
+        }
+        if not delivered_to and available_in_session:
+            out["available_listeners_in_session"] = available_in_session
+        return EffectOutcome.completed(out)
 
     def _handle_wait_until(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         until = effect.payload.get("until")

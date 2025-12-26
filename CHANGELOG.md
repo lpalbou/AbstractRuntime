@@ -5,6 +5,14 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Durable custom events (signals)**:
+  - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs.
+  - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).
+  - `Scheduler.emit_event(...)` host API for external event delivery (session-scoped by default).
+
 ## [0.2.0] - 2025-12-17
 
 ### Added

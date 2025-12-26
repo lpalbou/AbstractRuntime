@@ -48,6 +48,9 @@ class EffectType(str, Enum):
     ASK_USER = "ask_user"
     ANSWER_USER = "answer_user"
 
+    # Eventing
+    EMIT_EVENT = "emit_event"
+
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"
     TOOL_CALLS = "tool_calls"

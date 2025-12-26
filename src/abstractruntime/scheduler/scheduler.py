@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..core.models import RunState, RunStatus, WaitReason, WaitState
 from ..core.runtime import Runtime
+from ..core.event_keys import build_event_wait_key
 from ..storage.base import QueryableRunStore
 from .registry import WorkflowRegistry
 
@@ -217,6 +218,74 @@ class Scheduler:
             wait_key=wait_key,
             payload=payload,
         )
+
+    def emit_event(
+        self,
+        *,
+        name: str,
+        payload: Dict[str, Any],
+        scope: str = "session",
+        session_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        max_steps: int = 100,
+        limit: int = 10_000,
+    ) -> List[RunState]:
+        """Emit an event and resume all matching WAIT_EVENT runs.
+
+        This is the host-facing API for external signals (Temporal-style).
+
+        Default scope is "session" (workflow instance). For session scope, you must
+        provide `session_id` (typically the root run_id for that instance).
+        """
+        name2 = str(name or "").strip()
+        if not name2:
+            raise ValueError("emit_event requires a non-empty name")
+
+        scope2 = str(scope or "session").strip().lower() or "session"
+
+        wait_key = build_event_wait_key(
+            scope=scope2,
+            name=name2,
+            session_id=session_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+        )
+
+        # Find runs waiting for this event key.
+        waiting_runs = self._run_store.list_runs(
+            status=RunStatus.WAITING,
+            wait_reason=WaitReason.EVENT,
+            limit=limit,
+        )
+
+        resumed: List[RunState] = []
+        envelope: Dict[str, Any] = {
+            "event_id": None,
+            "name": name2,
+            "scope": scope2,
+            "session_id": session_id,
+            "payload": dict(payload) if isinstance(payload, dict) else {"value": payload},
+            "emitted_at": utc_now_iso(),
+            "emitter": {"source": "external"},
+        }
+
+        for r in waiting_runs:
+            if r.waiting is None:
+                continue
+            if r.waiting.wait_key != wait_key:
+                continue
+            wf = self._registry.get_or_raise(r.workflow_id)
+            new_state = self._runtime.resume(
+                workflow=wf,
+                run_id=r.run_id,
+                wait_key=wait_key,
+                payload=envelope,
+                max_steps=max_steps,
+            )
+            resumed.append(new_state)
+
+        return resumed
 
     def find_waiting_runs(
         self,

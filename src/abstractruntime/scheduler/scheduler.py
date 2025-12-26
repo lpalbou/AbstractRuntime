@@ -31,6 +31,18 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_paused(vars: Any) -> bool:
+    if not isinstance(vars, dict):
+        return False
+    runtime_ns = vars.get("_runtime")
+    if not isinstance(runtime_ns, dict):
+        return False
+    control = runtime_ns.get("control")
+    if not isinstance(control, dict):
+        return False
+    return bool(control.get("paused") is True)
+
+
 @dataclass
 class SchedulerStats:
     """Statistics about scheduler operation."""
@@ -271,6 +283,8 @@ class Scheduler:
         }
 
         for r in waiting_runs:
+            if _is_paused(getattr(r, "vars", None)):
+                continue
             if r.waiting is None:
                 continue
             if r.waiting.wait_key != wait_key:
@@ -358,6 +372,8 @@ class Scheduler:
 
         resumed_count = 0
         for run in due_runs:
+            if _is_paused(getattr(run, "vars", None)):
+                continue
             # Record resumption immediately to avoid a race where the run completes
             # (via runtime.tick) before the main thread observes updated stats.
             self._stats.runs_resumed += 1
@@ -441,6 +457,8 @@ class Scheduler:
         )
 
         for run in waiting_runs:
+            if _is_paused(getattr(run, "vars", None)):
+                continue
             if run.waiting is None:
                 continue
             if run.waiting.reason != WaitReason.SUBWORKFLOW:

@@ -56,6 +56,52 @@ def _ensure_runtime_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
     return runtime_ns
 
 
+def _ensure_control_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
+    runtime_ns = _ensure_runtime_namespace(vars)
+    control = runtime_ns.get("control")
+    if not isinstance(control, dict):
+        control = {}
+        runtime_ns["control"] = control
+    return control
+
+
+def _is_paused_run_vars(vars: Any) -> bool:
+    if not isinstance(vars, dict):
+        return False
+    runtime_ns = vars.get("_runtime")
+    if not isinstance(runtime_ns, dict):
+        return False
+    control = runtime_ns.get("control")
+    if not isinstance(control, dict):
+        return False
+    return bool(control.get("paused") is True)
+
+
+def _is_pause_wait(waiting: Any, *, run_id: str) -> bool:
+    if waiting is None:
+        return False
+    try:
+        reason = getattr(waiting, "reason", None)
+        reason_value = reason.value if hasattr(reason, "value") else str(reason) if reason else None
+    except Exception:
+        reason_value = None
+    if reason_value != WaitReason.USER.value:
+        return False
+    try:
+        wait_key = getattr(waiting, "wait_key", None)
+        if isinstance(wait_key, str) and wait_key == f"pause:{run_id}":
+            return True
+    except Exception:
+        pass
+    try:
+        details = getattr(waiting, "details", None)
+        if isinstance(details, dict) and details.get("kind") == "pause":
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _record_node_trace(
     *,
     run: RunState,
@@ -310,6 +356,87 @@ class Runtime:
         run.status = RunStatus.CANCELLED
         run.error = reason or "Cancelled"
         run.waiting = None
+        try:
+            control = _ensure_control_namespace(run.vars)
+            control.pop("paused", None)
+        except Exception:
+            pass
+        run.updated_at = utc_now_iso()
+        self._run_store.save(run)
+        return run
+
+    def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
+        """Pause a run (durably) until it is explicitly resumed.
+
+        Semantics:
+        - Pausing a RUNNING run transitions it to WAITING with a synthetic USER wait.
+        - Pausing a WAITING run (non-USER waits such as UNTIL/EVENT/SUBWORKFLOW) sets a
+          runtime-owned `paused` flag so schedulers/event emitters can skip it.
+        - Pausing an ASK_USER wait is a no-op (already blocked by user input).
+        """
+        run = self.get_state(run_id)
+
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+            return run
+
+        # If already paused, keep as-is.
+        if _is_paused_run_vars(run.vars):
+            return run
+
+        # Don't interfere with real user prompts (ASK_USER).
+        if run.status == RunStatus.WAITING and run.waiting is not None:
+            if getattr(run.waiting, "reason", None) == WaitReason.USER and not _is_pause_wait(run.waiting, run_id=run_id):
+                return run
+
+        control = _ensure_control_namespace(run.vars)
+        control["paused"] = True
+        control["paused_at"] = utc_now_iso()
+        if isinstance(reason, str) and reason.strip():
+            control["pause_reason"] = reason.strip()
+
+        if run.status == RunStatus.RUNNING:
+            run.status = RunStatus.WAITING
+            run.waiting = WaitState(
+                reason=WaitReason.USER,
+                wait_key=f"pause:{run.run_id}",
+                resume_to_node=run.current_node,
+                prompt="Paused",
+                choices=None,
+                allow_free_text=False,
+                details={"kind": "pause"},
+            )
+
+        run.updated_at = utc_now_iso()
+        self._run_store.save(run)
+        return run
+
+    def resume_run(self, run_id: str) -> RunState:
+        """Resume a previously paused run (durably).
+
+        If the run was paused while RUNNING, this clears the synthetic pause wait
+        and returns the run to RUNNING. If the run was paused while WAITING
+        (UNTIL/EVENT/SUBWORKFLOW), this only clears the paused flag.
+        """
+        run = self.get_state(run_id)
+
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+            return run
+
+        if not _is_paused_run_vars(run.vars):
+            return run
+
+        try:
+            control = _ensure_control_namespace(run.vars)
+            control.pop("paused", None)
+            control.pop("pause_reason", None)
+            control["resumed_at"] = utc_now_iso()
+        except Exception:
+            pass
+
+        if run.status == RunStatus.WAITING and _is_pause_wait(run.waiting, run_id=run_id):
+            resume_to = getattr(run.waiting, "resume_to_node", None)
+            self._apply_resume_payload(run, payload={}, override_node=resume_to)
+
         run.updated_at = utc_now_iso()
         self._run_store.save(run)
         return run
@@ -493,6 +620,8 @@ class Runtime:
         run = self.get_state(run_id)
         if run.status in (RunStatus.COMPLETED, RunStatus.FAILED):
             return run
+        if _is_paused_run_vars(run.vars):
+            return run
         if run.status == RunStatus.WAITING:
             # For WAIT_UNTIL we can auto-unblock if time passed
             if run.waiting and run.waiting.reason == WaitReason.UNTIL and run.waiting.until:
@@ -618,6 +747,8 @@ class Runtime:
         max_steps: int = 100,
     ) -> RunState:
         run = self.get_state(run_id)
+        if _is_paused_run_vars(run.vars):
+            raise ValueError("Run is paused")
         if run.status != RunStatus.WAITING or run.waiting is None:
             raise ValueError("Run is not waiting")
 
@@ -904,6 +1035,8 @@ class Runtime:
         prefix = f"evt:session:{session_id}:"
 
         for r in candidates:
+            if _is_paused_run_vars(getattr(r, "vars", None)):
+                continue
             w = getattr(r, "waiting", None)
             if w is None:
                 continue

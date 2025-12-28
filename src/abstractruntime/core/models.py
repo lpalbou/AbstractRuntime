@@ -59,6 +59,9 @@ class EffectType(str, Enum):
     MEMORY_COMPACT = "memory_compact"
     MEMORY_NOTE = "memory_note"
 
+    # Debug / inspection (schema-only tools -> runtime effects)
+    VARS_QUERY = "vars_query"
+
     # Composition
     START_SUBWORKFLOW = "start_subworkflow"
 

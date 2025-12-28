@@ -784,6 +784,7 @@ class Runtime:
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
         self._handlers[EffectType.MEMORY_NOTE] = self._handle_memory_note
+        self._handlers[EffectType.VARS_QUERY] = self._handle_vars_query
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
 
     def _find_prior_completed_result(
@@ -1256,7 +1257,7 @@ class Runtime:
           - tool_name: str                      (default "recall_memory"; for formatting)
           - call_id: str                        (tool-call id passthrough)
         """
-        from .vars import ensure_namespaces
+        from .vars import ensure_namespaces, parse_vars_path, resolve_vars_path
 
         ensure_namespaces(run.vars)
         runtime_ns = run.vars.get("_runtime")
@@ -1323,10 +1324,13 @@ class Runtime:
             connect_keys = ["topic", "person"]
 
         try:
-            max_messages = int(payload.get("max_messages", 80) or 80)
+            max_messages = int(payload.get("max_messages", -1) or -1)
         except Exception:
-            max_messages = 80
-        if max_messages < 1:
+            max_messages = -1
+        # `-1` means "no truncation" for rendered messages.
+        if max_messages < -1:
+            max_messages = -1
+        if max_messages != -1 and max_messages < 1:
             max_messages = 1
 
         from ..memory.active_context import ActiveContextPolicy, TimeRange
@@ -1407,6 +1411,108 @@ class Runtime:
             ],
         }
         return EffectOutcome.completed(result=result)
+
+    def _handle_vars_query(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle VARS_QUERY.
+
+        This is a JSON-safe, runtime-owned introspection primitive intended for:
+        - progressive recall/debugging (e.g., inspect `scratchpad`)
+        - host tooling parity (schema-only tools that map to runtime effects)
+
+        Payload (all optional unless stated):
+          - path: str                 (default "scratchpad"; supports dot path or JSON pointer "/a/b/0")
+          - keys_only: bool           (default False; when True, return keys/length instead of full value)
+          - target_run_id: str        (optional; inspect another run state)
+          - tool_name: str            (default "inspect_vars"; for tool-style output)
+          - call_id: str              (tool-call id passthrough)
+        """
+        import json
+
+        from .vars import ensure_namespaces, parse_vars_path, resolve_vars_path
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "inspect_vars")
+        call_id = str(payload.get("call_id") or "vars")
+
+        target_run_id = payload.get("target_run_id")
+        if target_run_id is not None:
+            target_run_id = str(target_run_id).strip() or None
+
+        path = payload.get("path")
+        if path is None:
+            path = payload.get("var_path")
+        path_text = str(path or "").strip() or "scratchpad"
+
+        keys_only = bool(payload.get("keys_only", False))
+
+        target_run = run
+        if target_run_id and target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.completed(
+                    result={
+                        "mode": "executed",
+                        "results": [
+                            {
+                                "call_id": call_id,
+                                "name": tool_name,
+                                "success": False,
+                                "output": None,
+                                "error": f"Unknown target_run_id: {target_run_id}",
+                            }
+                        ],
+                    }
+                )
+            target_run = loaded
+
+        ensure_namespaces(target_run.vars)
+
+        try:
+            tokens = parse_vars_path(path_text)
+            value = resolve_vars_path(target_run.vars, tokens)
+        except Exception as e:
+            return EffectOutcome.completed(
+                result={
+                    "mode": "executed",
+                    "results": [
+                        {
+                            "call_id": call_id,
+                            "name": tool_name,
+                            "success": False,
+                            "output": None,
+                            "error": str(e),
+                        }
+                    ],
+                }
+            )
+
+        out: Dict[str, Any] = {"path": path_text, "type": type(value).__name__}
+        if keys_only:
+            if isinstance(value, dict):
+                out["keys"] = sorted([str(k) for k in value.keys()])
+            elif isinstance(value, list):
+                out["length"] = len(value)
+            else:
+                out["value"] = value
+        else:
+            out["value"] = value
+
+        text = json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+        return EffectOutcome.completed(
+            result={
+                "mode": "executed",
+                "results": [
+                    {
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "success": True,
+                        "output": text,
+                        "error": None,
+                    }
+                ],
+            }
+        )
 
     def _handle_memory_tag(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle MEMORY_TAG.
@@ -1889,6 +1995,7 @@ class Runtime:
               - run_id: str          (optional; defaults to current run_id)
               - span_ids: list[str]  (optional; referenced span ids)
               - message_ids: list[str] (optional; referenced message ids)
+          - target_run_id: str       (optional; defaults to current run_id)
           - tool_name: str           (optional; default "remember_note")
           - call_id: str             (optional; passthrough)
         """
@@ -1902,11 +2009,6 @@ class Runtime:
             runtime_ns = {}
             run.vars["_runtime"] = runtime_ns
 
-        spans = runtime_ns.get("memory_spans")
-        if not isinstance(spans, list):
-            spans = []
-            runtime_ns["memory_spans"] = spans
-
         artifact_store = self._artifact_store
         if artifact_store is None:
             return EffectOutcome.failed(
@@ -1916,6 +2018,24 @@ class Runtime:
         payload = dict(effect.payload or {})
         tool_name = str(payload.get("tool_name") or "remember_note")
         call_id = str(payload.get("call_id") or "memory")
+
+        target_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
+        target_run = run
+        if target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
+            target_run = loaded
+            ensure_namespaces(target_run.vars)
+
+        target_runtime_ns = target_run.vars.get("_runtime")
+        if not isinstance(target_runtime_ns, dict):
+            target_runtime_ns = {}
+            target_run.vars["_runtime"] = target_runtime_ns
+        spans = target_runtime_ns.get("memory_spans")
+        if not isinstance(spans, list):
+            spans = []
+            target_runtime_ns["memory_spans"] = spans
 
         note = payload.get("note")
         note_text = str(note or "").strip()
@@ -1955,7 +2075,7 @@ class Runtime:
                 deduped.append(s)
             return deduped
 
-        source_run_id = str(sources_dict.get("run_id") or run.run_id).strip() or run.run_id
+        source_run_id = str(sources_dict.get("run_id") or target_run.run_id).strip() or target_run.run_id
         span_ids = _norm_list(sources_dict.get("span_ids"))
         message_ids = _norm_list(sources_dict.get("message_ids"))
 
@@ -1967,13 +2087,13 @@ class Runtime:
         }
         if run.actor_id:
             artifact_payload["actor_id"] = str(run.actor_id)
-        session_id = getattr(run, "session_id", None)
+        session_id = getattr(target_run, "session_id", None) or getattr(run, "session_id", None)
         if session_id:
             artifact_payload["session_id"] = str(session_id)
 
         artifact_tags: Dict[str, str] = {"kind": "memory_note"}
         artifact_tags.update(clean_tags)
-        meta = artifact_store.store_json(artifact_payload, run_id=run.run_id, tags=artifact_tags)
+        meta = artifact_store.store_json(artifact_payload, run_id=target_run.run_id, tags=artifact_tags)
         artifact_id = meta.artifact_id
 
         preview = note_text
@@ -1998,6 +2118,10 @@ class Runtime:
             span_record["created_by"] = str(run.actor_id)
 
         spans.append(span_record)
+
+        if target_run is not run:
+            target_run.updated_at = utc_now_iso()
+            self._run_store.save(target_run)
 
         rendered_tags = json.dumps(clean_tags, ensure_ascii=False, sort_keys=True) if clean_tags else "{}"
         text = f"Stored memory_note span_id={artifact_id} tags={rendered_tags}"
@@ -2149,7 +2273,7 @@ def _render_memory_query_output(
     lines: list[str] = []
     lines.append("Recalled memory spans (provenance-preserving):")
 
-    remaining = int(max_messages)
+    remaining: Optional[int] = None if int(max_messages) == -1 else int(max_messages)
     for i, aid in enumerate(selected_artifact_ids, start=1):
         span = span_by_id.get(aid, {})
         kind = span.get("kind") or "span"
@@ -2169,12 +2293,9 @@ def _render_memory_query_output(
 
         summary = summary_by_artifact.get(aid)
         if summary:
-            summary_clean = str(summary).strip()
-            if len(summary_clean) > 800:
-                summary_clean = summary_clean[:800] + "…"
-            lines.append(f"    summary: {summary_clean}")
+            lines.append(f"    summary: {str(summary).strip()}")
 
-        if remaining <= 0:
+        if remaining is not None and remaining <= 0:
             continue
 
         payload = artifact_store.load_json(aid)
@@ -2184,9 +2305,7 @@ def _render_memory_query_output(
         if kind == "memory_note" or "note" in payload:
             note = str(payload.get("note") or "").strip()
             if note:
-                if len(note) > 2400:
-                    note = note[:2400] + "…"
-                lines.append("    note: " + note.replace("\n", "\\n"))
+                lines.append("    note: " + note)
             else:
                 lines.append("    (note payload missing note text)")
 
@@ -2215,30 +2334,24 @@ def _render_memory_query_output(
         # Render messages with a global cap.
         rendered = 0
         for m in messages:
-            if remaining <= 0:
+            if remaining is not None and remaining <= 0:
                 break
             if not isinstance(m, dict):
                 continue
             role = str(m.get("role") or "unknown")
             content = str(m.get("content") or "")
             ts = str(m.get("timestamp") or "")
-            # Keep per-message lines bounded.
-            if len(content) > 1200:
-                content = content[:1200] + "…"
             prefix = f"    - {role}: "
             if ts:
                 prefix = f"    - {ts} {role}: "
-            lines.append(prefix + content.replace("\n", "\\n"))
+            lines.append(prefix + content)
             rendered += 1
-            remaining -= 1
+            if remaining is not None:
+                remaining -= 1
 
         total = sum(1 for m in messages if isinstance(m, dict))
-        if rendered < total:
-            lines.append(f"    … ({total - rendered} more messages not shown)")
-
-    if remaining <= 0:
-        lines.append("")
-        lines.append(f"(Output truncated: max_messages={int(max_messages)})")
+        if remaining is not None and rendered < total:
+            lines.append(f"    (remaining {total - rendered} messages omitted by max_messages={int(max_messages)})")
 
     return "\n".join(lines)
 

@@ -144,3 +144,83 @@ def test_memory_note_time_range_filter_matches_point_notes() -> None:
         tags={"topic": "t"},
     )
     assert [m.get("artifact_id") for m in matches] == [meta.artifact_id]
+
+
+def test_memory_note_effect_can_target_other_run() -> None:
+    """A child run can store a note into a different target run via payload.target_run_id."""
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
+    artifact_store = InMemoryArtifactStore()
+    runtime.set_artifact_store(artifact_store)
+
+    target_run_id = "run_target"
+    created_at = "2025-01-01T00:00:00+00:00"
+    run_store.save(
+        RunState(
+            run_id=target_run_id,
+            workflow_id="wf_target",
+            status=RunStatus.COMPLETED,
+            current_node="done",
+            vars={
+                "context": {"task": "t", "messages": []},
+                "scratchpad": {},
+                "_runtime": {"memory_spans": []},
+                "_temp": {},
+                "_limits": {},
+            },
+            waiting=None,
+            output={"messages": []},
+            error=None,
+            created_at=created_at,
+            updated_at=created_at,
+            actor_id=None,
+            session_id=None,
+            parent_run_id=None,
+        )
+    )
+
+    vars: dict[str, Any] = {
+        "context": {"task": "child", "messages": []},
+        "scratchpad": {},
+        "_runtime": {"memory_spans": []},
+        "_temp": {},
+        "_limits": {},
+    }
+
+    def note_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="note",
+            effect=Effect(
+                type=EffectType.MEMORY_NOTE,
+                payload={
+                    "target_run_id": target_run_id,
+                    "note": "Targeted note",
+                    "tags": {"topic": "t"},
+                },
+                result_key="_temp.note",
+            ),
+            next_node="done",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        return StepPlan(node_id="done", complete_output={"note": run.vars.get("_temp", {}).get("note")})
+
+    wf = WorkflowSpec(workflow_id="wf_child_note", entry_node="note", nodes={"note": note_node, "done": done_node})
+    child_run_id = runtime.start(workflow=wf, vars=vars, parent_run_id=target_run_id)
+    state = runtime.tick(workflow=wf, run_id=child_run_id)
+    assert state.status == RunStatus.COMPLETED
+
+    updated_target = run_store.load(target_run_id)
+    assert updated_target is not None
+    spans = updated_target.vars.get("_runtime", {}).get("memory_spans")
+    assert isinstance(spans, list) and spans
+    note_span = spans[0]
+    assert note_span.get("kind") == "memory_note"
+    assert note_span.get("tags") == {"topic": "t"}
+    artifact_id = note_span.get("artifact_id")
+    assert isinstance(artifact_id, str) and artifact_id
+
+    payload = artifact_store.load_json(artifact_id)
+    assert isinstance(payload, dict)
+    assert payload.get("note") == "Targeted note"

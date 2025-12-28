@@ -115,3 +115,75 @@ def _default_limits() -> Dict[str, Any]:
         "warn_iterations_pct": 80,
         "warn_tokens_pct": 80,
     }
+
+
+def parse_vars_path(path: str) -> list[Any]:
+    """Parse a path for inspecting `RunState.vars`.
+
+    Supports:
+      - dot paths: "scratchpad.research.sources[0].title"
+      - JSON pointer-ish paths: "/scratchpad/research/sources/0/title"
+    """
+    import re
+
+    raw = str(path or "").strip()
+    if not raw:
+        return []
+
+    tokens: list[Any] = []
+
+    if raw.startswith("/"):
+        for part in [p for p in raw.split("/") if p]:
+            part = part.replace("~1", "/").replace("~0", "~")
+            if part.isdigit():
+                tokens.append(int(part))
+            else:
+                tokens.append(part)
+        return tokens
+
+    for part in [p for p in raw.split(".") if p]:
+        # Allow list indexing as a bare segment: `foo.0.bar`
+        if "[" not in part and part.isdigit():
+            tokens.append(int(part))
+            continue
+
+        # Split `foo[0][1]` into ["foo", 0, 1]
+        for m in re.finditer(r"([^\[\]]+)|\[(\d+)\]", part):
+            key = m.group(1)
+            idx = m.group(2)
+            if key is not None:
+                tokens.append(key)
+            elif idx is not None:
+                tokens.append(int(idx))
+
+    return tokens
+
+
+def resolve_vars_path(root: Any, tokens: list[Any]) -> Any:
+    """Resolve tokens against nested dict/list structures."""
+    cur: Any = root
+    at: list[str] = []
+
+    for tok in tokens:
+        if isinstance(tok, int):
+            if not isinstance(cur, list):
+                where = ".".join([p for p in at if p]) or "(root)"
+                raise ValueError(f"Expected list at {where} but found {type(cur).__name__}")
+            if tok < 0 or tok >= len(cur):
+                where = ".".join([p for p in at if p]) or "(root)"
+                raise ValueError(f"Index {tok} out of range at {where} (len={len(cur)})")
+            cur = cur[tok]
+            at.append(str(tok))
+            continue
+
+        key = str(tok)
+        if not isinstance(cur, dict):
+            where = ".".join([p for p in at if p]) or "(root)"
+            raise ValueError(f"Expected object at {where} but found {type(cur).__name__}")
+        if key not in cur:
+            where = ".".join([p for p in at if p]) or "(root)"
+            raise ValueError(f"Missing key '{key}' at {where}")
+        cur = cur[key]
+        at.append(key)
+
+    return cur

@@ -13,7 +13,9 @@ Remote mode is the preferred way to support per-request dynamic routing (e.g. `b
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -30,12 +32,16 @@ _TOOL_MARKERS = (
     "</function_call>",
     "```tool_code",
     "```tool_call",
+    # CLI-like prefix format (some OSS models emit this even when prompted otherwise)
+    "tool: [",
+    "tool:[",
 )
 
 
 def _maybe_parse_tool_calls_from_text(
     *,
     content: Optional[str],
+    allowed_tool_names: Optional[set[str]] = None,
 ) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     """Best-effort extraction of tool calls from response content.
 
@@ -75,6 +81,8 @@ def _maybe_parse_tool_calls_from_text(
         arguments = getattr(tc, "arguments", None)
         call_id = getattr(tc, "call_id", None)
         if not isinstance(name, str) or not name.strip():
+            continue
+        if isinstance(allowed_tool_names, set) and allowed_tool_names and name not in allowed_tool_names:
             continue
         out_calls.append(
             {
@@ -154,6 +162,95 @@ def _jsonable(value: Any) -> Any:
         return _jsonable(to_dict())
 
     return str(value)
+
+
+def _loads_dict_like(raw: Any) -> Optional[Dict[str, Any]]:
+    """Parse a JSON-ish or Python-literal dict safely."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    candidate = re.sub(r"\btrue\b", "True", text, flags=re.IGNORECASE)
+    candidate = re.sub(r"\bfalse\b", "False", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\bnull\b", "None", candidate, flags=re.IGNORECASE)
+    try:
+        parsed = ast.literal_eval(candidate)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(k): v for k, v in parsed.items()}
+
+
+def _normalize_tool_calls(tool_calls: Any) -> Optional[List[Dict[str, Any]]]:
+    """Normalize tool call shapes into AbstractRuntime's standard dict form.
+
+    Standard shape:
+        {"name": str, "arguments": dict, "call_id": Optional[str]}
+    """
+    if tool_calls is None:
+        return None
+    if not isinstance(tool_calls, list):
+        return None
+
+    normalized: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+        name: Optional[str] = None
+        arguments: Any = None
+        call_id: Any = None
+
+        if isinstance(tc, dict):
+            call_id = tc.get("call_id", None)
+            if call_id is None:
+                call_id = tc.get("id", None)
+
+            raw_name = tc.get("name")
+            raw_args = tc.get("arguments")
+
+            func = tc.get("function") if isinstance(tc.get("function"), dict) else None
+            if func and (not isinstance(raw_name, str) or not raw_name.strip()):
+                raw_name = func.get("name")
+            if func and raw_args is None:
+                raw_args = func.get("arguments")
+
+            if isinstance(raw_name, str):
+                name = raw_name.strip()
+            arguments = raw_args if raw_args is not None else {}
+        else:
+            raw_name = getattr(tc, "name", None)
+            raw_args = getattr(tc, "arguments", None)
+            call_id = getattr(tc, "call_id", None)
+            if isinstance(raw_name, str):
+                name = raw_name.strip()
+            arguments = raw_args if raw_args is not None else {}
+
+        if not isinstance(name, str) or not name:
+            continue
+
+        if isinstance(arguments, str):
+            parsed = _loads_dict_like(arguments)
+            arguments = parsed if isinstance(parsed, dict) else {}
+
+        if not isinstance(arguments, dict):
+            arguments = {}
+
+        normalized.append(
+            {
+                "name": name,
+                "arguments": _jsonable(arguments),
+                "call_id": str(call_id) if call_id is not None else None,
+            }
+        )
+
+    return normalized or None
 
 
 def _normalize_local_response(resp: Any) -> Dict[str, Any]:
@@ -253,9 +350,22 @@ class LocalAbstractCoreLLMClient:
                 capabilities = list(get_capabilities())
             except Exception:
                 capabilities = []
-        supports_tools = "tools" in set(c.lower() for c in capabilities)
+        provider_supports_tools = "tools" in set(c.lower() for c in capabilities)
 
-        if tools and not supports_tools:
+        # Decide tool-calling mode using AbstractCore's model capability detection.
+        #
+        # Many local providers (notably LMStudio) advertise "tools" at the provider level,
+        # but the underlying OSS model may require *prompted* tool calling (tool calls in
+        # content, not in API fields). AbstractCore tracks this via model capabilities.
+        #
+        # Rule:
+        # - Use native tools only when BOTH:
+        #   - provider supports passing tools, AND
+        #   - model is marked as native tool-support
+        # - Otherwise prefer prompted tool calling (more robust across OSS models).
+        use_native_tools = bool(tools and provider_supports_tools and getattr(self._tool_handler, "supports_native", False))
+
+        if tools and not use_native_tools:
             # Fallback tool calling via prompting for providers/models without native tool support.
             from abstractcore.tools import ToolDefinition
 
@@ -290,7 +400,8 @@ class LocalAbstractCoreLLMClient:
                     ]
                     result["content"] = parsed.content
                 else:
-                    tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content)
+                    allowed_names = {str(t.name) for t in tool_defs if getattr(t, "name", None)}
+                    tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content, allowed_tool_names=allowed_names)
                     if tool_calls:
                         result["tool_calls"] = tool_calls
                         if isinstance(cleaned, str):
@@ -306,11 +417,27 @@ class LocalAbstractCoreLLMClient:
             **params,
         )
         result = _normalize_local_response(resp)
+        result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
         # Fallback: some providers return tool call tags in content without structured tool_calls.
         if tools and not result.get("tool_calls"):
             content = result.get("content")
-            tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content if isinstance(content, str) else None)
+            allowed_names: set[str] = set()
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                name = t.get("name")
+                if isinstance(name, str) and name.strip():
+                    allowed_names.add(name.strip())
+                    continue
+                func = t.get("function") if isinstance(t.get("function"), dict) else None
+                fname = func.get("name") if isinstance(func, dict) else None
+                if isinstance(fname, str) and fname.strip():
+                    allowed_names.add(fname.strip())
+            tool_calls, cleaned = _maybe_parse_tool_calls_from_text(
+                content=content if isinstance(content, str) else None,
+                allowed_tool_names=allowed_names or None,
+            )
             if tool_calls:
                 result["tool_calls"] = tool_calls
                 if isinstance(cleaned, str):
@@ -532,7 +659,7 @@ class RemoteAbstractCoreLLMClient:
         try:
             choice0 = (resp.get("choices") or [])[0]
             msg = choice0.get("message") or {}
-            return {
+            result = {
                 "content": msg.get("content"),
                 "data": None,
                 "tool_calls": _jsonable(msg.get("tool_calls")) if msg.get("tool_calls") is not None else None,
@@ -542,6 +669,32 @@ class RemoteAbstractCoreLLMClient:
                 "metadata": {"trace_id": trace_id} if trace_id else None,
                 "trace_id": trace_id,
             }
+            result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+
+            if tools and not result.get("tool_calls"):
+                allowed_names: set[str] = set()
+                for t in tools:
+                    if not isinstance(t, dict):
+                        continue
+                    name = t.get("name")
+                    if isinstance(name, str) and name.strip():
+                        allowed_names.add(name.strip())
+                        continue
+                    func = t.get("function") if isinstance(t.get("function"), dict) else None
+                    fname = func.get("name") if isinstance(func, dict) else None
+                    if isinstance(fname, str) and fname.strip():
+                        allowed_names.add(fname.strip())
+
+                tool_calls, cleaned = _maybe_parse_tool_calls_from_text(
+                    content=result.get("content") if isinstance(result.get("content"), str) else None,
+                    allowed_tool_names=allowed_names or None,
+                )
+                if tool_calls:
+                    result["tool_calls"] = tool_calls
+                    if isinstance(cleaned, str):
+                        result["content"] = cleaned
+
+            return result
         except Exception:
             # Fallback: return the raw response in JSON-safe form.
             logger.warning("Remote LLM response normalization failed; returning raw JSON")

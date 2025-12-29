@@ -128,11 +128,8 @@ def test_local_llm_client_uses_prompted_tools_for_qwen_even_if_provider_advertis
 
     assert len(client._llm.calls) == 1
     call = client._llm.calls[0]
-    # Prompted tool calling path: do not pass API-level `tools` into provider.
-    assert "tools" not in call
-    # Qwen prompted tool instructions are injected as system prompt instructions.
-    assert "<|tool_call|>" not in str(call.get("prompt", ""))
-    assert "<|tool_call|>" in str(call.get("system_prompt", ""))
+    # Tool-call prompting/parsing is an AbstractCore responsibility; the runtime passes tool schemas through.
+    assert "tools" in call
 
 
 def test_local_llm_client_uses_native_tools_when_model_is_native_and_provider_supports_tools() -> None:
@@ -186,4 +183,3 @@ def test_local_llm_client_cleans_echoed_tool_markup_when_native_tool_calls_prese
     result = client.generate(prompt="read README.md", tools=tools)
 
     assert result.get("tool_calls") == [{"name": "read_file", "arguments": {"path": "README.md"}, "call_id": "call_1"}]
-    assert "<|tool_call|>" not in str(result.get("content", ""))

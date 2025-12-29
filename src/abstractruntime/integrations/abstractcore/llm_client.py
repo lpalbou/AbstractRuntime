@@ -23,56 +23,35 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-_TOOL_MARKERS = (
-    "<|tool_call|>",
-    "</|tool_call|>",
-    "<tool_call>",
-    "</tool_call>",
-    "<function_call",
-    "</function_call>",
-    "```tool_code",
-    "```tool_call",
-    # CLI-like prefix format (some OSS models emit this even when prompted otherwise)
-    "tool: [",
-    "tool:[",
-)
 
-
-def _maybe_parse_tool_calls_from_text(
+def _extract_prompted_tool_calls(
     *,
     content: Optional[str],
+    tool_handler: Any,
     allowed_tool_names: Optional[set[str]] = None,
 ) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
-    """Best-effort extraction of tool calls from response content.
+    """Extract tool calls from *content* using AbstractCore's UniversalToolHandler.
 
-    Some provider/model combinations emit tool calls as text tags (e.g. `<tool_call>...</tool_call>`)
-    but fail to populate a structured `tool_calls` field. When that happens, the runtime must still
-    be able to execute tools via the ToolExecutor (ADR-0006).
+    This keeps tool-call parsing/cleaning logic centralized in AbstractCore.
 
     Returns:
         (tool_calls, cleaned_content)
-        - tool_calls: JSON-safe list of tool call dicts when detected, else None
-        - cleaned_content: content with tool-call markup stripped when detected, else None
+        - tool_calls: canonical JSON-safe list when detected, else None
+        - cleaned_content: content with tool-call markup stripped, else None
     """
     if not isinstance(content, str) or not content.strip():
         return None, None
-
-    lower = content.lower()
-    if not any(m in lower for m in _TOOL_MARKERS):
+    if tool_handler is None:
         return None, None
 
     try:
-        from abstractcore.tools.parser import parse_tool_calls, clean_tool_syntax
+        parsed = tool_handler.parse_response(content, mode="prompted")
     except Exception:
         return None, None
 
-    try:
-        # Force "try all formats" to handle architecture detection mismatches.
-        calls = parse_tool_calls(content, model_name=None)
-    except Exception:
-        calls = []
-
-    if not calls:
+    calls = getattr(parsed, "tool_calls", None)
+    cleaned = getattr(parsed, "content", None)
+    if not isinstance(calls, list) or not calls:
         return None, None
 
     out_calls: List[Dict[str, Any]] = []
@@ -86,7 +65,7 @@ def _maybe_parse_tool_calls_from_text(
             continue
         out_calls.append(
             {
-                "name": name,
+                "name": name.strip(),
                 "arguments": _jsonable(arguments) if arguments is not None else {},
                 "call_id": str(call_id) if call_id is not None else None,
             }
@@ -94,13 +73,33 @@ def _maybe_parse_tool_calls_from_text(
 
     if not out_calls:
         return None, None
+    return out_calls, (str(cleaned) if isinstance(cleaned, str) else "")
 
-    try:
-        cleaned = clean_tool_syntax(content, calls)
-    except Exception:
-        cleaned = content
 
-    return out_calls, cleaned
+def _maybe_parse_tool_calls_from_text(
+    *,
+    content: Optional[str],
+    allowed_tool_names: Optional[set[str]] = None,
+    model_name: Optional[str] = None,
+    tool_handler: Any = None,
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Best-effort tool-call extraction from assistant text.
+
+    This is a durability/robustness fallback used when a provider returns no structured
+    tool calls but tool syntax is present in the assistant `content`.
+
+    Parsing/cleaning is delegated to AbstractCore's UniversalToolHandler so the runtime
+    does not grow its own parsing stack.
+    """
+    if tool_handler is None:
+        from abstractcore.tools.handler import UniversalToolHandler
+
+        tool_handler = UniversalToolHandler(str(model_name or ""))
+    return _extract_prompted_tool_calls(
+        content=content,
+        tool_handler=tool_handler,
+        allowed_tool_names=allowed_tool_names,
+    )
 
 
 @dataclass(frozen=True)
@@ -378,34 +377,33 @@ class LocalAbstractCoreLLMClient:
                 for t in tools
             ]
             tools_prompt = self._tool_handler.format_tools_prompt(tool_defs)
-            effective_prompt = f"{tools_prompt}\n\nUser request: {prompt}"
+            combined_system_prompt = (str(system_prompt or "")).strip()
+            tools_prompt = (str(tools_prompt or "")).strip()
+            if tools_prompt:
+                combined_system_prompt = (
+                    f"{combined_system_prompt}\n\n{tools_prompt}".strip() if combined_system_prompt else tools_prompt
+                )
 
             resp = self._llm.generate(
-                prompt=effective_prompt,
+                prompt=str(prompt or ""),
                 messages=messages,
-                system_prompt=system_prompt,
+                system_prompt=combined_system_prompt or None,
                 stream=False,
                 **params,
             )
             result = _normalize_local_response(resp)
 
-            # Parse tool calls from response content.
-            content = result.get("content")
-            if isinstance(content, str) and content.strip():
-                parsed = self._tool_handler.parse_response(content, mode="prompted")
-                if parsed.tool_calls:
-                    result["tool_calls"] = [
-                        {"name": tc.name, "arguments": tc.arguments, "call_id": tc.call_id}
-                        for tc in parsed.tool_calls
-                    ]
-                    result["content"] = parsed.content
-                else:
-                    allowed_names = {str(t.name) for t in tool_defs if getattr(t, "name", None)}
-                    tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content, allowed_tool_names=allowed_names)
-                    if tool_calls:
-                        result["tool_calls"] = tool_calls
-                        if isinstance(cleaned, str):
-                            result["content"] = cleaned
+            allowed_names = {str(t.name) for t in tool_defs if getattr(t, "name", None)}
+            tool_calls, cleaned = _maybe_parse_tool_calls_from_text(
+                content=result.get("content") if isinstance(result.get("content"), str) else None,
+                allowed_tool_names=allowed_names or None,
+                model_name=self._model,
+                tool_handler=self._tool_handler,
+            )
+            if tool_calls:
+                result["tool_calls"] = tool_calls
+                if cleaned is not None:
+                    result["content"] = cleaned
             return result
 
         resp = self._llm.generate(
@@ -418,6 +416,30 @@ class LocalAbstractCoreLLMClient:
         )
         result = _normalize_local_response(resp)
         result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+
+        # Some providers/models include tool-call transcript markup in `content` even when
+        # structured tool_calls are present; strip it so history/UI stays clean.
+        if tools and result.get("tool_calls"):
+            content = result.get("content")
+            if isinstance(content, str) and content.strip():
+                try:
+                    from abstractcore.tools.core import ToolCall as CoreToolCall
+                    from abstractcore.tools.parser import clean_tool_syntax
+
+                    core_calls: list[CoreToolCall] = []
+                    for tc in result.get("tool_calls") or []:
+                        if not isinstance(tc, dict):
+                            continue
+                        name = tc.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            continue
+                        args = tc.get("arguments")
+                        args_dict = dict(args) if isinstance(args, dict) else {}
+                        core_calls.append(CoreToolCall(name=name.strip(), arguments=args_dict, call_id=tc.get("call_id")))
+                    if core_calls:
+                        result["content"] = clean_tool_syntax(content, core_calls)
+                except Exception:
+                    pass
 
         # Fallback: some providers return tool call tags in content without structured tool_calls.
         if tools and not result.get("tool_calls"):
@@ -437,6 +459,8 @@ class LocalAbstractCoreLLMClient:
             tool_calls, cleaned = _maybe_parse_tool_calls_from_text(
                 content=content if isinstance(content, str) else None,
                 allowed_tool_names=allowed_names or None,
+                model_name=self._model,
+                tool_handler=self._tool_handler,
             )
             if tool_calls:
                 result["tool_calls"] = tool_calls
@@ -671,6 +695,32 @@ class RemoteAbstractCoreLLMClient:
             }
             result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
+            # If tool calls are already structured, ensure any echoed tool markup is removed
+            # from the assistant content so downstream history/UI stays clean.
+            if tools and result.get("tool_calls"):
+                content = result.get("content")
+                if isinstance(content, str) and content.strip():
+                    try:
+                        from abstractcore.tools.core import ToolCall as CoreToolCall
+                        from abstractcore.tools.parser import clean_tool_syntax
+
+                        core_calls: list[CoreToolCall] = []
+                        for tc in result.get("tool_calls") or []:
+                            if not isinstance(tc, dict):
+                                continue
+                            name = tc.get("name")
+                            if not isinstance(name, str) or not name.strip():
+                                continue
+                            args = tc.get("arguments")
+                            args_dict = dict(args) if isinstance(args, dict) else {}
+                            core_calls.append(
+                                CoreToolCall(name=name.strip(), arguments=args_dict, call_id=tc.get("call_id"))
+                            )
+                        if core_calls:
+                            result["content"] = clean_tool_syntax(content, core_calls)
+                    except Exception:
+                        pass
+
             if tools and not result.get("tool_calls"):
                 allowed_names: set[str] = set()
                 for t in tools:
@@ -688,6 +738,7 @@ class RemoteAbstractCoreLLMClient:
                 tool_calls, cleaned = _maybe_parse_tool_calls_from_text(
                     content=result.get("content") if isinstance(result.get("content"), str) else None,
                     allowed_tool_names=allowed_names or None,
+                    model_name=self._model,
                 )
                 if tool_calls:
                     result["tool_calls"] = tool_calls

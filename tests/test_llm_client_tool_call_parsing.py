@@ -130,8 +130,9 @@ def test_local_llm_client_uses_prompted_tools_for_qwen_even_if_provider_advertis
     call = client._llm.calls[0]
     # Prompted tool calling path: do not pass API-level `tools` into provider.
     assert "tools" not in call
-    # Qwen prompted tool instructions include the special token format.
-    assert "<|tool_call|>" in str(call.get("prompt", ""))
+    # Qwen prompted tool instructions are injected as system prompt instructions.
+    assert "<|tool_call|>" not in str(call.get("prompt", ""))
+    assert "<|tool_call|>" in str(call.get("system_prompt", ""))
 
 
 def test_local_llm_client_uses_native_tools_when_model_is_native_and_provider_supports_tools() -> None:
@@ -144,3 +145,45 @@ def test_local_llm_client_uses_native_tools_when_model_is_native_and_provider_su
     call = client._llm.calls[0]
     # Native tool calling path: pass `tools` through to provider.
     assert "tools" in call
+
+
+class _DummyNativeToolCallLLM:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def get_capabilities(self) -> list[str]:
+        return ["tools"]
+
+    def generate(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return {
+            "content": (
+                "I will read the file.\n\n"
+                "<|tool_call|>\n"
+                '{"name":"read_file","arguments":{"path":"README.md"}}\n'
+                "</|tool_call|>\n"
+            ),
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"README.md"}'},
+                }
+            ],
+        }
+
+
+def test_local_llm_client_cleans_echoed_tool_markup_when_native_tool_calls_present() -> None:
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "dummy"
+    client._model = "google/gemma-3n-e2b"
+    client._llm = _DummyNativeToolCallLLM()
+    from abstractcore.tools.handler import UniversalToolHandler
+
+    client._tool_handler = UniversalToolHandler(client._model)
+
+    tools = [{"name": "read_file", "description": "Read a file", "parameters": {"path": {"type": "string"}}}]
+    result = client.generate(prompt="read README.md", tools=tools)
+
+    assert result.get("tool_calls") == [{"name": "read_file", "arguments": {"path": "README.md"}, "call_id": "call_1"}]
+    assert "<|tool_call|>" not in str(result.get("content", ""))

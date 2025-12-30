@@ -11,6 +11,7 @@ They are designed to keep `RunState.vars` JSON-safe.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.models import Effect, EffectType, RunState, WaitReason, WaitState
@@ -20,6 +21,26 @@ from .tool_executor import ToolExecutor
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _jsonable(value: Any) -> Any:
+    """Best-effort conversion to JSON-safe objects.
+
+    Runtime traces and effect outcomes are persisted in RunState.vars and must remain JSON-safe.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    try:
+        json.dumps(value)
+        return value
+    except Exception:
+        return str(value)
 
 
 def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Type[Any]:
@@ -143,6 +164,18 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                 )
                 params["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
 
+            runtime_observability = {
+                "llm_generate_kwargs": _jsonable(
+                    {
+                        "prompt": str(prompt or ""),
+                        "messages": messages,
+                        "system_prompt": system_prompt,
+                        "tools": tools,
+                        "params": params,
+                    }
+                ),
+            }
+
             result = llm.generate(
                 prompt=str(prompt or ""),
                 messages=messages,
@@ -150,6 +183,16 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                 tools=tools,
                 params=params,
             )
+            if isinstance(result, dict):
+                meta = result.get("metadata")
+                if not isinstance(meta, dict):
+                    meta = {}
+                    result["metadata"] = meta
+                existing = meta.get("_runtime_observability")
+                if not isinstance(existing, dict):
+                    existing = {}
+                    meta["_runtime_observability"] = existing
+                existing.update(runtime_observability)
             return EffectOutcome.completed(result=result)
         except Exception as e:
             logger.error("LLM_CALL failed", error=str(e))

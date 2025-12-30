@@ -117,6 +117,47 @@ class MappingToolExecutor:
             }
             return {k: v for k, v in kwargs.items() if k in allowed}
 
+        def _error_from_output(value: Any) -> Optional[str]:
+            """Detect tool failures reported as string outputs (instead of exceptions)."""
+            if not isinstance(value, str):
+                return None
+            text = value.strip()
+            if not text:
+                return None
+            if text.startswith("Error:"):
+                cleaned = text[len("Error:") :].strip()
+                return cleaned or text
+            if text.startswith(("❌", "🚫", "⏰")):
+                cleaned = text.lstrip("❌🚫⏰").strip()
+                if cleaned.startswith("Error:"):
+                    cleaned = cleaned[len("Error:") :].strip()
+                return cleaned or text
+            return None
+
+        def _append_result(*, call_id: str, name: str, output: Any) -> None:
+            error = _error_from_output(output)
+            if error is not None:
+                results.append(
+                    {
+                        "call_id": call_id,
+                        "name": name,
+                        "success": False,
+                        "output": None,
+                        "error": error,
+                    }
+                )
+                return
+
+            results.append(
+                {
+                    "call_id": call_id,
+                    "name": name,
+                    "success": True,
+                    "output": _jsonable(output),
+                    "error": None,
+                }
+            )
+
         for tc in tool_calls:
             name = str(tc.get("name", "") or "")
             raw_arguments = tc.get("arguments") or {}
@@ -138,15 +179,7 @@ class MappingToolExecutor:
 
             try:
                 output = func(**arguments)
-                results.append(
-                    {
-                        "call_id": call_id,
-                        "name": name,
-                        "success": True,
-                        "output": _jsonable(output),
-                        "error": None,
-                    }
-                )
+                _append_result(call_id=call_id, name=name, output=output)
             except TypeError as e:
                 # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
                 try:
@@ -154,15 +187,7 @@ class MappingToolExecutor:
                     filtered = _filter_kwargs(func, unwrapped)
                     if filtered != arguments:
                         output = func(**filtered)
-                        results.append(
-                            {
-                                "call_id": call_id,
-                                "name": name,
-                                "success": True,
-                                "output": _jsonable(output),
-                                "error": None,
-                            }
-                        )
+                        _append_result(call_id=call_id, name=name, output=output)
                         continue
                 except Exception:
                     pass

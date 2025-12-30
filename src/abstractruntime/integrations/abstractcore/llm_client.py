@@ -303,7 +303,9 @@ class LocalAbstractCoreLLMClient:
         kwargs = dict(llm_kwargs or {})
         kwargs.setdefault("enable_tracing", True)
         if kwargs.get("enable_tracing"):
-            kwargs.setdefault("max_traces", 0)
+            # Keep a small in-memory ring buffer for exact request/response observability.
+            # This enables hosts (AbstractCode/AbstractFlow) to inspect trace payloads by trace_id.
+            kwargs.setdefault("max_traces", 50)
         self._llm = create_llm(provider, model=model, **kwargs)
         self._tool_handler = UniversalToolHandler(model)
 

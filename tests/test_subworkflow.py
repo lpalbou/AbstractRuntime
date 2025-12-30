@@ -602,6 +602,26 @@ class TestSubworkflowCancellation:
         assert state.status == RunStatus.CANCELLED
         assert state.error == "Test cancellation"
 
+    def test_tick_is_noop_for_cancelled_run(self):
+        """Regression: cancelled runs must never progress when tick() is called."""
+        child = make_simple_child_workflow()
+
+        registry = WorkflowRegistry()
+        registry.register(child)
+
+        runtime = Runtime(
+            run_store=InMemoryRunStore(),
+            ledger_store=InMemoryLedgerStore(),
+            workflow_registry=registry,
+        )
+
+        run_id = runtime.start(workflow=child)
+        runtime.cancel_run(run_id, reason="Stop now")
+
+        state = runtime.tick(workflow=child, run_id=run_id)
+        assert state.status == RunStatus.CANCELLED
+        assert state.error == "Stop now"
+
     def test_cancel_waiting_run(self):
         """Can cancel a waiting run."""
         child = make_waiting_child_workflow()

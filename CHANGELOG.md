@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).
   - `Scheduler.emit_event(...)` host API for external event delivery (session-scoped by default).
 
+### Fixed
+- **Cancellation is terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as a terminal state and will not progress cancelled runs.
+- **Control-plane safety**: `Runtime.tick()` now stops without overwriting externally persisted pause/cancel state (used by hosts like AbstractFlow Web).
+- **Atomic run checkpoints**: `JsonFileRunStore.save()` now writes via a temp file + atomic rename to prevent partial/corrupt JSON under concurrent writes.
+- **START_SUBWORKFLOW async+wait**: added support for `async=true` + `wait=true` to start a child run without blocking the parent tick, while still keeping the parent in a durable SUBWORKFLOW wait until the host resumes it.
+
 ## [0.2.0] - 2025-12-17
 
 ### Added

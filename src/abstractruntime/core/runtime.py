@@ -618,7 +618,8 @@ class Runtime:
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
-        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        # Terminal runs never progress.
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
             return run
         if _is_paused_run_vars(run.vars):
             return run
@@ -632,15 +633,40 @@ class Runtime:
             else:
                 return run
 
+        # IMPORTANT (Web hosts / concurrency):
+        # A run may be paused/cancelled by an external control plane (e.g. AbstractFlow Web UI)
+        # while we're blocked inside a long-running effect (LLM/tool execution).
+        #
+        # We make `tick()` resilient to that by re-loading the persisted RunState before
+        # committing any updates. If an external pause/cancel is observed, we stop without
+        # overwriting it.
+        def _abort_if_externally_controlled() -> Optional[RunState]:
+            try:
+                latest = self.get_state(run_id)
+            except Exception:
+                return None
+            if latest.status == RunStatus.CANCELLED:
+                return latest
+            if _is_paused_run_vars(latest.vars):
+                return latest
+            return None
+
         steps = 0
         while steps < max_steps:
             steps += 1
+
+            controlled = _abort_if_externally_controlled()
+            if controlled is not None:
+                return controlled
 
             handler = workflow.get_node(run.current_node)
             plan = handler(run, self._ctx)
 
             # Completion
             if plan.complete_output is not None:
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.COMPLETED
                 run.output = plan.complete_output
                 run.updated_at = utc_now_iso()
@@ -657,6 +683,9 @@ class Runtime:
             if plan.effect is None:
                 if not plan.next_node:
                     raise ValueError(f"Node '{plan.node_id}' returned no effect and no next_node")
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.current_node = plan.next_node
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
@@ -701,6 +730,9 @@ class Runtime:
             )
 
             if outcome.status == "failed":
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.FAILED
                 run.error = outcome.error or "unknown error"
                 run.updated_at = utc_now_iso()
@@ -709,6 +741,9 @@ class Runtime:
 
             if outcome.status == "waiting":
                 assert outcome.wait is not None
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.WAITING
                 run.waiting = outcome.wait
                 run.updated_at = utc_now_iso()
@@ -726,11 +761,17 @@ class Runtime:
             # complete the run in a single StepPlan. Allowing next_node=None
             # makes "end on an effect node" valid (Blueprint-style UX).
             if not plan.next_node:
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.COMPLETED
                 run.output = {"success": True, "result": outcome.result}
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
                 return run
+            controlled = _abort_if_externally_controlled()
+            if controlled is not None:
+                return controlled
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
             self._run_store.save(run)
@@ -1174,6 +1215,7 @@ class Runtime:
 
         sub_vars = effect.payload.get("vars") or {}
         is_async = bool(effect.payload.get("async", False))
+        wait_for_completion = bool(effect.payload.get("wait", False))
         include_traces = bool(effect.payload.get("include_traces", False))
         resume_to = effect.payload.get("resume_to_node") or default_next_node
 
@@ -1187,8 +1229,29 @@ class Runtime:
         )
 
         if is_async:
-            # Async mode: return immediately with sub_run_id
-            # The child is started but not ticked - caller is responsible for driving it
+            # Async mode: start the child and return immediately.
+            #
+            # If `wait=True`, we *also* transition the parent into a durable WAITING state
+            # so a host (e.g. AbstractFlow WebSocket runner loop) can:
+            # - tick the child run incrementally (and stream node traces in real time)
+            # - resume the parent once the child completes (by calling runtime.resume(...))
+            #
+            # Without `wait=True`, this remains fire-and-forget.
+            if wait_for_completion:
+                wait = WaitState(
+                    reason=WaitReason.SUBWORKFLOW,
+                    wait_key=f"subworkflow:{sub_run_id}",
+                    resume_to_node=resume_to,
+                    result_key=effect.result_key,
+                    details={
+                        "sub_run_id": sub_run_id,
+                        "sub_workflow_id": workflow_id,
+                        "async": True,
+                    },
+                )
+                return EffectOutcome.waiting(wait)
+
+            # Fire-and-forget: caller is responsible for driving/observing the child.
             return EffectOutcome.completed({"sub_run_id": sub_run_id, "async": True})
 
         # Sync mode: run the subworkflow until completion or waiting

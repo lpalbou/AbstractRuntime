@@ -13,6 +13,8 @@ pause until the host resumes with the tool results.
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+import inspect
+import json
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 from .logging import get_logger
@@ -60,9 +62,65 @@ class MappingToolExecutor:
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         results: List[Dict[str, Any]] = []
 
+        def _loads_dict_like(value: Any) -> Optional[Dict[str, Any]]:
+            if value is None:
+                return None
+            if isinstance(value, dict):
+                return dict(value)
+            if not isinstance(value, str):
+                return None
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
+        def _unwrap_wrapper_args(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+            """Unwrap common wrapper shapes like {"name":..., "arguments":{...}}.
+
+            Some models emit tool kwargs wrapped inside an "arguments" object and may
+            mistakenly place real kwargs alongside wrapper fields. We unwrap and merge
+            (inner args take precedence).
+            """
+            current: Dict[str, Any] = dict(kwargs or {})
+            wrapper_keys = {"name", "arguments", "call_id", "id"}
+            for _ in range(4):
+                inner = current.get("arguments")
+                inner_dict = _loads_dict_like(inner)
+                if not isinstance(inner_dict, dict):
+                    break
+                extras = {k: v for k, v in current.items() if k not in wrapper_keys}
+                merged = dict(inner_dict)
+                for k, v in extras.items():
+                    merged.setdefault(k, v)
+                current = merged
+            return current
+
+        def _filter_kwargs(func: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+            """Best-effort filtering of unexpected kwargs for callables without **kwargs."""
+            try:
+                sig = inspect.signature(func)
+            except Exception:
+                return kwargs
+
+            params = list(sig.parameters.values())
+            if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+                return kwargs
+
+            allowed = {
+                p.name
+                for p in params
+                if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            }
+            return {k: v for k, v in kwargs.items() if k in allowed}
+
         for tc in tool_calls:
             name = str(tc.get("name", "") or "")
-            arguments = dict(tc.get("arguments") or {})
+            raw_arguments = tc.get("arguments") or {}
+            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
             call_id = str(tc.get("call_id") or "")
 
             func = self._tool_map.get(name)
@@ -87,6 +145,35 @@ class MappingToolExecutor:
                         "success": True,
                         "output": _jsonable(output),
                         "error": None,
+                    }
+                )
+            except TypeError as e:
+                # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
+                try:
+                    unwrapped = _unwrap_wrapper_args(arguments)
+                    filtered = _filter_kwargs(func, unwrapped)
+                    if filtered != arguments:
+                        output = func(**filtered)
+                        results.append(
+                            {
+                                "call_id": call_id,
+                                "name": name,
+                                "success": True,
+                                "output": _jsonable(output),
+                                "error": None,
+                            }
+                        )
+                        continue
+                except Exception:
+                    pass
+
+                results.append(
+                    {
+                        "call_id": call_id,
+                        "name": name,
+                        "success": False,
+                        "output": None,
+                        "error": str(e),
                     }
                 )
             except Exception as e:

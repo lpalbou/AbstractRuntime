@@ -237,6 +237,9 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
             meta = out.get("metadata")
             if isinstance(meta, dict) and "trace_id" in meta and "trace_id" not in out:
                 out["trace_id"] = meta["trace_id"]
+            # Some providers place reasoning under metadata (e.g. LM Studio gpt-oss).
+            if "reasoning" not in out and isinstance(meta, dict) and isinstance(meta.get("reasoning"), str):
+                out["reasoning"] = meta.get("reasoning")
         return out
 
     # Pydantic structured output
@@ -260,13 +263,18 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
     finish_reason = getattr(resp, "finish_reason", None)
     metadata = getattr(resp, "metadata", None)
     trace_id: Optional[str] = None
+    reasoning: Optional[str] = None
     if isinstance(metadata, dict):
         raw = metadata.get("trace_id")
         if raw is not None:
             trace_id = str(raw)
+        r = metadata.get("reasoning")
+        if isinstance(r, str) and r.strip():
+            reasoning = r.strip()
 
     return {
         "content": content,
+        "reasoning": reasoning,
         "data": None,
         "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
         "usage": _jsonable(usage) if usage is not None else None,
@@ -546,6 +554,7 @@ class RemoteAbstractCoreLLMClient:
             msg = choice0.get("message") or {}
             result = {
                 "content": msg.get("content"),
+                "reasoning": msg.get("reasoning"),
                 "data": None,
                 "tool_calls": _jsonable(msg.get("tool_calls")) if msg.get("tool_calls") is not None else None,
                 "usage": _jsonable(resp.get("usage")) if resp.get("usage") is not None else None,

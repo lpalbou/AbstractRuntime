@@ -5,6 +5,28 @@ from abstractruntime.integrations.abstractcore.llm_client import _maybe_parse_to
 from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCoreLLMClient
 
 
+def test_local_llm_client_surfaces_reasoning_from_provider_metadata() -> None:
+    from abstractcore.core.types import GenerateResponse
+
+    class _DummyReasoningLLM:
+        def get_capabilities(self) -> list[str]:
+            return []
+
+        def generate(self, **kwargs):
+            return GenerateResponse(content="", metadata={"reasoning": "I will do X."})
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "dummy"
+    client._model = "openai/gpt-oss-20b"
+    client._llm = _DummyReasoningLLM()
+    from abstractcore.tools.handler import UniversalToolHandler
+
+    client._tool_handler = UniversalToolHandler(client._model)
+
+    result = client.generate(prompt="do something")
+    assert result.get("reasoning") == "I will do X."
+
+
 def test_parse_xml_wrapped_tool_call() -> None:
     content = """
 <tool_call>

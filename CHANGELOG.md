@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs.
   - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).
   - `Scheduler.emit_event(...)` host API for external event delivery (session-scoped by default).
+- **Orchestrator-owned timeouts** (AbstractCore integration):
+  - Default **LLM timeout** is now 7200s (per `LLM_CALL`, not per-workflow) and is enforced by `create_*_runtime` factories (local/remote/hybrid).
+  - Default **tool execution timeout** is now 7200s (per tool call, not per-workflow) and is enforced by the runtime’s ToolExecutor implementations.
 
 ### Fixed
 - **Cancellation is terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as a terminal state and will not progress cancelled runs.

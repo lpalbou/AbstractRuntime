@@ -470,13 +470,17 @@ class RemoteAbstractCoreLLMClient:
         *,
         server_base_url: str,
         model: str,
-        timeout_s: float = 60.0,
+        # Runtime authority default: long-running workflow steps may legitimately take a long time.
+        # Keep this aligned with AbstractRuntime's orchestration defaults.
+        timeout_s: Optional[float] = None,
         headers: Optional[Dict[str, str]] = None,
         request_sender: Optional[RequestSender] = None,
     ):
+        from .constants import DEFAULT_LLM_TIMEOUT_S
+
         self._server_base_url = server_base_url.rstrip("/")
         self._model = model
-        self._timeout_s = timeout_s
+        self._timeout_s = float(timeout_s) if timeout_s is not None else DEFAULT_LLM_TIMEOUT_S
         self._headers = dict(headers or {})
         self._sender = request_sender or HttpxRequestSender()
 
@@ -522,6 +526,9 @@ class RemoteAbstractCoreLLMClient:
             "model": self._model,
             "messages": out_messages,
             "stream": False,
+            # Orchestrator policy: ask AbstractCore server to use the same timeout it expects.
+            # This keeps runtime authority even when the actual provider call happens server-side.
+            "timeout_s": self._timeout_s,
         }
 
         # Dynamic routing support (AbstractCore server feature).

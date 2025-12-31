@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 import inspect
 import json
+import threading
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 from .logging import get_logger
@@ -26,6 +27,54 @@ class ToolExecutor(Protocol):
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]: ...
 
 
+def _normalize_timeout_s(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except Exception:
+        return None
+    # Contract: non-positive values are treated as "unlimited".
+    return None if f <= 0 else f
+
+
+def _call_with_timeout(func: Callable[[], Any], *, timeout_s: Optional[float]) -> tuple[bool, Any, Optional[str]]:
+    """Execute a callable with a best-effort timeout.
+
+    Important limitation (Python semantics): we cannot forcibly stop a running function
+    without process isolation. On timeout we return an error, but the underlying callable
+    may still finish later (daemon thread).
+    """
+    timeout_s = _normalize_timeout_s(timeout_s)
+    if timeout_s is None:
+        try:
+            return True, func(), None
+        except Exception as e:
+            return False, None, str(e)
+
+    result: Dict[str, Any] = {"done": False, "ok": False, "value": None, "error": None}
+
+    def _runner() -> None:
+        try:
+            result["value"] = func()
+            result["ok"] = True
+        except Exception as e:
+            result["error"] = str(e)
+            result["ok"] = False
+        finally:
+            result["done"] = True
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout_s)
+
+    if not result.get("done", False):
+        return False, None, f"Tool execution timed out after {timeout_s}s"
+    if result.get("ok", False):
+        return True, result.get("value"), None
+    return False, None, str(result.get("error") or "Tool execution failed")
+
+
 class MappingToolExecutor:
     """Executes tool calls using an explicit {tool_name -> callable} mapping.
 
@@ -33,11 +82,12 @@ class MappingToolExecutor:
     host/runtime process and is never persisted inside RunState.
     """
 
-    def __init__(self, tool_map: Dict[str, Callable[..., Any]]):
+    def __init__(self, tool_map: Dict[str, Callable[..., Any]], *, timeout_s: Optional[float] = None):
         self._tool_map = dict(tool_map)
+        self._timeout_s = _normalize_timeout_s(timeout_s)
 
     @classmethod
-    def from_tools(cls, tools: Sequence[Callable[..., Any]]) -> "MappingToolExecutor":
+    def from_tools(cls, tools: Sequence[Callable[..., Any]], *, timeout_s: Optional[float] = None) -> "MappingToolExecutor":
         tool_map: Dict[str, Callable[..., Any]] = {}
         for t in tools:
             tool_def = getattr(t, "_tool_definition", None)
@@ -57,7 +107,10 @@ class MappingToolExecutor:
 
             tool_map[name] = func
 
-        return cls(tool_map)
+        return cls(tool_map, timeout_s=timeout_s)
+
+    def set_timeout_s(self, timeout_s: Optional[float]) -> None:
+        self._timeout_s = _normalize_timeout_s(timeout_s)
 
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         results: List[Dict[str, Any]] = []
@@ -177,38 +230,28 @@ class MappingToolExecutor:
                 )
                 continue
 
-            try:
-                output = func(**arguments)
-                _append_result(call_id=call_id, name=name, output=output)
-            except TypeError as e:
-                # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
+            def _invoke() -> Any:
                 try:
+                    return func(**arguments)
+                except TypeError:
+                    # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
                     unwrapped = _unwrap_wrapper_args(arguments)
                     filtered = _filter_kwargs(func, unwrapped)
                     if filtered != arguments:
-                        output = func(**filtered)
-                        _append_result(call_id=call_id, name=name, output=output)
-                        continue
-                except Exception:
-                    pass
+                        return func(**filtered)
+                    raise
 
+            ok, output, err = _call_with_timeout(_invoke, timeout_s=self._timeout_s)
+            if ok:
+                _append_result(call_id=call_id, name=name, output=output)
+            else:
                 results.append(
                     {
                         "call_id": call_id,
                         "name": name,
                         "success": False,
                         "output": None,
-                        "error": str(e),
-                    }
-                )
-            except Exception as e:
-                results.append(
-                    {
-                        "call_id": call_id,
-                        "name": name,
-                        "success": False,
-                        "output": None,
-                        "error": str(e),
+                        "error": str(err or "Tool execution failed"),
                     }
                 )
 
@@ -241,9 +284,15 @@ def _jsonable(value: Any) -> Any:
 class AbstractCoreToolExecutor:
     """Executes tool calls using AbstractCore's global tool registry."""
 
+    def __init__(self, *, timeout_s: Optional[float] = None):
+        self._timeout_s = _normalize_timeout_s(timeout_s)
+
+    def set_timeout_s(self, timeout_s: Optional[float]) -> None:
+        self._timeout_s = _normalize_timeout_s(timeout_s)
+
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         from abstractcore.tools.core import ToolCall
-        from abstractcore.tools.registry import execute_tools
+        from abstractcore.tools.registry import execute_tool
 
         calls = [
             ToolCall(
@@ -254,16 +303,29 @@ class AbstractCoreToolExecutor:
             for tc in tool_calls
         ]
 
-        results = execute_tools(calls)
         normalized = []
-        for call, r in zip(calls, results):
+        for call in calls:
+            ok, out, err = _call_with_timeout(lambda c=call: execute_tool(c), timeout_s=self._timeout_s)
+            if ok:
+                r = out
+                normalized.append(
+                    {
+                        "call_id": getattr(r, "call_id", "") if r is not None else "",
+                        "name": getattr(call, "name", ""),
+                        "success": bool(getattr(r, "success", False)) if r is not None else True,
+                        "output": _jsonable(getattr(r, "output", None)) if r is not None else None,
+                        "error": getattr(r, "error", None) if r is not None else None,
+                    }
+                )
+                continue
+
             normalized.append(
                 {
-                    "call_id": getattr(r, "call_id", ""),
+                    "call_id": str(getattr(call, "call_id", "") or ""),
                     "name": getattr(call, "name", ""),
-                    "success": bool(getattr(r, "success", False)),
-                    "output": _jsonable(getattr(r, "output", None)),
-                    "error": getattr(r, "error", None),
+                    "success": False,
+                    "output": None,
+                    "error": str(err or "Tool execution failed"),
                 }
             )
 

@@ -26,6 +26,7 @@ from .effect_handlers import build_effect_handlers
 from .llm_client import MultiLocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
 from .tool_executor import AbstractCoreToolExecutor, PassthroughToolExecutor, ToolExecutor
 from .summarizer import AbstractCoreChatSummarizer
+from .constants import DEFAULT_LLM_TIMEOUT_S, DEFAULT_TOOL_TIMEOUT_S
 
 
 def _default_in_memory_stores() -> tuple[RunStore, LedgerStore]:
@@ -46,6 +47,7 @@ def create_local_runtime(
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
+    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
     context: Optional[Any] = None,
     effect_policy: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
@@ -76,8 +78,22 @@ def create_local_runtime(
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
 
-    llm_client = MultiLocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=llm_kwargs)
-    tools = tool_executor or AbstractCoreToolExecutor()
+    # Runtime authority: default LLM timeout for orchestrated workflows.
+    #
+    # We set this here (in the runtime layer) rather than relying on AbstractCore global config,
+    # so workflow behavior is consistent and controlled by the orchestrator.
+    effective_llm_kwargs: Dict[str, Any] = dict(llm_kwargs or {})
+    effective_llm_kwargs.setdefault("timeout", DEFAULT_LLM_TIMEOUT_S)
+
+    llm_client = MultiLocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=effective_llm_kwargs)
+    tools = tool_executor or AbstractCoreToolExecutor(timeout_s=tool_timeout_s)
+    # Orchestrator policy: enforce tool execution timeout at the runtime layer.
+    try:
+        setter = getattr(tools, "set_timeout_s", None)
+        if callable(setter):
+            setter(tool_timeout_s)
+    except Exception:
+        pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
     # Query model capabilities and merge into config
@@ -113,7 +129,7 @@ def create_remote_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = 60.0,
+    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
@@ -149,7 +165,8 @@ def create_hybrid_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = 60.0,
+    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
+    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     context: Optional[Any] = None,
@@ -169,7 +186,13 @@ def create_hybrid_runtime(
         headers=headers,
         timeout_s=timeout_s,
     )
-    tools = AbstractCoreToolExecutor()
+    tools = AbstractCoreToolExecutor(timeout_s=tool_timeout_s)
+    try:
+        setter = getattr(tools, "set_timeout_s", None)
+        if callable(setter):
+            setter(tool_timeout_s)
+    except Exception:
+        pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
 
     return Runtime(
@@ -189,6 +212,7 @@ def create_local_file_runtime(
     llm_kwargs: Optional[Dict[str, Any]] = None,
     context: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
+    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
     artifact_store = FileArtifactStore(base_dir)
@@ -201,6 +225,7 @@ def create_local_file_runtime(
         context=context,
         config=config,
         artifact_store=artifact_store,
+        tool_timeout_s=tool_timeout_s,
     )
 
 
@@ -210,7 +235,7 @@ def create_remote_file_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = 60.0,
+    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
     context: Optional[Any] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)

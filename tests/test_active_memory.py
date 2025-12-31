@@ -9,15 +9,16 @@ from abstractruntime.memory.active_memory import (
     upsert_task,
     add_critical_insight,
     add_key_history_event,
+    apply_active_memory_delta,
 )
 
 
 def test_ensure_active_memory_initializes_schema() -> None:
     vars: dict = {}
     mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
-    assert mem.get("version") == 3
-    assert isinstance(mem.get("max_chars"), int) and mem["max_chars"] > 0
-    assert isinstance(mem.get("max_tokens"), int) and mem["max_tokens"] > 0
+    assert mem.get("version") == 7
+    # Token-native budgeting (0 => auto from vars["_limits"].max_tokens when present).
+    assert isinstance(mem.get("max_tokens"), int)
     assert isinstance(mem.get("persona_md"), str) and mem["persona_md"].strip()
     assert isinstance(mem.get("memory_organization_md"), str) and mem["memory_organization_md"].strip()
     assert isinstance(mem.get("tasks"), list)
@@ -40,6 +41,28 @@ def test_ensure_active_memory_initializes_schema() -> None:
     sys_ids = mem.get("system_component_ids")
     assert isinstance(sys_ids, list)
     assert "persona" in sys_ids and "tools" in sys_ids
+
+
+def test_ensure_active_memory_migrates_v3_default_budgets() -> None:
+    vars: dict = {
+        "_runtime": {
+            "active_memory": {
+                "version": 3,
+                "budgets": {
+                    "persona_pct": 0.10,
+                    "memory_organization_pct": 0.07,
+                    "tools_pct": 0.10,
+                },
+            }
+        }
+    }
+    mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
+    assert mem.get("version") == 7
+    budgets = mem.get("budgets")
+    assert isinstance(budgets, dict)
+    assert budgets.get("persona_pct") == 0.075
+    assert budgets.get("memory_organization_pct") == 0.08
+    assert budgets.get("tools_pct") == 0.115
 
 
 def test_upsert_task_preserves_created_at_and_caps_to_five() -> None:
@@ -128,7 +151,7 @@ def test_upsert_current_context_item_preserves_created_at() -> None:
 def test_render_active_memory_for_prompt_is_bounded_and_includes_sections() -> None:
     vars: dict = {"_runtime": {"toolset_id": "ts_test", "tool_specs": [{"name": "read_file", "description": "d", "parameters": {"file_path": {"type": "string"}, "encoding": {"type": "string", "default": "utf-8"}}}]}}
     mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
-    mem["max_chars"] = 600
+    mem["max_tokens"] = 300
 
     upsert_task(
         vars,
@@ -157,8 +180,8 @@ def test_render_active_memory_for_prompt_is_bounded_and_includes_sections() -> N
         now_iso=lambda: "2025-01-01T00:00:04+00:00",
     )
 
-    rendered = render_active_memory_for_prompt(vars, include_tools_summary=True)
-    assert len(rendered) <= 600
+    rendered = render_active_memory_for_prompt(vars, include_tools_summary=True, max_tokens=300, token_counter=lambda s: len(str(s).split()))
+    assert len(str(rendered).split()) <= 300
     assert "## Persona (persistent)" in rendered
     assert "## Memory Organization (persistent)" in rendered
     assert "## Tools (session)" in rendered
@@ -181,3 +204,32 @@ def test_compute_active_memory_token_breakdown_allocates_total_budget() -> None:
     assert isinstance(components, dict)
     assert sum(int(c.get("max_tokens") or 0) for c in components.values() if isinstance(c, dict)) == 100
     assert int(components["persona"]["used_tokens"]) > 0
+
+
+def test_apply_active_memory_delta_updates_evolving_modules() -> None:
+    vars: dict = {"_runtime": {}}
+    ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
+
+    delta = {
+        "current_tasks": {
+            "upsert": [
+                {"task_id": "t_1", "title": "Do thing", "status": "doing", "next": ["run tests"]},
+            ]
+        },
+        "current_context": {
+            "upsert": [
+                {"context_id": "c_1", "title": "Foo", "summary": "Bar", "refs": [{"kind": "file", "path": "x.py"}]},
+            ]
+        },
+        "critical_insights": {"add": [{"insight_id": "i_1", "text": "Beware", "tags": ["pitfall"]}]},
+        "key_history": {"add": [{"event_id": "h_1", "kind": "decision", "summary": "Chose X"}]},
+    }
+
+    out = apply_active_memory_delta(vars, delta=delta, now_iso=lambda: "2025-01-01T00:00:01+00:00")
+    assert out.get("ok") is True
+
+    mem = get_active_memory(vars)
+    assert any(isinstance(t, dict) and t.get("task_id") == "t_1" for t in mem.get("tasks") or [])
+    assert any(isinstance(c, dict) and c.get("context_id") == "c_1" for c in mem.get("current_context") or [])
+    assert any(isinstance(i, dict) and i.get("insight_id") == "i_1" for i in mem.get("critical_insights") or [])
+    assert any(isinstance(h, dict) and h.get("event_id") == "h_1" for h in mem.get("key_history") or [])

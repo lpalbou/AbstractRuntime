@@ -824,6 +824,7 @@ class Runtime:
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
+        self._handlers[EffectType.MEMORY_COMPACT_STRUCTURED] = self._handle_memory_compact_structured
         self._handlers[EffectType.MEMORY_NOTE] = self._handle_memory_note
         self._handlers[EffectType.VARS_QUERY] = self._handle_vars_query
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
@@ -2041,6 +2042,317 @@ class Runtime:
                     "output": text,
                     "error": None,
                     "meta": out,
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
+    def _handle_memory_compact_structured(
+        self, run: RunState, effect: Effect, default_next_node: Optional[str]
+    ) -> EffectOutcome:
+        """Handle MEMORY_COMPACT_STRUCTURED.
+
+        Runtime-owned compaction for Structured Active Memory (per-component, provenance-preserving).
+
+        This archives overflow items from Active Memory list components into ArtifactStore and
+        indexes them in `_runtime.memory_spans` so they can be recalled later.
+
+        Payload (all optional unless stated):
+          - components: list[str]        Components to compact. Supported:
+              current_tasks, current_context, critical_insights, key_history
+            Default: ["critical_insights", "key_history"]
+          - preserve: dict[str,int]      Per-component "keep newest N" counts.
+            Defaults:
+              current_tasks=5, current_context=20, critical_insights=50, key_history=50
+          - target_run_id: str           Compact another run (defaults to current run).
+          - tool_name: str              For tool-style output (default "compact_active_memory").
+          - call_id: str                Passthrough call id.
+        """
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return EffectOutcome.failed(
+                "MEMORY_COMPACT_STRUCTURED requires an ArtifactStore; configure runtime.set_artifact_store(...)"
+            )
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "compact_active_memory")
+        call_id = str(payload.get("call_id") or "memory")
+
+        target_run_id = payload.get("target_run_id")
+        if target_run_id is not None:
+            target_run_id = str(target_run_id).strip() or None
+
+        # Resolve which run is being compacted.
+        target_run = run
+        if target_run_id and target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
+            target_run = loaded
+            ensure_namespaces(target_run.vars)
+
+        try:
+            from ..memory.active_memory import ensure_active_memory, add_key_history_event
+        except Exception as e:  # pragma: no cover
+            return EffectOutcome.failed(f"Active Memory unavailable: {e}")
+
+        mem = ensure_active_memory(target_run.vars)
+
+        raw_components = payload.get("components")
+        if raw_components is None:
+            components = ["critical_insights", "key_history"]
+        elif isinstance(raw_components, list):
+            components = [str(c).strip() for c in raw_components if isinstance(c, (str, int)) and str(c).strip()]
+        else:
+            components = [str(raw_components).strip()] if str(raw_components).strip() else []
+
+        supported = {"current_tasks", "current_context", "critical_insights", "key_history"}
+        components = [c for c in components if c in supported]
+        if not components:
+            components = ["critical_insights", "key_history"]
+
+        preserve_raw = payload.get("preserve")
+        preserve_map = dict(preserve_raw) if isinstance(preserve_raw, dict) else {}
+
+        def _preserve_for(cid: str) -> int:
+            defaults = {
+                "current_tasks": 5,
+                "current_context": 20,
+                "critical_insights": 50,
+                "key_history": 50,
+            }
+            raw = preserve_map.get(cid)
+            try:
+                val = int(raw) if raw is not None else int(defaults.get(cid, 0))
+            except Exception:
+                val = int(defaults.get(cid, 0))
+            return max(0, val)
+
+        # Map component -> (mem_key, id_key, timestamp_keys)
+        comp_info = {
+            "current_tasks": {"mem_key": "tasks", "id_key": "task_id", "ts_keys": ("updated_at", "created_at")},
+            "current_context": {"mem_key": "current_context", "id_key": "context_id", "ts_keys": ("updated_at", "created_at")},
+            "critical_insights": {"mem_key": "critical_insights", "id_key": "insight_id", "ts_keys": ("ts",)},
+            "key_history": {"mem_key": "key_history", "id_key": "event_id", "ts_keys": ("ts",)},
+        }
+
+        def _item_ts(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+            for k in keys:
+                v = item.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return utc_now_iso()
+
+        def _render_item(component_id: str, item: dict[str, Any]) -> str:
+            if component_id == "current_tasks":
+                return (
+                    f"task_id={item.get('task_id')} status={item.get('status')} title={item.get('title')}\n"
+                    f"purpose={item.get('purpose')}\n"
+                    f"done={item.get('done')}\nnext={item.get('next')}\nissues={item.get('issues')}"
+                ).strip()
+            if component_id == "current_context":
+                refs = item.get("refs")
+                ref_count = len(refs) if isinstance(refs, list) else 0
+                return (
+                    f"context_id={item.get('context_id')} kind={item.get('kind')} title={item.get('title')}\n"
+                    f"summary={item.get('summary')}\nrefs_count={ref_count}"
+                ).strip()
+            if component_id == "critical_insights":
+                return (
+                    f"insight_id={item.get('insight_id')} tags={item.get('tags')}\n"
+                    f"text={item.get('text')}"
+                ).strip()
+            # key_history
+            return (
+                f"event_id={item.get('event_id')} kind={item.get('kind')}\n"
+                f"summary={item.get('summary')}\nrefs={item.get('refs')}"
+            ).strip()
+
+        # First pass: compute candidate archives.
+        #
+        # Special-case key_history: if we are compacting it, we want the final length to stay
+        # within its preserve budget *after* we append compaction events for created spans.
+        planned_archives: dict[str, dict[str, Any]] = {}
+        key_history_items: list[dict[str, Any]] = []
+        key_history_keep = 0
+
+        for cid in components:
+            info = comp_info[cid]
+            mem_key = str(info["mem_key"])
+            items = mem.get(mem_key)
+            items_list = [dict(x) for x in items if isinstance(x, dict)] if isinstance(items, list) else []
+            keep = _preserve_for(cid)
+
+            if cid == "key_history":
+                key_history_items = items_list
+                key_history_keep = keep
+                planned_archives[cid] = {"keep": keep, "archive": [], "kept": items_list}
+                continue
+
+            if keep <= 0:
+                archive = list(items_list)
+                kept = []
+            elif len(items_list) > keep:
+                archive = items_list[:-keep]
+                kept = items_list[-keep:]
+            else:
+                archive = []
+                kept = items_list
+            planned_archives[cid] = {"keep": keep, "archive": archive, "kept": kept}
+
+        spans_to_create: list[str] = [
+            cid for cid, plan in planned_archives.items() if cid != "key_history" and plan.get("archive")
+        ]
+        other_span_count = len(spans_to_create)
+
+        # If compacting key_history, reserve space for the compaction events we'll append.
+        if "key_history" in planned_archives:
+            base_keep = int(key_history_keep or 0)
+            adjusted_keep = max(0, base_keep - other_span_count)
+            # If key_history itself will need a span after reserving space, reserve one more slot.
+            if len(key_history_items) > adjusted_keep:
+                adjusted_keep = max(0, base_keep - (other_span_count + 1))
+
+            if adjusted_keep <= 0:
+                archive = list(key_history_items)
+                kept = []
+            elif len(key_history_items) > adjusted_keep:
+                archive = key_history_items[:-adjusted_keep]
+                kept = key_history_items[-adjusted_keep:]
+            else:
+                archive = []
+                kept = key_history_items
+
+            planned_archives["key_history"].update(
+                {"archive": archive, "kept": kept, "effective_keep": adjusted_keep}
+            )
+            if archive:
+                spans_to_create.append("key_history")
+
+        # Apply compaction (trim lists) before storing spans so the run state is consistent even if storage fails later.
+        for cid, plan in planned_archives.items():
+            info = comp_info[cid]
+            mem_key = str(info["mem_key"])
+            kept = plan.get("kept") if isinstance(plan.get("kept"), list) else []
+            mem[mem_key] = kept
+
+        runtime_ns = target_run.vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            target_run.vars["_runtime"] = runtime_ns
+        spans = runtime_ns.get("memory_spans")
+        if not isinstance(spans, list):
+            spans = []
+            runtime_ns["memory_spans"] = spans
+
+        created: list[dict[str, Any]] = []
+
+        for cid in spans_to_create:
+            plan = planned_archives.get(cid) or {}
+            archive_items = plan.get("archive")
+            if not isinstance(archive_items, list) or not archive_items:
+                continue
+
+            info = comp_info[cid]
+            id_key = str(info["id_key"])
+            ts_keys = tuple(info["ts_keys"])
+            now = utc_now_iso()
+
+            messages: list[dict[str, Any]] = []
+            for it in archive_items:
+                if not isinstance(it, dict):
+                    continue
+                ts = _item_ts(it, ts_keys)
+                msg = {
+                    "role": "memory",
+                    "content": _render_item(cid, it),
+                    "timestamp": ts,
+                    "metadata": {
+                        "kind": "active_memory_item",
+                        "component_id": cid,
+                        "item_id": str(it.get(id_key) or ""),
+                    },
+                }
+                messages.append(msg)
+
+            if not messages:
+                messages = [
+                    {
+                        "role": "memory",
+                        "content": f"(archived {len(archive_items)} {cid} items)",
+                        "timestamp": now,
+                        "metadata": {"kind": "active_memory_item", "component_id": cid},
+                    }
+                ]
+
+            from_ts = str(messages[0].get("timestamp") or "")
+            to_ts = str(messages[-1].get("timestamp") or "")
+
+            artifact_payload = {
+                "kind": "active_memory_span",
+                "component_id": cid,
+                "created_at": now,
+                "items": archive_items,
+                "messages": messages,
+            }
+
+            artifact_tags = {"kind": "active_memory_span", "component": cid}
+            meta = artifact_store.store_json(artifact_payload, run_id=target_run.run_id, tags=artifact_tags)
+            artifact_id = meta.artifact_id
+
+            span_entry = {
+                "kind": "active_memory_span",
+                "component_id": cid,
+                "artifact_id": artifact_id,
+                "created_at": now,
+                "from_timestamp": from_ts,
+                "to_timestamp": to_ts,
+                "message_count": len(messages),
+                "item_count": len([x for x in archive_items if isinstance(x, dict)]),
+                "tags": {"component": cid},
+            }
+            spans.append(span_entry)
+
+            # Append a key history event pointing to the archived span so the model has a durable handle.
+            add_key_history_event(
+                target_run.vars,
+                kind="active_memory_compact",
+                summary=f"Archived {len(archive_items)} {cid} item(s) to span_id={artifact_id}.",
+                refs=[{"span_id": artifact_id, "component_id": cid, "archived_count": len(archive_items)}],
+            )
+
+            created.append(
+                {
+                    "component_id": cid,
+                    "span_id": artifact_id,
+                    "archived_items": len(archive_items),
+                    "kept_items": len(plan.get("kept") or []),
+                }
+            )
+
+        # Persist when compacting another run.
+        if target_run is not run:
+            target_run.updated_at = utc_now_iso()
+            self._run_store.save(target_run)
+
+        if not created:
+            text = "Structured Active Memory: nothing to compact."
+        else:
+            text = f"Structured Active Memory: archived {len(created)} component(s) into span(s)."
+
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": True,
+                    "output": text,
+                    "error": None,
+                    "meta": {"created_spans": created},
                 }
             ],
         }

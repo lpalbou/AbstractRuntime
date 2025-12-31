@@ -47,9 +47,25 @@ def ensure_active_memory(
 ) -> Dict[str, Any]:
     mem = get_active_memory(vars)
 
-    mem.setdefault("version", 3)
-    mem.setdefault("max_chars", 8000)
-    mem.setdefault("max_tokens", 2000)
+    # Schema / migrations
+    try:
+        version = int(mem.get("version") or 0)
+    except Exception:
+        version = 0
+
+    # `max_chars` is legacy (v3/v4). The budgeting + rendering system is token-native (v5+).
+    # Keep the key for backward compatibility but always disable it to avoid confusing UX.
+    if "max_chars" in mem:
+        mem["max_chars"] = 0
+
+    # `max_tokens` is the total Active Memory budget (0 => auto from run context max_tokens).
+    if "max_tokens" not in mem:
+        mem["max_tokens"] = 0
+    else:
+        try:
+            mem["max_tokens"] = int(mem.get("max_tokens") or 0)
+        except Exception:
+            mem["max_tokens"] = 0
 
     # Persistent blocks (Markdown)
     mem.setdefault("persona_md", _default_persona_md())
@@ -70,15 +86,104 @@ def ensure_active_memory(
     if not isinstance(budgets, dict):
         budgets = {}
         mem["budgets"] = budgets
+
+    # Lightweight migration: adjust default budget distribution (only when users didn't customize).
+    # v3 defaults: persona=10%, org=7%, tools=10%
+    # v4 defaults: persona=7.5%, org=8%, tools=11.5%
+    if version < 4:
+        old_defaults = {"persona_pct": 0.10, "memory_organization_pct": 0.07, "tools_pct": 0.10}
+        new_defaults = {"persona_pct": 0.075, "memory_organization_pct": 0.08, "tools_pct": 0.115}
+        for key, new_value in new_defaults.items():
+            if key not in budgets:
+                budgets[key] = new_value
+                continue
+            try:
+                current = float(budgets.get(key, 0.0))
+            except Exception:
+                continue
+            old_value = old_defaults.get(key)
+            if old_value is None:
+                continue
+            if abs(current - float(old_value)) < 1e-9:
+                budgets[key] = new_value
+
+        version = 4
+
+    # v5 migration: token-native budgeting defaults to "auto" max_tokens.
+    # Keep user custom budgets intact; only migrate the previous default max_tokens=2000.
+    if version < 5:
+        try:
+            max_tokens = int(mem.get("max_tokens") or 0)
+        except Exception:
+            max_tokens = 0
+        if max_tokens == 2000:
+            mem["max_tokens"] = 0
+
+        if "max_chars" in mem:
+            # Disable legacy char budgets (they caused confusing UX).
+            mem["max_chars"] = 0
+
+        version = 5
+
+    # v6 migration: treat `max_tokens=2000` as legacy default even if version was already bumped.
+    # This avoids silently keeping the old 2k budget in durable sessions, which made `/memory`
+    # misleading vs the actual model context window. Users can still explicitly set a smaller
+    # budget by writing a different positive value.
+    if version < 6:
+        try:
+            max_tokens = int(mem.get("max_tokens") or 0)
+        except Exception:
+            max_tokens = 0
+        if max_tokens == 2000:
+            mem["max_tokens"] = 0
+        if "max_chars" in mem:
+            mem["max_chars"] = 0
+        version = 6
+
+    # v7 migration: remove legacy defaults that accidentally persisted in durable sessions.
+    # - `max_tokens=2000` was the historic default; treat it as "auto" unless the user changes it after v7.
+    # - Ensure Memory Organization contains delta instructions so evolving modules actually get used.
+    if version < 7:
+        try:
+            max_tokens = int(mem.get("max_tokens") or 0)
+        except Exception:
+            max_tokens = 0
+        if max_tokens == 2000:
+            mem["max_tokens"] = 0
+        if "max_chars" in mem:
+            mem["max_chars"] = 0
+
+        org = str(mem.get("memory_organization_md") or "").strip()
+        if "active_memory_delta" not in org:
+            org = (
+                f"{org}\n\n"
+                "Active Memory deltas (IMPORTANT):\n"
+                "- When you are NOT emitting a tool call, append a JSON delta block at the end of your message:\n"
+                "  ```active_memory_delta\n"
+                "  {\n"
+                "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
+                "    \"current_context\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
+                "    \"critical_insights\": {\"add\": [...], \"remove\": [...], \"clear\": false},\n"
+                "    \"key_history\": {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
+                "  }\n"
+                "  ```\n"
+                "- Only include fields that changed (deltas, not full rewrites).\n"
+                "- The host will apply the delta and will NOT show the delta block to the user.\n"
+            ).strip()
+            mem["memory_organization_md"] = org
+
+        version = 7
+
+    mem["version"] = 7
     # Defaults are chosen to:
     # - preserve stable identity (persona/org/tools),
     # - prioritize current work (tasks/context/insights),
     # - keep history bounded (history should not dominate; full fidelity lives in spans/artifacts).
     #
     # Sum ~= 1.0 (if users override and sum > 1.0, renderers normalize down).
-    budgets.setdefault("persona_pct", 0.10)
-    budgets.setdefault("memory_organization_pct", 0.07)
-    budgets.setdefault("tools_pct", 0.10)
+    budgets.setdefault("persona_pct", 0.075)
+    budgets.setdefault("memory_organization_pct", 0.08)
+    budgets.setdefault("tools_pct", 0.115)
     budgets.setdefault("current_tasks_pct", 0.30)
     budgets.setdefault("current_context_pct", 0.08)
     budgets.setdefault("critical_insights_pct", 0.20)
@@ -296,6 +401,183 @@ def add_key_history_event(
     return hid
 
 
+def apply_active_memory_delta(
+    vars: Dict[str, Any],
+    *,
+    delta: Dict[str, Any],
+    now_iso: Callable[[], str] = utc_now_iso_seconds,
+) -> Dict[str, Any]:
+    """Apply an LLM-produced Active Memory delta (unit updates; no full rewrites).
+
+    The delta is expected to be JSON (dict) with optional keys:
+      - current_tasks: {clear?: bool, remove?: [task_id], upsert?: [task_obj]}
+      - current_context: {clear?: bool, remove?: [context_id], upsert?: [context_obj]}
+      - critical_insights: {clear?: bool, remove?: [insight_id], add?: [insight_obj|text]}
+      - key_history: {clear?: bool, remove?: [event_id], add?: [event_obj]}
+
+    Unknown keys are ignored.
+    """
+    if not isinstance(delta, dict):
+        return {"ok": False, "error": "delta must be a dict"}
+
+    mem = ensure_active_memory(vars, now_iso=now_iso)
+    ts = now_iso()
+
+    applied: Dict[str, Any] = {
+        "current_tasks": {"cleared": False, "removed": 0, "upserted": 0},
+        "current_context": {"cleared": False, "removed": 0, "upserted": 0},
+        "critical_insights": {"cleared": False, "removed": 0, "added": 0},
+        "key_history": {"cleared": False, "removed": 0, "added": 0},
+    }
+    errors: List[str] = []
+
+    def _as_str_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        out: List[str] = []
+        for x in value:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+        return out
+
+    def _remove_by_id(items: Any, *, id_key: str, ids: List[str]) -> int:
+        if not isinstance(items, list) or not ids:
+            return 0
+        id_set = {i for i in ids if i}
+        before = len(items)
+        items[:] = [x for x in items if not (isinstance(x, dict) and str(x.get(id_key) or "") in id_set)]
+        return max(0, before - len(items))
+
+    # --------------------------
+    # current_tasks
+    # --------------------------
+    tasks_delta = delta.get("current_tasks") or delta.get("tasks")
+    if isinstance(tasks_delta, dict):
+        if bool(tasks_delta.get("clear")):
+            mem["tasks"] = []
+            applied["current_tasks"]["cleared"] = True
+        removed = _remove_by_id(mem.get("tasks"), id_key="task_id", ids=_as_str_list(tasks_delta.get("remove")))
+        applied["current_tasks"]["removed"] = removed
+
+        upserts = tasks_delta.get("upsert")
+        if isinstance(upserts, list):
+            for t in upserts:
+                if not isinstance(t, dict):
+                    continue
+                title = str(t.get("title") or "").strip()
+                if not title:
+                    continue
+                upsert_task(
+                    vars,
+                    task_id=str(t.get("task_id") or "").strip() or None,
+                    title=title,
+                    purpose=str(t.get("purpose") or "").strip(),
+                    status=str(t.get("status") or "").strip() or "todo",
+                    done=t.get("done") if isinstance(t.get("done"), list) else None,
+                    next_steps=t.get("next") if isinstance(t.get("next"), list) else None,
+                    issues=t.get("issues") if isinstance(t.get("issues"), list) else None,
+                    now_iso=now_iso,
+                )
+                applied["current_tasks"]["upserted"] += 1
+
+    # --------------------------
+    # current_context
+    # --------------------------
+    ctx_delta = delta.get("current_context") or delta.get("context") or delta.get("current_context_items")
+    if isinstance(ctx_delta, dict):
+        if bool(ctx_delta.get("clear")):
+            mem["current_context"] = []
+            applied["current_context"]["cleared"] = True
+        removed = _remove_by_id(mem.get("current_context"), id_key="context_id", ids=_as_str_list(ctx_delta.get("remove")))
+        applied["current_context"]["removed"] = removed
+
+        upserts = ctx_delta.get("upsert")
+        if isinstance(upserts, list):
+            for c in upserts:
+                if not isinstance(c, dict):
+                    continue
+                title = str(c.get("title") or "").strip()
+                if not title:
+                    continue
+                upsert_current_context_item(
+                    vars,
+                    context_id=str(c.get("context_id") or "").strip() or None,
+                    title=title,
+                    summary=str(c.get("summary") or "").strip(),
+                    kind=str(c.get("kind") or "").strip() or "context",
+                    refs=c.get("refs") if isinstance(c.get("refs"), list) else None,
+                    now_iso=now_iso,
+                )
+                applied["current_context"]["upserted"] += 1
+
+    # --------------------------
+    # critical_insights
+    # --------------------------
+    insights_delta = delta.get("critical_insights") or delta.get("insights")
+    if isinstance(insights_delta, dict):
+        if bool(insights_delta.get("clear")):
+            mem["critical_insights"] = []
+            applied["critical_insights"]["cleared"] = True
+        removed = _remove_by_id(mem.get("critical_insights"), id_key="insight_id", ids=_as_str_list(insights_delta.get("remove")))
+        applied["critical_insights"]["removed"] = removed
+
+        adds = insights_delta.get("add") or insights_delta.get("append")
+        if isinstance(adds, list):
+            for it in adds:
+                if isinstance(it, str):
+                    text = it.strip()
+                    tags = None
+                    insight_id = None
+                elif isinstance(it, dict):
+                    text = str(it.get("text") or "").strip()
+                    tags = it.get("tags") if isinstance(it.get("tags"), list) else None
+                    insight_id = str(it.get("insight_id") or "").strip() or None
+                else:
+                    continue
+                if not text:
+                    continue
+                add_critical_insight(vars, text=text, tags=tags, insight_id=insight_id, now_iso=now_iso)
+                applied["critical_insights"]["added"] += 1
+
+    # --------------------------
+    # key_history
+    # --------------------------
+    history_delta = delta.get("key_history") or delta.get("history")
+    if isinstance(history_delta, dict):
+        if bool(history_delta.get("clear")):
+            mem["key_history"] = []
+            applied["key_history"]["cleared"] = True
+        removed = _remove_by_id(mem.get("key_history"), id_key="event_id", ids=_as_str_list(history_delta.get("remove")))
+        applied["key_history"]["removed"] = removed
+
+        adds = history_delta.get("add") or history_delta.get("append")
+        if isinstance(adds, list):
+            for it in adds:
+                if not isinstance(it, dict):
+                    continue
+                kind = str(it.get("kind") or "").strip() or "event"
+                summary = str(it.get("summary") or "").strip()
+                if not summary:
+                    continue
+                add_key_history_event(
+                    vars,
+                    kind=kind,
+                    summary=summary,
+                    refs=it.get("refs") if isinstance(it.get("refs"), list) else None,
+                    event_id=str(it.get("event_id") or "").strip() or None,
+                    ts=str(it.get("ts") or "").strip() or None,
+                    now_iso=now_iso,
+                )
+                applied["key_history"]["added"] += 1
+
+    # If we made any changes directly (clears/removes), bump updated_at.
+    mem["updated_at"] = ts
+    result: Dict[str, Any] = {"ok": True, "applied": applied}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
 _ACTIVE_MEMORY_COMPONENT_SPECS: List[Dict[str, str]] = [
     {"id": "persona", "title": "Persona (persistent)", "budget_key": "persona_pct", "kind": "markdown"},
     {
@@ -330,11 +612,99 @@ def _estimate_tokens_fast(text: str) -> int:
     return max(1, len(s) // 4)
 
 
+def _resolve_active_memory_max_tokens(
+    vars: Dict[str, Any],
+    mem: Dict[str, Any],
+    *,
+    max_tokens: Optional[int],
+    max_chars: Optional[int],
+) -> Optional[int]:
+    """Resolve the effective Active Memory budget (in tokens).
+
+    Resolution order:
+    1) explicit `max_tokens` (0/None => "unbounded/unfitted")
+    2) stored `active_memory.max_tokens` (when > 0)
+    3) run context budget `vars['_limits'].max_tokens` (when > 0)
+    4) legacy `max_chars` (explicit or stored) converted to tokens (≈4 chars/token)
+    5) fallback default (32768)
+    """
+    # Explicit override.
+    if max_tokens is not None:
+        try:
+            val = int(max_tokens)
+        except Exception:
+            val = 0
+        return val if val > 0 else None
+
+    # Stored override (0 => auto).
+    try:
+        stored = int(mem.get("max_tokens") or 0)
+    except Exception:
+        stored = 0
+    if stored > 0:
+        return stored
+
+    # Auto: use run context budget when available.
+    limits = vars.get("_limits")
+    if isinstance(limits, dict):
+        try:
+            run_max = int(limits.get("max_tokens") or 0)
+        except Exception:
+            run_max = 0
+        if run_max > 0:
+            return run_max
+
+    # Legacy char budget (explicit or stored).
+    legacy_chars = max_chars
+    if legacy_chars is None:
+        legacy_chars = mem.get("max_chars") if "max_chars" in mem else None
+    try:
+        legacy_chars_i = int(legacy_chars) if legacy_chars is not None else 0
+    except Exception:
+        legacy_chars_i = 0
+    if legacy_chars_i > 0:
+        return max(1, legacy_chars_i // 4)
+
+    return 32768
+
+
+def _allocate_token_budgets(total_budget: int, weights: Dict[str, float]) -> Dict[str, int]:
+    """Allocate integer token budgets by weight using stable rounding.
+
+    The returned budgets sum to `total_budget` (when total_budget > 0).
+    """
+    total = int(total_budget)
+    if total <= 0:
+        return {k: 0 for k in weights.keys()}
+
+    floors: Dict[str, int] = {}
+    fracs: List[Tuple[float, str]] = []
+    allocated = 0
+    for cid, w in weights.items():
+        exact = float(total) * float(w)
+        base = int(exact)
+        floors[cid] = base
+        allocated += base
+        fracs.append((exact - base, cid))
+
+    remainder = max(0, total - allocated)
+    fracs.sort(key=lambda x: x[0], reverse=True)
+    for _, cid in fracs:
+        if remainder <= 0:
+            break
+        floors[cid] += 1
+        remainder -= 1
+
+    return floors
+
+
 def render_active_memory_blocks_for_prompt(
     vars: Dict[str, Any],
     *,
     include_tools_summary: bool = True,
-    max_chars: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    token_counter: Optional[Callable[[str], int]] = None,
+    max_chars: Optional[int] = None,  # legacy (chars-based); kept for backward compatibility
 ) -> List[Dict[str, Any]]:
     """Render Active Memory as fitted per-component blocks.
 
@@ -348,10 +718,8 @@ def render_active_memory_blocks_for_prompt(
     mem = ensure_active_memory(vars)
     budgets = mem.get("budgets") if isinstance(mem.get("budgets"), dict) else {}
 
-    if max_chars is None:
-        stored = mem.get("max_chars")
-        if isinstance(stored, int) and stored > 0:
-            max_chars = stored
+    count = token_counter or _estimate_tokens_fast
+    total = _resolve_active_memory_max_tokens(vars, mem, max_tokens=max_tokens, max_chars=max_chars)
 
     def pct(key: str) -> float:
         try:
@@ -371,87 +739,114 @@ def render_active_memory_blocks_for_prompt(
         "key_history": _render_history_yaml(mem.get("key_history")).strip(),
     }
 
-    total = int(max_chars) if isinstance(max_chars, int) and max_chars > 0 else None
+    # Ensure blocks remain discoverable to the model even when empty.
+    if not raw_by_id.get("persona"):
+        raw_by_id["persona"] = "(empty)"
+    if not raw_by_id.get("memory_organization"):
+        raw_by_id["memory_organization"] = "(empty)"
+    if include_tools_summary and not raw_by_id.get("tools"):
+        raw_by_id["tools"] = "tools: []"
 
     specs: List[Dict[str, Any]] = []
     for spec in _ACTIVE_MEMORY_COMPONENT_SPECS:
         cid = spec["id"]
-        content = raw_by_id.get(cid, "")
-        if not isinstance(content, str) or not content.strip():
-            continue
-        specs.append(
-            {
-                "component_id": cid,
-                "title": spec["title"],
-                "budget_key": spec["budget_key"],
-                "kind": spec["kind"],
-                "content": content.strip(),
-            }
-        )
+        content = str(raw_by_id.get(cid, "") or "").strip()
+        if not content:
+            # List renderers already produce `<name>: []` when empty; markdown uses a placeholder.
+            if spec["kind"] == "markdown":
+                content = "(empty)"
+            elif cid == "tools":
+                content = "tools: []"
+            else:
+                content = f"{cid}: []"
+        specs.append({"component_id": cid, "title": spec["title"], "kind": spec["kind"], "content": content})
 
+    # Unbounded/unfitted render (useful for inspection).
     if total is None:
         return [{"component_id": s["component_id"], "title": s["title"], "content": s["content"]} for s in specs]
 
-    pcts = {s["component_id"]: pct(str(s.get("budget_key") or "")) for s in specs}
-    total_pct = sum(pcts.values()) or 1.0
-    scale = 1.0 / total_pct if total_pct > 1.0 else 1.0
+    weights = {spec["id"]: pct(spec["budget_key"]) for spec in _ACTIVE_MEMORY_COMPONENT_SPECS}
+    sum_w = sum(weights.values()) or 1.0
+    if sum_w > 1.0:
+        weights = {k: (v / sum_w) for k, v in weights.items()}
+
+    budgets_by_id = _allocate_token_budgets(int(total), weights)
 
     fitted: List[Dict[str, Any]] = []
     for s in specs:
         cid = str(s.get("component_id") or "")
-        budget = int(total * (pcts.get(cid, 0.0) * scale))
+        budget = int(budgets_by_id.get(cid) or 0)
         if budget <= 0:
             continue
 
+        title = str(s.get("title") or "").strip()
         kind = str(s.get("kind") or "")
-        content = str(s.get("content") or "")
+        content = str(s.get("content") or "").strip()
+
+        heading = f"## {title}\n"
+        heading_tokens = int(count(heading) or 0)
+        content_budget = max(0, budget - heading_tokens)
+
         if kind == "markdown":
-            out = _fit_markdown_section(content, max_chars=budget)
+            out = _fit_text_lines_to_token_budget(content, max_tokens=content_budget, token_counter=count)
         elif kind == "yaml_list":
-            out = _fit_yaml_section(str(s.get("title") or ""), content, max_chars=budget)
+            out = _fit_yaml_list_section_to_token_budget(content, max_tokens=content_budget, token_counter=count)
         else:
-            out = _fit_tools_yaml_section(content, max_chars=budget)
+            out = _fit_tools_yaml_section_to_token_budget(content, max_tokens=content_budget, token_counter=count)
 
         out = str(out or "").strip()
-        if out:
-            fitted.append({"component_id": cid, "title": s["title"], "content": out})
+        if not out:
+            # Always keep a syntactically valid placeholder.
+            if kind == "markdown":
+                out = "(empty)"
+            elif kind == "yaml_list":
+                out = (content.splitlines() or [""])[0].strip() or f"{cid}: []"
+            else:
+                out = "tools: []"
 
-    # Best-effort final fit: drop least-critical blocks until within total.
+        fitted.append({"component_id": cid, "title": title, "content": out})
+
+    # Best-effort final fit (token-based): drop least-critical blocks until within total.
     rendered = _join_blocks([(b["title"], b["content"]) for b in fitted]).strip()
-    if len(rendered) <= total:
+    if int(count(rendered) or 0) <= int(total):
         return fitted
 
-    drop_order = [
-        "key_history",
-        "critical_insights",
-        "current_context",
-        "current_tasks",
-        "tools",
-    ]
+    drop_order = ["key_history", "critical_insights", "current_context", "current_tasks", "tools"]
     remaining = list(fitted)
     for drop_id in drop_order:
-        if len(rendered) <= total:
-            break
         remaining = [b for b in remaining if b.get("component_id") != drop_id]
         rendered = _join_blocks([(b["title"], b["content"]) for b in remaining]).strip()
-    if len(rendered) <= total:
-        return remaining
+        if int(count(rendered) or 0) <= int(total):
+            return remaining
 
-    # At this point, keep only markdown identity blocks and fit them at line boundaries.
+    # Final fallback: keep only identity blocks and fit sequentially.
     keep_ids = {"persona", "memory_organization"}
-    markdown_only = [b for b in remaining if b.get("component_id") in keep_ids]
-    out_text = _fit_markdown_section(_join_blocks([(b["title"], b["content"]) for b in markdown_only]).strip(), max_chars=total)
-    # Preserve per-component separation as best-effort: keep persona, then org if space remains.
-    persona = next((b for b in markdown_only if b.get("component_id") == "persona"), None)
-    org = next((b for b in markdown_only if b.get("component_id") == "memory_organization"), None)
+    identity = [b for b in remaining if b.get("component_id") in keep_ids]
+    identity.sort(key=lambda b: 0 if b.get("component_id") == "persona" else 1)
+
     out: List[Dict[str, Any]] = []
-    if isinstance(persona, dict) and persona.get("content"):
-        out.append({"component_id": "persona", "title": persona["title"], "content": str(persona["content"])})
-    if isinstance(org, dict) and org.get("content"):
-        out.append({"component_id": "memory_organization", "title": org["title"], "content": str(org["content"])})
-    # If our reconstructed blocks still exceed, fall back to a single combined block.
-    if len(_join_blocks([(b["title"], b["content"]) for b in out]).strip()) > total:
-        return [{"component_id": "persona", "title": "Persona (persistent)", "content": out_text}]
+    remaining_budget = int(total)
+    for b in identity:
+        title = str(b.get("title") or "").strip()
+        content = str(b.get("content") or "").strip()
+        heading = f"## {title}\n"
+        heading_tokens = int(count(heading) or 0)
+        if remaining_budget <= heading_tokens:
+            continue
+        fitted_content = _fit_text_lines_to_token_budget(
+            content,
+            max_tokens=max(0, remaining_budget - heading_tokens),
+            token_counter=count,
+        ).strip()
+        if not fitted_content:
+            continue
+        section_text = f"{heading}{fitted_content}".strip()
+        section_tokens = int(count(section_text) or 0)
+        if section_tokens <= 0 or section_tokens > remaining_budget:
+            continue
+        out.append({"component_id": b.get("component_id"), "title": title, "content": fitted_content})
+        remaining_budget -= section_tokens
+
     return out
 
 
@@ -459,7 +854,9 @@ def render_active_memory_split_for_llm_request(
     vars: Dict[str, Any],
     *,
     include_tools_summary: bool = True,
-    max_chars: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    token_counter: Optional[Callable[[str], int]] = None,
+    max_chars: Optional[int] = None,  # legacy
 ) -> Dict[str, str]:
     """Render Active Memory split into (system_memory, user_memory).
 
@@ -467,10 +864,16 @@ def render_active_memory_split_for_llm_request(
     - system_memory: persona + memory_organization + tools (default)
     - user_memory: current_tasks + current_context + critical_insights + key_history
 
-    The split uses a single fitted render pass so the combined result stays within `max_chars`.
+    The split uses a single fitted render pass so the combined result stays within budget.
     """
     mem = ensure_active_memory(vars)
-    blocks = render_active_memory_blocks_for_prompt(vars, include_tools_summary=include_tools_summary, max_chars=max_chars)
+    blocks = render_active_memory_blocks_for_prompt(
+        vars,
+        include_tools_summary=include_tools_summary,
+        max_tokens=max_tokens,
+        token_counter=token_counter,
+        max_chars=max_chars,
+    )
 
     raw_ids = mem.get("system_component_ids")
     ids_list = (
@@ -491,9 +894,17 @@ def render_active_memory_for_system_prompt(
     vars: Dict[str, Any],
     *,
     include_tools_summary: bool = True,
-    max_chars: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    token_counter: Optional[Callable[[str], int]] = None,
+    max_chars: Optional[int] = None,  # legacy
 ) -> str:
-    split = render_active_memory_split_for_llm_request(vars, include_tools_summary=include_tools_summary, max_chars=max_chars)
+    split = render_active_memory_split_for_llm_request(
+        vars,
+        include_tools_summary=include_tools_summary,
+        max_tokens=max_tokens,
+        token_counter=token_counter,
+        max_chars=max_chars,
+    )
     return str(split.get("system_memory") or "").strip()
 
 
@@ -501,9 +912,17 @@ def render_active_memory_for_user_prompt(
     vars: Dict[str, Any],
     *,
     include_tools_summary: bool = True,
-    max_chars: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    token_counter: Optional[Callable[[str], int]] = None,
+    max_chars: Optional[int] = None,  # legacy
 ) -> str:
-    split = render_active_memory_split_for_llm_request(vars, include_tools_summary=include_tools_summary, max_chars=max_chars)
+    split = render_active_memory_split_for_llm_request(
+        vars,
+        include_tools_summary=include_tools_summary,
+        max_tokens=max_tokens,
+        token_counter=token_counter,
+        max_chars=max_chars,
+    )
     return str(split.get("user_memory") or "").strip()
 
 
@@ -516,20 +935,16 @@ def compute_active_memory_token_breakdown(
     """Compute per-component token usage and budgets for Active Memory.
 
     Notes:
-    - Uses `vars["_runtime"]["active_memory"].max_tokens` as the total Active Memory budget (default 2000).
+    - Uses `active_memory.max_tokens` when set (>0), otherwise defaults to `vars["_limits"].max_tokens`.
+      When neither is available, falls back to 32768.
     - If budgets sum > 1.0, the budget weights are normalized down.
     - Token counting is injected to avoid AbstractRuntime depending on AbstractCore.
     """
     mem = ensure_active_memory(vars)
     budgets = mem.get("budgets") if isinstance(mem.get("budgets"), dict) else {}
 
-    total_budget = mem.get("max_tokens")
-    if not isinstance(total_budget, int) or total_budget <= 0:
-        max_chars = mem.get("max_chars")
-        if isinstance(max_chars, int) and max_chars > 0:
-            total_budget = max(1, max_chars // 4)
-        else:
-            total_budget = 2000
+    resolved = _resolve_active_memory_max_tokens(vars, mem, max_tokens=None, max_chars=None)
+    total_budget = int(resolved) if isinstance(resolved, int) and resolved > 0 else 32768
 
     def pct(key: str) -> float:
         try:
@@ -547,28 +962,16 @@ def compute_active_memory_token_breakdown(
     if sum_w > 1.0:
         weights = {k: (v / sum_w) for k, v in weights.items()}
 
-    # Allocate integer budgets with stable rounding.
-    floors: Dict[str, int] = {}
-    fracs: List[Tuple[float, str]] = []
-    allocated = 0
-    for cid, w in weights.items():
-        exact = float(total_budget) * float(w)
-        base = int(exact)
-        floors[cid] = base
-        allocated += base
-        fracs.append((exact - base, cid))
-
-    remainder = max(0, int(total_budget) - allocated)
-    fracs.sort(key=lambda x: x[0], reverse=True)
-    for _, cid in fracs:
-        if remainder <= 0:
-            break
-        floors[cid] += 1
-        remainder -= 1
+    floors = _allocate_token_budgets(int(total_budget), weights)
 
     count = token_counter or _estimate_tokens_fast
 
-    blocks = render_active_memory_blocks_for_prompt(vars, include_tools_summary=include_tools_summary)
+    blocks = render_active_memory_blocks_for_prompt(
+        vars,
+        include_tools_summary=include_tools_summary,
+        max_tokens=int(total_budget),
+        token_counter=count,
+    )
     used_by_id: Dict[str, int] = {spec["id"]: 0 for spec in _ACTIVE_MEMORY_COMPONENT_SPECS}
     for b in blocks:
         cid = str(b.get("component_id") or "")
@@ -602,14 +1005,22 @@ def render_active_memory_for_prompt(
     vars: Dict[str, Any],
     *,
     include_tools_summary: bool = True,
-    max_chars: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    token_counter: Optional[Callable[[str], int]] = None,
+    max_chars: Optional[int] = None,  # legacy
 ) -> str:
     """Render active memory into a prompt-friendly block.
 
     Important: This renderer never truncates entries mid-string. If content must
-    shrink due to `max_chars`, it drops whole list entries (oldest first).
+    shrink due to token budgets, it drops whole list entries (oldest first).
     """
-    blocks = render_active_memory_blocks_for_prompt(vars, include_tools_summary=include_tools_summary, max_chars=max_chars)
+    blocks = render_active_memory_blocks_for_prompt(
+        vars,
+        include_tools_summary=include_tools_summary,
+        max_tokens=max_tokens,
+        token_counter=token_counter,
+        max_chars=max_chars,
+    )
     return _join_blocks([(b["title"], b["content"]) for b in blocks]).strip()
 
 
@@ -636,6 +1047,19 @@ def _default_memory_organization_md() -> str:
         "System/user alias (backward compatibility):\n"
         "- System prompt memory ~= Persona + Memory Organization + Tools.\n"
         "- User prompt memory ~= Current Tasks + Current Context + Critical Insights + Key History.\n\n"
+        "Active Memory maintenance (IMPORTANT):\n"
+        "- Keep the evolving modules up to date: Current Tasks, Current Context, Critical Insights, Key History.\n"
+        "- When you are NOT emitting a tool call, append a JSON delta block at the end of your message:\n"
+        "  ```active_memory_delta\n"
+        "  {\n"
+        "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
+        "    \"current_context\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
+        "    \"critical_insights\": {\"add\": [...], \"remove\": [...], \"clear\": false},\n"
+        "    \"key_history\": {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
+        "  }\n"
+        "  ```\n"
+        "- Only include fields that changed (deltas, not full rewrites).\n"
+        "- The host will apply the delta and will NOT show the delta block to the user.\n\n"
         "How to use each module:\n"
         "- Persona: keep identity + methodology stable. If a conflict appears, stop and resolve it.\n"
         "- Tools: choose the smallest allowed tool that advances the task.\n"
@@ -675,19 +1099,23 @@ def _default_memory_organization_md() -> str:
 def _render_tools_yaml(vars: Dict[str, Any]) -> str:
     runtime_ns = vars.get("_runtime")
     if not isinstance(runtime_ns, dict):
-        return ""
+        return "tools: []"
     toolset_id = str(runtime_ns.get("toolset_id") or "").strip()
 
     specs = runtime_ns.get("tool_specs")
     specs_list: List[Dict[str, Any]] = [dict(s) for s in specs if isinstance(s, dict)] if isinstance(specs, list) else []
+    allowed = runtime_ns.get("allowed_tools")
+    enabled_names: Optional[List[str]] = None
+    if isinstance(allowed, list):
+        enabled_names = [str(t).strip() for t in allowed if isinstance(t, str) and t.strip()]
+
     if not specs_list:
-        allowed = runtime_ns.get("allowed_tools")
         enabled: List[str] = []
-        if isinstance(allowed, list):
-            enabled = [str(t) for t in allowed if isinstance(t, str) and t.strip()]
+        if isinstance(enabled_names, list):
+            enabled = list(enabled_names)
         enabled.sort()
         if not enabled and not toolset_id:
-            return ""
+            return "tools: []"
         parts: List[str] = []
         if toolset_id:
             parts.append(f"toolset_id: {_yaml_escape(toolset_id)}")
@@ -695,7 +1123,17 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
             parts.append("tools:")
             for t in enabled:
                 parts.append(f"  - name: {_yaml_escape(t)}")
+        else:
+            parts.append("tools: []")
         return "\n".join(parts).strip()
+
+    if isinstance(enabled_names, list):
+        enabled_set = {name for name in enabled_names if name}
+        specs_list = [
+            spec
+            for spec in specs_list
+            if str(spec.get("name") or "").strip() and str(spec.get("name") or "").strip() in enabled_set
+        ]
 
     specs_list.sort(key=lambda s: str(s.get("name") or ""))
 
@@ -737,7 +1175,11 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
         if example_call:
             parts.append(f"    example: {_yaml_escape(example_call)}")
 
-    return "\n".join(parts).strip()
+    rendered = "\n".join(parts).strip()
+    if rendered.endswith("\ntools:") or rendered == "tools:":
+        # No tool entries; prefer an explicit empty list for clarity.
+        rendered = rendered.replace("tools:", "tools: []").strip()
+    return rendered
 
 
 def _join_blocks(blocks: Sequence[Tuple[str, str]]) -> str:
@@ -759,6 +1201,136 @@ def _yaml_escape(value: Any) -> str:
         escaped = text.replace('"', '\\"')
         return f"\"{escaped}\""
     return text
+
+
+def _fit_text_lines_to_token_budget(text: str, *, max_tokens: int, token_counter: Callable[[str], int]) -> str:
+    """Fit a plain/Markdown-ish block by dropping whole lines to satisfy a token budget."""
+    budget = int(max_tokens)
+    if budget <= 0:
+        return ""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    if int(token_counter(raw) or 0) <= budget:
+        return raw
+
+    kept: List[str] = []
+    for line in raw.splitlines():
+        candidate = "\n".join(kept + [line]).strip()
+        if int(token_counter(candidate) or 0) <= budget:
+            kept.append(line)
+        else:
+            break
+    return "\n".join(kept).strip()
+
+
+def _fit_yaml_list_section_to_token_budget(text: str, *, max_tokens: int, token_counter: Callable[[str], int]) -> str:
+    """Fit a rendered YAML-ish list section by dropping whole list entries."""
+    budget = int(max_tokens)
+    if budget <= 0:
+        return ""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    if int(token_counter(raw) or 0) <= budget:
+        return raw
+
+    lines = raw.splitlines()
+    header = (lines[:1] or [""])[0].rstrip()
+    if not header:
+        return ""
+    if int(token_counter(header) or 0) > budget:
+        return ""
+
+    entries: List[List[str]] = []
+    current: List[str] = []
+    for line in lines[1:]:
+        if line.startswith("  - "):
+            if current:
+                entries.append(current)
+            current = [line]
+        else:
+            if current:
+                current.append(line)
+    if current:
+        entries.append(current)
+
+    out_lines: List[str] = [header]
+    for entry in entries:
+        candidate_lines = out_lines + entry
+        candidate = "\n".join(candidate_lines).strip()
+        if int(token_counter(candidate) or 0) <= budget:
+            out_lines = candidate_lines
+
+    if len(out_lines) == 1 and header.endswith(":"):
+        # Prefer an explicit empty list when no entry fits.
+        empty_list = f"{header} []"
+        if int(token_counter(empty_list) or 0) <= budget:
+            return empty_list
+
+    return "\n".join(out_lines).strip()
+
+
+def _fit_tools_yaml_section_to_token_budget(text: str, *, max_tokens: int, token_counter: Callable[[str], int]) -> str:
+    """Fit a tools YAML mapping by dropping whole tool entries."""
+    budget = int(max_tokens)
+    if budget <= 0:
+        return ""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    if int(token_counter(raw) or 0) <= budget:
+        return raw
+
+    lines = raw.splitlines()
+    if not lines:
+        return ""
+
+    header: List[str] = []
+    tool_lines: List[str] = []
+    in_tools = False
+    for line in lines:
+        if not in_tools:
+            header.append(line)
+            if line.strip().startswith("tools:"):
+                in_tools = True
+            continue
+        tool_lines.append(line)
+
+    # If there's no list to drop, fall back to line-fitting.
+    if not in_tools:
+        return _fit_text_lines_to_token_budget(raw, max_tokens=budget, token_counter=token_counter)
+
+    # Handle explicit empty list already present.
+    if header and header[-1].strip() == "tools: []":
+        fitted_header = "\n".join(header).strip()
+        return fitted_header if int(token_counter(fitted_header) or 0) <= budget else "tools: []"
+
+    entries: List[List[str]] = []
+    current: List[str] = []
+    for line in tool_lines:
+        if line.startswith("  - "):
+            if current:
+                entries.append(current)
+            current = [line]
+        else:
+            if current:
+                current.append(line)
+    if current:
+        entries.append(current)
+
+    out_lines: List[str] = list(header)
+    for entry in entries:
+        candidate_lines = out_lines + entry
+        candidate = "\n".join(candidate_lines).strip()
+        if int(token_counter(candidate) or 0) <= budget:
+            out_lines = candidate_lines
+
+    rendered = "\n".join(out_lines).strip()
+    if rendered.endswith("\ntools:") or rendered == "tools:":
+        # No entries fit; prefer an explicit empty list.
+        rendered = rendered.replace("tools:", "tools: []").strip()
+    return rendered
 
 
 def _fit_markdown_section(text: str, *, max_chars: int) -> str:
@@ -844,7 +1416,7 @@ def _render_list_yaml(name: str, items: Sequence[Any]) -> str:
 
 def _render_tasks_yaml(tasks: Any) -> str:
     if not isinstance(tasks, list) or not tasks:
-        return ""
+        return "current_tasks: []"
     # Render newest first for quick relevance.
     items = [t for t in tasks if isinstance(t, dict)]
     items.sort(key=lambda d: str(d.get("updated_at") or d.get("created_at") or ""), reverse=True)
@@ -879,7 +1451,7 @@ def _render_tasks_yaml(tasks: Any) -> str:
 
 def _render_current_context_yaml(context_items: Any) -> str:
     if not isinstance(context_items, list) or not context_items:
-        return ""
+        return "current_context: []"
     items = [c for c in context_items if isinstance(c, dict)]
     items.sort(key=lambda d: str(d.get("updated_at") or d.get("created_at") or ""), reverse=True)
     out: List[str] = ["current_context:"]
@@ -907,7 +1479,7 @@ def _render_current_context_yaml(context_items: Any) -> str:
 
 def _render_insights_yaml(insights: Any) -> str:
     if not isinstance(insights, list) or not insights:
-        return ""
+        return "critical_insights: []"
     items = [i for i in insights if isinstance(i, dict)]
     items.sort(key=lambda d: str(d.get("ts") or ""), reverse=True)
     out: List[str] = ["critical_insights:"]
@@ -926,7 +1498,7 @@ def _render_insights_yaml(insights: Any) -> str:
 
 def _render_history_yaml(history: Any) -> str:
     if not isinstance(history, list) or not history:
-        return ""
+        return "key_history: []"
     items = [h for h in history if isinstance(h, dict)]
     items.sort(key=lambda d: str(d.get("ts") or ""), reverse=True)
     out: List[str] = ["key_history:"]

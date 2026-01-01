@@ -497,6 +497,37 @@ class Runtime:
         return {"node_id": node_id, "steps": []}
 
     # ---------------------------------------------------------------------
+    # Evidence Helpers (Runtime-Owned)
+    # ---------------------------------------------------------------------
+
+    def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """List evidence records for a run (index entries only).
+
+        Evidence is indexed as `kind="evidence"` items inside `vars["_runtime"]["memory_spans"]`.
+        """
+        run = self.get_state(run_id)
+        runtime_ns = run.vars.get("_runtime")
+        spans = runtime_ns.get("memory_spans") if isinstance(runtime_ns, dict) else None
+        if not isinstance(spans, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for s in spans:
+            if not isinstance(s, dict):
+                continue
+            if s.get("kind") != "evidence":
+                continue
+            out.append(copy.deepcopy(s))
+        return out
+
+    def load_evidence(self, evidence_id: str) -> Optional[dict[str, Any]]:
+        """Load an evidence record payload from ArtifactStore by id."""
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            raise RuntimeError("Evidence requires an ArtifactStore; configure runtime.set_artifact_store(...)")
+        payload = artifact_store.load_json(str(evidence_id))
+        return payload if isinstance(payload, dict) else None
+
+    # ---------------------------------------------------------------------
     # Limit Management
     # ---------------------------------------------------------------------
 
@@ -719,6 +750,26 @@ class Runtime:
 
             duration_ms = float((time.perf_counter() - t0) * 1000.0)
 
+            # Evidence capture (runtime-owned, durable):
+            # After tool execution completes, record provenance-first evidence for a small set of
+            # external-boundary tools (web_search/fetch_url/execute_command). This must happen
+            # BEFORE we persist node traces / result_key outputs so run state remains bounded.
+            try:
+                if (
+                    not reused_prior_result
+                    and plan.effect.type == EffectType.TOOL_CALLS
+                    and outcome.status == "completed"
+                ):
+                    self._maybe_record_tool_evidence(
+                        run=run,
+                        node_id=plan.node_id,
+                        effect=plan.effect,
+                        tool_results=outcome.result,
+                    )
+            except Exception:
+                # Evidence capture should never crash the run; failures are recorded in run vars.
+                pass
+
             _record_node_trace(
                 run=run,
                 node_id=plan.node_id,
@@ -778,6 +829,49 @@ class Runtime:
 
         return run
 
+    def _maybe_record_tool_evidence(
+        self,
+        *,
+        run: RunState,
+        node_id: str,
+        effect: Effect,
+        tool_results: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort evidence capture for TOOL_CALLS.
+
+        This is intentionally non-fatal: evidence capture must not crash the run,
+        but failures should be visible in durable run state for debugging.
+        """
+        if effect.type != EffectType.TOOL_CALLS:
+            return
+        if not isinstance(tool_results, dict):
+            return
+        payload = effect.payload if isinstance(effect.payload, dict) else {}
+        tool_calls = payload.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return
+
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return
+
+        try:
+            from ..evidence import EvidenceRecorder
+
+            EvidenceRecorder(artifact_store=artifact_store).record_tool_calls(
+                run=run,
+                node_id=str(node_id or ""),
+                tool_calls=tool_calls,
+                tool_results=tool_results,
+            )
+        except Exception as e:
+            runtime_ns = _ensure_runtime_namespace(run.vars)
+            warnings = runtime_ns.get("evidence_warnings")
+            if not isinstance(warnings, list):
+                warnings = []
+                runtime_ns["evidence_warnings"] = warnings
+            warnings.append({"ts": utc_now_iso(), "node_id": str(node_id or ""), "error": str(e)})
+
     def resume(
         self,
         *,
@@ -802,6 +896,24 @@ class Runtime:
 
         if result_key:
             _set_nested(run.vars, result_key, payload)
+            # Passthrough tool execution: the host resumes with tool results. We still want
+            # evidence capture and payload-bounding (store large parts as artifacts) before
+            # the run continues.
+            try:
+                details = run.waiting.details if run.waiting is not None else None
+                if isinstance(details, dict) and isinstance(details.get("tool_calls"), list):
+                    from ..evidence import EvidenceRecorder
+
+                    artifact_store = self._artifact_store
+                    if artifact_store is not None and isinstance(payload, dict):
+                        EvidenceRecorder(artifact_store=artifact_store).record_tool_calls(
+                            run=run,
+                            node_id=str(run.current_node or ""),
+                            tool_calls=list(details.get("tool_calls") or []),
+                            tool_results=payload,
+                        )
+            except Exception:
+                pass
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)
         run.updated_at = utc_now_iso()
@@ -1400,6 +1512,9 @@ class Runtime:
         from ..memory.active_context import ActiveContextPolicy, TimeRange
 
         spans = ActiveContextPolicy.list_memory_spans_from_run(run)
+        # `memory_spans` is a general span-like index (conversation spans, notes, evidence, etc).
+        # MEMORY_QUERY is specifically for provenance-first *memory recall*, not evidence retrieval.
+        spans = [s for s in spans if not (isinstance(s, dict) and str(s.get("kind") or "") == "evidence")]
 
         # Resolve explicit span ids if provided.
         span_id_payload = payload.get("span_id")

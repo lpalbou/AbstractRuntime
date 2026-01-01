@@ -158,7 +158,8 @@ def ensure_active_memory(
             org = (
                 f"{org}\n\n"
                 "Active Memory deltas (IMPORTANT):\n"
-                "- When you are NOT emitting a tool call, append a JSON delta block at the end of your message:\n"
+                "- When you are NOT emitting a tool call, append EXACTLY ONE JSON delta block at the end of your message.\n"
+                "  - That single block may update multiple modules and include multiple entries per list.\n"
                 "  ```active_memory_delta\n"
                 "  {\n"
                 "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
@@ -168,6 +169,10 @@ def ensure_active_memory(
                 "  }\n"
                 "  ```\n"
                 "- Only include fields that changed (deltas, not full rewrites).\n"
+                "- String shorthands are accepted for common operations:\n"
+                "  - `current_tasks.upsert`: [\"Task title\"]\n"
+                "  - `current_context.upsert`: [\"Context title\"]\n"
+                "  - `key_history.add`: [\"Event summary\"]\n"
                 "- The host will apply the delta and will NOT show the delta block to the user.\n"
             ).strip()
             mem["memory_organization_md"] = org
@@ -462,6 +467,10 @@ def apply_active_memory_delta(
         upserts = tasks_delta.get("upsert")
         if isinstance(upserts, list):
             for t in upserts:
+                # Accept a simple string as a minimal task title for robustness.
+                if isinstance(t, str):
+                    title = t.strip()
+                    t = {"title": title}
                 if not isinstance(t, dict):
                     continue
                 title = str(t.get("title") or "").strip()
@@ -494,6 +503,10 @@ def apply_active_memory_delta(
         upserts = ctx_delta.get("upsert")
         if isinstance(upserts, list):
             for c in upserts:
+                # Accept a simple string as a minimal context title for robustness.
+                if isinstance(c, str):
+                    title = c.strip()
+                    c = {"title": title}
                 if not isinstance(c, dict):
                     continue
                 title = str(c.get("title") or "").strip()
@@ -553,6 +566,10 @@ def apply_active_memory_delta(
         adds = history_delta.get("add") or history_delta.get("append")
         if isinstance(adds, list):
             for it in adds:
+                # Accept a simple string as a minimal event summary for robustness.
+                if isinstance(it, str):
+                    summary = it.strip()
+                    it = {"summary": summary}
                 if not isinstance(it, dict):
                     continue
                 kind = str(it.get("kind") or "").strip() or "event"
@@ -1049,7 +1066,8 @@ def _default_memory_organization_md() -> str:
         "- User prompt memory ~= Current Tasks + Current Context + Critical Insights + Key History.\n\n"
         "Active Memory maintenance (IMPORTANT):\n"
         "- Keep the evolving modules up to date: Current Tasks, Current Context, Critical Insights, Key History.\n"
-        "- When you are NOT emitting a tool call, append a JSON delta block at the end of your message:\n"
+        "- When you are NOT emitting a tool call, append EXACTLY ONE JSON delta block at the end of your message:\n"
+        "  - That single block may update multiple modules and include multiple entries per list.\n"
         "  ```active_memory_delta\n"
         "  {\n"
         "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
@@ -1059,6 +1077,10 @@ def _default_memory_organization_md() -> str:
         "  }\n"
         "  ```\n"
         "- Only include fields that changed (deltas, not full rewrites).\n"
+        "- For `upsert`/`add` lists, prefer objects:\n"
+        "  - `current_tasks.upsert`: [{\"title\": \"...\", \"status\": \"todo|doing|done\", ...}] (strings are accepted as a title shorthand)\n"
+        "  - `current_context.upsert`: [{\"title\": \"...\", \"summary\": \"...\", \"refs\": [...]}] (strings are accepted as a title shorthand)\n"
+        "  - `key_history.add`: [{\"kind\": \"event\", \"summary\": \"...\", \"refs\": [...]}] (strings are accepted as a summary shorthand)\n"
         "- The host will apply the delta and will NOT show the delta block to the user.\n\n"
         "How to use each module:\n"
         "- Persona: keep identity + methodology stable. If a conflict appears, stop and resolve it.\n"
@@ -1163,8 +1185,6 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
                 required.append(pname)
         required.sort()
 
-        example_call = _example_call_from_tool_spec(name=name, spec=spec, required=required)
-
         parts.append(f"  - name: {_yaml_escape(name)}")
         if desc:
             parts.append(f"    description: {_yaml_escape(desc)}")
@@ -1172,8 +1192,6 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
             parts.append("    required_args:")
             for r in required:
                 parts.append(f"      - {_yaml_escape(r)}")
-        if example_call:
-            parts.append(f"    example: {_yaml_escape(example_call)}")
 
     rendered = "\n".join(parts).strip()
     if rendered.endswith("\ntools:") or rendered == "tools:":
@@ -1533,47 +1551,6 @@ def _append_yaml_dict_list_item(lines: List[str], item: Dict[str, Any], *, base_
     lines.append(f"{indent}- {first}: {_yaml_escape(first_val)}")
     for k in keys[1:]:
         lines.append(f"{indent}  {k}: {_yaml_escape(item.get(k))}")
-
-
-def _example_call_from_tool_spec(*, name: str, spec: Dict[str, Any], required: Sequence[str]) -> str:
-    """Render a compact example call string for a tool."""
-    examples = spec.get("examples")
-    if isinstance(examples, list):
-        for ex in examples:
-            if not isinstance(ex, dict):
-                continue
-            args = ex.get("arguments")
-            if isinstance(args, dict) and args:
-                return _format_tool_call(name=name, arguments=args)
-
-    # Fallback: minimal placeholder args for required params.
-    args: Dict[str, Any] = {}
-    for key in required:
-        if not isinstance(key, str) or not key.strip():
-            continue
-        args[key] = "..."
-    return _format_tool_call(name=name, arguments=args)
-
-
-def _format_tool_call(*, name: str, arguments: Dict[str, Any]) -> str:
-    if not arguments:
-        return f"{name}()"
-
-    parts: List[str] = []
-    for k, v in arguments.items():
-        if not isinstance(k, str) or not k.strip():
-            continue
-        key = k.strip()
-        if isinstance(v, str):
-            val = '"' + v.replace('"', '\\"') + '"'
-        elif isinstance(v, bool):
-            val = "true" if v else "false"
-        elif v is None:
-            val = "null"
-        else:
-            val = str(v)
-        parts.append(f"{key}={val}")
-    return f"{name}({', '.join(parts)})"
 
 
 def _fit_tools_yaml_section(text: str, *, max_chars: int) -> str:

@@ -172,6 +172,16 @@ class MappingToolExecutor:
 
         def _error_from_output(value: Any) -> Optional[str]:
             """Detect tool failures reported as string outputs (instead of exceptions)."""
+            # Structured tool outputs may explicitly report failure without raising.
+            # Only treat as error when the tool declares failure.
+            if isinstance(value, dict):
+                success = value.get("success")
+                ok = value.get("ok")
+                if success is False or ok is False:
+                    err = value.get("error") or value.get("message") or "Tool reported failure"
+                    text = str(err).strip()
+                    return text or "Tool reported failure"
+                return None
             if not isinstance(value, str):
                 return None
             text = value.strip()
@@ -190,12 +200,15 @@ class MappingToolExecutor:
         def _append_result(*, call_id: str, name: str, output: Any) -> None:
             error = _error_from_output(output)
             if error is not None:
+                # Preserve structured outputs for provenance/evidence. For string-only error outputs
+                # (the historical convention), keep output empty and store the message in `error`.
+                output_json = None if isinstance(output, str) else _jsonable(output)
                 results.append(
                     {
                         "call_id": call_id,
                         "name": name,
                         "success": False,
-                        "output": None,
+                        "output": output_json,
                         "error": error,
                     }
                 )

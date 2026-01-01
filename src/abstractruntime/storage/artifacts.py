@@ -86,9 +86,24 @@ class Artifact:
         return json.loads(self.content.decode("utf-8"))
 
 
-def compute_artifact_id(content: bytes) -> str:
-    """Compute content-addressed artifact ID using SHA-256."""
-    return hashlib.sha256(content).hexdigest()[:32]
+def compute_artifact_id(content: bytes, *, run_id: Optional[str] = None) -> str:
+    """Compute a deterministic artifact id.
+
+    By default, artifacts are content-addressed (SHA-256, truncated) so the same bytes
+    produce the same id.
+
+    If `run_id` is provided, the id is *namespaced to that run* to avoid cross-run
+    collisions when using a shared `FileArtifactStore(base_dir)` and to preserve
+    correct `list_by_run(...)` / purge-by-run semantics.
+    """
+    h = hashlib.sha256()
+    if run_id is not None:
+        rid = str(run_id).strip()
+        if rid:
+            h.update(rid.encode("utf-8"))
+            h.update(b"\0")
+    h.update(content)
+    return h.hexdigest()[:32]
 
 
 def validate_artifact_id(artifact_id: str) -> None:
@@ -318,7 +333,7 @@ class InMemoryArtifactStore(ArtifactStore):
         artifact_id: Optional[str] = None,
     ) -> ArtifactMetadata:
         if artifact_id is None:
-            artifact_id = compute_artifact_id(content)
+            artifact_id = compute_artifact_id(content, run_id=run_id)
 
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,
@@ -397,7 +412,7 @@ class FileArtifactStore(ArtifactStore):
         artifact_id: Optional[str] = None,
     ) -> ArtifactMetadata:
         if artifact_id is None:
-            artifact_id = compute_artifact_id(content)
+            artifact_id = compute_artifact_id(content, run_id=run_id)
 
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,

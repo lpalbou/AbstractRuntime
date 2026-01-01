@@ -233,3 +233,22 @@ def test_apply_active_memory_delta_updates_evolving_modules() -> None:
     assert any(isinstance(c, dict) and c.get("context_id") == "c_1" for c in mem.get("current_context") or [])
     assert any(isinstance(i, dict) and i.get("insight_id") == "i_1" for i in mem.get("critical_insights") or [])
     assert any(isinstance(h, dict) and h.get("event_id") == "h_1" for h in mem.get("key_history") or [])
+
+
+def test_apply_active_memory_delta_accepts_string_shorthand_for_common_ops() -> None:
+    vars: dict = {"_runtime": {}}
+    ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
+
+    delta = {
+        "current_tasks": {"upsert": ["Do thing"]},
+        "current_context": {"upsert": ["Reviewed work-rtype/main.py"]},
+        "key_history": {"add": ["Decision: keep tools prompt architecture-specific"]},
+    }
+
+    out = apply_active_memory_delta(vars, delta=delta, now_iso=lambda: "2025-01-01T00:00:01+00:00")
+    assert out.get("ok") is True
+
+    mem = get_active_memory(vars)
+    assert any(isinstance(t, dict) and t.get("title") == "Do thing" for t in mem.get("tasks") or [])
+    assert any(isinstance(c, dict) and c.get("title") == "Reviewed work-rtype/main.py" for c in mem.get("current_context") or [])
+    assert any(isinstance(h, dict) and h.get("summary") == "Decision: keep tools prompt architecture-specific" for h in mem.get("key_history") or [])

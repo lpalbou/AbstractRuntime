@@ -15,12 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Orchestrator-owned timeouts** (AbstractCore integration):
   - Default **LLM timeout** is now 7200s (per `LLM_CALL`, not per-workflow) and is enforced by `create_*_runtime` factories (local/remote/hybrid).
   - Default **tool execution timeout** is now 7200s (per tool call, not per-workflow) and is enforced by the runtime’s ToolExecutor implementations.
+- **Runtime-owned evidence capture (always-on)**:
+  - Automatically records provenance-first evidence for external-boundary tools: `web_search`, `fetch_url`, `execute_command`.
+  - Evidence is stored as artifact-backed records and indexed as `kind="evidence"` entries in `RunState.vars["_runtime"]["memory_spans"]`.
+  - Added runtime helpers: `Runtime.list_evidence(run_id)` and `Runtime.load_evidence(evidence_id)`.
 
 ### Fixed
 - **Cancellation is terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as a terminal state and will not progress cancelled runs.
 - **Control-plane safety**: `Runtime.tick()` now stops without overwriting externally persisted pause/cancel state (used by hosts like AbstractFlow Web).
 - **Atomic run checkpoints**: `JsonFileRunStore.save()` now writes via a temp file + atomic rename to prevent partial/corrupt JSON under concurrent writes.
 - **START_SUBWORKFLOW async+wait**: added support for `async=true` + `wait=true` to start a child run without blocking the parent tick, while still keeping the parent in a durable SUBWORKFLOW wait until the host resumes it.
+- **ArtifactStore run-scoped addressing**: when `run_id` is provided, artifact ids are now namespaced to the run to prevent cross-run metadata collisions in `FileArtifactStore` and preserve purge-by-run semantics.
 
 ## [0.2.0] - 2025-12-17
 

@@ -33,13 +33,15 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
+[project.scripts]
+abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_worker:main"
+
 [project.urls]
 "AbstractCore (website)" = "https://www.abstractcore.ai/"
 "AbstractCore (GitHub)" = "https://github.com/lpalbou/abstractruntime"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abstractruntime"]
-
 
 
 

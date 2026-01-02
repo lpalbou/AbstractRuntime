@@ -901,13 +901,64 @@ class Runtime:
         result_key = run.waiting.result_key
 
         if result_key:
-            _set_nested(run.vars, result_key, payload)
+            # Tool waits may carry blocked-by-allowlist metadata. External hosts typically only execute
+            # the filtered subset of tool calls and resume with results for those calls. To keep agent
+            # semantics correct (and evidence indices aligned), merge blocked entries back into the
+            # resumed payload deterministically.
+            merged_payload: Dict[str, Any] = payload
+            try:
+                details = run.waiting.details if run.waiting is not None else None
+                if isinstance(details, dict):
+                    blocked = details.get("blocked_by_index")
+                    original_count = details.get("original_call_count")
+                    results = payload.get("results") if isinstance(payload, dict) else None
+                    if (
+                        isinstance(blocked, dict)
+                        and isinstance(original_count, int)
+                        and original_count > 0
+                        and isinstance(results, list)
+                        and len(results) != original_count
+                    ):
+                        merged_results: list[Any] = []
+                        executed_iter = iter(results)
+
+                        for idx in range(original_count):
+                            blocked_entry = blocked.get(str(idx))
+                            if isinstance(blocked_entry, dict):
+                                merged_results.append(blocked_entry)
+                                continue
+                            try:
+                                merged_results.append(next(executed_iter))
+                            except StopIteration:
+                                merged_results.append(
+                                    {
+                                        "call_id": "",
+                                        "name": "",
+                                        "success": False,
+                                        "output": None,
+                                        "error": "Missing tool result",
+                                    }
+                                )
+
+                        merged_payload = dict(payload)
+                        merged_payload["results"] = merged_results
+                        merged_payload.setdefault("mode", "executed")
+            except Exception:
+                merged_payload = payload
+
+            _set_nested(run.vars, result_key, merged_payload)
             # Passthrough tool execution: the host resumes with tool results. We still want
             # evidence capture and payload-bounding (store large parts as artifacts) before
             # the run continues.
             try:
                 details = run.waiting.details if run.waiting is not None else None
-                if isinstance(details, dict) and isinstance(details.get("tool_calls"), list):
+                tool_calls_for_evidence = None
+                if isinstance(details, dict):
+                    tool_calls_for_evidence = details.get("tool_calls_for_evidence")
+                    if not isinstance(tool_calls_for_evidence, list):
+                        tool_calls_for_evidence = details.get("tool_calls")
+
+                if isinstance(tool_calls_for_evidence, list):
                     from ..evidence import EvidenceRecorder
 
                     artifact_store = self._artifact_store
@@ -915,8 +966,8 @@ class Runtime:
                         EvidenceRecorder(artifact_store=artifact_store).record_tool_calls(
                             run=run,
                             node_id=str(run.current_node or ""),
-                            tool_calls=list(details.get("tool_calls") or []),
-                            tool_results=payload,
+                            tool_calls=list(tool_calls_for_evidence or []),
+                            tool_results=merged_payload,
                         )
             except Exception:
                 pass
@@ -2863,8 +2914,15 @@ class Runtime:
             target_run = loaded
             ensure_namespaces(target_run.vars)
 
-        # Best-effort: skip non-conversation spans by consulting the target run's span index.
-        # This avoids treating memory_note/evidence as a "missing_messages" error.
+        # Best-effort: rehydrate only span kinds that are meaningful to inject into
+        # `context.messages` for downstream LLM calls.
+        #
+        # Rationale:
+        # - conversation_span: archived chat messages
+        # - active_memory_span: structured active-memory items rendered as messages
+        # - memory_note: durable notes (rehydrated as a synthetic message by ActiveContextPolicy)
+        #
+        # Evidence and other span kinds are intentionally skipped by default.
         from ..memory.active_context import ActiveContextPolicy
 
         spans = ActiveContextPolicy.list_memory_spans_from_run(target_run)
@@ -2883,9 +2941,10 @@ class Runtime:
 
         to_rehydrate: list[str] = []
         skipped_artifacts: list[dict[str, Any]] = []
+        allowed_kinds = {"conversation_span", "active_memory_span", "memory_note"}
         for aid in resolved:
             kind = kind_by_artifact.get(aid, "")
-            if kind and kind != "conversation_span":
+            if kind and kind not in allowed_kinds:
                 skipped_artifacts.append(
                     {"span_id": aid, "inserted": 0, "skipped": 0, "error": None, "kind": kind}
                 )

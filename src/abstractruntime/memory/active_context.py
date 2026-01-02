@@ -290,11 +290,35 @@ class ActiveContextPolicy:
 
             archived = self._artifact_store.load_json(artifact_id)
             archived_messages = archived.get("messages") if isinstance(archived, dict) else None
+
+            # Support rehydrating memory_note spans into context as a single synthetic message.
+            # This is the most practical "make recalled memory LLM-visible" behavior for
+            # visual workflows (users expect "Recall into context" to work with notes).
             if not isinstance(archived_messages, list):
-                per_artifact.append(
-                    {"artifact_id": artifact_id, "inserted": 0, "skipped": 0, "error": "missing_messages"}
-                )
-                continue
+                note_text = None
+                if isinstance(archived, dict):
+                    raw_note = archived.get("note")
+                    if isinstance(raw_note, str) and raw_note.strip():
+                        note_text = raw_note.strip()
+                if note_text is not None:
+                    archived_messages = [
+                        {
+                            "role": "system",
+                            "content": f"[MEMORY NOTE]\n{note_text}",
+                            "timestamp": str(archived.get("created_at") or "") if isinstance(archived, dict) else "",
+                            "metadata": {
+                                "kind": "memory_note",
+                                "rehydrated": True,
+                                "source_artifact_id": artifact_id,
+                                "message_id": f"memory_note:{artifact_id}",
+                            },
+                        }
+                    ]
+                else:
+                    per_artifact.append(
+                        {"artifact_id": artifact_id, "inserted": 0, "skipped": 0, "error": "missing_messages"}
+                    )
+                    continue
 
             to_insert: List[Dict[str, Any]] = []
             skipped = 0

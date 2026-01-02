@@ -188,7 +188,7 @@ def test_memory_note_scope_global_routes_to_global_memory_run() -> None:
     assert spans[0].get("kind") == "memory_note"
 
 
-def test_memory_rehydrate_inserts_conversation_span_and_skips_memory_note() -> None:
+def test_memory_rehydrate_inserts_conversation_span_and_includes_memory_note() -> None:
     run_store = InMemoryRunStore()
     ledger_store = InMemoryLedgerStore()
     runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
@@ -206,7 +206,7 @@ def test_memory_rehydrate_inserts_conversation_span_and_skips_memory_note() -> N
     }
     span_meta = artifact_store.store_json(span_payload, run_id="run", tags={"kind": "conversation_span"})
 
-    # Create a memory_note artifact (not rehydratable).
+    # Create a memory_note artifact (rehydratable as a synthetic system message).
     note_payload = {"note": "note", "sources": {"run_id": "run", "span_ids": [], "message_ids": []}, "created_at": "2025-01-01T00:02:00+00:00"}
     note_meta = artifact_store.store_json(note_payload, run_id="run", tags={"kind": "memory_note"})
 
@@ -259,11 +259,18 @@ def test_memory_rehydrate_inserts_conversation_span_and_skips_memory_note() -> N
     state = runtime.tick(workflow=wf, run_id=run_id)
     assert state.status == RunStatus.COMPLETED
 
-    out = (state.output or {}).get("rehydrate")
-    assert isinstance(out, dict)
-    assert out.get("inserted") == 2
+    out = state.output or {}
+    rehydrate = out.get("rehydrate")
+    assert isinstance(rehydrate, dict)
+    # 1 synthetic note message + 2 archived convo messages
+    assert rehydrate.get("inserted") == 3
 
-    artifacts = out.get("artifacts")
+    msgs = out.get("messages")
+    assert isinstance(msgs, list)
+    ids = [m.get("metadata", {}).get("message_id") for m in msgs if isinstance(m, dict)]
+    assert "memory_note:" + note_meta.artifact_id in ids
+
+    artifacts = rehydrate.get("artifacts")
     assert isinstance(artifacts, list)
     kinds = {a.get("kind") for a in artifacts if isinstance(a, dict)}
     assert "memory_note" in kinds
@@ -273,6 +280,7 @@ def test_memory_rehydrate_inserts_conversation_span_and_skips_memory_note() -> N
     assert isinstance(messages, list)
     # Inserted after the system message.
     assert [m.get("content") for m in messages if isinstance(m, dict)][0] == "sys"
-    assert [m.get("content") for m in messages if isinstance(m, dict)][1:3] == ["u1", "a1"]
+    assert [m.get("content") for m in messages if isinstance(m, dict)][1] == "[MEMORY NOTE]\nnote"
+    assert [m.get("content") for m in messages if isinstance(m, dict)][2:4] == ["u1", "a1"]
 
 

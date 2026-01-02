@@ -16,6 +16,7 @@ from dataclasses import asdict, is_dataclass
 import inspect
 import json
 import threading
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 from .logging import get_logger
@@ -389,3 +390,194 @@ class PassthroughToolExecutor:
 
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"mode": self._mode, "tool_calls": _jsonable(tool_calls)}
+
+
+def _mcp_result_to_output(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return _jsonable(result)
+
+    content = result.get("content")
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "text":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+        if texts:
+            joined = "\n".join(texts).strip()
+            if joined:
+                try:
+                    return _jsonable(json.loads(joined))
+                except Exception:
+                    return joined
+
+    return _jsonable(result)
+
+
+def _mcp_result_to_error(result: Any) -> Optional[str]:
+    if not isinstance(result, dict):
+        return None
+    output = _mcp_result_to_output(result)
+
+    # MCP-native error flag.
+    if result.get("isError") is True:
+        if isinstance(output, str) and output.strip():
+            return output.strip()
+        return "MCP tool call reported error"
+
+    # Some real MCP servers return error strings inside content while leaving `isError=false`.
+    # Match the local executor's convention for string error outputs.
+    if isinstance(output, str):
+        text = output.strip()
+        if not text:
+            return None
+        if text.startswith("Error:"):
+            cleaned = text[len("Error:") :].strip()
+            return cleaned or text
+        if text.startswith(("❌", "🚫", "⏰")):
+            cleaned = text.lstrip("❌🚫⏰").strip()
+            if cleaned.startswith("Error:"):
+                cleaned = cleaned[len("Error:") :].strip()
+            return cleaned or text
+        if text.lower().startswith("traceback"):
+            return text
+    return None
+
+
+class McpToolExecutor:
+    """Executes tool calls remotely via an MCP server (Streamable HTTP / JSON-RPC)."""
+
+    def __init__(
+        self,
+        *,
+        server_id: str,
+        mcp_url: str,
+        timeout_s: Optional[float] = 30.0,
+        mcp_client: Optional[Any] = None,
+    ):
+        self._server_id = str(server_id or "").strip()
+        if not self._server_id:
+            raise ValueError("McpToolExecutor requires a non-empty server_id")
+        self._mcp_url = str(mcp_url or "").strip()
+        if not self._mcp_url:
+            raise ValueError("McpToolExecutor requires a non-empty mcp_url")
+        self._timeout_s = _normalize_timeout_s(timeout_s)
+        self._mcp_client = mcp_client
+
+    def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        from abstractcore.mcp import McpClient, parse_namespaced_tool_name
+
+        results: List[Dict[str, Any]] = []
+        client = self._mcp_client or McpClient(url=self._mcp_url, timeout_s=self._timeout_s)
+        close_client = self._mcp_client is None
+        try:
+            for tc in tool_calls:
+                name = str(tc.get("name", "") or "")
+                call_id = str(tc.get("call_id") or "")
+                raw_arguments = tc.get("arguments") or {}
+                arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
+
+                remote_name = name
+                parsed = parse_namespaced_tool_name(name)
+                if parsed is not None:
+                    server_id, tool_name = parsed
+                    if server_id != self._server_id:
+                        results.append(
+                            {
+                                "call_id": call_id,
+                                "name": name,
+                                "success": False,
+                                "output": None,
+                                "error": f"MCP tool '{name}' targets server '{server_id}', expected '{self._server_id}'",
+                            }
+                        )
+                        continue
+                    remote_name = tool_name
+
+                try:
+                    mcp_result = client.call_tool(name=remote_name, arguments=arguments)
+                    err = _mcp_result_to_error(mcp_result)
+                    if err is not None:
+                        results.append(
+                            {
+                                "call_id": call_id,
+                                "name": name,
+                                "success": False,
+                                "output": None,
+                                "error": err,
+                            }
+                        )
+                        continue
+                    results.append(
+                        {
+                            "call_id": call_id,
+                            "name": name,
+                            "success": True,
+                            "output": _mcp_result_to_output(mcp_result),
+                            "error": None,
+                        }
+                    )
+                except Exception as e:
+                    results.append(
+                        {
+                            "call_id": call_id,
+                            "name": name,
+                            "success": False,
+                            "output": None,
+                            "error": str(e),
+                        }
+                    )
+
+        finally:
+            if close_client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+        return {"mode": "executed", "results": results}
+
+
+class DelegatingMcpToolExecutor:
+    """Delegates tool calls to an MCP server by returning a durable JOB wait payload.
+
+    This executor does not execute tools directly; it packages the tool calls plus
+    MCP endpoint metadata into a `WAITING` state so an external worker can execute
+    them and resume the run with results.
+    """
+
+    def __init__(
+        self,
+        *,
+        server_id: str,
+        mcp_url: str,
+        transport: str = "streamable_http",
+        wait_key_factory: Optional[Callable[[], str]] = None,
+    ):
+        self._server_id = str(server_id or "").strip()
+        if not self._server_id:
+            raise ValueError("DelegatingMcpToolExecutor requires a non-empty server_id")
+        self._mcp_url = str(mcp_url or "").strip()
+        if not self._mcp_url:
+            raise ValueError("DelegatingMcpToolExecutor requires a non-empty mcp_url")
+        self._transport = str(transport or "").strip() or "streamable_http"
+        self._wait_key_factory = wait_key_factory or (lambda: f"mcp_job:{uuid.uuid4().hex}")
+
+    def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "mode": "delegated",
+            "wait_reason": "job",
+            "wait_key": self._wait_key_factory(),
+            "tool_calls": _jsonable(tool_calls),
+            "details": {
+                "protocol": "mcp",
+                "transport": self._transport,
+                "url": self._mcp_url,
+                "server_id": self._server_id,
+                "tool_name_prefix": f"mcp::{self._server_id}::",
+            },
+        }

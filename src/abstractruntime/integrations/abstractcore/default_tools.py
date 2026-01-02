@@ -43,6 +43,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         list_files,
         read_file,
         search_files,
+        analyze_code,
         write_file,
         edit_file,
         web_search,
@@ -54,7 +55,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         "files": {
             "id": "files",
             "label": "Files",
-            "tools": [list_files, read_file, search_files, write_file, edit_file],
+            "tools": [list_files, search_files, analyze_code, read_file, write_file, edit_file],
         },
         "web": {
             "id": "web",
@@ -131,4 +132,3 @@ def filter_tool_specs(tool_names: Sequence[str]) -> List[Dict[str, Any]]:
         if spec is not None:
             out.append(spec)
     return out
-

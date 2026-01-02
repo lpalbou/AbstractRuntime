@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from abstractruntime.memory.active_memory import (
     ensure_active_memory,
     compute_active_memory_token_breakdown,
@@ -187,6 +189,19 @@ def test_render_active_memory_for_prompt_is_bounded_and_includes_sections() -> N
     assert "## Tools (session)" in rendered
     assert "## Current Tasks (evolving)" in rendered
     assert "## Current Context (dynamic)" in rendered
+
+
+def test_render_active_memory_current_context_includes_environment_entry() -> None:
+    vars: dict = {"_runtime": {}}
+    mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
+    mem["max_tokens"] = 2_000
+
+    rendered = render_active_memory_for_prompt(vars, include_tools_summary=False, max_tokens=2_000, token_counter=lambda s: len(str(s).split()))
+    assert "context_id: sys_env" in rendered
+    assert "title: Environment" in rendered
+    assert "Env: CWD=" in rendered
+    assert "User=" in rendered
+    assert re.search(r"Now=\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z", rendered)
 
 
 def test_compute_active_memory_token_breakdown_allocates_total_budget() -> None:

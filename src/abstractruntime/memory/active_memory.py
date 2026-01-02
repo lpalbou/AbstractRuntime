@@ -14,6 +14,9 @@ This is an early prototype for a future AbstractMemory "memory blocks" system.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import getpass
+import os
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import uuid
 
@@ -1169,11 +1172,17 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
         if not name:
             continue
 
-        desc = str(spec.get("when_to_use") or spec.get("description") or "").strip()
+        desc_raw = str(spec.get("description") or "").strip()
+        when_raw = str(spec.get("when_to_use") or "").strip()
+        # Tool metadata is expected to be prompt-friendly by construction (single-line, short). We still
+        # collapse whitespace defensively, but we do NOT truncate (truncation can hide critical semantics).
+        desc = " ".join(desc_raw.split())
+        when_to_use = " ".join(when_raw.split()) if when_raw else ""
         params = spec.get("parameters")
         params_dict = dict(params) if isinstance(params, dict) else {}
 
         required: List[str] = []
+        optional: List[str] = []
         for pname, pmeta in params_dict.items():
             if not isinstance(pname, str) or not pname.strip():
                 continue
@@ -1183,15 +1192,24 @@ def _render_tools_yaml(vars: Dict[str, Any]) -> str:
             # Convention: missing "default" means required (ToolDefinition.to_dict pattern in this repo).
             if "default" not in pmeta:
                 required.append(pname)
+            else:
+                optional.append(pname)
         required.sort()
+        optional.sort()
 
         parts.append(f"  - name: {_yaml_escape(name)}")
         if desc:
             parts.append(f"    description: {_yaml_escape(desc)}")
+        if when_to_use:
+            parts.append(f"    when_to_use: {_yaml_escape(when_to_use)}")
         if required:
             parts.append("    required_args:")
             for r in required:
                 parts.append(f"      - {_yaml_escape(r)}")
+        if optional:
+            parts.append("    optional_args:")
+            for opt in optional:
+                parts.append(f"      - {_yaml_escape(opt)}")
 
     rendered = "\n".join(parts).strip()
     if rendered.endswith("\ntools:") or rendered == "tools:":
@@ -1468,11 +1486,47 @@ def _render_tasks_yaml(tasks: Any) -> str:
 
 
 def _render_current_context_yaml(context_items: Any) -> str:
+    # System-provided environment context (render-time only; not persisted in memory deltas).
+    try:
+        cwd = str(Path.cwd().resolve())
+    except Exception:
+        try:
+            cwd = os.getcwd()
+        except Exception:
+            cwd = "."
+
+    try:
+        user = str(getpass.getuser() or "").strip() or "unknown"
+    except Exception:
+        user = str(os.environ.get("USER") or os.environ.get("USERNAME") or "unknown").strip() or "unknown"
+
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+
+    def _locale_short() -> str:
+        for key in ("LC_ALL", "LANG", "LANGUAGE"):
+            raw = str(os.environ.get(key) or "").strip()
+            if not raw:
+                continue
+            raw = raw.split(":", 1)[0]  # LANGUAGE can contain multiple entries.
+            raw = raw.split(".", 1)[0]  # Drop encoding (e.g. .UTF-8)
+            raw = raw.split("@", 1)[0]  # Drop modifiers
+            if raw:
+                return raw
+        return "unknown"
+
+    locale_short = _locale_short()
+    env_summary = f"Env: CWD={cwd} | User={user} | Now={now_utc} | Locale={locale_short}"
+
+    out: List[str] = ["current_context:"]
+    out.append("  - context_id: " + _yaml_escape("sys_env"))
+    out.append("    kind: " + _yaml_escape("system"))
+    out.append("    title: " + _yaml_escape("Environment"))
+    out.append("    summary: " + _yaml_escape(env_summary))
+
     if not isinstance(context_items, list) or not context_items:
-        return "current_context: []"
+        return "\n".join(out).strip()
     items = [c for c in context_items if isinstance(c, dict)]
     items.sort(key=lambda d: str(d.get("updated_at") or d.get("created_at") or ""), reverse=True)
-    out: List[str] = ["current_context:"]
     for c in items:
         out.append("  - context_id: " + _yaml_escape(c.get("context_id")))
         if str(c.get("kind") or "").strip():

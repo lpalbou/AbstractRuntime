@@ -170,6 +170,36 @@ class MappingToolExecutor:
             }
             return {k: v for k, v in kwargs.items() if k in allowed}
 
+        def _apply_arg_aliases(tool_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+            """Map common alias kwargs to canonical parameter names.
+
+            This improves robustness for LLM-generated calls where parameter naming
+            can drift across tools (e.g., `read_file` often receives `start_line/end_line`
+            even though it exposes `start_line_one_indexed/end_line_one_indexed_inclusive`).
+            """
+            if not isinstance(kwargs, dict) or not kwargs:
+                return dict(kwargs or {})
+            out = dict(kwargs)
+
+            if tool_name == "read_file":
+                # Map range aliases -> canonical read_file args.
+                if "start_line_one_indexed" not in out:
+                    if "start_line" in out:
+                        out["start_line_one_indexed"] = out.get("start_line")
+                    elif "start" in out:
+                        out["start_line_one_indexed"] = out.get("start")
+                if "end_line_one_indexed_inclusive" not in out:
+                    if "end_line" in out:
+                        out["end_line_one_indexed_inclusive"] = out.get("end_line")
+                    elif "end" in out:
+                        out["end_line_one_indexed_inclusive"] = out.get("end")
+
+                # Drop alias keys to avoid TypeError for callables without **kwargs.
+                for k in ("start_line", "end_line", "start", "end"):
+                    out.pop(k, None)
+
+            return out
+
         def _error_from_output(value: Any) -> Optional[str]:
             """Detect tool failures reported as string outputs (instead of exceptions)."""
             # Structured tool outputs may explicitly report failure without raising.
@@ -228,6 +258,7 @@ class MappingToolExecutor:
             name = str(tc.get("name", "") or "")
             raw_arguments = tc.get("arguments") or {}
             arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
+            arguments = _apply_arg_aliases(name, arguments)
             call_id = str(tc.get("call_id") or "")
 
             func = self._tool_map.get(name)
@@ -249,6 +280,7 @@ class MappingToolExecutor:
                 except TypeError:
                     # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
                     unwrapped = _unwrap_wrapper_args(arguments)
+                    unwrapped = _apply_arg_aliases(name, unwrapped)
                     filtered = _filter_kwargs(func, unwrapped)
                     if filtered != arguments:
                         return func(**filtered)

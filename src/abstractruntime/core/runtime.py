@@ -2856,7 +2856,7 @@ class Runtime:
                     "success": True,
                     "output": text,
                     "error": None,
-                    "meta": {"span_id": artifact_id, "created_at": created_at},
+                    "meta": {"span_id": artifact_id, "created_at": created_at, "note_preview": preview},
                 }
             ],
         }
@@ -2982,6 +2982,7 @@ class Runtime:
                         "skipped": a.get("skipped"),
                         "error": a.get("error"),
                         "kind": kind_by_artifact.get(aid) or None,
+                        "preview": a.get("preview"),
                     }
                 )
         artifacts_out.extend(skipped_artifacts)

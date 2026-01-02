@@ -280,6 +280,28 @@ class ActiveContextPolicy:
         if max_messages_int is not None and max_messages_int < 0:
             max_messages_int = None
 
+        def _preview_inserted(messages: Sequence[Dict[str, Any]]) -> str:
+            """Build a small, human-friendly preview for UI/observability."""
+            if not messages:
+                return ""
+            lines: list[str] = []
+            for m in messages[:3]:
+                if not isinstance(m, dict):
+                    continue
+                role = str(m.get("role") or "").strip()
+                content = str(m.get("content") or "").strip()
+                if not content:
+                    continue
+                # If the synthetic memory note marker is present, keep it as-is (no "role:" prefix).
+                if content.startswith("[MEMORY NOTE]"):
+                    lines.append(content)
+                else:
+                    lines.append(f"{role}: {content}" if role else content)
+            text = "\n".join([l for l in lines if l]).strip()
+            if len(text) > 360:
+                return text[:357] + "…"
+            return text
+
         for artifact_id in resolved_artifacts:
             if max_messages_int is not None and inserted_total >= max_messages_int:
                 # Deterministic: stop inserting once the global cap is reached.
@@ -357,7 +379,11 @@ class ActiveContextPolicy:
 
             inserted_total += len(to_insert)
             skipped_total += skipped
-            per_artifact.append({"artifact_id": artifact_id, "inserted": len(to_insert), "skipped": skipped})
+            entry: Dict[str, Any] = {"artifact_id": artifact_id, "inserted": len(to_insert), "skipped": skipped}
+            preview = _preview_inserted(to_insert)
+            if preview:
+                entry["preview"] = preview
+            per_artifact.append(entry)
 
         ctx["messages"] = active
         if isinstance(getattr(run, "output", None), dict):

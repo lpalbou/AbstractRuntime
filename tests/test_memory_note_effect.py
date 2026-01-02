@@ -66,6 +66,15 @@ def test_memory_note_effect_stores_artifact_indexes_span_and_is_queryable() -> N
 
     assert state.status == RunStatus.COMPLETED
 
+    note_out = (state.output or {}).get("note")
+    assert isinstance(note_out, dict)
+    note_results = note_out.get("results")
+    assert isinstance(note_results, list) and note_results
+    note_meta = note_results[0].get("meta") if isinstance(note_results[0], dict) else None
+    assert isinstance(note_meta, dict)
+    assert isinstance(note_meta.get("note_preview"), str)
+    assert "Alice owns the API contract" in str(note_meta.get("note_preview"))
+
     spans = (state.output or {}).get("spans")
     assert isinstance(spans, list) and spans
     note_span = spans[0]

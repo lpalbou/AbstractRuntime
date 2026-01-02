@@ -218,6 +218,7 @@ class ActiveContextPolicy:
         span_ids: Sequence[SpanId],
         placement: str = "after_summary",
         dedup_by: str = "message_id",
+        max_messages: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Rehydrate archived span(s) into `context.messages` and persist the run.
 
@@ -226,8 +227,34 @@ class ActiveContextPolicy:
             span_ids: Sequence of artifact_ids or 1-based indices into `_runtime.memory_spans`.
             placement: Where to insert. Supported: "after_summary" (default), "after_system", "end".
             dedup_by: Dedup key (default: metadata.message_id).
+            max_messages: Optional cap on inserted messages across all spans (None = unlimited).
         """
         run = self._require_run(run_id)
+        out = self.rehydrate_into_context_from_run(
+            run,
+            span_ids=span_ids,
+            placement=placement,
+            dedup_by=dedup_by,
+            max_messages=max_messages,
+        )
+
+        self._run_store.save(run)
+        return out
+
+    def rehydrate_into_context_from_run(
+        self,
+        run: RunState,
+        *,
+        span_ids: Sequence[SpanId],
+        placement: str = "after_summary",
+        dedup_by: str = "message_id",
+        max_messages: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Like `rehydrate_into_context`, but operates on an in-memory RunState.
+
+        This mutates `run.vars["context"]["messages"]` (and `run.output["messages"]` when present),
+        but does NOT persist the run.
+        """
         spans = self.list_memory_spans_from_run(run)
         resolved_artifacts: List[str] = self.resolve_span_ids_from_spans(span_ids, spans)
         if not resolved_artifacts:
@@ -245,7 +272,22 @@ class ActiveContextPolicy:
         # Build a dedup set for active context.
         existing_keys = self._collect_message_keys(active, dedup_by=dedup_by)
 
+        # Normalize cap.
+        try:
+            max_messages_int = int(max_messages) if max_messages is not None else None
+        except Exception:
+            max_messages_int = None
+        if max_messages_int is not None and max_messages_int < 0:
+            max_messages_int = None
+
         for artifact_id in resolved_artifacts:
+            if max_messages_int is not None and inserted_total >= max_messages_int:
+                # Deterministic: stop inserting once the global cap is reached.
+                per_artifact.append(
+                    {"artifact_id": artifact_id, "inserted": 0, "skipped": 0, "error": "max_messages"}
+                )
+                continue
+
             archived = self._artifact_store.load_json(artifact_id)
             archived_messages = archived.get("messages") if isinstance(archived, dict) else None
             if not isinstance(archived_messages, list):
@@ -276,6 +318,16 @@ class ActiveContextPolicy:
                     existing_keys.add(key)
                 to_insert.append(m_copy)
 
+            if max_messages_int is not None:
+                remaining = max(0, max_messages_int - inserted_total)
+                if remaining <= 0:
+                    per_artifact.append(
+                        {"artifact_id": artifact_id, "inserted": 0, "skipped": 0, "error": "max_messages"}
+                    )
+                    continue
+                if len(to_insert) > remaining:
+                    to_insert = to_insert[:remaining]
+
             idx = self._insertion_index(active, artifact_id=artifact_id, placement=placement)
             active[idx:idx] = to_insert
 
@@ -286,7 +338,6 @@ class ActiveContextPolicy:
         ctx["messages"] = active
         if isinstance(getattr(run, "output", None), dict):
             run.output["messages"] = active
-        self._run_store.save(run)
 
         return {"inserted": inserted_total, "skipped": skipped_total, "artifacts": per_artifact}
 

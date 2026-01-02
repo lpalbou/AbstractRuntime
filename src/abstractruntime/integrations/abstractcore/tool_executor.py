@@ -174,28 +174,32 @@ class MappingToolExecutor:
             """Map common alias kwargs to canonical parameter names.
 
             This improves robustness for LLM-generated calls where parameter naming
-            can drift across tools (e.g., `read_file` often receives `start_line/end_line`
-            even though it exposes `start_line_one_indexed/end_line_one_indexed_inclusive`).
+            can drift across tools (e.g., legacy `read_file` calls may use
+            `start_line_one_indexed/end_line_one_indexed_inclusive`).
             """
             if not isinstance(kwargs, dict) or not kwargs:
                 return dict(kwargs or {})
             out = dict(kwargs)
 
             if tool_name == "read_file":
-                # Map range aliases -> canonical read_file args.
-                if "start_line_one_indexed" not in out:
-                    if "start_line" in out:
-                        out["start_line_one_indexed"] = out.get("start_line")
+                # Map range aliases -> canonical read_file args (start_line/end_line, inclusive, 1-indexed).
+                # Do not inject/force legacy flags (e.g. should_read_entire_file). AbstractCore
+                # owns tool-call normalization; runtime keeps only a minimal alias mapper.
+
+                if "start_line" not in out:
+                    if "start_line_one_indexed" in out:
+                        out["start_line"] = out.get("start_line_one_indexed")
                     elif "start" in out:
-                        out["start_line_one_indexed"] = out.get("start")
-                if "end_line_one_indexed_inclusive" not in out:
-                    if "end_line" in out:
-                        out["end_line_one_indexed_inclusive"] = out.get("end_line")
+                        out["start_line"] = out.get("start")
+
+                if "end_line" not in out:
+                    if "end_line_one_indexed_inclusive" in out:
+                        out["end_line"] = out.get("end_line_one_indexed_inclusive")
                     elif "end" in out:
-                        out["end_line_one_indexed_inclusive"] = out.get("end")
+                        out["end_line"] = out.get("end")
 
                 # Drop alias keys to avoid TypeError for callables without **kwargs.
-                for k in ("start_line", "end_line", "start", "end"):
+                for k in ("start_line_one_indexed", "end_line_one_indexed_inclusive", "start", "end"):
                     out.pop(k, None)
 
             return out

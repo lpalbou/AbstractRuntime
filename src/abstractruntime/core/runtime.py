@@ -1551,7 +1551,10 @@ class Runtime:
           - query: str                          (keyword substring match)
           - since: str                          (ISO8601, span intersection filter)
           - until: str                          (ISO8601, span intersection filter)
-          - tags: dict[str,str]                 (span tag filter)
+          - tags: dict[str, str|list[str]]      (span tag filter; values can be multi-valued)
+          - tags_mode: "all"|"any"              (default "all"; AND/OR across tag keys)
+          - authors: list[str]                  (alias: usernames; matches span.created_by case-insensitively)
+          - locations: list[str]                (matches span.location case-insensitively)
           - limit_spans: int                    (default 5)
           - deep: bool                          (default True when query is set; scans archived messages)
           - deep_limit_spans: int               (default 50)
@@ -1596,7 +1599,63 @@ class Runtime:
         since = payload.get("since")
         until = payload.get("until")
         tags = payload.get("tags")
-        tags_dict = dict(tags) if isinstance(tags, dict) else None
+        tags_dict: Optional[Dict[str, Any]] = None
+        if isinstance(tags, dict):
+            # Accept str or list[str] values. Ignore reserved key "kind".
+            out_tags: Dict[str, Any] = {}
+            for k, v in tags.items():
+                if not isinstance(k, str) or not k.strip():
+                    continue
+                if k == "kind":
+                    continue
+                if isinstance(v, str) and v.strip():
+                    out_tags[k.strip()] = v.strip()
+                elif isinstance(v, (list, tuple)):
+                    vals = [str(x).strip() for x in v if isinstance(x, str) and str(x).strip()]
+                    if vals:
+                        out_tags[k.strip()] = vals
+            tags_dict = out_tags or None
+
+        tags_mode_raw = payload.get("tags_mode")
+        if tags_mode_raw is None:
+            tags_mode_raw = payload.get("tagsMode")
+        if tags_mode_raw is None:
+            tags_mode_raw = payload.get("tag_mode")
+        tags_mode = str(tags_mode_raw or "all").strip().lower() or "all"
+        if tags_mode in {"and"}:
+            tags_mode = "all"
+        if tags_mode in {"or"}:
+            tags_mode = "any"
+        if tags_mode not in {"all", "any"}:
+            tags_mode = "all"
+
+        def _norm_str_list(value: Any) -> list[str]:
+            if value is None:
+                return []
+            if isinstance(value, str):
+                v = value.strip()
+                return [v] if v else []
+            if not isinstance(value, list):
+                return []
+            out: list[str] = []
+            for x in value:
+                if isinstance(x, str) and x.strip():
+                    out.append(x.strip())
+            # preserve order but dedup (case-insensitive)
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for s in out:
+                key = s.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(s)
+            return deduped
+
+        authors = _norm_str_list(payload.get("authors") if "authors" in payload else payload.get("usernames"))
+        if not authors:
+            authors = _norm_str_list(payload.get("users"))
+        locations = _norm_str_list(payload.get("locations") if "locations" in payload else payload.get("location"))
 
         try:
             limit_spans = int(payload.get("limit_spans", 5) or 5)
@@ -1724,16 +1783,31 @@ class Runtime:
                     artifact_store=artifact_store,
                     time_range=time_range,
                     tags=tags_dict,
+                    tags_mode=tags_mode,
+                    authors=authors or None,
+                    locations=locations or None,
                     query=query_text or None,
                     limit=limit_spans,
                 )
                 selected = [str(s.get("artifact_id") or "") for s in matches if isinstance(s, dict) and s.get("artifact_id")]
 
                 if deep_enabled and query_text:
+                    # Deep scan is bounded and should respect metadata filters (tags/authors/locations/time).
+                    deep_candidates = ActiveContextPolicy.filter_spans_from_run(
+                        target,
+                        artifact_store=artifact_store,
+                        time_range=time_range,
+                        tags=tags_dict,
+                        tags_mode=tags_mode,
+                        authors=authors or None,
+                        locations=locations or None,
+                        query=None,
+                        limit=deep_limit_spans,
+                    )
                     selected = _dedup_preserve_order(
                         selected
                         + _deep_scan_span_ids(
-                            spans=spans,
+                            spans=deep_candidates,
                             artifact_store=artifact_store,
                             query=query_text,
                             limit_spans=deep_limit_spans,
@@ -1742,9 +1816,20 @@ class Runtime:
                     )
 
                 if connected and selected:
+                    connect_candidates = ActiveContextPolicy.filter_spans_from_run(
+                        target,
+                        artifact_store=artifact_store,
+                        time_range=time_range,
+                        tags=tags_dict,
+                        tags_mode=tags_mode,
+                        authors=authors or None,
+                        locations=locations or None,
+                        query=None,
+                        limit=max(1000, len(spans)),
+                    )
                     selected = _dedup_preserve_order(
                         _expand_connected_span_ids(
-                            spans=spans,
+                            spans=connect_candidates,
                             seed_artifact_ids=selected,
                             connect_keys=connect_keys,
                             neighbor_hops=neighbor_hops,
@@ -1792,6 +1877,9 @@ class Runtime:
                     "to_timestamp": span.get("to_timestamp"),
                     "tags": span.get("tags") if isinstance(span.get("tags"), dict) else {},
                 }
+                for k in ("created_by", "location"):
+                    if k in span:
+                        m[k] = span.get(k)
                 # Include known preview fields without enforcing a global schema.
                 for k in ("note_preview", "message_count", "summary_message_id"):
                     if k in span:
@@ -2340,21 +2428,22 @@ class Runtime:
         if not isinstance(spans, list):
             spans = []
             runtime_ns["memory_spans"] = spans
-        spans.append(
-            {
-                "kind": "conversation_span",
-                "artifact_id": archived_ref,
-                "created_at": now_iso(),
-                "summary_message_id": summary_message_id,
-                "from_timestamp": span_meta.get("from_timestamp"),
-                "to_timestamp": span_meta.get("to_timestamp"),
-                "from_message_id": span_meta.get("from_message_id"),
-                "to_message_id": span_meta.get("to_message_id"),
-                "message_count": int(span_meta.get("message_count") or 0),
-                "compression_mode": compression_mode,
-                "focus": focus_text,
-            }
-        )
+        span_record: Dict[str, Any] = {
+            "kind": "conversation_span",
+            "artifact_id": archived_ref,
+            "created_at": now_iso(),
+            "summary_message_id": summary_message_id,
+            "from_timestamp": span_meta.get("from_timestamp"),
+            "to_timestamp": span_meta.get("to_timestamp"),
+            "from_message_id": span_meta.get("from_message_id"),
+            "to_message_id": span_meta.get("to_message_id"),
+            "message_count": int(span_meta.get("message_count") or 0),
+            "compression_mode": compression_mode,
+            "focus": focus_text,
+        }
+        if run.actor_id:
+            span_record["created_by"] = str(run.actor_id)
+        spans.append(span_record)
 
         if target_run is not run:
             target_run.updated_at = now_iso()
@@ -2653,6 +2742,8 @@ class Runtime:
                 "item_count": len([x for x in archive_items if isinstance(x, dict)]),
                 "tags": {"component": cid},
             }
+            if run.actor_id:
+                span_entry["created_by"] = str(run.actor_id)
             spans.append(span_entry)
 
             # Append a key history event pointing to the archived span so the model has a durable handle.
@@ -2763,6 +2854,9 @@ class Runtime:
         if not note_text:
             return EffectOutcome.failed("MEMORY_NOTE requires payload.note (non-empty string)")
 
+        location_raw = payload.get("location")
+        location = str(location_raw).strip() if isinstance(location_raw, str) else ""
+
         tags = payload.get("tags")
         clean_tags: Dict[str, str] = {}
         if isinstance(tags, dict):
@@ -2807,6 +2901,8 @@ class Runtime:
             "sources": {"run_id": source_run_id, "span_ids": span_ids, "message_ids": message_ids},
             "created_at": created_at,
         }
+        if location:
+            artifact_payload["location"] = location
         if run.actor_id:
             artifact_payload["actor_id"] = str(run.actor_id)
         session_id = getattr(target_run, "session_id", None) or getattr(run, "session_id", None)
@@ -2832,6 +2928,8 @@ class Runtime:
             "message_count": 0,
             "note_preview": preview,
         }
+        if location:
+            span_record["location"] = location
         if clean_tags:
             span_record["tags"] = dict(clean_tags)
         if span_ids or message_ids:
@@ -3136,6 +3234,8 @@ def _render_memory_query_output(
         from_ts = span.get("from_timestamp") or ""
         to_ts = span.get("to_timestamp") or ""
         count = span.get("message_count") or ""
+        created_by = span.get("created_by") or ""
+        location = span.get("location") or ""
         tags = span.get("tags") if isinstance(span.get("tags"), dict) else {}
         tags_txt = ", ".join([f"{k}={v}" for k, v in sorted(tags.items()) if isinstance(v, str) and v])
 
@@ -3143,6 +3243,10 @@ def _render_memory_query_output(
         lines.append(f"[{i}] span_id={aid} kind={kind} msgs={count} created_at={created}")
         if from_ts or to_ts:
             lines.append(f"    time_range: {from_ts} .. {to_ts}")
+        if isinstance(created_by, str) and str(created_by).strip():
+            lines.append(f"    created_by: {str(created_by).strip()}")
+        if isinstance(location, str) and str(location).strip():
+            lines.append(f"    location: {str(location).strip()}")
         if tags_txt:
             lines.append(f"    tags: {tags_txt}")
 
@@ -3163,6 +3267,11 @@ def _render_memory_query_output(
                 lines.append("    note: " + note)
             else:
                 lines.append("    (note payload missing note text)")
+
+            if not (isinstance(location, str) and location.strip()):
+                loc = payload.get("location")
+                if isinstance(loc, str) and loc.strip():
+                    lines.append(f"    location: {loc.strip()}")
 
             sources = payload.get("sources")
             if isinstance(sources, dict):

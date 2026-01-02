@@ -109,7 +109,10 @@ class ActiveContextPolicy:
         run_id: str,
         *,
         time_range: Optional[TimeRange] = None,
-        tags: Optional[Dict[str, str]] = None,
+        tags: Optional[Dict[str, Any]] = None,
+        tags_mode: str = "all",
+        authors: Optional[List[str]] = None,
+        locations: Optional[List[str]] = None,
         query: Optional[str] = None,
         limit: int = 1000,
     ) -> List[Dict[str, Any]]:
@@ -125,6 +128,9 @@ class ActiveContextPolicy:
             artifact_store=self._artifact_store,
             time_range=time_range,
             tags=tags,
+            tags_mode=tags_mode,
+            authors=authors,
+            locations=locations,
             query=query,
             limit=limit,
         )
@@ -135,7 +141,10 @@ class ActiveContextPolicy:
         *,
         artifact_store: ArtifactStore,
         time_range: Optional[TimeRange] = None,
-        tags: Optional[Dict[str, str]] = None,
+        tags: Optional[Dict[str, Any]] = None,
+        tags_mode: str = "all",
+        authors: Optional[List[str]] = None,
+        locations: Optional[List[str]] = None,
         query: Optional[str] = None,
         limit: int = 1000,
     ) -> List[Dict[str, Any]]:
@@ -145,25 +154,48 @@ class ActiveContextPolicy:
             return []
 
         summary_by_artifact = ActiveContextPolicy.summary_text_by_artifact_id_from_run(run)
+        lowered_query = (query or "").strip().lower() if query else None
+
+        # Notes are small; for keyword filtering we can load their text safely.
+        # IMPORTANT: only do this when we actually have a query (avoids unnecessary I/O).
+        #
+        # Also include summary text from the note's linked conversation span(s) when available,
+        # so searching for a topic can surface both the span *and* the derived note.
         note_by_artifact: Dict[str, str] = {}
-        for span in spans:
-            if not isinstance(span, dict):
-                continue
-            if str(span.get("kind") or "") != "memory_note":
-                continue
-            artifact_id = str(span.get("artifact_id") or "")
-            if not artifact_id:
-                continue
-            # Notes are small; for keyword filtering, we can load their text safely.
-            try:
-                payload = artifact_store.load_json(artifact_id)
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            note = payload.get("note")
-            if isinstance(note, str) and note.strip():
-                note_by_artifact[artifact_id] = note.strip()
+        if lowered_query:
+            for span in spans:
+                if not isinstance(span, dict):
+                    continue
+                if str(span.get("kind") or "") != "memory_note":
+                    continue
+                artifact_id = str(span.get("artifact_id") or "")
+                if not artifact_id:
+                    continue
+                try:
+                    payload = artifact_store.load_json(artifact_id)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+
+                parts: list[str] = []
+                note = payload.get("note")
+                if isinstance(note, str) and note.strip():
+                    parts.append(note.strip())
+
+                sources = payload.get("sources")
+                if isinstance(sources, dict):
+                    span_ids = sources.get("span_ids")
+                    if isinstance(span_ids, list):
+                        for sid in span_ids:
+                            if not isinstance(sid, str) or not sid.strip():
+                                continue
+                            summary = summary_by_artifact.get(sid.strip())
+                            if isinstance(summary, str) and summary.strip():
+                                parts.append(summary.strip())
+
+                if parts:
+                    note_by_artifact[artifact_id] = "\n".join(parts).strip()
 
         def _artifact_meta(artifact_id: str) -> Optional[ArtifactMetadata]:
             try:
@@ -171,7 +203,16 @@ class ActiveContextPolicy:
             except Exception:
                 return None
 
-        lowered_query = (query or "").strip().lower() if query else None
+        mode = str(tags_mode or "all").strip().lower() or "all"
+        if mode in {"and"}:
+            mode = "all"
+        if mode in {"or"}:
+            mode = "any"
+        if mode not in {"all", "any"}:
+            mode = "all"
+
+        authors_norm = {str(a).strip().lower() for a in (authors or []) if isinstance(a, str) and a.strip()}
+        locations_norm = {str(l).strip().lower() for l in (locations or []) if isinstance(l, str) and l.strip()}
 
         out: List[Dict[str, Any]] = []
         for span in spans:
@@ -189,7 +230,24 @@ class ActiveContextPolicy:
             meta = _artifact_meta(artifact_id)
 
             if tags:
-                if not ActiveContextPolicy._tags_match(span=span, meta=meta, required=tags):
+                if not ActiveContextPolicy._tags_match(span=span, meta=meta, required=tags, mode=mode):
+                    continue
+
+            if authors_norm:
+                created_by = span.get("created_by")
+                author = str(created_by).strip().lower() if isinstance(created_by, str) else ""
+                if not author or author not in authors_norm:
+                    continue
+
+            if locations_norm:
+                loc = span.get("location")
+                loc_str = str(loc).strip().lower() if isinstance(loc, str) else ""
+                if not loc_str:
+                    # Fallback: allow location to be stored as a tag.
+                    span_tags = span.get("tags") if isinstance(span.get("tags"), dict) else {}
+                    tag_loc = span_tags.get("location") if isinstance(span_tags, dict) else None
+                    loc_str = str(tag_loc).strip().lower() if isinstance(tag_loc, str) else ""
+                if not loc_str or loc_str not in locations_norm:
                     continue
 
             if lowered_query:
@@ -581,7 +639,7 @@ class ActiveContextPolicy:
             parts.append(summary)
         if note:
             parts.append(note)
-        for k in ("kind", "compression_mode", "focus", "from_timestamp", "to_timestamp"):
+        for k in ("kind", "compression_mode", "focus", "from_timestamp", "to_timestamp", "created_by", "location"):
             v = span.get(k)
             if isinstance(v, str) and v:
                 parts.append(v)
@@ -605,23 +663,84 @@ class ActiveContextPolicy:
         *,
         span: Dict[str, Any],
         meta: Optional[ArtifactMetadata],
-        required: Dict[str, str],
+        required: Dict[str, Any],
+        mode: str = "all",
     ) -> bool:
+        def _norm(s: str) -> str:
+            return str(s or "").strip().lower()
+
         tags: Dict[str, str] = {}
         if meta is not None and meta.tags:
-            tags.update(meta.tags)
+            for k, v in meta.tags.items():
+                if not isinstance(k, str) or not isinstance(v, str):
+                    continue
+                kk = _norm(k)
+                vv = _norm(v)
+                if kk and vv and kk not in tags:
+                    tags[kk] = vv
 
         span_tags = span.get("tags")
         if isinstance(span_tags, dict):
             for k, v in span_tags.items():
-                if isinstance(k, str) and isinstance(v, str) and v and k not in tags:
-                    tags[k] = v
+                if not isinstance(k, str):
+                    continue
+                kk = _norm(k)
+                if not kk or kk in tags:
+                    continue
+                if isinstance(v, str):
+                    vv = _norm(v)
+                    if vv:
+                        tags[kk] = vv
 
         # Derived tags from span ref (cheap and keeps filtering usable even
         # if artifact metadata is missing).
         for k in ("kind", "compression_mode", "focus"):
             v = span.get(k)
-            if isinstance(v, str) and v and k not in tags:
-                tags[k] = v
+            if isinstance(v, str) and v:
+                kk = _norm(k)
+                if kk and kk not in tags:
+                    tags[kk] = _norm(v)
 
-        return all(tags.get(k) == v for k, v in required.items())
+        required_norm: Dict[str, List[str]] = {}
+        for k, v in (required or {}).items():
+            if not isinstance(k, str):
+                continue
+            kk = _norm(k)
+            if not kk or kk == "kind":
+                continue
+            values: List[str] = []
+            if isinstance(v, str):
+                vv = _norm(v)
+                if vv:
+                    values.append(vv)
+            elif isinstance(v, (list, tuple)):
+                for it in v:
+                    if isinstance(it, str) and it.strip():
+                        values.append(_norm(it))
+            if values:
+                # preserve order but dedup
+                seen: set[str] = set()
+                deduped = []
+                for x in values:
+                    if x in seen:
+                        continue
+                    seen.add(x)
+                    deduped.append(x)
+                required_norm[kk] = deduped
+
+        if not required_norm:
+            return True
+
+        def _key_matches(key: str) -> bool:
+            cand = tags.get(key)
+            if cand is None:
+                return False
+            allowed = required_norm.get(key) or []
+            return cand in allowed
+
+        op = str(mode or "all").strip().lower() or "all"
+        if op not in {"all", "any"}:
+            op = "all"
+        if op == "any":
+            return any(_key_matches(k) for k in required_norm.keys())
+        return all(_key_matches(k) for k in required_norm.keys())

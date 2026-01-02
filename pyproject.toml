@@ -33,6 +33,17 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
+[project.optional-dependencies]
+# Enables `abstractruntime.integrations.abstractcore.*` imports.
+abstractcore = [
+  "abstractcore>=2.6.8",
+]
+
+# Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
+mcp-worker = [
+  "abstractcore[tools]>=2.6.8",
+]
+
 [project.scripts]
 abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_worker:main"
 
@@ -42,6 +53,5 @@ abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_work
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abstractruntime"]
-
 
 

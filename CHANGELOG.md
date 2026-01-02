@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatically records provenance-first evidence for external-boundary tools: `web_search`, `fetch_url`, `execute_command`.
   - Evidence is stored as artifact-backed records and indexed as `kind="evidence"` entries in `RunState.vars["_runtime"]["memory_spans"]`.
   - Added runtime helpers: `Runtime.list_evidence(run_id)` and `Runtime.load_evidence(evidence_id)`.
+- **Richer provenance-first recall filters** (`MEMORY_QUERY`):
+  - Tag filters now support **AND/OR** (`tags_mode=all|any`) and **multi-value** tag keys (`tags.person=["alice","bob"]`).
+  - Added metadata filters for **authors** (`created_by`) and **locations** (`location` / `tags.location`).
+  - Span records now capture `created_by` for `conversation_span` / `active_memory_span` / `memory_note` when `actor_id` is available.
+  - `MEMORY_NOTE` now accepts an optional `location` field.
 
 ### Fixed
 - **Cancellation is terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as a terminal state and will not progress cancelled runs.

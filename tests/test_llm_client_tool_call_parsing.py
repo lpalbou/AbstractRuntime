@@ -13,7 +13,7 @@ def test_local_llm_client_surfaces_reasoning_from_provider_metadata() -> None:
             return []
 
         def generate(self, **kwargs):
-            return GenerateResponse(content="", metadata={"reasoning": "I will do X."})
+            return GenerateResponse(content="", metadata={"reasoning": "I will do X."}, gen_time=123.4)
 
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
@@ -25,6 +25,45 @@ def test_local_llm_client_surfaces_reasoning_from_provider_metadata() -> None:
 
     result = client.generate(prompt="do something")
     assert result.get("reasoning") == "I will do X."
+    assert result.get("gen_time") == 123.4
+
+
+def test_local_llm_client_streaming_aggregates_and_surfaces_ttft() -> None:
+    from abstractcore.core.types import GenerateResponse
+
+    class _DummyStreamingLLM:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def get_capabilities(self) -> list[str]:
+            return []
+
+        def generate(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            if kwargs.get("stream") is True:
+                def _gen():
+                    yield GenerateResponse(content="Hello", metadata={"_timing": {"ttft_ms": 12.3}})
+                    yield GenerateResponse(content=" world", finish_reason="stop")
+
+                return _gen()
+            return GenerateResponse(content="Hello world", finish_reason="stop", gen_time=1.0)
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "dummy"
+    client._model = "openai/gpt-oss-20b"
+    client._llm = _DummyStreamingLLM()
+    from abstractcore.tools.handler import UniversalToolHandler
+
+    client._tool_handler = UniversalToolHandler(client._model)
+
+    result = client.generate(prompt="do something", params={"stream": True})
+
+    assert result.get("content") == "Hello world"
+    assert result.get("ttft_ms") == 12.3
+    assert isinstance(result.get("gen_time"), (int, float))
+    assert isinstance(result.get("metadata"), dict)
+    assert result["metadata"].get("_timing", {}).get("ttft_ms") == 12.3
+    assert client._llm.calls and client._llm.calls[0].get("stream") is True
 
 
 def test_parse_xml_wrapped_tool_call() -> None:

@@ -262,6 +262,7 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
     model = getattr(resp, "model", None)
     finish_reason = getattr(resp, "finish_reason", None)
     metadata = getattr(resp, "metadata", None)
+    gen_time = getattr(resp, "gen_time", None)
     trace_id: Optional[str] = None
     reasoning: Optional[str] = None
     if isinstance(metadata, dict):
@@ -282,6 +283,134 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
         "finish_reason": finish_reason,
         "metadata": _jsonable(metadata) if metadata is not None else None,
         "trace_id": trace_id,
+        "gen_time": float(gen_time) if isinstance(gen_time, (int, float)) else None,
+    }
+
+
+def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
+    """Consume an AbstractCore streaming `generate(..., stream=True)` iterator into a single JSON result.
+
+    AbstractRuntime currently persists a single effect outcome object per LLM call, so even when
+    the underlying provider streams we aggregate into one final dict and surface timing fields.
+    """
+    import time
+
+    start_perf = time.perf_counter()
+
+    chunks: list[str] = []
+    tool_calls: Any = None
+    usage: Any = None
+    model: Optional[str] = None
+    finish_reason: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+    trace_id: Optional[str] = None
+    reasoning: Optional[str] = None
+    ttft_ms: Optional[float] = None
+
+    def _maybe_capture_ttft(*, content: Any, tool_calls_value: Any, meta: Any) -> None:
+        nonlocal ttft_ms
+        if ttft_ms is not None:
+            return
+
+        if isinstance(meta, dict):
+            timing = meta.get("_timing") if isinstance(meta.get("_timing"), dict) else None
+            if isinstance(timing, dict) and isinstance(timing.get("ttft_ms"), (int, float)):
+                ttft_ms = float(timing["ttft_ms"])
+                return
+
+        has_content = isinstance(content, str) and bool(content)
+        has_tools = isinstance(tool_calls_value, list) and bool(tool_calls_value)
+        if has_content or has_tools:
+            ttft_ms = round((time.perf_counter() - start_perf) * 1000, 1)
+
+    for chunk in stream:
+        if chunk is None:
+            continue
+
+        if isinstance(chunk, dict):
+            content = chunk.get("content")
+            if isinstance(content, str) and content:
+                chunks.append(content)
+
+            tc = chunk.get("tool_calls")
+            if tc is not None:
+                tool_calls = tc
+
+            u = chunk.get("usage")
+            if u is not None:
+                usage = u
+
+            m = chunk.get("model")
+            if model is None and isinstance(m, str) and m.strip():
+                model = m.strip()
+
+            fr = chunk.get("finish_reason")
+            if fr is not None:
+                finish_reason = str(fr)
+
+            meta = chunk.get("metadata")
+            _maybe_capture_ttft(content=content, tool_calls_value=tc, meta=meta)
+
+            if isinstance(meta, dict):
+                meta_json = _jsonable(meta)
+                if isinstance(meta_json, dict):
+                    metadata.update(meta_json)
+                    raw_trace = meta_json.get("trace_id")
+                    if trace_id is None and raw_trace is not None:
+                        trace_id = str(raw_trace)
+                    r = meta_json.get("reasoning")
+                    if reasoning is None and isinstance(r, str) and r.strip():
+                        reasoning = r.strip()
+            continue
+
+        content = getattr(chunk, "content", None)
+        if isinstance(content, str) and content:
+            chunks.append(content)
+
+        tc = getattr(chunk, "tool_calls", None)
+        if tc is not None:
+            tool_calls = tc
+
+        u = getattr(chunk, "usage", None)
+        if u is not None:
+            usage = u
+
+        m = getattr(chunk, "model", None)
+        if model is None and isinstance(m, str) and m.strip():
+            model = m.strip()
+
+        fr = getattr(chunk, "finish_reason", None)
+        if fr is not None:
+            finish_reason = str(fr)
+
+        meta = getattr(chunk, "metadata", None)
+        _maybe_capture_ttft(content=content, tool_calls_value=tc, meta=meta)
+
+        if isinstance(meta, dict):
+            meta_json = _jsonable(meta)
+            if isinstance(meta_json, dict):
+                metadata.update(meta_json)
+                raw_trace = meta_json.get("trace_id")
+                if trace_id is None and raw_trace is not None:
+                    trace_id = str(raw_trace)
+                r = meta_json.get("reasoning")
+                if reasoning is None and isinstance(r, str) and r.strip():
+                    reasoning = r.strip()
+
+    gen_time = round((time.perf_counter() - start_perf) * 1000, 1)
+
+    return {
+        "content": "".join(chunks),
+        "reasoning": reasoning,
+        "data": None,
+        "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
+        "usage": _jsonable(usage) if usage is not None else None,
+        "model": model,
+        "finish_reason": finish_reason,
+        "metadata": metadata or None,
+        "trace_id": trace_id,
+        "gen_time": gen_time,
+        "ttft_ms": ttft_ms,
     }
 
 
@@ -320,6 +449,14 @@ class LocalAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         params = dict(params or {})
 
+        stream_raw = params.pop("stream", None)
+        if stream_raw is None:
+            stream_raw = params.pop("streaming", None)
+        if isinstance(stream_raw, str):
+            stream = stream_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            stream = bool(stream_raw) if stream_raw is not None else False
+
         # `base_url` is a provider construction concern in local mode. We intentionally
         # do not create new providers per call unless the host explicitly chooses to.
         params.pop("base_url", None)
@@ -332,10 +469,13 @@ class LocalAbstractCoreLLMClient:
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
-            stream=False,
+            stream=stream,
             **params,
         )
-        result = _normalize_local_response(resp)
+        if stream and hasattr(resp, "__next__"):
+            result = _normalize_local_streaming_response(resp)
+        else:
+            result = _normalize_local_response(resp)
         result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
         return result

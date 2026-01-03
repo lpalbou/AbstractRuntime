@@ -188,6 +188,56 @@ def test_memory_note_scope_global_routes_to_global_memory_run() -> None:
     assert spans[0].get("kind") == "memory_note"
 
 
+def test_memory_note_keep_in_context_inserts_synthetic_message() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
+    artifact_store = InMemoryArtifactStore()
+    runtime.set_artifact_store(artifact_store)
+
+    vars: dict[str, Any] = {
+        "context": {"task": "t", "messages": [{"role": "system", "content": "sys", "timestamp": "2025-01-01T00:00:00+00:00"}]},
+        "scratchpad": {},
+        "_runtime": {"memory_spans": []},
+        "_temp": {},
+        "_limits": {},
+    }
+
+    def note_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="note",
+            effect=Effect(
+                type=EffectType.MEMORY_NOTE,
+                payload={"note": "i am laurent-philippe", "tags": {"who": "user"}, "keep_in_context": True},
+                result_key="_temp.note",
+            ),
+            next_node="done",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        return StepPlan(node_id="done", complete_output={"note": run.vars.get("_temp", {}).get("note"), "messages": run.vars.get("context", {}).get("messages")})
+
+    wf = WorkflowSpec(workflow_id="wf_keep_in_context", entry_node="note", nodes={"note": note_node, "done": done_node})
+    run_id = runtime.start(workflow=wf, vars=vars)
+    state = runtime.tick(workflow=wf, run_id=run_id)
+    assert state.status == RunStatus.COMPLETED
+
+    messages = (state.output or {}).get("messages")
+    assert isinstance(messages, list)
+    assert any(isinstance(m, dict) and str(m.get("content") or "").startswith("[MEMORY NOTE]") for m in messages)
+    assert any(isinstance(m, dict) and "laurent-philippe" in str(m.get("content") or "") for m in messages)
+
+    note_result = (state.output or {}).get("note")
+    assert isinstance(note_result, dict)
+    results = note_result.get("results")
+    assert isinstance(results, list) and results
+    meta = results[0].get("meta")
+    assert isinstance(meta, dict)
+    kept = meta.get("kept_in_context")
+    assert isinstance(kept, dict)
+    assert kept.get("inserted") == 1
+
+
 def test_memory_rehydrate_inserts_conversation_span_and_includes_memory_note() -> None:
     run_store = InMemoryRunStore()
     ledger_store = InMemoryLedgerStore()

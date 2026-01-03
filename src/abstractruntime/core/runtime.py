@@ -2939,12 +2939,62 @@ class Runtime:
 
         spans.append(span_record)
 
+        def _coerce_bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return bool(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    return float(value) != 0.0
+                except Exception:
+                    return False
+            if isinstance(value, str):
+                s = value.strip().lower()
+                if not s:
+                    return False
+                if s in {"false", "0", "no", "off"}:
+                    return False
+                if s in {"true", "1", "yes", "on"}:
+                    return True
+            return False
+
+        # Optional UX convenience: keep the stored note immediately visible to downstream LLM calls by
+        # rehydrating it into `base_run.context.messages` as a synthetic system message.
+        keep_raw = payload.get("keep_in_context")
+        if keep_raw is None:
+            keep_raw = payload.get("keepInContext")
+        keep_in_context = _coerce_bool(keep_raw)
+        kept: Optional[Dict[str, Any]] = None
+        if keep_in_context:
+            try:
+                from ..memory.active_context import ActiveContextPolicy
+
+                policy = ActiveContextPolicy(run_store=self._run_store, artifact_store=artifact_store)
+                out = policy.rehydrate_into_context_from_run(
+                    base_run,
+                    span_ids=[artifact_id],
+                    placement="end",
+                    dedup_by="message_id",
+                    max_messages=1,
+                )
+                kept = {"inserted": out.get("inserted", 0), "skipped": out.get("skipped", 0)}
+
+                # Persist when mutating a different run than the currently executing one.
+                if base_run is not run:
+                    base_run.updated_at = utc_now_iso()
+                    self._run_store.save(base_run)
+            except Exception as e:
+                kept = {"inserted": 0, "skipped": 0, "error": str(e)}
+
         if target_run is not run:
             target_run.updated_at = utc_now_iso()
             self._run_store.save(target_run)
 
         rendered_tags = json.dumps(clean_tags, ensure_ascii=False, sort_keys=True) if clean_tags else "{}"
         text = f"Stored memory_note span_id={artifact_id} tags={rendered_tags}"
+        meta_out: Dict[str, Any] = {"span_id": artifact_id, "created_at": created_at, "note_preview": preview}
+        if isinstance(kept, dict):
+            meta_out["kept_in_context"] = kept
+
         result = {
             "mode": "executed",
             "results": [
@@ -2954,7 +3004,7 @@ class Runtime:
                     "success": True,
                     "output": text,
                     "error": None,
-                    "meta": {"span_id": artifact_id, "created_at": created_at, "note_preview": preview},
+                    "meta": meta_out,
                 }
             ],
         }

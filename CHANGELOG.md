@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added metadata filters for **authors** (`created_by`) and **locations** (`location` / `tags.location`).
   - Span records now capture `created_by` for `conversation_span` / `active_memory_span` / `memory_note` when `actor_id` is available.
   - `MEMORY_NOTE` now accepts an optional `location` field.
+  - `MEMORY_NOTE` now supports an optional `keep_in_context=true` flag to immediately rehydrate the stored note into `context.messages` (synthetic system message) for downstream LLM visibility.
 
 ### Fixed
 - **Cancellation is terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as a terminal state and will not progress cancelled runs.

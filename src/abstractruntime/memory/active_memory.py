@@ -770,6 +770,14 @@ def render_active_memory_blocks_for_prompt(
     specs: List[Dict[str, Any]] = []
     for spec in _ACTIVE_MEMORY_COMPONENT_SPECS:
         cid = spec["id"]
+        # When tools are supplied natively by the provider/server (or the caller explicitly
+        # disables the tools summary), emitting a visible tools catalog in the prompt can
+        # conflict with provider-enforced tool grammars and cause "text leaked" tool calls.
+        #
+        # In that mode, omit the entire Tools (session) block rather than showing an empty
+        # placeholder (which would misleadingly suggest no tools are available).
+        if cid == "tools" and not include_tools_summary:
+            continue
         content = str(raw_by_id.get(cid, "") or "").strip()
         if not content:
             # List renderers already produce `<name>: []` when empty; markdown uses a placeholder.

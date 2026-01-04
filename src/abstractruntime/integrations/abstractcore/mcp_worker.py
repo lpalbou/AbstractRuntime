@@ -4,12 +4,158 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from importlib import metadata
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .default_tools import get_default_toolsets
 from .tool_executor import MappingToolExecutor
+
+
+def _ansi(enabled: bool, code: str) -> str:
+    if not enabled:
+        return ""
+    return f"\033[{code}m"
+
+
+def _truncate(text: str, *, limit: int) -> str:
+    s = "" if text is None else str(text)
+    if limit <= 0 or len(s) <= limit:
+        return s
+    return s[:limit] + "…"
+
+
+def _log_worker_event(tag: str, message: str) -> None:
+    """Write a human-friendly worker log line to stderr (never stdout)."""
+    enabled = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+    ts = time.strftime("%H:%M:%S")
+    tag_norm = str(tag or "").strip() or "WORKER"
+
+    if tag_norm == "RECEIVING_COMMANDS":
+        color = _ansi(enabled, "38;5;39")  # blue
+    elif tag_norm == "RETURNING_RESULTS":
+        color = _ansi(enabled, "38;5;208")  # orange
+    else:
+        color = _ansi(enabled, "2")  # dim
+    reset = _ansi(enabled, "0")
+
+    try:
+        sys.stderr.write(f"{color}[{tag_norm}]{reset} {ts} {message}\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _preview_json(value: Any, *, limit: int) -> str:
+    try:
+        return _truncate(json.dumps(value, ensure_ascii=False, sort_keys=True), limit=limit)
+    except Exception:
+        return _truncate(str(value), limit=limit)
+
+
+def _summarize_jsonrpc_request(req: Any, *, limit: int) -> str:
+    if not isinstance(req, dict):
+        return f"rpc invalid type={type(req).__name__} preview={_preview_json(req, limit=limit)}"
+
+    req_id = req.get("id")
+    method = str(req.get("method") or "").strip() or "<missing>"
+
+    summary = f"rpc method={method} id={_truncate(str(req_id), limit=64)}"
+    params = req.get("params")
+    params_obj = params if isinstance(params, dict) else {}
+    if method == "tools/call":
+        name = str(params_obj.get("name") or "").strip() or "<missing>"
+        arguments = params_obj.get("arguments")
+        args = dict(arguments) if isinstance(arguments, dict) else {}
+        summary += f" name={name} args={_preview_json(args, limit=limit)}"
+        return summary
+
+    if method == "tools/list":
+        return summary
+
+    if method == "initialize":
+        proto = str(params_obj.get("protocolVersion") or "").strip()
+        if proto:
+            summary += f" protocolVersion={_truncate(proto, limit=64)}"
+        return summary
+
+    return summary
+
+
+def _summarize_jsonrpc_response(resp: Any, *, limit: int) -> str:
+    if resp is None:
+        return "rpc notification(no response)"
+    if not isinstance(resp, dict):
+        return f"rpc invalid_response type={type(resp).__name__} preview={_preview_json(resp, limit=limit)}"
+
+    if isinstance(resp.get("error"), dict):
+        err = resp["error"]
+        code = err.get("code")
+        msg = str(err.get("message") or "").strip()
+        return f"rpc_error code={code} message={_truncate(msg, limit=limit)}"
+
+    result = resp.get("result")
+    if isinstance(result, dict) and isinstance(result.get("tools"), list):
+        tools = result.get("tools") or []
+        names = [
+            str(t.get("name") or "").strip()
+            for t in tools
+            if isinstance(t, dict) and isinstance(t.get("name"), str) and str(t.get("name") or "").strip()
+        ]
+        preview = ", ".join(names[:10])
+        suffix = f" names={_truncate(preview, limit=limit)}" if preview else ""
+        return f"rpc_result tools_count={len(tools)}{suffix}"
+
+    if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
+        proto = str(result.get("protocolVersion") or "").strip()
+        if proto:
+            return f"rpc_result protocolVersion={_truncate(proto, limit=limit)}"
+
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        is_error = result.get("isError")
+        content = result.get("content") or []
+        first = content[0] if isinstance(content, list) and content else None
+        if isinstance(first, dict) and first.get("type") == "text":
+            text = str(first.get("text") or "")
+            return f"rpc_result isError={bool(is_error)} preview={_truncate(text, limit=limit)}"
+        return f"rpc_result isError={bool(is_error)}"
+
+    return f"rpc_result preview={_preview_json(result, limit=limit)}"
+
+
+def _summarize_http_request(environ: Dict[str, Any], *, limit: int) -> str:
+    method = str(environ.get("REQUEST_METHOD") or "").strip() or "?"
+    path = str(environ.get("PATH_INFO") or "/") or "/"
+    query = str(environ.get("QUERY_STRING") or "").strip()
+    if query:
+        path = f"{path}?{query}"
+
+    remote = str(environ.get("REMOTE_ADDR") or "").strip()
+    port = str(environ.get("REMOTE_PORT") or "").strip()
+    if remote and port:
+        remote = f"{remote}:{port}"
+
+    origin = str(environ.get("HTTP_ORIGIN") or "").strip()
+    user_agent = str(environ.get("HTTP_USER_AGENT") or "").strip()
+    content_length = str(environ.get("CONTENT_LENGTH") or "").strip()
+
+    auth_present = bool(
+        str(environ.get("HTTP_AUTHORIZATION") or "").strip() or str(environ.get("HTTP_X_ABSTRACT_WORKER_TOKEN") or "").strip()
+    )
+
+    parts = [f"http {method} {path}"]
+    if remote:
+        parts.append(f"from={_truncate(remote, limit=128)}")
+    if origin:
+        parts.append(f"origin={_truncate(origin, limit=128)}")
+    parts.append(f"auth={'present' if auth_present else 'missing'}")
+    if content_length:
+        parts.append(f"content_length={_truncate(content_length, limit=32)}")
+    if user_agent:
+        parts.append(f"ua={_truncate(user_agent, limit=128)}")
+
+    return _truncate(" ".join(parts), limit=limit)
 
 
 def _runtime_version() -> Optional[str]:
@@ -184,7 +330,6 @@ def handle_mcp_request(*, req: Dict[str, Any], state: McpWorkerState) -> Optiona
             return _jsonrpc_error(req_id, code=-32602, message="Invalid params: missing tool name")
         arguments = params_obj.get("arguments")
         args = dict(arguments) if isinstance(arguments, dict) else {}
-
         executed = state.executor.execute(tool_calls=[{"name": name, "arguments": args, "call_id": "mcp"}])
         results = executed.get("results") if isinstance(executed, dict) else None
         first = results[0] if isinstance(results, list) and results else None
@@ -212,13 +357,24 @@ def serve_stdio(*, state: McpWorkerState) -> None:
         text = (line or "").strip()
         if not text:
             continue
+        started = time.perf_counter()
         try:
             req = json.loads(text)
         except Exception:
+            _log_worker_event("RECEIVING_COMMANDS", f"stdio parse_error body={_truncate(text, limit=500)}")
+            _log_worker_event("RETURNING_RESULTS", "stdio ok=false error=parse_error")
             continue
+        _log_worker_event("RECEIVING_COMMANDS", f"stdio {_summarize_jsonrpc_request(req, limit=500)}")
         if not isinstance(req, dict):
+            _log_worker_event("RETURNING_RESULTS", "stdio ok=false error=invalid_request_type")
             continue
         resp = handle_mcp_request(req=req, state=state)
+        elapsed_s = time.perf_counter() - started
+        ok = not (isinstance(resp, dict) and isinstance(resp.get("error"), dict))
+        _log_worker_event(
+            "RETURNING_RESULTS",
+            f"stdio ok={str(ok).lower()} elapsed_s={elapsed_s:.2f} {_summarize_jsonrpc_response(resp, limit=500)}",
+        )
         if resp is None:
             continue
         sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
@@ -262,14 +418,27 @@ def build_wsgi_app(*, state: McpWorkerState):
         return None
 
     def _app(environ: Dict[str, Any], start_response):
+        started = time.perf_counter()
         sec = _check_security(environ)
         if sec is not None:
             status, headers, payload = sec
+            status_code = int(str(status).split(" ", 1)[0]) if status else 500
+            base = _summarize_http_request(environ, limit=500)
+            _log_worker_event("RECEIVING_COMMANDS", base)
+            elapsed_s = time.perf_counter() - started
+            _log_worker_event(
+                "RETURNING_RESULTS",
+                f"http status={status_code} elapsed_s={elapsed_s:.2f} {_summarize_jsonrpc_response(payload, limit=500)}",
+            )
             start_response(status, headers)
             return [json.dumps(payload).encode("utf-8")]
 
         method = environ.get("REQUEST_METHOD")
         if method != "POST":
+            base = _summarize_http_request(environ, limit=500)
+            _log_worker_event("RECEIVING_COMMANDS", base)
+            elapsed_s = time.perf_counter() - started
+            _log_worker_event("RETURNING_RESULTS", f"http status=405 elapsed_s={elapsed_s:.2f} body=method not allowed")
             start_response("405 Method Not Allowed", [("Content-Type", "text/plain")])
             return [b"method not allowed"]
 
@@ -281,13 +450,26 @@ def build_wsgi_app(*, state: McpWorkerState):
         try:
             req = json.loads(body.decode("utf-8"))
         except Exception:
+            base = _summarize_http_request(environ, limit=500)
+            _log_worker_event("RECEIVING_COMMANDS", f"{base} body={_truncate(body.decode('utf-8', errors='replace'), limit=500)}")
+            elapsed_s = time.perf_counter() - started
+            _log_worker_event("RETURNING_RESULTS", f"http status=400 elapsed_s={elapsed_s:.2f} rpc_error parse_error")
             start_response("400 Bad Request", [("Content-Type", "application/json")])
             return [json.dumps(_jsonrpc_error(None, code=-32700, message="Parse error")).encode("utf-8")]
+
+        base = _summarize_http_request(environ, limit=500)
+        summary = _summarize_jsonrpc_request(req, limit=500)
+        _log_worker_event("RECEIVING_COMMANDS", f"{base} {summary}")
 
         resp = handle_mcp_request(req=req if isinstance(req, dict) else {}, state=state)
         if resp is None:
             resp = _jsonrpc_error(None, code=-32600, message="Notification not supported over HTTP")
 
+        elapsed_s = time.perf_counter() - started
+        _log_worker_event(
+            "RETURNING_RESULTS",
+            f"http status=200 elapsed_s={elapsed_s:.2f} {_summarize_jsonrpc_response(resp, limit=500)}",
+        )
         start_response("200 OK", [("Content-Type", "application/json")])
         return [json.dumps(resp).encode("utf-8")]
 
@@ -384,10 +566,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     if args.transport == "http":
-        from wsgiref.simple_server import make_server
+        from socketserver import ThreadingMixIn
+        from wsgiref.simple_server import WSGIServer, make_server
 
         app = build_wsgi_app(state=state)
-        with make_server(str(args.host), int(args.port), app) as httpd:
+
+        class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+            daemon_threads = True
+
+        with make_server(str(args.host), int(args.port), app, server_class=_ThreadingWSGIServer) as httpd:
             httpd.serve_forever()
         return 0
 

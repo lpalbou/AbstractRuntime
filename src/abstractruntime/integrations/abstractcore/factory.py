@@ -99,7 +99,11 @@ def create_local_runtime(
     # Query model capabilities and merge into config
     capabilities = llm_client.get_model_capabilities()
     if config is None:
-        config = RuntimeConfig(model_capabilities=capabilities)
+        config = RuntimeConfig(
+            provider=str(provider).strip() if isinstance(provider, str) and str(provider).strip() else None,
+            model=str(model).strip() if isinstance(model, str) and str(model).strip() else None,
+            model_capabilities=capabilities,
+        )
     else:
         # Merge capabilities into provided config
         config = config.with_capabilities(capabilities)

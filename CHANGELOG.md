@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **START_SUBWORKFLOW async+wait**: added support for `async=true` + `wait=true` to start a child run without blocking the parent tick, while still keeping the parent in a durable SUBWORKFLOW wait until the host resumes it.
 - **ArtifactStore run-scoped addressing**: when `run_id` is provided, artifact ids are now namespaced to the run to prevent cross-run metadata collisions in `FileArtifactStore` and preserve purge-by-run semantics.
 - **AbstractCore integration imports**: `LocalAbstractCoreLLMClient` now imports `create_llm` robustly in monorepo namespace-package layouts (fallback to `abstractcore.core.factory` when `from abstractcore import create_llm` is unavailable).
+- **Token-limit metadata**: `_limits.max_output_tokens` now falls back to model capabilities when not explicitly configured, so the runtime can surface an explicit per-step output budget to agent workflows.
+- **Token-cap normalization boundary**: removed local `max_tokens → max_output_tokens` aliasing from AbstractRuntime’s AbstractCore client. AbstractCore providers now own this compatibility mapping, keeping runtime integration thin and provider-agnostic.
+- **Active Memory (Key History)**: Key History is now rendered as **natural-language markdown bullets** (not YAML) to reduce syntax contamination in prompts while keeping durable storage JSON-safe.
 
 ## [0.2.0] - 2025-12-17
 

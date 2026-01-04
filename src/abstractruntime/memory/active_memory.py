@@ -620,7 +620,7 @@ _ACTIVE_MEMORY_COMPONENT_SPECS: List[Dict[str, str]] = [
         "budget_key": "critical_insights_pct",
         "kind": "yaml_list",
     },
-    {"id": "key_history", "title": "Key History (append-only)", "budget_key": "key_history_pct", "kind": "yaml_list"},
+    {"id": "key_history", "title": "Key History (append-only)", "budget_key": "key_history_pct", "kind": "markdown"},
 ]
 
 
@@ -756,7 +756,7 @@ def render_active_memory_blocks_for_prompt(
         "current_tasks": _render_tasks_yaml(mem.get("tasks")).strip(),
         "current_context": _render_current_context_yaml(mem.get("current_context")).strip(),
         "critical_insights": _render_insights_yaml(mem.get("critical_insights")).strip(),
-        "key_history": _render_history_yaml(mem.get("key_history")).strip(),
+        "key_history": _render_history_markdown(mem.get("key_history")).strip(),
     }
 
     # Ensure blocks remain discoverable to the model even when empty.
@@ -1597,6 +1597,48 @@ def _render_history_yaml(history: Any) -> str:
                     continue
                 _append_yaml_dict_list_item(out, r, base_indent="      ")
     return "\n".join(out).strip()
+
+
+def _render_history_markdown(history: Any) -> str:
+    """Render Key History as natural-language bullets (token-efficient, model-friendly)."""
+    if not isinstance(history, list) or not history:
+        return ""
+    items = [h for h in history if isinstance(h, dict)]
+    items.sort(key=lambda d: str(d.get("ts") or ""), reverse=True)
+    lines: List[str] = []
+    for e in items:
+        summary = str(e.get("summary") or "").strip()
+        if not summary:
+            continue
+        kind = str(e.get("kind") or "").strip()
+        ts = str(e.get("ts") or "").strip()
+        prefix_parts: List[str] = []
+        if ts:
+            prefix_parts.append(ts)
+        if kind:
+            prefix_parts.append(kind)
+        prefix = f"[{' | '.join(prefix_parts)}] " if prefix_parts else ""
+
+        refs = e.get("refs")
+        ref_text = ""
+        if isinstance(refs, list) and refs:
+            # Keep refs compact: include only small key/value tags (no large payloads).
+            pairs: List[str] = []
+            for r in refs:
+                if not isinstance(r, dict) or not r:
+                    continue
+                for k, v in r.items():
+                    if not isinstance(k, str) or not k.strip():
+                        continue
+                    s = str(v or "").strip()
+                    if s and len(s) <= 120:
+                        pairs.append(f"{k}={s}")
+            if pairs:
+                pairs = pairs[:6]
+                ref_text = " (" + ", ".join(pairs) + ")"
+
+        lines.append(f"- {prefix}{summary}{ref_text}".strip())
+    return "\n".join(lines).strip()
 
 
 def _append_yaml_dict_list_item(lines: List[str], item: Dict[str, Any], *, base_indent: str) -> None:

@@ -326,6 +326,43 @@ class Runtime:
         if "_limits" not in vars:
             vars["_limits"] = self._config.to_limits_dict()
 
+        # Ensure a durable `_runtime` namespace exists and seed default provider/model metadata
+        # from the Runtime config (best-effort).
+        #
+        # Rationale:
+        # - The Runtime is the orchestration authority (ADR-0001/0014), and `start()` is the
+        #   choke point where durable run state is initialized.
+        # - Agents/workflows should not have to guess/duplicate routing metadata to make prompt
+        #   composition decisions (e.g. native-tools => omit Tools(session) prompt catalogs).
+        runtime_ns = vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            vars["_runtime"] = runtime_ns
+        try:
+            provider_id = getattr(self._config, "provider", None)
+            model_id = getattr(self._config, "model", None)
+            if isinstance(provider_id, str) and provider_id.strip():
+                runtime_ns.setdefault("provider", provider_id.strip())
+            if isinstance(model_id, str) and model_id.strip():
+                runtime_ns.setdefault("model", model_id.strip())
+        except Exception:
+            pass
+
+        # Seed tool-support metadata from model capabilities (best-effort).
+        #
+        # This makes the native-vs-prompted tools decision explicit and durable in run state,
+        # so adapters/UI helpers don't have to guess or re-run AbstractCore detection logic.
+        try:
+            caps = getattr(self._config, "model_capabilities", None)
+            if isinstance(caps, dict):
+                tool_support = caps.get("tool_support")
+                if isinstance(tool_support, str) and tool_support.strip():
+                    ts = tool_support.strip()
+                    runtime_ns.setdefault("tool_support", ts)
+                    runtime_ns.setdefault("supports_native_tools", ts == "native")
+        except Exception:
+            pass
+
         run = RunState.new(
             workflow_id=workflow.workflow_id,
             entry_node=workflow.entry_node,

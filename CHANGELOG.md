@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Atomic run checkpoints**: `JsonFileRunStore.save()` now writes via a temp file + atomic rename to prevent partial/corrupt JSON under concurrent writes.
 - **START_SUBWORKFLOW async+wait**: added support for `async=true` + `wait=true` to start a child run without blocking the parent tick, while still keeping the parent in a durable SUBWORKFLOW wait until the host resumes it.
 - **ArtifactStore run-scoped addressing**: when `run_id` is provided, artifact ids are now namespaced to the run to prevent cross-run metadata collisions in `FileArtifactStore` and preserve purge-by-run semantics.
+- **AbstractCore integration imports**: `LocalAbstractCoreLLMClient` now imports `create_llm` robustly in monorepo namespace-package layouts (fallback to `abstractcore.core.factory` when `from abstractcore import create_llm` is unavailable).
 
 ## [0.2.0] - 2025-12-17
 

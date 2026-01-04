@@ -424,7 +424,17 @@ class LocalAbstractCoreLLMClient:
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from abstractcore import create_llm
+        # In this monorepo layout, `import abstractcore` can resolve to a namespace package
+        # (the outer project directory) when running from the repo root. In that case, the
+        # top-level re-export `from abstractcore import create_llm` is unavailable even though
+        # the actual module tree (e.g. `abstractcore.core.factory`) is importable.
+        #
+        # Prefer the canonical public import, but fall back to the concrete module path so
+        # in-repo tooling/tests don't depend on editable-install import ordering.
+        try:
+            from abstractcore import create_llm  # type: ignore
+        except Exception:  # pragma: no cover
+            from abstractcore.core.factory import create_llm  # type: ignore
         from abstractcore.tools.handler import UniversalToolHandler
 
         self._provider = provider

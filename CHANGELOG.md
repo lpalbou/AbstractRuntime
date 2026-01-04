@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Token-limit metadata**: `_limits.max_output_tokens` now falls back to model capabilities when not explicitly configured, so the runtime can surface an explicit per-step output budget to agent workflows.
 - **Token-cap normalization boundary**: removed local `max_tokens → max_output_tokens` aliasing from AbstractRuntime’s AbstractCore client. AbstractCore providers now own this compatibility mapping, keeping runtime integration thin and provider-agnostic.
 - **Active Memory (Key History)**: Key History is now rendered as **natural-language markdown bullets** (not YAML) to reduce syntax contamination in prompts while keeping durable storage JSON-safe.
+- **LLM call observability (durable)**: runtime-integrated AbstractCore clients now always attach the exact **provider request payload** under `result.metadata._provider_request` for every `LLM_CALL` step (remote `/v1/chat/completions` and local fallback). Normalized LLM results now also preserve a JSON-safe `raw_response` when available for debugging OpenAI-compatible envelopes.
 
 ## [0.2.0] - 2025-12-17
 

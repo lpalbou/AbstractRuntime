@@ -257,6 +257,7 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
 
     # AbstractCore GenerateResponse
     content = getattr(resp, "content", None)
+    raw_response = getattr(resp, "raw_response", None)
     tool_calls = getattr(resp, "tool_calls", None)
     usage = getattr(resp, "usage", None)
     model = getattr(resp, "model", None)
@@ -277,6 +278,7 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
         "content": content,
         "reasoning": reasoning,
         "data": None,
+        "raw_response": _jsonable(raw_response) if raw_response is not None else None,
         "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
         "usage": _jsonable(usage) if usage is not None else None,
         "model": model,
@@ -487,6 +489,53 @@ class LocalAbstractCoreLLMClient:
         else:
             result = _normalize_local_response(resp)
         result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+
+        # Durable observability: ensure a provider request payload exists even when the
+        # underlying provider does not attach `_provider_request` metadata.
+        #
+        # AbstractCode's `/llm --verbatim` expects `metadata._provider_request.payload.messages`
+        # to be present to display the exact system/user content that was sent.
+        try:
+            meta = result.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+                result["metadata"] = meta
+
+            if "_provider_request" not in meta:
+                out_messages: List[Dict[str, str]] = []
+                if isinstance(system_prompt, str) and system_prompt:
+                    out_messages.append({"role": "system", "content": system_prompt})
+                if isinstance(messages, list) and messages:
+                    # Copy dict entries defensively (caller-owned objects).
+                    out_messages.extend([dict(m) for m in messages if isinstance(m, dict)])
+
+                # Append the current prompt as the final user message unless it's already present.
+                prompt_str = str(prompt or "")
+                if prompt_str:
+                    last = out_messages[-1] if out_messages else None
+                    if not (isinstance(last, dict) and last.get("role") == "user" and last.get("content") == prompt_str):
+                        out_messages.append({"role": "user", "content": prompt_str})
+
+                payload: Dict[str, Any] = {
+                    "model": str(self._model),
+                    "messages": out_messages,
+                    "stream": bool(stream),
+                }
+                if tools is not None:
+                    payload["tools"] = tools
+
+                # Include generation params for debugging; keep JSON-safe (e.g. response_model).
+                payload["params"] = _jsonable(params) if params else {}
+
+                meta["_provider_request"] = {
+                    "transport": "local",
+                    "provider": str(self._provider),
+                    "model": str(self._model),
+                    "payload": payload,
+                }
+        except Exception:
+            # Never fail an LLM call due to observability.
+            pass
 
         return result
 
@@ -711,15 +760,21 @@ class RemoteAbstractCoreLLMClient:
         try:
             choice0 = (resp.get("choices") or [])[0]
             msg = choice0.get("message") or {}
+            meta: Dict[str, Any] = {
+                "_provider_request": {"url": url, "payload": body}
+            }
+            if trace_id:
+                meta["trace_id"] = trace_id
             result = {
                 "content": msg.get("content"),
                 "reasoning": msg.get("reasoning"),
                 "data": None,
+                "raw_response": _jsonable(resp) if resp is not None else None,
                 "tool_calls": _jsonable(msg.get("tool_calls")) if msg.get("tool_calls") is not None else None,
                 "usage": _jsonable(resp.get("usage")) if resp.get("usage") is not None else None,
                 "model": resp.get("model"),
                 "finish_reason": choice0.get("finish_reason"),
-                "metadata": {"trace_id": trace_id} if trace_id else None,
+                "metadata": meta,
                 "trace_id": trace_id,
             }
             result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
@@ -735,6 +790,12 @@ class RemoteAbstractCoreLLMClient:
                 "usage": None,
                 "model": resp.get("model") if isinstance(resp, dict) else None,
                 "finish_reason": None,
-                "metadata": {"trace_id": trace_id} if trace_id else None,
+                "metadata": {
+                    "_provider_request": {"url": url, "payload": body},
+                    "trace_id": trace_id,
+                }
+                if trace_id
+                else {"_provider_request": {"url": url, "payload": body}},
                 "trace_id": trace_id,
+                "raw_response": _jsonable(resp) if resp is not None else None,
             }

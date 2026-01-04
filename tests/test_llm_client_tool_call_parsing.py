@@ -26,6 +26,9 @@ def test_local_llm_client_surfaces_reasoning_from_provider_metadata() -> None:
     result = client.generate(prompt="do something")
     assert result.get("reasoning") == "I will do X."
     assert result.get("gen_time") == 123.4
+    # Observability: local client should always attach a provider request payload.
+    assert isinstance(result.get("metadata"), dict)
+    assert isinstance(result["metadata"].get("_provider_request"), dict)
 
 
 def test_local_llm_client_streaming_aggregates_and_surfaces_ttft() -> None:
@@ -63,6 +66,7 @@ def test_local_llm_client_streaming_aggregates_and_surfaces_ttft() -> None:
     assert isinstance(result.get("gen_time"), (int, float))
     assert isinstance(result.get("metadata"), dict)
     assert result["metadata"].get("_timing", {}).get("ttft_ms") == 12.3
+    assert isinstance(result["metadata"].get("_provider_request"), dict)
     assert client._llm.calls and client._llm.calls[0].get("stream") is True
 
 

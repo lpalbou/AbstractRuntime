@@ -39,6 +39,10 @@ def test_remote_llm_client_builds_chat_completions_request_and_forwards_base_url
     )
 
     assert result["content"] == "ok"
+    assert isinstance(result.get("metadata"), dict)
+    assert isinstance(result["metadata"].get("_provider_request"), dict)
+    assert result["metadata"]["_provider_request"]["url"] == "http://localhost:8080/v1/chat/completions"
+    assert result["metadata"]["_provider_request"]["payload"]["model"] == "openai-compatible/default"
 
     call = sender.calls[0]
     assert call["url"] == "http://localhost:8080/v1/chat/completions"

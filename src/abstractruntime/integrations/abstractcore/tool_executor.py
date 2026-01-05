@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 import inspect
 import json
+import re
 import threading
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
@@ -171,39 +172,78 @@ class MappingToolExecutor:
             }
             return {k: v for k, v in kwargs.items() if k in allowed}
 
-        def _apply_arg_aliases(tool_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-            """Map common alias kwargs to canonical parameter names.
+        def _normalize_key(key: str) -> str:
+            # Lowercase and remove common separators so `file_path`, `filePath`,
+            # `file-path`, `file path` all normalize to the same token.
+            return re.sub(r"[\s_\-]+", "", str(key or "").strip().lower())
 
-            This improves robustness for LLM-generated calls where parameter naming
-            can drift across tools (e.g., legacy `read_file` calls may use
-            `start_line_one_indexed/end_line_one_indexed_inclusive`).
+        _SYNONYM_ALIASES: Dict[str, List[str]] = {
+            # Common semantic drift across many tools
+            "path": ["file_path", "directory_path", "path"],
+            "dir": ["directory_path", "path"],
+            "directory": ["directory_path", "path"],
+            "folder": ["directory_path", "path"],
+            "query": ["pattern", "query"],
+            "regex": ["pattern", "regex"],
+            # Range drift (used by multiple tools)
+            "start": ["start_line", "start"],
+            "end": ["end_line", "end"],
+            "startlineoneindexed": ["start_line"],
+            "endlineoneindexedinclusive": ["end_line"],
+        }
+
+        def _canonicalize_kwargs(func: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+            """Best-effort canonicalization of kwarg names.
+
+            Strategy:
+            - Unwrap common wrapper shapes (nested `arguments`)
+            - Map keys by normalized form (case + separators)
+            - Apply a small, tool-agnostic synonym table (path/query/start/end)
+            - Finally, filter unexpected kwargs for callables without **kwargs
             """
             if not isinstance(kwargs, dict) or not kwargs:
-                return dict(kwargs or {})
-            out = dict(kwargs)
+                return {}
 
-            if tool_name == "read_file":
-                # Map range aliases -> canonical read_file args (start_line/end_line, inclusive, 1-indexed).
-                # Do not inject/force legacy flags (e.g. should_read_entire_file). AbstractCore
-                # owns tool-call normalization; runtime keeps only a minimal alias mapper.
+            # 1) Unwrap wrapper shapes early.
+            current = _unwrap_wrapper_args(kwargs)
 
-                if "start_line" not in out:
-                    if "start_line_one_indexed" in out:
-                        out["start_line"] = out.get("start_line_one_indexed")
-                    elif "start" in out:
-                        out["start_line"] = out.get("start")
+            try:
+                sig = inspect.signature(func)
+            except Exception:
+                return current
 
-                if "end_line" not in out:
-                    if "end_line_one_indexed_inclusive" in out:
-                        out["end_line"] = out.get("end_line_one_indexed_inclusive")
-                    elif "end" in out:
-                        out["end_line"] = out.get("end")
+            params = list(sig.parameters.values())
+            allowed_names = {
+                p.name
+                for p in params
+                if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            }
+            norm_to_param = { _normalize_key(n): n for n in allowed_names }
 
-                # Drop alias keys to avoid TypeError for callables without **kwargs.
-                for k in ("start_line_one_indexed", "end_line_one_indexed_inclusive", "start", "end"):
-                    out.pop(k, None)
+            out: Dict[str, Any] = dict(current)
 
-            return out
+            # 2) Normalized (morphological) key mapping.
+            for k in list(out.keys()):
+                if k in allowed_names:
+                    continue
+                nk = _normalize_key(k)
+                target = norm_to_param.get(nk)
+                if target and target not in out:
+                    out[target] = out.pop(k)
+
+            # 3) Synonym mapping (semantic).
+            for k in list(out.keys()):
+                if k in allowed_names:
+                    continue
+                nk = _normalize_key(k)
+                candidates = _SYNONYM_ALIASES.get(nk, [])
+                for cand in candidates:
+                    if cand in allowed_names and cand not in out:
+                        out[cand] = out.pop(k)
+                        break
+
+            # 4) Filter unexpected kwargs when callable doesn't accept **kwargs.
+            return _filter_kwargs(func, out)
 
         def _error_from_output(value: Any) -> Optional[str]:
             """Detect tool failures reported as string outputs (instead of exceptions)."""
@@ -262,8 +302,7 @@ class MappingToolExecutor:
         for tc in tool_calls:
             name = str(tc.get("name", "") or "")
             raw_arguments = tc.get("arguments") or {}
-            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
-            arguments = _apply_arg_aliases(name, arguments)
+            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
             call_id = str(tc.get("call_id") or "")
 
             func = self._tool_map.get(name)
@@ -279,14 +318,14 @@ class MappingToolExecutor:
                 )
                 continue
 
+            arguments = _canonicalize_kwargs(func, arguments)
+
             def _invoke() -> Any:
                 try:
                     return func(**arguments)
                 except TypeError:
                     # Retry once with sanitized kwargs for common wrapper/extra-arg failures.
-                    unwrapped = _unwrap_wrapper_args(arguments)
-                    unwrapped = _apply_arg_aliases(name, unwrapped)
-                    filtered = _filter_kwargs(func, unwrapped)
+                    filtered = _canonicalize_kwargs(func, arguments)
                     if filtered != arguments:
                         return func(**filtered)
                     raise

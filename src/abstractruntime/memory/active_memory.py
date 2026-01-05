@@ -191,7 +191,45 @@ def ensure_active_memory(
         mem["memory_organization_md"] = org
         version = 8
 
-    mem["version"] = 8
+    # v9 migration: Active Memory is internal; render all components into the system prompt by default.
+    if version < 9:
+        # Upgrade the default system-component split unless the user explicitly customized it.
+        raw_ids = mem.get("system_component_ids")
+        ids_list = (
+            [str(x).strip() for x in raw_ids if isinstance(x, str) and str(x).strip()] if isinstance(raw_ids, list) else []
+        )
+        old_default = ["persona", "memory_organization", "tools"]
+        if not ids_list or ids_list == old_default:
+            mem["system_component_ids"] = [
+                "persona",
+                "memory_organization",
+                "tools",
+                "current_tasks",
+                "current_context",
+                "critical_insights",
+                "key_history",
+            ]
+
+        # Remove legacy "System/user alias" text, which is now misleading.
+        org = str(mem.get("memory_organization_md") or "").strip()
+        legacy_anchor = "System/user alias (backward compatibility):"
+        next_anchor = "Active Memory maintenance (IMPORTANT):"
+        if legacy_anchor in org and next_anchor in org:
+            start = org.find(legacy_anchor)
+            end = org.find(next_anchor, start)
+            if start != -1 and end != -1 and end > start:
+                replacement = (
+                    "IMPORTANT (prompt placement):\n"
+                    "- All Active Memory sections below are your INTERNAL memory/state.\n"
+                    "- They are NOT messages from the user.\n"
+                    "- The user-role message contains ONLY the user's request.\n\n"
+                )
+                org = (org[:start].rstrip() + "\n\n" + replacement + org[end:].lstrip()).strip()
+                mem["memory_organization_md"] = org
+
+        version = 9
+
+    mem["version"] = 9
     # Defaults are chosen to:
     # - preserve stable identity (persona/org/tools),
     # - prioritize current work (tasks/context/insights),
@@ -206,15 +244,28 @@ def ensure_active_memory(
     budgets.setdefault("critical_insights_pct", 0.20)
     budgets.setdefault("key_history_pct", 0.15)
 
-    # Conventional aliasing: treat some modules as "system prompt memory" and the rest
-    # as "user prompt memory" for backward compatibility with UIs and code paths.
+    # Prompt placement policy (durable):
     #
-    # Defaults:
-    # - system: identity + coordination + tool affordances
-    # - user: current work + insights + timeline
+    # We render *all* Active Memory components into the system prompt by default.
     #
-    # If you want to move `key_history` into the system prompt, add it here.
-    mem.setdefault("system_component_ids", ["persona", "memory_organization", "tools"])
+    # Rationale:
+    # - The user message should contain only the user's request.
+    # - Active Memory is the agent's internal state (coordination + experiential history).
+    # - Mixing "memory/history" into a user-role message can cause models to treat it as a new user request.
+    #
+    # Hosts may override this list if they intentionally want a different split.
+    mem.setdefault(
+        "system_component_ids",
+        [
+            "persona",
+            "memory_organization",
+            "tools",
+            "current_tasks",
+            "current_context",
+            "critical_insights",
+            "key_history",
+        ],
+    )
 
     # Important: avoid calling `now_iso()` eagerly on every ensure.
     # `dict.setdefault("updated_at", now_iso())` would evaluate `now_iso()` even when the key exists.
@@ -1081,9 +1132,10 @@ def _default_memory_organization_md() -> str:
         "5) Current Context (task-specific working set; references over payloads)\n"
         "6) Critical Insights (pitfalls/strategies to apply before acting)\n"
         "7) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n\n"
-        "System/user alias (backward compatibility):\n"
-        "- System prompt memory ~= Persona + Memory Organization + Tools.\n"
-        "- User prompt memory ~= Current Tasks + Current Context + Critical Insights + Key History.\n\n"
+        "IMPORTANT (prompt placement):\n"
+        "- All Active Memory sections below are your INTERNAL memory/state.\n"
+        "- They are NOT messages from the user.\n"
+        "- The user-role message contains ONLY the user's request.\n\n"
         "Active Memory maintenance (IMPORTANT):\n"
         "- Keep the evolving modules up to date: Current Tasks, Current Context, Critical Insights, Key History.\n"
         "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`.\n"
@@ -1102,7 +1154,10 @@ def _default_memory_organization_md() -> str:
         "- Current Tasks: keep the top items (≤5). Update status as you make progress.\n"
         "- Current Context: a *dynamic working set* rebuilt per task. Prefer short digests + refs (file paths, span_id, artifact_id).\n"
         "- Critical Insights: check this before repeating a failed approach or changing architecture.\n"
-        "- Key History: consult only when needed (e.g., “did we already try X?”).\n\n"
+        "- Key History: consult only when needed (e.g., “did we already try X?”).\n"
+        "  - Write experiential summaries (what you did + what happened), not user instructions.\n"
+        "  - NEVER include raw command lines or tool-call syntax; describe outcomes instead.\n"
+        "  - Keep entries as standalone statements so they can be edited independently.\n\n"
         "Selective retrieval (when you are missing key info):\n"
         "1) Repo/source-of-truth → `search_files` (or analyze_code for code) then `read_file`.\n"
         "2) Durable run state → `inspect_vars` (start with keys_only=true), especially:\n"

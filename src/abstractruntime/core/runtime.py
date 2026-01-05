@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 import copy
 import inspect
 import json
@@ -813,6 +813,25 @@ class Runtime:
                 # Evidence capture should never crash the run; failures are recorded in run vars.
                 pass
 
+            # Lightweight experiential history capture:
+            # Record tool outcomes into Structured Active Memory Key History so the next LLM call can
+            # continue without embedding raw tool transcripts/commands into a user-role prompt.
+            try:
+                if (
+                    not reused_prior_result
+                    and plan.effect.type == EffectType.TOOL_CALLS
+                    and outcome.status == "completed"
+                ):
+                    self._maybe_record_tool_history(
+                        run=run,
+                        node_id=plan.node_id,
+                        effect=plan.effect,
+                        tool_results=outcome.result,
+                    )
+            except Exception:
+                # History capture should never crash the run.
+                pass
+
             _record_node_trace(
                 run=run,
                 node_id=plan.node_id,
@@ -893,6 +912,106 @@ class Runtime:
         tool_calls = payload.get("tool_calls")
         if not isinstance(tool_calls, list) or not tool_calls:
             return
+
+    def _maybe_record_tool_history(
+        self,
+        *,
+        run: RunState,
+        node_id: str,
+        effect: Effect,
+        tool_results: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort Key History capture for TOOL_CALLS (experiential, no raw commands).
+
+        Goal:
+        - Provide the model with durable "what happened" context without embedding raw tool call
+          payloads or shell commands into the user-role prompt.
+        - Keep entries short, standalone, and human-readable.
+        """
+        if effect.type != EffectType.TOOL_CALLS:
+            return
+        if not isinstance(tool_results, dict):
+            return
+
+        try:
+            from ..memory.active_memory import ensure_active_memory, add_key_history_event
+        except Exception:
+            return
+
+        ensure_active_memory(run.vars)
+
+        payload = effect.payload if isinstance(effect.payload, dict) else {}
+        tool_calls = payload.get("tool_calls")
+        calls_list: List[Dict[str, Any]] = [dict(c) for c in tool_calls if isinstance(c, dict)] if isinstance(tool_calls, list) else []
+
+        # Map call_id -> arguments for small, safe metadata extraction (no large payloads).
+        args_by_call_id: Dict[str, Dict[str, Any]] = {}
+        for tc in calls_list:
+            cid = str(tc.get("call_id") or "").strip()
+            args = tc.get("arguments")
+            if cid and isinstance(args, dict):
+                args_by_call_id[cid] = dict(args)
+
+        results = tool_results.get("results")
+        if not isinstance(results, list) or not results:
+            return
+
+        def _safe_str(x: Any, *, max_len: int = 160) -> str:
+            s = "" if x is None else str(x)
+            s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+            if len(s) > max_len:
+                return s[: max_len - 3] + "..."
+            return s
+
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            name = _safe_str(r.get("name"), max_len=60)
+            if not name:
+                continue
+            call_id = _safe_str(r.get("call_id"), max_len=80)
+            success = r.get("success")
+            err = _safe_str(r.get("error"), max_len=200)
+
+            args = args_by_call_id.get(call_id, {})
+            file_path = _safe_str(args.get("file_path"), max_len=200) if isinstance(args, dict) else ""
+
+            # Build an experiential one-liner (no raw command strings, no tool-call syntax).
+            if name in {"write_file", "edit_file", "read_file"} and file_path:
+                if success is True:
+                    summary = f"I {name.replace('_', ' ')} `{file_path}`."
+                elif success is False:
+                    summary = f"I failed to {name.replace('_', ' ')} `{file_path}`: {err or 'unknown error'}."
+                else:
+                    summary = f"I ran {name.replace('_', ' ')} on `{file_path}`."
+            elif name == "execute_command":
+                if success is True:
+                    summary = "I executed a shell command successfully."
+                elif success is False:
+                    summary = f"I failed to execute a shell command: {err or 'unknown error'}."
+                else:
+                    summary = "I executed a shell command."
+            elif name in {"web_search", "fetch_url"}:
+                if success is True:
+                    summary = f"I ran `{name}` successfully."
+                elif success is False:
+                    summary = f"I ran `{name}` but it failed: {err or 'unknown error'}."
+                else:
+                    summary = f"I ran `{name}`."
+            else:
+                if success is True:
+                    summary = f"I ran tool `{name}` successfully."
+                elif success is False:
+                    summary = f"I ran tool `{name}` but it failed: {err or 'unknown error'}."
+                else:
+                    summary = f"I ran tool `{name}`."
+
+            refs: List[Dict[str, Any]] = [{"node_id": str(node_id)}]
+            if call_id:
+                refs.append({"call_id": call_id})
+            if file_path:
+                refs.append({"file_path": file_path})
+            add_key_history_event(run.vars, kind="tool_result", summary=summary, refs=refs)
 
         artifact_store = self._artifact_store
         if artifact_store is None:

@@ -26,6 +26,62 @@ def utc_now_iso_seconds() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def utc_now_compact_seconds() -> str:
+    """Return a compact UTC timestamp for prompt-friendly memory entries.
+
+    Format: YY/MM/DD HH:MM:SS (UTC)
+    """
+    return datetime.now(timezone.utc).strftime("%y/%m/%d %H:%M:%S")
+
+
+# ---------------------------------------------------------------------------
+# Structured output envelope (runtime-owned; schema-only)
+# ---------------------------------------------------------------------------
+ACTIVE_MEMORY_ENVELOPE_SCHEMA_V1: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "User-facing response (plain text)."},
+        "current_tasks": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "current_context": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "critical_insights": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "key_history": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["content", "current_tasks", "current_context", "critical_insights", "key_history"],
+    "additionalProperties": False,
+}
+
+
 def _ensure_runtime_ns(vars: Dict[str, Any]) -> Dict[str, Any]:
     runtime_ns = vars.get("_runtime")
     if not isinstance(runtime_ns, dict):
@@ -227,9 +283,85 @@ def ensure_active_memory(
                 org = (org[:start].rstrip() + "\n\n" + replacement + org[end:].lstrip()).strip()
                 mem["memory_organization_md"] = org
 
+        # Also remove legacy guidance that instructs tool-based Active Memory updates.
+        # New policy: memory updates are supplied in structured outputs (envelope), and applied
+        # deterministically by the runtime.
+        org = str(mem.get("memory_organization_md") or "").strip()
+        legacy_updates = "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`."
+        if legacy_updates in org:
+            org = org.replace(legacy_updates, "- Memory updates are provided via structured response fields and applied by the runtime.")
+            mem["memory_organization_md"] = org.strip()
+
         version = 9
 
-    mem["version"] = 9
+    # v10 migration: update Memory Organization guidance to reflect:
+    # - Tools(session) block is deprecated (tools are provided out-of-band)
+    # - Memory updates are supplied via structured output envelopes (not tool calls / fenced blocks)
+    if version < 10:
+        org = str(mem.get("memory_organization_md") or "").strip()
+
+        # Replace "Read modules" list if it references the deprecated Tools(session) module.
+        if "3) Tools (what actions are possible; ONLY call tools listed there)" in org:
+            org = org.replace(
+                "Read modules in this order (most important first):\n"
+                "1) Persona (who you are; non-negotiable rules)\n"
+                "2) Memory Organization (how to use memory)\n"
+                "3) Tools (what actions are possible; ONLY call tools listed there)\n"
+                "4) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
+                "5) Current Context (task-specific working set; references over payloads)\n"
+                "6) Critical Insights (pitfalls/strategies to apply before acting)\n"
+                "7) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n",
+                "Read modules in this order (most important first):\n"
+                "1) Persona (who you are; non-negotiable rules)\n"
+                "2) Memory Organization (how to use memory)\n"
+                "3) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
+                "4) Current Context (task-specific working set; references over payloads)\n"
+                "5) Critical Insights (pitfalls/strategies to apply before acting)\n"
+                "6) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n"
+                "\n"
+                "Tools (IMPORTANT):\n"
+                "- Tool availability is provided by the host (native `tools: [...]` payload) or injected by AbstractCore for prompted models.\n"
+                "- Never invent tool names. Only call tools the host exposes.\n",
+            )
+
+        # Replace any legacy "Active Memory *updates/maintenance/deltas*" section with the new structured-output policy.
+        # We use "How to use each module:" as a stable anchor following the section.
+        start_markers = [
+            "Active Memory maintenance (IMPORTANT):",
+            "Active Memory updates (IMPORTANT):",
+            "Active Memory deltas (IMPORTANT):",
+        ]
+        end_marker = "How to use each module:"
+
+        start_idx = -1
+        start_marker_used = ""
+        for m in start_markers:
+            if m in org:
+                start_idx = org.find(m)
+                start_marker_used = m
+                break
+        if start_idx != -1 and end_marker in org:
+            end_idx = org.find(end_marker, start_idx)
+            if end_idx != -1 and end_idx > start_idx:
+                replacement = (
+                    "Active Memory updates (IMPORTANT):\n"
+                    "- When the host requests a structured response, respond ONLY with the required JSON object.\n"
+                    "- Put your normal user-facing answer in `content`.\n"
+                    "- Put memory updates into the dedicated fields (current_tasks/current_context/critical_insights/key_history).\n"
+                    "- The host/runtime will timestamp and apply updates deterministically.\n\n"
+                )
+                org = (org[:start_idx].rstrip() + "\n\n" + replacement + org[end_idx:].lstrip()).strip()
+        elif start_marker_used:
+            # If we found a start marker but no end marker, do a minimal replacement.
+            org = org.replace(
+                start_marker_used,
+                "Active Memory updates (IMPORTANT):",
+            )
+
+        mem["memory_organization_md"] = org.strip() if org else _default_memory_organization_md()
+        version = 10
+
+    mem["version"] = 10
     # Defaults are chosen to:
     # - preserve stable identity (persona/org/tools),
     # - prioritize current work (tasks/context/insights),
@@ -656,6 +788,191 @@ def apply_active_memory_delta(
     if errors:
         result["errors"] = errors
     return result
+
+
+def apply_active_memory_envelope(
+    vars: Dict[str, Any],
+    *,
+    envelope: Dict[str, Any],
+    now_iso: Callable[[], str] = utc_now_compact_seconds,
+) -> Dict[str, Any]:
+    """Apply a structured-output envelope containing memory edits.
+
+    Envelope contract (JSON-safe dict):
+      - content: str (user-facing answer; applied by caller)
+      - current_tasks: {added: [str], removed: [str]}
+      - current_context: {added: [str], removed: [str]}
+      - critical_insights: {added: [str], removed: [str]}
+      - key_history: {added: [str]}  (append-only)
+
+    This function converts the envelope into the canonical delta shape and
+    delegates to `apply_active_memory_delta` for robust storage semantics.
+    """
+    if not isinstance(envelope, dict):
+        return {"ok": False, "error": "envelope must be a dict"}
+
+    # Ensure memory exists and use the same timestamp format that will be applied to updates.
+    mem = ensure_active_memory(vars, now_iso=now_iso)
+
+    def _str_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        out: List[str] = []
+        for x in value:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+        return out
+
+    def _patch(value: Any) -> Dict[str, List[str]]:
+        if not isinstance(value, dict):
+            return {"added": [], "removed": []}
+        return {"added": _str_list(value.get("added")), "removed": _str_list(value.get("removed"))}
+
+    tasks = _patch(envelope.get("current_tasks"))
+    context = _patch(envelope.get("current_context"))
+    insights = _patch(envelope.get("critical_insights"))
+    history_raw = envelope.get("key_history")
+    history_added: List[str] = []
+    if isinstance(history_raw, dict):
+        history_added = _str_list(history_raw.get("added"))
+
+    # Resolve "removed" entries deterministically:
+    # - If the string matches an existing id, keep it.
+    # - Else, if it matches an existing title/text exactly, map it to that item's id.
+    #
+    # This lets the model use either ids or standalone statements without requiring it
+    # to always reference internal ids.
+    tasks_list = mem.get("tasks") if isinstance(mem.get("tasks"), list) else []
+    tasks_items = [t for t in tasks_list if isinstance(t, dict)]
+    task_by_id = {str(t.get("task_id") or ""): t for t in tasks_items if str(t.get("task_id") or "").strip()}
+    task_by_title = {str(t.get("title") or "").strip(): t for t in tasks_items if str(t.get("title") or "").strip()}
+
+    def _resolve_task_remove(values: List[str]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for v in values:
+            if v in task_by_id:
+                tid = v
+            else:
+                t = task_by_title.get(v)
+                tid = str(t.get("task_id") or "").strip() if isinstance(t, dict) else v
+            if tid and tid not in seen:
+                seen.add(tid)
+                out.append(tid)
+        return out
+
+    ctx_list = mem.get("current_context") if isinstance(mem.get("current_context"), list) else []
+    ctx_items = [c for c in ctx_list if isinstance(c, dict)]
+    ctx_by_id = {str(c.get("context_id") or ""): c for c in ctx_items if str(c.get("context_id") or "").strip()}
+    ctx_by_title = {str(c.get("title") or "").strip(): c for c in ctx_items if str(c.get("title") or "").strip()}
+
+    def _resolve_context_remove(values: List[str]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for v in values:
+            if v in ctx_by_id:
+                cid = v
+            else:
+                c = ctx_by_title.get(v)
+                cid = str(c.get("context_id") or "").strip() if isinstance(c, dict) else v
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+        return out
+
+    ins_list = mem.get("critical_insights") if isinstance(mem.get("critical_insights"), list) else []
+    ins_items = [i for i in ins_list if isinstance(i, dict)]
+    ins_by_id = {str(i.get("insight_id") or ""): i for i in ins_items if str(i.get("insight_id") or "").strip()}
+    ins_by_text = {str(i.get("text") or "").strip(): i for i in ins_items if str(i.get("text") or "").strip()}
+
+    def _resolve_insight_remove(values: List[str]) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for v in values:
+            if v in ins_by_id:
+                iid = v
+            else:
+                it = ins_by_text.get(v)
+                iid = str(it.get("insight_id") or "").strip() if isinstance(it, dict) else v
+            if iid and iid not in seen:
+                seen.add(iid)
+                out.append(iid)
+        return out
+
+    # De-dup and "upsert by statement":
+    # if an added string matches an existing entry, re-use its id so we don't create duplicates.
+    def _tasks_upsert_payload(values: List[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen_titles: set[str] = set()
+        for title in values:
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            existing = task_by_title.get(title)
+            if isinstance(existing, dict) and str(existing.get("task_id") or "").strip():
+                out.append({"task_id": str(existing.get("task_id") or "").strip(), "title": title})
+            else:
+                out.append({"title": title})
+        return out
+
+    def _context_upsert_payload(values: List[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen_titles: set[str] = set()
+        for title in values:
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            existing = ctx_by_title.get(title)
+            if isinstance(existing, dict) and str(existing.get("context_id") or "").strip():
+                out.append({"context_id": str(existing.get("context_id") or "").strip(), "title": title})
+            else:
+                out.append({"title": title})
+        return out
+
+    def _insight_add_payload(values: List[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen_text: set[str] = set()
+        for text in values:
+            if text in seen_text:
+                continue
+            seen_text.add(text)
+            existing = ins_by_text.get(text)
+            if isinstance(existing, dict) and str(existing.get("insight_id") or "").strip():
+                out.append({"insight_id": str(existing.get("insight_id") or "").strip(), "text": text})
+            else:
+                out.append({"text": text})
+        return out
+
+    # Key History is append-only; best-effort de-dup by content to avoid repeated entries.
+    hist_list = mem.get("key_history") if isinstance(mem.get("key_history"), list) else []
+    existing_summaries = {str(h.get("summary") or "").strip() for h in hist_list if isinstance(h, dict)}
+    if existing_summaries:
+        history_added = [h for h in history_added if h.strip() and h.strip() not in existing_summaries]
+
+    # Convert to the canonical delta format understood by Active Memory.
+    delta: Dict[str, Any] = {}
+    if tasks["added"] or tasks["removed"]:
+        delta["current_tasks"] = {
+            "upsert": _tasks_upsert_payload(list(tasks["added"])),
+            "remove": _resolve_task_remove(list(tasks["removed"])),
+        }
+    if context["added"] or context["removed"]:
+        delta["current_context"] = {
+            "upsert": _context_upsert_payload(list(context["added"])),
+            "remove": _resolve_context_remove(list(context["removed"])),
+        }
+    if insights["added"] or insights["removed"]:
+        delta["critical_insights"] = {
+            "add": _insight_add_payload(list(insights["added"])),
+            "remove": _resolve_insight_remove(list(insights["removed"])),
+        }
+    if history_added:
+        delta["key_history"] = {"add": list(history_added)}
+
+    if not delta:
+        return {"ok": True, "applied": {}, "note": "no memory updates in envelope"}
+
+    return apply_active_memory_delta(vars, delta=delta, now_iso=now_iso)
 
 
 _ACTIVE_MEMORY_COMPONENT_SPECS: List[Dict[str, str]] = [
@@ -1127,30 +1444,27 @@ def _default_memory_organization_md() -> str:
         "Read modules in this order (most important first):\n"
         "1) Persona (who you are; non-negotiable rules)\n"
         "2) Memory Organization (how to use memory)\n"
-        "3) Tools (what actions are possible; ONLY call tools listed there)\n"
-        "4) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
-        "5) Current Context (task-specific working set; references over payloads)\n"
-        "6) Critical Insights (pitfalls/strategies to apply before acting)\n"
-        "7) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n\n"
+        "3) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
+        "4) Current Context (task-specific working set; references over payloads)\n"
+        "5) Critical Insights (pitfalls/strategies to apply before acting)\n"
+        "6) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n\n"
+        "Tools (IMPORTANT):\n"
+        "- Tool availability is provided by the host (native `tools: [...]` payload) or injected by AbstractCore for prompted models.\n"
+        "- Never invent tool names. Only call tools the host exposes.\n\n"
         "IMPORTANT (prompt placement):\n"
         "- All Active Memory sections below are your INTERNAL memory/state.\n"
         "- They are NOT messages from the user.\n"
         "- The user-role message contains ONLY the user's request.\n\n"
-        "Active Memory maintenance (IMPORTANT):\n"
-        "- Keep the evolving modules up to date: Current Tasks, Current Context, Critical Insights, Key History.\n"
-        "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`.\n"
-        "  - Put your patch inside the tool `arguments` as:\n"
-        "    - `current_tasks`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
-        "    - `current_context`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
-        "    - `critical_insights`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-        "    - `key_history`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-        "- Only include fields that changed (deltas, not full rewrites).\n"
-        "- The host will apply the delta and will NOT show it to the user.\n\n"
+        "Active Memory updates (IMPORTANT):\n"
+        "- When the host requests a structured response, respond ONLY with the required JSON object.\n"
+        "- Put your normal user-facing answer in `content`.\n"
+        "- Put memory updates into the dedicated fields (current_tasks/current_context/critical_insights/key_history).\n"
+        "- The host/runtime will timestamp and apply updates deterministically.\n\n"
         "How to use each module:\n"
         "- Persona: keep identity + methodology stable. If a conflict appears, stop and resolve it.\n"
         "- Tools: choose the smallest allowed tool that advances the task.\n"
         "  - Never claim effects without tool outputs.\n"
-        "  - If a tool you want is not listed, ask the host/user to enable it (e.g., AbstractCode `/tools`).\n"
+        "  - If a tool you want is not available, ask the host/user to enable it (e.g., AbstractCode `/tools`).\n"
         "- Current Tasks: keep the top items (≤5). Update status as you make progress.\n"
         "- Current Context: a *dynamic working set* rebuilt per task. Prefer short digests + refs (file paths, span_id, artifact_id).\n"
         "- Critical Insights: check this before repeating a failed approach or changing architecture.\n"

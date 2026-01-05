@@ -18,7 +18,7 @@ from abstractruntime.memory.active_memory import (
 def test_ensure_active_memory_initializes_schema() -> None:
     vars: dict = {}
     mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
-    assert mem.get("version") == 9
+    assert mem.get("version") == 10
     # Token-native budgeting (0 => auto from vars["_limits"].max_tokens when present).
     assert isinstance(mem.get("max_tokens"), int)
     assert isinstance(mem.get("persona_md"), str) and mem["persona_md"].strip()
@@ -59,7 +59,7 @@ def test_ensure_active_memory_migrates_v3_default_budgets() -> None:
         }
     }
     mem = ensure_active_memory(vars, now_iso=lambda: "2025-01-01T00:00:00+00:00")
-    assert mem.get("version") == 9
+    assert mem.get("version") == 10
     budgets = mem.get("budgets")
     assert isinstance(budgets, dict)
     assert budgets.get("persona_pct") == 0.075

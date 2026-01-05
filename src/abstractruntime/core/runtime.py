@@ -963,56 +963,6 @@ class Runtime:
                 return s[: max_len - 3] + "..."
             return s
 
-        for r in results:
-            if not isinstance(r, dict):
-                continue
-            name = _safe_str(r.get("name"), max_len=60)
-            if not name:
-                continue
-            call_id = _safe_str(r.get("call_id"), max_len=80)
-            success = r.get("success")
-            err = _safe_str(r.get("error"), max_len=200)
-
-            args = args_by_call_id.get(call_id, {})
-            file_path = _safe_str(args.get("file_path"), max_len=200) if isinstance(args, dict) else ""
-
-            # Build an experiential one-liner (no raw command strings, no tool-call syntax).
-            if name in {"write_file", "edit_file", "read_file"} and file_path:
-                if success is True:
-                    summary = f"I {name.replace('_', ' ')} `{file_path}`."
-                elif success is False:
-                    summary = f"I failed to {name.replace('_', ' ')} `{file_path}`: {err or 'unknown error'}."
-                else:
-                    summary = f"I ran {name.replace('_', ' ')} on `{file_path}`."
-            elif name == "execute_command":
-                if success is True:
-                    summary = "I executed a shell command successfully."
-                elif success is False:
-                    summary = f"I failed to execute a shell command: {err or 'unknown error'}."
-                else:
-                    summary = "I executed a shell command."
-            elif name in {"web_search", "fetch_url"}:
-                if success is True:
-                    summary = f"I ran `{name}` successfully."
-                elif success is False:
-                    summary = f"I ran `{name}` but it failed: {err or 'unknown error'}."
-                else:
-                    summary = f"I ran `{name}`."
-            else:
-                if success is True:
-                    summary = f"I ran tool `{name}` successfully."
-                elif success is False:
-                    summary = f"I ran tool `{name}` but it failed: {err or 'unknown error'}."
-                else:
-                    summary = f"I ran tool `{name}`."
-
-            refs: List[Dict[str, Any]] = [{"node_id": str(node_id)}]
-            if call_id:
-                refs.append({"call_id": call_id})
-            if file_path:
-                refs.append({"file_path": file_path})
-            add_key_history_event(run.vars, kind="tool_result", summary=summary, refs=refs)
-
         artifact_store = self._artifact_store
         if artifact_store is None:
             return

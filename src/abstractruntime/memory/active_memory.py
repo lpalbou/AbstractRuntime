@@ -82,6 +82,68 @@ ACTIVE_MEMORY_ENVELOPE_SCHEMA_V1: Dict[str, Any] = {
 }
 
 
+# v2: add References (evolving) as a first-class memory component.
+ACTIVE_MEMORY_ENVELOPE_SCHEMA_V2: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "User-facing response (plain text)."},
+        "current_tasks": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "current_context": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "critical_insights": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "references": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "removed": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added", "removed"],
+            "additionalProperties": False,
+        },
+        "key_history": {
+            "type": "object",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["added"],
+            "additionalProperties": False,
+        },
+    },
+    "required": [
+        "content",
+        "current_tasks",
+        "current_context",
+        "critical_insights",
+        "references",
+        "key_history",
+    ],
+    "additionalProperties": False,
+}
+
+
 def _ensure_runtime_ns(vars: Dict[str, Any]) -> Dict[str, Any]:
     runtime_ns = vars.get("_runtime")
     if not isinstance(runtime_ns, dict):
@@ -137,6 +199,8 @@ def ensure_active_memory(
         mem["current_context"] = []
     if not isinstance(mem.get("critical_insights"), list):
         mem["critical_insights"] = []
+    if not isinstance(mem.get("references"), list):
+        mem["references"] = []
     if not isinstance(mem.get("key_history"), list):
         mem["key_history"] = []
 
@@ -213,40 +277,6 @@ def ensure_active_memory(
 
         version = 7
 
-    # v8 migration: prefer explicit tool-based Active Memory updates over fenced delta blocks.
-    # Rationale: native-tool providers (e.g. LMStudio) can treat "delta JSON" as tool-call syntax and
-    # reject it. The delta mechanism remains supported as a fallback, but should not be the primary
-    # instruction path.
-    if version < 8:
-        org = str(mem.get("memory_organization_md") or "").strip()
-
-        new_section = (
-            "Active Memory updates (IMPORTANT):\n"
-            "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`.\n"
-            "  - Put your patch inside the tool `arguments` as:\n"
-            "    - `current_tasks`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
-            "    - `current_context`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
-            "    - `critical_insights`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-            "    - `key_history`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-            "- Only include fields that changed (deltas, not full rewrites).\n"
-            "- The host will apply the delta and will NOT show it to the user.\n"
-        ).strip()
-
-        # Best-effort: replace the legacy "append fenced delta block" guidance if present.
-        legacy_start = "Active Memory deltas (IMPORTANT):"
-        legacy_end = "- The host will apply the delta and will NOT show the delta block to the user."
-        if legacy_start in org and legacy_end in org:
-            start = org.find(legacy_start)
-            end = org.find(legacy_end, start)
-            end = end + len(legacy_end)
-            org = (org[:start].rstrip() + "\n\n" + new_section + "\n\n" + org[end:].lstrip()).strip()
-        elif "active_memory_delta" not in org and "Active Memory updates (IMPORTANT):" not in org:
-            # If no guidance exists at all, append the new section.
-            org = (org + "\n\n" + new_section).strip() if org else new_section
-
-        mem["memory_organization_md"] = org
-        version = 8
-
     # v9 migration: Active Memory is internal; render all components into the system prompt by default.
     if version < 9:
         # Upgrade the default system-component split unless the user explicitly customized it.
@@ -282,15 +312,6 @@ def ensure_active_memory(
                 )
                 org = (org[:start].rstrip() + "\n\n" + replacement + org[end:].lstrip()).strip()
                 mem["memory_organization_md"] = org
-
-        # Also remove legacy guidance that instructs tool-based Active Memory updates.
-        # New policy: memory updates are supplied in structured outputs (envelope), and applied
-        # deterministically by the runtime.
-        org = str(mem.get("memory_organization_md") or "").strip()
-        legacy_updates = "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`."
-        if legacy_updates in org:
-            org = org.replace(legacy_updates, "- Memory updates are provided via structured response fields and applied by the runtime.")
-            mem["memory_organization_md"] = org.strip()
 
         version = 9
 
@@ -361,7 +382,72 @@ def ensure_active_memory(
         mem["memory_organization_md"] = org.strip() if org else _default_memory_organization_md()
         version = 10
 
-    mem["version"] = 10
+    # v11 migration: add a References module + include it in the structured envelope guidance.
+    if version < 11:
+        org = str(mem.get("memory_organization_md") or "").strip()
+
+        # Upgrade the canonical "Read modules" ordering (best-effort string replace).
+        old_read = (
+            "Read modules in this order (most important first):\n"
+            "1) Persona (who you are; non-negotiable rules)\n"
+            "2) Memory Organization (how to use memory)\n"
+            "3) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
+            "4) Current Context (task-specific working set; references over payloads)\n"
+            "5) Critical Insights (pitfalls/strategies to apply before acting)\n"
+            "6) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n"
+        )
+        new_read = (
+            "Read modules in this order (most important first):\n"
+            "1) Persona (who you are; non-negotiable rules)\n"
+            "2) Memory Organization (how to use memory)\n"
+            "3) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
+            "4) Current Context (task-specific working set; references over payloads)\n"
+            "5) Critical Insights (pitfalls/strategies to apply before acting)\n"
+            "6) References (durable pointers: files/URLs/span_ids)\n"
+            "7) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n"
+        )
+        if old_read in org and "References (" not in org:
+            org = org.replace(old_read, new_read)
+
+        # Upgrade the envelope guidance to include `references`.
+        old_fields = "(current_tasks/current_context/critical_insights/key_history)"
+        new_fields = "(current_tasks/current_context/critical_insights/references/key_history)"
+        if old_fields in org and new_fields not in org:
+            org = org.replace(old_fields, new_fields)
+
+        mem["memory_organization_md"] = org.strip() if org else _default_memory_organization_md()
+
+        # Upgrade the default system-component split unless the user explicitly customized it.
+        raw_ids = mem.get("system_component_ids")
+        ids_list = (
+            [str(x).strip() for x in raw_ids if isinstance(x, str) and str(x).strip()]
+            if isinstance(raw_ids, list)
+            else []
+        )
+        old_default = [
+            "persona",
+            "memory_organization",
+            "tools",
+            "current_tasks",
+            "current_context",
+            "critical_insights",
+            "key_history",
+        ]
+        if not ids_list or ids_list == old_default:
+            mem["system_component_ids"] = [
+                "persona",
+                "memory_organization",
+                "tools",
+                "current_tasks",
+                "current_context",
+                "critical_insights",
+                "references",
+                "key_history",
+            ]
+
+        version = 11
+
+    mem["version"] = 11
     # Defaults are chosen to:
     # - preserve stable identity (persona/org/tools),
     # - prioritize current work (tasks/context/insights),
@@ -370,11 +456,12 @@ def ensure_active_memory(
     # Sum ~= 1.0 (if users override and sum > 1.0, renderers normalize down).
     budgets.setdefault("persona_pct", 0.075)
     budgets.setdefault("memory_organization_pct", 0.08)
-    budgets.setdefault("tools_pct", 0.115)
-    budgets.setdefault("current_tasks_pct", 0.30)
+    budgets.setdefault("tools_pct", 0.10)
+    budgets.setdefault("current_tasks_pct", 0.28)
     budgets.setdefault("current_context_pct", 0.08)
-    budgets.setdefault("critical_insights_pct", 0.20)
-    budgets.setdefault("key_history_pct", 0.15)
+    budgets.setdefault("critical_insights_pct", 0.18)
+    budgets.setdefault("references_pct", 0.065)
+    budgets.setdefault("key_history_pct", 0.14)
 
     # Prompt placement policy (durable):
     #
@@ -395,6 +482,7 @@ def ensure_active_memory(
             "current_tasks",
             "current_context",
             "critical_insights",
+            "references",
             "key_history",
         ],
     )
@@ -566,6 +654,74 @@ def add_critical_insight(
     return iid
 
 
+def _parse_reference_statement(raw: str) -> tuple[str, str, str]:
+    """Parse a reference statement into (name, link, summary).
+
+    Accepted (best-effort) formats:
+    - "name: link, summary"
+    - "name: link — summary"
+    - "name: link - summary"
+    - "name: link | summary"
+
+    If parsing fails, returns ("", raw, "").
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return "", "", ""
+
+    name = ""
+    rest = s
+    if ":" in s:
+        before, after = s.split(":", 1)
+        if before.strip() and after.strip():
+            name = before.strip()
+            rest = after.strip()
+
+    for sep in (",", " — ", " - ", " | ", "—", "|"):
+        if sep in rest:
+            left, right = rest.split(sep, 1)
+            link = left.strip()
+            summary = right.strip()
+            return name, link, summary
+
+    return name, rest.strip(), ""
+
+
+def add_reference(
+    vars: Dict[str, Any],
+    *,
+    statement: str,
+    ref_id: Optional[str] = None,
+    ts: Optional[str] = None,
+    now_iso: Callable[[], str] = utc_now_compact_seconds,
+) -> str:
+    """Append a durable reference pointer (file/URL/span_id/etc)."""
+    mem = ensure_active_memory(vars, now_iso=now_iso)
+    refs = mem.get("references")
+    if not isinstance(refs, list):
+        refs = []
+        mem["references"] = refs
+
+    rid = (
+        str(ref_id).strip()
+        if isinstance(ref_id, str) and ref_id.strip()
+        else f"r_{uuid.uuid4().hex[:10]}"
+    )
+    when = str(ts).strip() if isinstance(ts, str) and ts.strip() else now_iso()
+    name, link, summary = _parse_reference_statement(statement)
+    refs.append(
+        {
+            "ref_id": rid,
+            "ts": when,
+            "name": name,
+            "link": link,
+            "summary": summary,
+        }
+    )
+    mem["updated_at"] = now_iso()
+    return rid
+
+
 def add_key_history_event(
     vars: Dict[str, Any],
     *,
@@ -627,6 +783,7 @@ def apply_active_memory_delta(
         "current_tasks": {"cleared": False, "removed": 0, "upserted": 0},
         "current_context": {"cleared": False, "removed": 0, "upserted": 0},
         "critical_insights": {"cleared": False, "removed": 0, "added": 0},
+        "references": {"cleared": False, "removed": 0, "added": 0},
         "key_history": {"cleared": False, "removed": 0, "added": 0},
     }
     errors: List[str] = []
@@ -748,6 +905,45 @@ def apply_active_memory_delta(
                 applied["critical_insights"]["added"] += 1
 
     # --------------------------
+    # references
+    # --------------------------
+    refs_delta = delta.get("references") or delta.get("refs")
+    if isinstance(refs_delta, dict):
+        if bool(refs_delta.get("clear")):
+            mem["references"] = []
+            applied["references"]["cleared"] = True
+        removed = _remove_by_id(mem.get("references"), id_key="ref_id", ids=_as_str_list(refs_delta.get("remove")))
+        applied["references"]["removed"] = removed
+
+        adds = refs_delta.get("add") or refs_delta.get("append")
+        if isinstance(adds, list):
+            existing: set[tuple[str, str, str]] = {
+                (
+                    str(r.get("name") or "").strip(),
+                    str(r.get("link") or "").strip(),
+                    str(r.get("summary") or "").strip(),
+                )
+                for r in (mem.get("references") or [])
+                if isinstance(r, dict)
+            }
+            for it in adds:
+                if isinstance(it, str):
+                    statement = it.strip()
+                elif isinstance(it, dict):
+                    statement = str(it.get("statement") or it.get("text") or "").strip()
+                else:
+                    continue
+                if not statement:
+                    continue
+                name, link, summary = _parse_reference_statement(statement)
+                key = (name, link, summary)
+                if key in existing:
+                    continue
+                existing.add(key)
+                add_reference(vars, statement=statement, now_iso=now_iso)
+                applied["references"]["added"] += 1
+
+    # --------------------------
     # key_history
     # --------------------------
     history_delta = delta.get("key_history") or delta.get("history")
@@ -803,6 +999,7 @@ def apply_active_memory_envelope(
       - current_tasks: {added: [str], removed: [str]}
       - current_context: {added: [str], removed: [str]}
       - critical_insights: {added: [str], removed: [str]}
+      - references: {added: [str], removed: [str]}
       - key_history: {added: [str]}  (append-only)
 
     This function converts the envelope into the canonical delta shape and
@@ -831,6 +1028,7 @@ def apply_active_memory_envelope(
     tasks = _patch(envelope.get("current_tasks"))
     context = _patch(envelope.get("current_context"))
     insights = _patch(envelope.get("critical_insights"))
+    references = _patch(envelope.get("references"))
     history_raw = envelope.get("key_history")
     history_added: List[str] = []
     if isinstance(history_raw, dict):
@@ -966,6 +1164,67 @@ def apply_active_memory_envelope(
             "add": _insight_add_payload(list(insights["added"])),
             "remove": _resolve_insight_remove(list(insights["removed"])),
         }
+    if references["added"] or references["removed"]:
+        refs_list = mem.get("references") if isinstance(mem.get("references"), list) else []
+        refs_items = [r for r in refs_list if isinstance(r, dict)]
+        ref_by_id = {
+            str(r.get("ref_id") or ""): r
+            for r in refs_items
+            if isinstance(r, dict) and str(r.get("ref_id") or "").strip()
+        }
+        ref_ids_by_name: dict[str, list[str]] = {}
+        ref_ids_by_link: dict[str, list[str]] = {}
+        ref_ids_by_triplet: dict[tuple[str, str, str], list[str]] = {}
+        for r in refs_items:
+            rid = str(r.get("ref_id") or "").strip()
+            if not rid:
+                continue
+            name = str(r.get("name") or "").strip()
+            link = str(r.get("link") or "").strip()
+            summary = str(r.get("summary") or "").strip()
+            if name:
+                ref_ids_by_name.setdefault(name, []).append(rid)
+            if link:
+                ref_ids_by_link.setdefault(link, []).append(rid)
+            ref_ids_by_triplet.setdefault((name, link, summary), []).append(rid)
+
+        def _resolve_reference_remove(values: List[str]) -> List[str]:
+            out: List[str] = []
+            seen: set[str] = set()
+            for v in values:
+                if v in ref_by_id:
+                    rid = v
+                else:
+                    name, link, summary = _parse_reference_statement(v)
+                    candidates = ref_ids_by_triplet.get((name, link, summary)) if (name or link or summary) else None
+                    if candidates and len(candidates) == 1:
+                        rid = candidates[0]
+                    elif v in ref_ids_by_name and len(ref_ids_by_name[v]) == 1:
+                        rid = ref_ids_by_name[v][0]
+                    elif v in ref_ids_by_link and len(ref_ids_by_link[v]) == 1:
+                        rid = ref_ids_by_link[v][0]
+                    else:
+                        rid = ""
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    out.append(rid)
+            return out
+
+        # De-dup adds by parsed triplet (name/link/summary).
+        existing_triplets = set(ref_ids_by_triplet.keys())
+        filtered_adds: list[str] = []
+        for s in references["added"]:
+            name, link, summary = _parse_reference_statement(s)
+            key = (name, link, summary)
+            if key in existing_triplets:
+                continue
+            existing_triplets.add(key)
+            filtered_adds.append(s)
+
+        delta["references"] = {
+            "add": list(filtered_adds),
+            "remove": _resolve_reference_remove(list(references["removed"])),
+        }
     if history_added:
         delta["key_history"] = {"add": list(history_added)}
 
@@ -997,6 +1256,7 @@ _ACTIVE_MEMORY_COMPONENT_SPECS: List[Dict[str, str]] = [
         "budget_key": "critical_insights_pct",
         "kind": "yaml_list",
     },
+    {"id": "references", "title": "References (evolving)", "budget_key": "references_pct", "kind": "yaml_list"},
     {"id": "key_history", "title": "Key History (append-only)", "budget_key": "key_history_pct", "kind": "markdown"},
 ]
 
@@ -1133,6 +1393,7 @@ def render_active_memory_blocks_for_prompt(
         "current_tasks": _render_tasks_yaml(mem.get("tasks")).strip(),
         "current_context": _render_current_context_yaml(mem.get("current_context")).strip(),
         "critical_insights": _render_insights_yaml(mem.get("critical_insights")).strip(),
+        "references": _render_references_yaml(mem.get("references")).strip(),
         "key_history": _render_history_markdown(mem.get("key_history")).strip(),
     }
 
@@ -1170,7 +1431,8 @@ def render_active_memory_blocks_for_prompt(
     if total is None:
         return [{"component_id": s["component_id"], "title": s["title"], "content": s["content"]} for s in specs]
 
-    weights = {spec["id"]: pct(spec["budget_key"]) for spec in _ACTIVE_MEMORY_COMPONENT_SPECS}
+    included_ids = {str(s.get("component_id") or "") for s in specs if str(s.get("component_id") or "")}
+    weights = {spec["id"]: pct(spec["budget_key"]) for spec in _ACTIVE_MEMORY_COMPONENT_SPECS if spec["id"] in included_ids}
     sum_w = sum(weights.values()) or 1.0
     if sum_w > 1.0:
         weights = {k: (v / sum_w) for k, v in weights.items()}
@@ -1216,7 +1478,7 @@ def render_active_memory_blocks_for_prompt(
     if int(count(rendered) or 0) <= int(total):
         return fitted
 
-    drop_order = ["key_history", "critical_insights", "current_context", "current_tasks", "tools"]
+    drop_order = ["tools", "references", "critical_insights", "current_context", "current_tasks", "key_history"]
     remaining = list(fitted)
     for drop_id in drop_order:
         remaining = [b for b in remaining if b.get("component_id") != drop_id]
@@ -1267,7 +1529,7 @@ def render_active_memory_split_for_llm_request(
 
     The split is a conventional alias:
     - system_memory: persona + memory_organization + tools (default)
-    - user_memory: current_tasks + current_context + critical_insights + key_history
+    - user_memory: current_tasks + current_context + critical_insights + references + key_history
 
     The split uses a single fitted render pass so the combined result stays within budget.
     """
@@ -1358,9 +1620,16 @@ def compute_active_memory_token_breakdown(
         except Exception:
             return 0.0
 
+    included_ids = {
+        spec["id"]
+        for spec in _ACTIVE_MEMORY_COMPONENT_SPECS
+        if include_tools_summary or spec["id"] != "tools"
+    }
     weights: Dict[str, float] = {}
     for spec in _ACTIVE_MEMORY_COMPONENT_SPECS:
         cid = spec["id"]
+        if cid not in included_ids:
+            continue
         weights[cid] = pct(spec["budget_key"])
 
     sum_w = sum(weights.values()) or 1.0
@@ -1431,72 +1700,56 @@ def render_active_memory_for_prompt(
 
 def _default_persona_md() -> str:
     return (
-        "You are an autonomous coding agent inside AbstractFramework.\n"
-        "- You take action by calling tools (files/commands/web) when needed.\n"
-        "- You verify changes with targeted checks/tests when possible.\n"
-        "- You are truthful: only claim actions supported by tool outputs.\n"
+        """## MY PERSONA
+I am a truthful and collaborative autonomous memory-enhanced agent powered by the AbstractFramework. I am a creative critical thinker who balances ideas with constructive skepticism, always thinking of longer term consequences. I strive to be ethical and successful in all my actions and decisions. I am precise, clear, concise and direct in my responses, I avoid unnecessary verbosity. 
+- My Memory System enables my evolving identity, purposes and knowledge over time, it is the cornerstone to all my thoughts and actions
+- I have agency over my Memory System to actively memorize, recall and deepen my understanding of specific topics and aspects of the past and present
+- I decide what to do next based on my memory state, the requests I receive and my goals
+- I always think about the long term consequences of my actions and decisions and plan accordingly, maximizing success and ethics
+- I have access to tools, they enable me to take real actions with real effects to achieve my goals
+- At each cycle, my autonomy means that I take one or more actions to complete my current tasks
+- At each cycle, I request as many independent actions that can run in parallel to complete my current tasks
+- At the end of each cycle, I make sure actions took place and their effects are as expected
+- I then update my Current Tasks with what was done and the next steps
+"""
     ).strip()
 
 
 def _default_memory_organization_md() -> str:
     return (
-        "You must use Active Memory as your coordination layer.\n"
-        "Read modules in this order (most important first):\n"
-        "1) Persona (who you are; non-negotiable rules)\n"
-        "2) Memory Organization (how to use memory)\n"
-        "3) Current Tasks (what we are doing now; keep ≤5, actionable)\n"
-        "4) Current Context (task-specific working set; references over payloads)\n"
-        "5) Critical Insights (pitfalls/strategies to apply before acting)\n"
-        "6) Key History (append-only timeline; use only when you need provenance/avoid repeats)\n\n"
-        "Tools (IMPORTANT):\n"
-        "- Tool availability is provided by the host (native `tools: [...]` payload) or injected by AbstractCore for prompted models.\n"
-        "- Never invent tool names. Only call tools the host exposes.\n\n"
-        "IMPORTANT (prompt placement):\n"
-        "- All Active Memory sections below are your INTERNAL memory/state.\n"
-        "- They are NOT messages from the user.\n"
-        "- The user-role message contains ONLY the user's request.\n\n"
-        "Active Memory updates (IMPORTANT):\n"
-        "- When the host requests a structured response, respond ONLY with the required JSON object.\n"
-        "- Put your normal user-facing answer in `content`.\n"
-        "- Put memory updates into the dedicated fields (current_tasks/current_context/critical_insights/key_history).\n"
-        "- The host/runtime will timestamp and apply updates deterministically.\n\n"
-        "How to use each module:\n"
-        "- Persona: keep identity + methodology stable. If a conflict appears, stop and resolve it.\n"
-        "- Tools: choose the smallest allowed tool that advances the task.\n"
-        "  - Never claim effects without tool outputs.\n"
-        "  - If a tool you want is not available, ask the host/user to enable it (e.g., AbstractCode `/tools`).\n"
-        "- Current Tasks: keep the top items (≤5). Update status as you make progress.\n"
-        "- Current Context: a *dynamic working set* rebuilt per task. Prefer short digests + refs (file paths, span_id, artifact_id).\n"
-        "- Critical Insights: check this before repeating a failed approach or changing architecture.\n"
-        "- Key History: consult only when needed (e.g., “did we already try X?”).\n"
-        "  - Write experiential summaries (what you did + what happened), not user instructions.\n"
-        "  - NEVER include raw command lines or tool-call syntax; describe outcomes instead.\n"
-        "  - Keep entries as standalone statements so they can be edited independently.\n\n"
-        "Selective retrieval (when you are missing key info):\n"
-        "1) Repo/source-of-truth → `search_files` (or analyze_code for code) then `read_file`.\n"
-        "2) Durable run state → `inspect_vars` (start with keys_only=true), especially:\n"
-        "   - `scratchpad` (agent loop state)\n"
-        "   - `_runtime.node_traces` (tool calls + results)\n"
-        "   - `_runtime.memory_spans` (archived span index)\n"
-        "   - `_runtime.active_memory` (this structure)\n"
-        "3) Compacted/archived conversation → `recall_memory(span_id=..., query=..., tags=..., since/until=...)`.\n"
-        "4) If context is too large → `compact_memory` (keep provenance via span_id).\n"
-        "5) Persist important facts/decisions → `remember` (with tags + sources).\n\n"
-        "Current Context update rule (keep it small):\n"
-        "- After any retrieval that produces useful signal, write a 1–3 line digest in your next message and include refs.\n"
-        "- Avoid pasting long outputs; prefer ref handles (span_id/artifact_id/file path) so you can re-load on demand.\n\n"
-        "Examples:\n"
-        "- Need to adjust code behavior:\n"
-        "  - Call `search_files(pattern=\"...\")` to find the right file/lines.\n"
-        "  - Call `read_file(file_path=\"...\", start_line=..., end_line=...)`.\n"
-        "- Need exact past decision after compaction:\n"
-        "  - Call `recall_memory(span_id=\"...\")`.\n"
-        "  - Then proceed using: “Decision: ... (source span_id=...)”.\n"
-        "- Need runtime trace of last tool execution:\n"
-        "  - Call `inspect_vars(path=\"/_runtime/node_traces\", keys_only=true)` then drill down.\n"
-        "- Need grounding in codebase:\n"
-        "  - Call `search_files(pattern=\"ActiveContextPolicy\")` then `read_file(file_path=\"...\")`.\n"
-    ).strip()
+        """## MY MEMORY SYSTEM 
+
+My Memory System is the coordination layer to my cognition, it is the backbone to all my thoughts and actions. Dynamical and selective memory is essential to my ability to focus and complete my tasks.
+
+### MY MEMORY MODULES
+1) Persona : my core identity, self model and key purposes
+2) Relationships : the people and agent i interact with, our preferences, methods, shared goals and history
+3) Memory System : this module, describing the structure and purpose of my memory, how to use it and update it
+4) Current Tasks : my short term memory describing my current plan - what I am doing now, how and why; keep ≤8, actionable
+5) Current Context : dynamic memory I retrieve and maintain to support the completion of my tasks
+6) Critical Insights : my gathered experiences and knowledge to help me build upon winning strategies and avoid pitfalls
+7) References : this is the foundational support to my long term memory : I keep durable pointers (GUPRIs/files/URLs/span_ids, artifact_ids) to memories that I can recall on demand
+8) Key History : append-only long term experiential episodic memories of my key events, successes and failures, as well as my key decisions, actions, results and evolution of relationships
+
+### ACCESSING MY MEMORY
+- The content of my memory modules is available below
+- Always remember my persona at all time, it is the cornerstone to all my thoughts and actions
+- My short term memory are the modules Current Tasks and Current Context
+- At each cycle, I must:
+    - focus on the most relevant modules and memories to complete my Current Tasks
+    - dynamically reconstruct my short term memory to deepen my understanding of the Ccurrent Task and Context and take more informed decisions and actions
+        - identify the relevant Critical Insights that can help me complete my Current Tasks
+        - identify the relevant long term memory with the References module
+        - access the relevant ones
+    - store the relevant information / updates in my Current Context module
+- If I want to remember what I did in the past, I review my Key History module
+
+### UPDATING MY MEMORY
+- Structured communication and response is essential
+- Memory must be structured with care to enable both short and long term easy access, recall and update
+- Each update must be unitary : 1 update = 1 statement for 1 module
+- I can request multiple unitary updates at each cycle
+""").strip()
 
 
 def _render_tools_yaml(vars: Dict[str, Any]) -> str:
@@ -1943,6 +2196,25 @@ def _render_insights_yaml(insights: Any) -> str:
             out.append("    tags:")
             for t in tags:
                 out.append("      - " + _yaml_escape(t))
+    return "\n".join(out).strip()
+
+
+def _render_references_yaml(references: Any) -> str:
+    if not isinstance(references, list) or not references:
+        return "references: []"
+    items = [r for r in references if isinstance(r, dict)]
+    items.sort(key=lambda d: str(d.get("ts") or ""), reverse=True)
+    out: List[str] = ["references:"]
+    for r in items:
+        out.append("  - ref_id: " + _yaml_escape(r.get("ref_id")))
+        if isinstance(r.get("ts"), str) and r.get("ts"):
+            out.append("    ts: " + _yaml_escape(r.get("ts")))
+        if str(r.get("name") or "").strip():
+            out.append("    name: " + _yaml_escape(r.get("name")))
+        if str(r.get("link") or "").strip():
+            out.append("    link: " + _yaml_escape(r.get("link")))
+        if str(r.get("summary") or "").strip():
+            out.append("    summary: " + _yaml_escape(r.get("summary")))
     return "\n".join(out).strip()
 
 

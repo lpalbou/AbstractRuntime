@@ -57,10 +57,8 @@ class EffectType(str, Enum):
     MEMORY_QUERY = "memory_query"
     MEMORY_TAG = "memory_tag"
     MEMORY_COMPACT = "memory_compact"
-    MEMORY_COMPACT_STRUCTURED = "memory_compact_structured"
     MEMORY_NOTE = "memory_note"
     MEMORY_REHYDRATE = "memory_rehydrate"
-    ACTIVE_MEMORY_DELTA = "active_memory_delta"
 
     # Debug / inspection (schema-only tools -> runtime effects)
     VARS_QUERY = "vars_query"

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Active Memory editing (native/prompted tools)**: added a runtime-owned `ACTIVE_MEMORY_DELTA` effect to apply structured Active Memory updates durably (used by agents via the `active_memory_delta` tool).
 - **Durable custom events (signals)**:
   - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs.
   - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).

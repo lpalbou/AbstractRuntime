@@ -145,7 +145,6 @@ def ensure_active_memory(
 
     # v7 migration: remove legacy defaults that accidentally persisted in durable sessions.
     # - `max_tokens=2000` was the historic default; treat it as "auto" unless the user changes it after v7.
-    # - Ensure Memory Organization contains delta instructions so evolving modules actually get used.
     if version < 7:
         try:
             max_tokens = int(mem.get("max_tokens") or 0)
@@ -156,33 +155,43 @@ def ensure_active_memory(
         if "max_chars" in mem:
             mem["max_chars"] = 0
 
-        org = str(mem.get("memory_organization_md") or "").strip()
-        if "active_memory_delta" not in org:
-            org = (
-                f"{org}\n\n"
-                "Active Memory deltas (IMPORTANT):\n"
-                "- When you are NOT emitting a tool call, append EXACTLY ONE JSON delta block at the end of your message.\n"
-                "  - That single block may update multiple modules and include multiple entries per list.\n"
-                "  ```active_memory_delta\n"
-                "  {\n"
-                "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
-                "    \"current_context\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
-                "    \"critical_insights\": {\"add\": [...], \"remove\": [...], \"clear\": false},\n"
-                "    \"key_history\": {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-                "  }\n"
-                "  ```\n"
-                "- Only include fields that changed (deltas, not full rewrites).\n"
-                "- String shorthands are accepted for common operations:\n"
-                "  - `current_tasks.upsert`: [\"Task title\"]\n"
-                "  - `current_context.upsert`: [\"Context title\"]\n"
-                "  - `key_history.add`: [\"Event summary\"]\n"
-                "- The host will apply the delta and will NOT show the delta block to the user.\n"
-            ).strip()
-            mem["memory_organization_md"] = org
-
         version = 7
 
-    mem["version"] = 7
+    # v8 migration: prefer explicit tool-based Active Memory updates over fenced delta blocks.
+    # Rationale: native-tool providers (e.g. LMStudio) can treat "delta JSON" as tool-call syntax and
+    # reject it. The delta mechanism remains supported as a fallback, but should not be the primary
+    # instruction path.
+    if version < 8:
+        org = str(mem.get("memory_organization_md") or "").strip()
+
+        new_section = (
+            "Active Memory updates (IMPORTANT):\n"
+            "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`.\n"
+            "  - Put your patch inside the tool `arguments` as:\n"
+            "    - `current_tasks`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
+            "    - `current_context`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
+            "    - `critical_insights`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
+            "    - `key_history`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
+            "- Only include fields that changed (deltas, not full rewrites).\n"
+            "- The host will apply the delta and will NOT show it to the user.\n"
+        ).strip()
+
+        # Best-effort: replace the legacy "append fenced delta block" guidance if present.
+        legacy_start = "Active Memory deltas (IMPORTANT):"
+        legacy_end = "- The host will apply the delta and will NOT show the delta block to the user."
+        if legacy_start in org and legacy_end in org:
+            start = org.find(legacy_start)
+            end = org.find(legacy_end, start)
+            end = end + len(legacy_end)
+            org = (org[:start].rstrip() + "\n\n" + new_section + "\n\n" + org[end:].lstrip()).strip()
+        elif "active_memory_delta" not in org and "Active Memory updates (IMPORTANT):" not in org:
+            # If no guidance exists at all, append the new section.
+            org = (org + "\n\n" + new_section).strip() if org else new_section
+
+        mem["memory_organization_md"] = org
+        version = 8
+
+    mem["version"] = 8
     # Defaults are chosen to:
     # - preserve stable identity (persona/org/tools),
     # - prioritize current work (tasks/context/insights),
@@ -1077,22 +1086,14 @@ def _default_memory_organization_md() -> str:
         "- User prompt memory ~= Current Tasks + Current Context + Critical Insights + Key History.\n\n"
         "Active Memory maintenance (IMPORTANT):\n"
         "- Keep the evolving modules up to date: Current Tasks, Current Context, Critical Insights, Key History.\n"
-        "- When you are NOT emitting a tool call, append EXACTLY ONE JSON delta block at the end of your message:\n"
-        "  - That single block may update multiple modules and include multiple entries per list.\n"
-        "  ```active_memory_delta\n"
-        "  {\n"
-        "    \"current_tasks\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
-        "    \"current_context\": {\"upsert\": [...], \"remove\": [...], \"clear\": false},\n"
-        "    \"critical_insights\": {\"add\": [...], \"remove\": [...], \"clear\": false},\n"
-        "    \"key_history\": {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
-        "  }\n"
-        "  ```\n"
+        "- Update Active Memory by calling the runtime-owned tool `active_memory_delta`.\n"
+        "  - Put your patch inside the tool `arguments` as:\n"
+        "    - `current_tasks`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
+        "    - `current_context`: {\"upsert\": [...], \"remove\": [...], \"clear\": false}\n"
+        "    - `critical_insights`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
+        "    - `key_history`: {\"add\": [...], \"remove\": [...], \"clear\": false}\n"
         "- Only include fields that changed (deltas, not full rewrites).\n"
-        "- For `upsert`/`add` lists, prefer objects:\n"
-        "  - `current_tasks.upsert`: [{\"title\": \"...\", \"status\": \"todo|doing|done\", ...}] (strings are accepted as a title shorthand)\n"
-        "  - `current_context.upsert`: [{\"title\": \"...\", \"summary\": \"...\", \"refs\": [...]}] (strings are accepted as a title shorthand)\n"
-        "  - `key_history.add`: [{\"kind\": \"event\", \"summary\": \"...\", \"refs\": [...]}] (strings are accepted as a summary shorthand)\n"
-        "- The host will apply the delta and will NOT show the delta block to the user.\n\n"
+        "- The host will apply the delta and will NOT show it to the user.\n\n"
         "How to use each module:\n"
         "- Persona: keep identity + methodology stable. If a conflict appears, stop and resolve it.\n"
         "- Tools: choose the smallest allowed tool that advances the task.\n"

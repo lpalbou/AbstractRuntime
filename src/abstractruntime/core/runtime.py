@@ -1033,6 +1033,7 @@ class Runtime:
         self._handlers[EffectType.MEMORY_COMPACT_STRUCTURED] = self._handle_memory_compact_structured
         self._handlers[EffectType.MEMORY_NOTE] = self._handle_memory_note
         self._handlers[EffectType.MEMORY_REHYDRATE] = self._handle_memory_rehydrate
+        self._handlers[EffectType.ACTIVE_MEMORY_DELTA] = self._handle_active_memory_delta
         self._handlers[EffectType.VARS_QUERY] = self._handle_vars_query
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
 
@@ -1935,6 +1936,80 @@ class Runtime:
                     "output": rendered_text if return_mode in {"rendered", "both"} else "",
                     "error": None,
                     "meta": meta if meta else None,
+                }
+            ],
+        }
+        return EffectOutcome.completed(result=result)
+
+    def _handle_active_memory_delta(
+        self, run: RunState, effect: Effect, default_next_node: Optional[str]
+    ) -> EffectOutcome:
+        """Handle ACTIVE_MEMORY_DELTA.
+
+        Apply a Structured Active Memory delta to `run.vars["_runtime"]["active_memory"]` durably.
+
+        Payload:
+          - delta: dict                    Delta patch (same shape as `apply_active_memory_delta`)
+          - tool_name: str                 For tool-style output (default "active_memory_delta")
+          - call_id: str                   Passthrough call id.
+          - target_run_id: str             Optional run id to mutate (defaults to current run).
+        """
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+
+        payload = dict(effect.payload or {})
+        tool_name = str(payload.get("tool_name") or "active_memory_delta")
+        call_id = str(payload.get("call_id") or "memory")
+
+        target_run_id = payload.get("target_run_id")
+        if target_run_id is not None:
+            target_run_id = str(target_run_id).strip() or None
+
+        target_run = run
+        if target_run_id and target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
+            target_run = loaded
+            ensure_namespaces(target_run.vars)
+
+        delta = payload.get("delta")
+        if not isinstance(delta, dict) or not delta:
+            result = {
+                "mode": "executed",
+                "results": [
+                    {
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "success": False,
+                        "output": None,
+                        "error": "ACTIVE_MEMORY_DELTA requires payload.delta (non-empty dict)",
+                    }
+                ],
+            }
+            return EffectOutcome.completed(result=result)
+
+        try:
+            from ..memory.active_memory import apply_active_memory_delta
+        except Exception as e:  # pragma: no cover
+            return EffectOutcome.failed(f"Active Memory unavailable: {e}")
+
+        out = apply_active_memory_delta(target_run.vars, delta=delta)
+
+        # Persist the mutated target run (even if mutating a different run than the current one).
+        target_run.updated_at = utc_now_iso()
+        self._run_store.save(target_run)
+
+        result = {
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "success": bool(isinstance(out, dict) and out.get("ok") is True),
+                    "output": out,
+                    "error": None if isinstance(out, dict) and out.get("ok") is True else "Active Memory delta failed",
                 }
             ],
         }

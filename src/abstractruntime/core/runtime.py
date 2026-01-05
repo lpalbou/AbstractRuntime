@@ -2790,7 +2790,6 @@ class Runtime:
         #
         # Rationale:
         # - conversation_span: archived chat messages
-        # - active_memory_span: structured active-memory items rendered as messages
         # - memory_note: durable notes (rehydrated as a synthetic message by ActiveContextPolicy)
         #
         # Evidence and other span kinds are intentionally skipped by default.
@@ -2812,7 +2811,7 @@ class Runtime:
 
         to_rehydrate: list[str] = []
         skipped_artifacts: list[dict[str, Any]] = []
-        allowed_kinds = {"conversation_span", "active_memory_span", "memory_note"}
+        allowed_kinds = {"conversation_span", "memory_note"}
         for aid in resolved:
             kind = kind_by_artifact.get(aid, "")
             if kind and kind not in allowed_kinds:

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Active Memory editing (native/prompted tools)**: added a runtime-owned `ACTIVE_MEMORY_DELTA` effect to apply structured Active Memory updates durably (used by agents via the `active_memory_delta` tool).
+- **Ledger subscriptions enabled by default in AbstractCore runtimes**: `create_local_runtime` / `create_remote_runtime` / `create_hybrid_runtime` now wrap the configured LedgerStore with `ObservableLedgerStore` so hosts can receive real-time step append events via `Runtime.subscribe_ledger()`.
 - **Durable custom events (signals)**:
   - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs.
   - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).

@@ -21,6 +21,7 @@ from ...storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from ...storage.json_files import JsonFileRunStore, JsonlLedgerStore
 from ...storage.base import LedgerStore, RunStore
 from ...storage.artifacts import FileArtifactStore, InMemoryArtifactStore, ArtifactStore
+from ...storage.observable import ObservableLedgerStore, ObservableLedgerStoreProtocol
 
 from .effect_handlers import build_effect_handlers
 from .llm_client import MultiLocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
@@ -37,6 +38,18 @@ def _default_file_stores(*, base_dir: str | Path) -> tuple[RunStore, LedgerStore
     base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
     return JsonFileRunStore(base), JsonlLedgerStore(base)
+
+def _ensure_observable_ledger(ledger_store: LedgerStore) -> LedgerStore:
+    """Wrap a LedgerStore so Runtime.subscribe_ledger() is available (in-process).
+
+    Why:
+    - Real-time UI/UX often needs "step started" signals *before* a blocking effect
+      (LLM/tool HTTP) returns.
+    - The runtime kernel stays transport-agnostic; this is an optional decorator.
+    """
+    if isinstance(ledger_store, ObservableLedgerStoreProtocol):
+        return ledger_store
+    return ObservableLedgerStore(ledger_store)
 
 
 def create_local_runtime(
@@ -74,6 +87,7 @@ def create_local_runtime(
     """
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
+    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
@@ -142,6 +156,7 @@ def create_remote_runtime(
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
+    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
@@ -180,6 +195,7 @@ def create_hybrid_runtime(
 
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
+    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()

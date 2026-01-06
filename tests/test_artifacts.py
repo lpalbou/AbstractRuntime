@@ -248,6 +248,26 @@ class TestFileArtifactStore:
 
             assert data == {"persistent": True}
 
+    def test_same_content_different_runs_do_not_collide(self):
+        """Same bytes stored for different runs must not overwrite metadata (run-scoped ids)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+
+            m1 = store.store(b"same-content", run_id="run-1")
+            m2 = store.store(b"same-content", run_id="run-2")
+
+            assert m1.artifact_id != m2.artifact_id
+
+            run1 = store.list_by_run("run-1")
+            run2 = store.list_by_run("run-2")
+            assert {m.artifact_id for m in run1} == {m1.artifact_id}
+            assert {m.artifact_id for m in run2} == {m2.artifact_id}
+
+            meta1 = store.get_metadata(m1.artifact_id)
+            meta2 = store.get_metadata(m2.artifact_id)
+            assert meta1 is not None and meta1.run_id == "run-1"
+            assert meta2 is not None and meta2.run_id == "run-2"
+
     def test_delete_removes_files(self):
         """Delete removes both content and metadata files."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -692,6 +712,18 @@ class TestComputeArtifactId:
         id2 = compute_artifact_id(b"content b")
 
         assert id1 != id2
+
+    def test_compute_artifact_id_namespaced_by_run_id(self):
+        """Same content produces different IDs when run_id differs (run-scoped addressing)."""
+        from abstractruntime import compute_artifact_id
+
+        content = b"same bytes"
+        id1 = compute_artifact_id(content, run_id="run-1")
+        id2 = compute_artifact_id(content, run_id="run-2")
+        id3 = compute_artifact_id(content, run_id="run-1")
+
+        assert id1 != id2
+        assert id1 == id3
 
     def test_compute_artifact_id_check_before_store(self):
         """Can check if content exists before storing."""

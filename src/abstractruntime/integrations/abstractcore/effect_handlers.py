@@ -11,6 +11,7 @@ They are designed to keep `RunState.vars` JSON-safe.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.models import Effect, EffectType, RunState, WaitReason, WaitState
@@ -20,6 +21,26 @@ from .tool_executor import ToolExecutor
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _jsonable(value: Any) -> Any:
+    """Best-effort conversion to JSON-safe objects.
+
+    Runtime traces and effect outcomes are persisted in RunState.vars and must remain JSON-safe.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    try:
+        json.dumps(value)
+        return value
+    except Exception:
+        return str(value)
 
 
 def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Type[Any]:
@@ -143,6 +164,18 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                 )
                 params["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
 
+            runtime_observability = {
+                "llm_generate_kwargs": _jsonable(
+                    {
+                        "prompt": str(prompt or ""),
+                        "messages": messages,
+                        "system_prompt": system_prompt,
+                        "tools": tools,
+                        "params": params,
+                    }
+                ),
+            }
+
             result = llm.generate(
                 prompt=str(prompt or ""),
                 messages=messages,
@@ -150,6 +183,16 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                 tools=tools,
                 params=params,
             )
+            if isinstance(result, dict):
+                meta = result.get("metadata")
+                if not isinstance(meta, dict):
+                    meta = {}
+                    result["metadata"] = meta
+                existing = meta.get("_runtime_observability")
+                if not isinstance(existing, dict):
+                    existing = {}
+                    meta["_runtime_observability"] = existing
+                existing.update(runtime_observability)
             return EffectOutcome.completed(result=result)
         except Exception as e:
             logger.error("LLM_CALL failed", error=str(e))
@@ -181,34 +224,67 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
                 "MappingToolExecutor/AbstractCoreToolExecutor/PassthroughToolExecutor."
             )
 
-        filtered_tool_calls = tool_calls
+        original_call_count = len(tool_calls)
+
+        # Always block non-dict tool call entries: passthrough hosts expect dicts and may crash otherwise.
         blocked_by_index: Dict[int, Dict[str, Any]] = {}
-        if allowlist_enabled:
-            filtered_tool_calls = []
-            for idx, tc in enumerate(tool_calls):
-                if not isinstance(tc, dict):
-                    filtered_tool_calls.append(tc)
-                    continue
-                name = tc.get("name")
-                name_str = str(name) if isinstance(name, str) else ""
-                if name_str and name_str not in allowed_tools:
+        filtered_tool_calls: list[Dict[str, Any]] = []
+
+        # For evidence and deterministic resume merging, keep a positional tool call list aligned to the
+        # *original* tool call order. Blocked entries are represented as empty-args stubs.
+        tool_calls_for_evidence: list[Dict[str, Any]] = []
+
+        for idx, tc in enumerate(tool_calls):
+            if not isinstance(tc, dict):
+                blocked_by_index[idx] = {
+                    "call_id": "",
+                    "name": "",
+                    "success": False,
+                    "output": None,
+                    "error": "Invalid tool call (expected an object)",
+                }
+                tool_calls_for_evidence.append({})
+                continue
+
+            name_raw = tc.get("name")
+            name = name_raw.strip() if isinstance(name_raw, str) else ""
+            call_id = str(tc.get("call_id") or "")
+
+            if allowlist_enabled:
+                if not name:
                     blocked_by_index[idx] = {
-                        "call_id": str(tc.get("call_id") or ""),
-                        "name": name_str,
+                        "call_id": call_id,
+                        "name": "",
                         "success": False,
                         "output": None,
-                        "error": f"Tool '{name_str}' is not allowed for this node",
+                        "error": "Tool call missing a valid name",
                     }
+                    tool_calls_for_evidence.append({"call_id": call_id, "name": "", "arguments": {}})
                     continue
-                filtered_tool_calls.append(tc)
-
-            if not filtered_tool_calls:
-                return EffectOutcome.completed(
-                    result={
-                        "mode": "executed",
-                        "results": [blocked_by_index[i] for i in sorted(blocked_by_index.keys())],
+                if name not in allowed_tools:
+                    blocked_by_index[idx] = {
+                        "call_id": call_id,
+                        "name": name,
+                        "success": False,
+                        "output": None,
+                        "error": f"Tool '{name}' is not allowed for this node",
                     }
-                )
+                    # Do not leak arguments for disallowed tools into the durable wait payload.
+                    tool_calls_for_evidence.append({"call_id": call_id, "name": name, "arguments": {}})
+                    continue
+
+            # Allowed (or allowlist disabled): include for execution and keep full args for evidence.
+            filtered_tool_calls.append(tc)
+            tool_calls_for_evidence.append(tc)
+
+        # If everything was blocked, complete immediately with blocked results (no waiting/execution).
+        if not filtered_tool_calls and blocked_by_index:
+            return EffectOutcome.completed(
+                result={
+                    "mode": "executed",
+                    "results": [blocked_by_index[i] for i in sorted(blocked_by_index.keys())],
+                }
+            )
 
         try:
             result = tools.execute(tool_calls=filtered_tool_calls)
@@ -219,13 +295,39 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
         mode = result.get("mode")
         if mode and mode != "executed":
             # Passthrough/untrusted mode: pause until an external host resumes with tool results.
-            wait_key = payload.get("wait_key") or f"tool_calls:{run.run_id}:{run.current_node}"
+            #
+            # Correctness/security: persist only allowlist-safe tool calls in the wait payload.
+            wait_key = payload.get("wait_key") or result.get("wait_key") or f"tool_calls:{run.run_id}:{run.current_node}"
+            raw_wait_reason = result.get("wait_reason")
+            wait_reason = WaitReason.EVENT
+            if isinstance(raw_wait_reason, str) and raw_wait_reason.strip():
+                try:
+                    wait_reason = WaitReason(raw_wait_reason.strip())
+                except ValueError:
+                    wait_reason = WaitReason.EVENT
+            elif str(mode).strip().lower() == "delegated":
+                wait_reason = WaitReason.JOB
+
+            tool_calls_for_wait = result.get("tool_calls")
+            if not isinstance(tool_calls_for_wait, list):
+                tool_calls_for_wait = filtered_tool_calls
+
+            details: Dict[str, Any] = {"mode": mode, "tool_calls": _jsonable(tool_calls_for_wait)}
+            executor_details = result.get("details")
+            if isinstance(executor_details, dict) and executor_details:
+                # Avoid collisions with our reserved keys.
+                details["executor"] = _jsonable(executor_details)
+            if blocked_by_index:
+                details["original_call_count"] = original_call_count
+                details["blocked_by_index"] = {str(k): _jsonable(v) for k, v in blocked_by_index.items()}
+                details["tool_calls_for_evidence"] = _jsonable(tool_calls_for_evidence)
+
             wait = WaitState(
-                reason=WaitReason.EVENT,
+                reason=wait_reason,
                 wait_key=str(wait_key),
                 resume_to_node=payload.get("resume_to_node") or default_next_node,
                 result_key=effect.result_key,
-                details={"mode": mode, "tool_calls": tool_calls},
+                details=details,
             )
             return EffectOutcome.waiting(wait)
 

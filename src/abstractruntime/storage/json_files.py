@@ -10,6 +10,7 @@ This is meant as a straightforward MVP backend.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -36,8 +37,20 @@ class JsonFileRunStore(RunStore):
 
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
-        with p.open("w", encoding="utf-8") as f:
-            json.dump(asdict(run), f, ensure_ascii=False, indent=2)
+        # Atomic write to prevent corrupted/partial JSON when multiple threads/processes
+        # (e.g. WS tick loop + UI pause/cancel) write the same run file concurrently.
+        tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(asdict(run), f, ensure_ascii=False, indent=2)
+            tmp.replace(p)
+        finally:
+            # Best-effort cleanup if replace() failed.
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)

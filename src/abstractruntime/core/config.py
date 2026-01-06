@@ -29,6 +29,8 @@ class RuntimeConfig:
         max_output_tokens: Maximum tokens for LLM response (None = provider default)
         warn_tokens_pct: Percentage threshold for token warnings (default: 80)
         max_history_messages: Maximum conversation history messages (-1 = unlimited)
+        provider: Default provider id for this Runtime (best-effort; used for run metadata)
+        model: Default model id for this Runtime (best-effort; used for run metadata)
         model_capabilities: Dict of model capabilities from LLM provider
 
     Example:
@@ -50,6 +52,10 @@ class RuntimeConfig:
     # History management
     max_history_messages: int = -1  # -1 = unlimited (send all messages)
 
+    # Default routing metadata (optional; depends on how the Runtime was constructed)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
     # Model capabilities (populated from LLM client)
     model_capabilities: Dict[str, Any] = field(default_factory=dict)
 
@@ -60,6 +66,11 @@ class RuntimeConfig:
             Dict with canonical limit values for storage in RunState.vars["_limits"].
             Uses model_capabilities as fallback for max_tokens if not explicitly set.
         """
+        max_output_tokens = self.max_output_tokens
+        if max_output_tokens is None:
+            # Best-effort: persist the provider/model default so agent logic can reason about
+            # output-size constraints (e.g., chunk large tool arguments like file contents).
+            max_output_tokens = self.model_capabilities.get("max_output_tokens")
         return {
             # Iteration control
             "max_iterations": self.max_iterations,
@@ -67,7 +78,7 @@ class RuntimeConfig:
 
             # Token management
             "max_tokens": self.max_tokens or self.model_capabilities.get("max_tokens", 32768),
-            "max_output_tokens": self.max_output_tokens,
+            "max_output_tokens": max_output_tokens,
             "estimated_tokens_used": 0,
 
             # History management
@@ -97,5 +108,7 @@ class RuntimeConfig:
             max_output_tokens=self.max_output_tokens,
             warn_tokens_pct=self.warn_tokens_pct,
             max_history_messages=self.max_history_messages,
+            provider=self.provider,
+            model=self.model,
             model_capabilities=capabilities,
         )

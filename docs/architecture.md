@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture (Current)
 
-> Updated: 2025-12-27  
+> Updated: 2026-01-02  
 > Scope: this describes **what is implemented today** in this monorepo.
 
 AbstractRuntime is the **durable execution kernel** of the AbstractFramework. It runs workflow graphs as a persisted state machine:
@@ -74,6 +74,19 @@ Storage interfaces are defined in `abstractruntime/src/abstractruntime/storage/b
 ## Effect System (Handlers)
 
 The runtime executes side effects by dispatching `EffectType` to handler callables. The core runtime ships with the effect protocol; hosts wire concrete handlers.
+
+### Memory effects (runtime-owned, durable)
+The runtime ships a small, provenance-first memory surface (no embeddings):
+- `EffectType.MEMORY_COMPACT`: archive older `context.messages` into an artifact + insert a summary handle
+- `EffectType.MEMORY_NOTE`: store a durable note with tags + sources
+  - supports `payload.scope = run|session|global` (scope is routing: it selects the index-owner run)
+- `EffectType.MEMORY_QUERY`: recall spans/notes by id/tags/time/query
+  - supports `payload.scope = run|session|global|all`
+  - supports `payload.return = rendered|meta|both` (meta enables deterministic workflows without parsing text)
+- `EffectType.MEMORY_TAG`: apply/merge tags onto existing span index entries
+- `EffectType.MEMORY_REHYDRATE`: rehydrate archived `conversation_span` artifacts into `context.messages` deterministically (deduped)
+
+Global scope uses a stable run id (default `global_memory`, override via `ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID`, validated as filesystem-safe).
 
 ### AbstractCore Integration (LLM + Tools)
 `abstractruntime/src/abstractruntime/integrations/abstractcore/*` provides:

@@ -7,11 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-01-06
+
 ### Added
-- **Durable custom events (signals)**:
-  - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs.
-  - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes a stable `wait_key`).
-  - `Scheduler.emit_event(...)` host API for external event delivery (session-scoped by default).
+
+- **Active Memory System** (`abstractruntime.memory.active_memory`): Complete MemAct agent memory module
+  - Runtime-owned `ACTIVE_MEMORY_DELTA` effect for structured Active Memory updates (used by agents via `active_memory_delta` tool)
+  - JSON-safe durable storage in `run.vars["_runtime"]["active_memory"]`
+  - Memory modules: MY PERSONA, RELATIONSHIPS, MEMORY BLUEPRINTS, CURRENT TASKS, CURRENT CONTEXT, CRITICAL INSIGHTS, REFERENCES, HISTORY
+  - Active Memory v9 format with natural-language markdown rendering (not YAML) to reduce syntax contamination
+  - All components render into system prompt by default (prevents user-role pollution on native-tool providers)
+
+- **MCP Worker** (`abstractruntime-mcp-worker`): Standalone stdio-based MCP server for AbstractRuntime tools
+  - Exposes AbstractRuntime's default toolsets as MCP tools via stdio transport
+  - Human-friendly logging to stderr with ANSI color support
+  - Security: allowlist-based command execution safety (`TOOL_WAIT` effect for dangerous commands)
+  - New optional dependency: `abstractruntime[mcp-worker]` (includes `abstractcore[tools]`)
+  - Entry point: `abstractruntime-mcp-worker` CLI script
+
+- **Evidence Capture System** (`abstractruntime.evidence.recorder`): Always-on provenance-first evidence recording
+  - Automatically records evidence for external-boundary tools: `web_search`, `fetch_url`, `execute_command`
+  - Evidence stored as artifact-backed records indexed as `kind="evidence"` in `RunState.vars["_runtime"]["memory_spans"]`
+  - Runtime helpers: `Runtime.list_evidence(run_id)` and `Runtime.load_evidence(evidence_id)`
+  - Keeps RunState JSON-safe by storing large payloads in ArtifactStore with refs
+
+- **Ledger Subscriptions**: Real-time step append events via `Runtime.subscribe_ledger()`
+  - `create_local_runtime`, `create_remote_runtime`, `create_hybrid_runtime` now wrap LedgerStore with `ObservableLedgerStore` by default
+  - Hosts can receive real-time notifications when steps are appended to ledger
+
+- **Durable Custom Events (Signals)**:
+  - `EMIT_EVENT` effect to dispatch events and resume matching `WAIT_EVENT` runs
+  - Extended `WAIT_EVENT` to accept `{scope, name}` payloads (runtime computes stable `wait_key`)
+  - `Scheduler.emit_event(...)` host API for external event delivery (session-scoped by default)
+
+- **Orchestrator-Owned Timeouts** (AbstractCore integration):
+  - Default **LLM timeout**: 7200s per `LLM_CALL` (not per-workflow), enforced by `create_*_runtime` factories
+  - Default **tool execution timeout**: 7200s per tool call (not per-workflow), enforced by ToolExecutor implementations
+
+- **Tool Executor Enhancements** (`MappingToolExecutor`):
+  - **Argument canonicalization**: Maps common parameter name variations (e.g., `file_path`/`filepath`/`path`) to canonical names
+  - **Filename aliases**: Supports `target_file`, `file_path`, `filepath`, `path` as aliases for file operations
+  - **Error output detection**: Detects structured error responses (`{"success": false, ...}`) from tools
+  - **Argument sanitization**: Cleans and validates tool call arguments
+  - **Timeout support**: Per-tool execution timeouts with configurable limits
+
+- **Memory Query Enhancements** (`MEMORY_QUERY` effect):
+  - Tag filters with **AND/OR** modes (`tags_mode=all|any`) and **multi-value** keys (`tags.person=["alice","bob"]`)
+  - Metadata filters for **authors** (`created_by`) and **locations** (`location`, `tags.location`)
+  - Span records now capture `created_by` for `conversation_span`, `active_memory_span`, `memory_note` when `actor_id` available
+  - `MEMORY_NOTE` accepts optional `location` field
+  - `MEMORY_NOTE` supports `keep_in_context=true` flag to immediately rehydrate stored note into `context.messages`
+
+- **Package Dependencies**:
+  - New optional dependency: `abstractruntime[abstractcore]` (enables `abstractruntime.integrations.abstractcore.*`)
+  - New optional dependency: `abstractruntime[mcp-worker]` (includes `abstractcore[tools]>=2.6.8`)
+
+### Changed
+
+- **LLM Client Enhancements**:
+  - Tool call parsing refactored for better robustness and error handling
+  - Streaming support with timing metrics (TTFT, generation time)
+  - Response normalization preserves JSON-safe `raw_response` for debugging
+  - Always attaches exact provider request payload under `result.metadata._provider_request` for every `LLM_CALL` step
+
+- **Runtime Core** (902 lines changed):
+  - Enhanced resume handling for paused/cancelled runs
+  - Improved subworkflow execution with async+wait support
+  - Better observable ledger integration
+
+### Fixed
+
+- **Cancellation is Terminal**: `Runtime.tick()` now treats `RunStatus.CANCELLED` as terminal and will not progress cancelled runs
+- **Control-Plane Safety**: `Runtime.tick()` stops without overwriting externally persisted pause/cancel state (used by AbstractFlow Web)
+- **Atomic Run Checkpoints**: `JsonFileRunStore.save()` writes via temp file + atomic rename to prevent partial/corrupt JSON under concurrent writes
+- **START_SUBWORKFLOW async+wait**: Support for `async=true` + `wait=true` to start child run without blocking parent tick, while keeping parent in durable SUBWORKFLOW wait
+- **ArtifactStore Run-Scoped Addressing**: Artifact IDs namespaced to run when `run_id` provided (prevents cross-run collisions, preserves purge-by-run semantics)
+- **AbstractCore Integration Imports**: `LocalAbstractCoreLLMClient` imports `create_llm` robustly in monorepo namespace-package layouts
+- **Token Limit Metadata**: `_limits.max_output_tokens` falls back to model capabilities when not configured (runtime surfaces explicit per-step output budget)
+- **Token-Cap Normalization Boundary**: Removed local `max_tokens → max_output_tokens` aliasing from AbstractRuntime's AbstractCore client (AbstractCore providers own this mapping)
+
+### Testing
+
+- **25 new/modified test files** covering:
+  - Active Memory functionality
+  - MCP worker (logging, security, stdio communication)
+  - Evidence recorder
+  - Memory query rich filters
+  - Tool executor (canonicalization, filename aliases, timeouts, error detection)
+  - LLM client tool call parsing
+  - Runtime configuration and subworkflow handling
+  - Packaging extras validation
+
+### Statistics
+
+- **33 commits** improving memory systems, MCP integration, evidence capture, and tool execution
+- **45 files changed**: 5,788 insertions, 286 deletions
+- **6,074 total lines changed** across the codebase
+- **3 new modules**: `active_memory.py`, `evidence/recorder.py`, `mcp_worker.py`
 
 ## [0.2.0] - 2025-12-17
 

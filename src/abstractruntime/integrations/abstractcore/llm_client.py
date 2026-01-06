@@ -13,7 +13,9 @@ Remote mode is the preferred way to support per-request dynamic routing (e.g. `b
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -21,52 +23,36 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-_TOOL_MARKERS = (
-    "<|tool_call|>",
-    "</|tool_call|>",
-    "<tool_call>",
-    "</tool_call>",
-    "<function_call",
-    "</function_call>",
-    "```tool_code",
-    "```tool_call",
-)
-
 
 def _maybe_parse_tool_calls_from_text(
     *,
     content: Optional[str],
+    allowed_tool_names: Optional[set[str]] = None,
+    model_name: Optional[str] = None,
+    tool_handler: Any = None,
 ) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
-    """Best-effort extraction of tool calls from response content.
+    """Deprecated: tool-call parsing belongs to AbstractCore.
 
-    Some provider/model combinations emit tool calls as text tags (e.g. `<tool_call>...</tool_call>`)
-    but fail to populate a structured `tool_calls` field. When that happens, the runtime must still
-    be able to execute tools via the ToolExecutor (ADR-0006).
-
-    Returns:
-        (tool_calls, cleaned_content)
-        - tool_calls: JSON-safe list of tool call dicts when detected, else None
-        - cleaned_content: content with tool-call markup stripped when detected, else None
+    AbstractCore now normalizes non-streaming responses by populating structured `tool_calls`
+    and returning cleaned `content`. This helper remains only for backward compatibility with
+    older AbstractCore versions and will be removed in the next major release.
     """
+    # Keep behavior for external callers/tests that still import it.
     if not isinstance(content, str) or not content.strip():
         return None, None
+    if tool_handler is None:
+        from abstractcore.tools.handler import UniversalToolHandler
 
-    lower = content.lower()
-    if not any(m in lower for m in _TOOL_MARKERS):
-        return None, None
+        tool_handler = UniversalToolHandler(str(model_name or ""))
 
     try:
-        from abstractcore.tools.parser import parse_tool_calls, clean_tool_syntax
+        parsed = tool_handler.parse_response(content, mode="prompted")
     except Exception:
         return None, None
 
-    try:
-        # Force "try all formats" to handle architecture detection mismatches.
-        calls = parse_tool_calls(content, model_name=None)
-    except Exception:
-        calls = []
-
-    if not calls:
+    calls = getattr(parsed, "tool_calls", None)
+    cleaned = getattr(parsed, "content", None)
+    if not isinstance(calls, list) or not calls:
         return None, None
 
     out_calls: List[Dict[str, Any]] = []
@@ -76,9 +62,11 @@ def _maybe_parse_tool_calls_from_text(
         call_id = getattr(tc, "call_id", None)
         if not isinstance(name, str) or not name.strip():
             continue
+        if isinstance(allowed_tool_names, set) and allowed_tool_names and name not in allowed_tool_names:
+            continue
         out_calls.append(
             {
-                "name": name,
+                "name": name.strip(),
                 "arguments": _jsonable(arguments) if arguments is not None else {},
                 "call_id": str(call_id) if call_id is not None else None,
             }
@@ -86,13 +74,7 @@ def _maybe_parse_tool_calls_from_text(
 
     if not out_calls:
         return None, None
-
-    try:
-        cleaned = clean_tool_syntax(content, calls)
-    except Exception:
-        cleaned = content
-
-    return out_calls, cleaned
+    return out_calls, (str(cleaned) if isinstance(cleaned, str) else "")
 
 
 @dataclass(frozen=True)
@@ -156,6 +138,95 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _loads_dict_like(raw: Any) -> Optional[Dict[str, Any]]:
+    """Parse a JSON-ish or Python-literal dict safely."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    candidate = re.sub(r"\btrue\b", "True", text, flags=re.IGNORECASE)
+    candidate = re.sub(r"\bfalse\b", "False", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\bnull\b", "None", candidate, flags=re.IGNORECASE)
+    try:
+        parsed = ast.literal_eval(candidate)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(k): v for k, v in parsed.items()}
+
+
+def _normalize_tool_calls(tool_calls: Any) -> Optional[List[Dict[str, Any]]]:
+    """Normalize tool call shapes into AbstractRuntime's standard dict form.
+
+    Standard shape:
+        {"name": str, "arguments": dict, "call_id": Optional[str]}
+    """
+    if tool_calls is None:
+        return None
+    if not isinstance(tool_calls, list):
+        return None
+
+    normalized: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+        name: Optional[str] = None
+        arguments: Any = None
+        call_id: Any = None
+
+        if isinstance(tc, dict):
+            call_id = tc.get("call_id", None)
+            if call_id is None:
+                call_id = tc.get("id", None)
+
+            raw_name = tc.get("name")
+            raw_args = tc.get("arguments")
+
+            func = tc.get("function") if isinstance(tc.get("function"), dict) else None
+            if func and (not isinstance(raw_name, str) or not raw_name.strip()):
+                raw_name = func.get("name")
+            if func and raw_args is None:
+                raw_args = func.get("arguments")
+
+            if isinstance(raw_name, str):
+                name = raw_name.strip()
+            arguments = raw_args if raw_args is not None else {}
+        else:
+            raw_name = getattr(tc, "name", None)
+            raw_args = getattr(tc, "arguments", None)
+            call_id = getattr(tc, "call_id", None)
+            if isinstance(raw_name, str):
+                name = raw_name.strip()
+            arguments = raw_args if raw_args is not None else {}
+
+        if not isinstance(name, str) or not name:
+            continue
+
+        if isinstance(arguments, str):
+            parsed = _loads_dict_like(arguments)
+            arguments = parsed if isinstance(parsed, dict) else {}
+
+        if not isinstance(arguments, dict):
+            arguments = {}
+
+        normalized.append(
+            {
+                "name": name,
+                "arguments": _jsonable(arguments),
+                "call_id": str(call_id) if call_id is not None else None,
+            }
+        )
+
+    return normalized or None
+
+
 def _normalize_local_response(resp: Any) -> Dict[str, Any]:
     """Normalize an AbstractCore local `generate()` result into JSON."""
 
@@ -166,6 +237,9 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
             meta = out.get("metadata")
             if isinstance(meta, dict) and "trace_id" in meta and "trace_id" not in out:
                 out["trace_id"] = meta["trace_id"]
+            # Some providers place reasoning under metadata (e.g. LM Studio gpt-oss).
+            if "reasoning" not in out and isinstance(meta, dict) and isinstance(meta.get("reasoning"), str):
+                out["reasoning"] = meta.get("reasoning")
         return out
 
     # Pydantic structured output
@@ -183,26 +257,162 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
 
     # AbstractCore GenerateResponse
     content = getattr(resp, "content", None)
+    raw_response = getattr(resp, "raw_response", None)
     tool_calls = getattr(resp, "tool_calls", None)
     usage = getattr(resp, "usage", None)
     model = getattr(resp, "model", None)
     finish_reason = getattr(resp, "finish_reason", None)
     metadata = getattr(resp, "metadata", None)
+    gen_time = getattr(resp, "gen_time", None)
     trace_id: Optional[str] = None
+    reasoning: Optional[str] = None
     if isinstance(metadata, dict):
         raw = metadata.get("trace_id")
         if raw is not None:
             trace_id = str(raw)
+        r = metadata.get("reasoning")
+        if isinstance(r, str) and r.strip():
+            reasoning = r.strip()
 
     return {
         "content": content,
+        "reasoning": reasoning,
         "data": None,
+        "raw_response": _jsonable(raw_response) if raw_response is not None else None,
         "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
         "usage": _jsonable(usage) if usage is not None else None,
         "model": model,
         "finish_reason": finish_reason,
         "metadata": _jsonable(metadata) if metadata is not None else None,
         "trace_id": trace_id,
+        "gen_time": float(gen_time) if isinstance(gen_time, (int, float)) else None,
+    }
+
+
+def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
+    """Consume an AbstractCore streaming `generate(..., stream=True)` iterator into a single JSON result.
+
+    AbstractRuntime currently persists a single effect outcome object per LLM call, so even when
+    the underlying provider streams we aggregate into one final dict and surface timing fields.
+    """
+    import time
+
+    start_perf = time.perf_counter()
+
+    chunks: list[str] = []
+    tool_calls: Any = None
+    usage: Any = None
+    model: Optional[str] = None
+    finish_reason: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+    trace_id: Optional[str] = None
+    reasoning: Optional[str] = None
+    ttft_ms: Optional[float] = None
+
+    def _maybe_capture_ttft(*, content: Any, tool_calls_value: Any, meta: Any) -> None:
+        nonlocal ttft_ms
+        if ttft_ms is not None:
+            return
+
+        if isinstance(meta, dict):
+            timing = meta.get("_timing") if isinstance(meta.get("_timing"), dict) else None
+            if isinstance(timing, dict) and isinstance(timing.get("ttft_ms"), (int, float)):
+                ttft_ms = float(timing["ttft_ms"])
+                return
+
+        has_content = isinstance(content, str) and bool(content)
+        has_tools = isinstance(tool_calls_value, list) and bool(tool_calls_value)
+        if has_content or has_tools:
+            ttft_ms = round((time.perf_counter() - start_perf) * 1000, 1)
+
+    for chunk in stream:
+        if chunk is None:
+            continue
+
+        if isinstance(chunk, dict):
+            content = chunk.get("content")
+            if isinstance(content, str) and content:
+                chunks.append(content)
+
+            tc = chunk.get("tool_calls")
+            if tc is not None:
+                tool_calls = tc
+
+            u = chunk.get("usage")
+            if u is not None:
+                usage = u
+
+            m = chunk.get("model")
+            if model is None and isinstance(m, str) and m.strip():
+                model = m.strip()
+
+            fr = chunk.get("finish_reason")
+            if fr is not None:
+                finish_reason = str(fr)
+
+            meta = chunk.get("metadata")
+            _maybe_capture_ttft(content=content, tool_calls_value=tc, meta=meta)
+
+            if isinstance(meta, dict):
+                meta_json = _jsonable(meta)
+                if isinstance(meta_json, dict):
+                    metadata.update(meta_json)
+                    raw_trace = meta_json.get("trace_id")
+                    if trace_id is None and raw_trace is not None:
+                        trace_id = str(raw_trace)
+                    r = meta_json.get("reasoning")
+                    if reasoning is None and isinstance(r, str) and r.strip():
+                        reasoning = r.strip()
+            continue
+
+        content = getattr(chunk, "content", None)
+        if isinstance(content, str) and content:
+            chunks.append(content)
+
+        tc = getattr(chunk, "tool_calls", None)
+        if tc is not None:
+            tool_calls = tc
+
+        u = getattr(chunk, "usage", None)
+        if u is not None:
+            usage = u
+
+        m = getattr(chunk, "model", None)
+        if model is None and isinstance(m, str) and m.strip():
+            model = m.strip()
+
+        fr = getattr(chunk, "finish_reason", None)
+        if fr is not None:
+            finish_reason = str(fr)
+
+        meta = getattr(chunk, "metadata", None)
+        _maybe_capture_ttft(content=content, tool_calls_value=tc, meta=meta)
+
+        if isinstance(meta, dict):
+            meta_json = _jsonable(meta)
+            if isinstance(meta_json, dict):
+                metadata.update(meta_json)
+                raw_trace = meta_json.get("trace_id")
+                if trace_id is None and raw_trace is not None:
+                    trace_id = str(raw_trace)
+                r = meta_json.get("reasoning")
+                if reasoning is None and isinstance(r, str) and r.strip():
+                    reasoning = r.strip()
+
+    gen_time = round((time.perf_counter() - start_perf) * 1000, 1)
+
+    return {
+        "content": "".join(chunks),
+        "reasoning": reasoning,
+        "data": None,
+        "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
+        "usage": _jsonable(usage) if usage is not None else None,
+        "model": model,
+        "finish_reason": finish_reason,
+        "metadata": metadata or None,
+        "trace_id": trace_id,
+        "gen_time": gen_time,
+        "ttft_ms": ttft_ms,
     }
 
 
@@ -216,7 +426,17 @@ class LocalAbstractCoreLLMClient:
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from abstractcore import create_llm
+        # In this monorepo layout, `import abstractcore` can resolve to a namespace package
+        # (the outer project directory) when running from the repo root. In that case, the
+        # top-level re-export `from abstractcore import create_llm` is unavailable even though
+        # the actual module tree (e.g. `abstractcore.core.factory`) is importable.
+        #
+        # Prefer the canonical public import, but fall back to the concrete module path so
+        # in-repo tooling/tests don't depend on editable-install import ordering.
+        try:
+            from abstractcore import create_llm  # type: ignore
+        except Exception:  # pragma: no cover
+            from abstractcore.core.factory import create_llm  # type: ignore
         from abstractcore.tools.handler import UniversalToolHandler
 
         self._provider = provider
@@ -224,7 +444,9 @@ class LocalAbstractCoreLLMClient:
         kwargs = dict(llm_kwargs or {})
         kwargs.setdefault("enable_tracing", True)
         if kwargs.get("enable_tracing"):
-            kwargs.setdefault("max_traces", 0)
+            # Keep a small in-memory ring buffer for exact request/response observability.
+            # This enables hosts (AbstractCode/AbstractFlow) to inspect trace payloads by trace_id.
+            kwargs.setdefault("max_traces", 50)
         self._llm = create_llm(provider, model=model, **kwargs)
         self._tool_handler = UniversalToolHandler(model)
 
@@ -239,6 +461,14 @@ class LocalAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         params = dict(params or {})
 
+        stream_raw = params.pop("stream", None)
+        if stream_raw is None:
+            stream_raw = params.pop("streaming", None)
+        if isinstance(stream_raw, str):
+            stream = stream_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            stream = bool(stream_raw) if stream_raw is not None else False
+
         # `base_url` is a provider construction concern in local mode. We intentionally
         # do not create new providers per call unless the host explicitly chooses to.
         params.pop("base_url", None)
@@ -246,75 +476,66 @@ class LocalAbstractCoreLLMClient:
         params.pop("_provider", None)
         params.pop("_model", None)
 
-        capabilities: List[str] = []
-        get_capabilities = getattr(self._llm, "get_capabilities", None)
-        if callable(get_capabilities):
-            try:
-                capabilities = list(get_capabilities())
-            except Exception:
-                capabilities = []
-        supports_tools = "tools" in set(c.lower() for c in capabilities)
-
-        if tools and not supports_tools:
-            # Fallback tool calling via prompting for providers/models without native tool support.
-            from abstractcore.tools import ToolDefinition
-
-            tool_defs = [
-                ToolDefinition(
-                    name=t.get("name", ""),
-                    description=t.get("description", ""),
-                    parameters=t.get("parameters", {}),
-                )
-                for t in tools
-            ]
-            tools_prompt = self._tool_handler.format_tools_prompt(tool_defs)
-            effective_prompt = f"{tools_prompt}\n\nUser request: {prompt}"
-
-            resp = self._llm.generate(
-                prompt=effective_prompt,
-                messages=messages,
-                system_prompt=system_prompt,
-                stream=False,
-                **params,
-            )
-            result = _normalize_local_response(resp)
-
-            # Parse tool calls from response content.
-            content = result.get("content")
-            if isinstance(content, str) and content.strip():
-                parsed = self._tool_handler.parse_response(content, mode="prompted")
-                if parsed.tool_calls:
-                    result["tool_calls"] = [
-                        {"name": tc.name, "arguments": tc.arguments, "call_id": tc.call_id}
-                        for tc in parsed.tool_calls
-                    ]
-                    result["content"] = parsed.content
-                else:
-                    tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content)
-                    if tool_calls:
-                        result["tool_calls"] = tool_calls
-                        if isinstance(cleaned, str):
-                            result["content"] = cleaned
-            return result
-
         resp = self._llm.generate(
             prompt=str(prompt or ""),
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
-            stream=False,
+            stream=stream,
             **params,
         )
-        result = _normalize_local_response(resp)
+        if stream and hasattr(resp, "__next__"):
+            result = _normalize_local_streaming_response(resp)
+        else:
+            result = _normalize_local_response(resp)
+        result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
-        # Fallback: some providers return tool call tags in content without structured tool_calls.
-        if tools and not result.get("tool_calls"):
-            content = result.get("content")
-            tool_calls, cleaned = _maybe_parse_tool_calls_from_text(content=content if isinstance(content, str) else None)
-            if tool_calls:
-                result["tool_calls"] = tool_calls
-                if isinstance(cleaned, str):
-                    result["content"] = cleaned
+        # Durable observability: ensure a provider request payload exists even when the
+        # underlying provider does not attach `_provider_request` metadata.
+        #
+        # AbstractCode's `/llm --verbatim` expects `metadata._provider_request.payload.messages`
+        # to be present to display the exact system/user content that was sent.
+        try:
+            meta = result.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+                result["metadata"] = meta
+
+            if "_provider_request" not in meta:
+                out_messages: List[Dict[str, str]] = []
+                if isinstance(system_prompt, str) and system_prompt:
+                    out_messages.append({"role": "system", "content": system_prompt})
+                if isinstance(messages, list) and messages:
+                    # Copy dict entries defensively (caller-owned objects).
+                    out_messages.extend([dict(m) for m in messages if isinstance(m, dict)])
+
+                # Append the current prompt as the final user message unless it's already present.
+                prompt_str = str(prompt or "")
+                if prompt_str:
+                    last = out_messages[-1] if out_messages else None
+                    if not (isinstance(last, dict) and last.get("role") == "user" and last.get("content") == prompt_str):
+                        out_messages.append({"role": "user", "content": prompt_str})
+
+                payload: Dict[str, Any] = {
+                    "model": str(self._model),
+                    "messages": out_messages,
+                    "stream": bool(stream),
+                }
+                if tools is not None:
+                    payload["tools"] = tools
+
+                # Include generation params for debugging; keep JSON-safe (e.g. response_model).
+                payload["params"] = _jsonable(params) if params else {}
+
+                meta["_provider_request"] = {
+                    "transport": "local",
+                    "provider": str(self._provider),
+                    "model": str(self._model),
+                    "payload": payload,
+                }
+        except Exception:
+            # Never fail an LLM call due to observability.
+            pass
 
         return result
 
@@ -448,13 +669,17 @@ class RemoteAbstractCoreLLMClient:
         *,
         server_base_url: str,
         model: str,
-        timeout_s: float = 60.0,
+        # Runtime authority default: long-running workflow steps may legitimately take a long time.
+        # Keep this aligned with AbstractRuntime's orchestration defaults.
+        timeout_s: Optional[float] = None,
         headers: Optional[Dict[str, str]] = None,
         request_sender: Optional[RequestSender] = None,
     ):
+        from .constants import DEFAULT_LLM_TIMEOUT_S
+
         self._server_base_url = server_base_url.rstrip("/")
         self._model = model
-        self._timeout_s = timeout_s
+        self._timeout_s = float(timeout_s) if timeout_s is not None else DEFAULT_LLM_TIMEOUT_S
         self._headers = dict(headers or {})
         self._sender = request_sender or HttpxRequestSender()
 
@@ -500,6 +725,9 @@ class RemoteAbstractCoreLLMClient:
             "model": self._model,
             "messages": out_messages,
             "stream": False,
+            # Orchestrator policy: ask AbstractCore server to use the same timeout it expects.
+            # This keeps runtime authority even when the actual provider call happens server-side.
+            "timeout_s": self._timeout_s,
         }
 
         # Dynamic routing support (AbstractCore server feature).
@@ -532,16 +760,26 @@ class RemoteAbstractCoreLLMClient:
         try:
             choice0 = (resp.get("choices") or [])[0]
             msg = choice0.get("message") or {}
-            return {
+            meta: Dict[str, Any] = {
+                "_provider_request": {"url": url, "payload": body}
+            }
+            if trace_id:
+                meta["trace_id"] = trace_id
+            result = {
                 "content": msg.get("content"),
+                "reasoning": msg.get("reasoning"),
                 "data": None,
+                "raw_response": _jsonable(resp) if resp is not None else None,
                 "tool_calls": _jsonable(msg.get("tool_calls")) if msg.get("tool_calls") is not None else None,
                 "usage": _jsonable(resp.get("usage")) if resp.get("usage") is not None else None,
                 "model": resp.get("model"),
                 "finish_reason": choice0.get("finish_reason"),
-                "metadata": {"trace_id": trace_id} if trace_id else None,
+                "metadata": meta,
                 "trace_id": trace_id,
             }
+            result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+
+            return result
         except Exception:
             # Fallback: return the raw response in JSON-safe form.
             logger.warning("Remote LLM response normalization failed; returning raw JSON")
@@ -552,6 +790,12 @@ class RemoteAbstractCoreLLMClient:
                 "usage": None,
                 "model": resp.get("model") if isinstance(resp, dict) else None,
                 "finish_reason": None,
-                "metadata": {"trace_id": trace_id} if trace_id else None,
+                "metadata": {
+                    "_provider_request": {"url": url, "payload": body},
+                    "trace_id": trace_id,
+                }
+                if trace_id
+                else {"_provider_request": {"url": url, "payload": body}},
                 "trace_id": trace_id,
+                "raw_response": _jsonable(resp) if resp is not None else None,
             }

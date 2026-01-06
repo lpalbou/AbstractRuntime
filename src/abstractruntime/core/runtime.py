@@ -20,10 +20,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 import copy
 import inspect
 import json
+import os
+import re
 
 from .config import RuntimeConfig
 from .models import (
@@ -46,6 +48,10 @@ from .event_keys import build_event_wait_key
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
+_SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _ensure_runtime_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,6 +326,43 @@ class Runtime:
         if "_limits" not in vars:
             vars["_limits"] = self._config.to_limits_dict()
 
+        # Ensure a durable `_runtime` namespace exists and seed default provider/model metadata
+        # from the Runtime config (best-effort).
+        #
+        # Rationale:
+        # - The Runtime is the orchestration authority (ADR-0001/0014), and `start()` is the
+        #   choke point where durable run state is initialized.
+        # - Agents/workflows should not have to guess/duplicate routing metadata to make prompt
+        #   composition decisions (e.g. native-tools => omit Tools(session) prompt catalogs).
+        runtime_ns = vars.get("_runtime")
+        if not isinstance(runtime_ns, dict):
+            runtime_ns = {}
+            vars["_runtime"] = runtime_ns
+        try:
+            provider_id = getattr(self._config, "provider", None)
+            model_id = getattr(self._config, "model", None)
+            if isinstance(provider_id, str) and provider_id.strip():
+                runtime_ns.setdefault("provider", provider_id.strip())
+            if isinstance(model_id, str) and model_id.strip():
+                runtime_ns.setdefault("model", model_id.strip())
+        except Exception:
+            pass
+
+        # Seed tool-support metadata from model capabilities (best-effort).
+        #
+        # This makes the native-vs-prompted tools decision explicit and durable in run state,
+        # so adapters/UI helpers don't have to guess or re-run AbstractCore detection logic.
+        try:
+            caps = getattr(self._config, "model_capabilities", None)
+            if isinstance(caps, dict):
+                tool_support = caps.get("tool_support")
+                if isinstance(tool_support, str) and tool_support.strip():
+                    ts = tool_support.strip()
+                    runtime_ns.setdefault("tool_support", ts)
+                    runtime_ns.setdefault("supports_native_tools", ts == "native")
+        except Exception:
+            pass
+
         run = RunState.new(
             workflow_id=workflow.workflow_id,
             entry_node=workflow.entry_node,
@@ -497,6 +540,37 @@ class Runtime:
         return {"node_id": node_id, "steps": []}
 
     # ---------------------------------------------------------------------
+    # Evidence Helpers (Runtime-Owned)
+    # ---------------------------------------------------------------------
+
+    def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """List evidence records for a run (index entries only).
+
+        Evidence is indexed as `kind="evidence"` items inside `vars["_runtime"]["memory_spans"]`.
+        """
+        run = self.get_state(run_id)
+        runtime_ns = run.vars.get("_runtime")
+        spans = runtime_ns.get("memory_spans") if isinstance(runtime_ns, dict) else None
+        if not isinstance(spans, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for s in spans:
+            if not isinstance(s, dict):
+                continue
+            if s.get("kind") != "evidence":
+                continue
+            out.append(copy.deepcopy(s))
+        return out
+
+    def load_evidence(self, evidence_id: str) -> Optional[dict[str, Any]]:
+        """Load an evidence record payload from ArtifactStore by id."""
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            raise RuntimeError("Evidence requires an ArtifactStore; configure runtime.set_artifact_store(...)")
+        payload = artifact_store.load_json(str(evidence_id))
+        return payload if isinstance(payload, dict) else None
+
+    # ---------------------------------------------------------------------
     # Limit Management
     # ---------------------------------------------------------------------
 
@@ -618,7 +692,8 @@ class Runtime:
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
-        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        # Terminal runs never progress.
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
             return run
         if _is_paused_run_vars(run.vars):
             return run
@@ -632,15 +707,40 @@ class Runtime:
             else:
                 return run
 
+        # IMPORTANT (Web hosts / concurrency):
+        # A run may be paused/cancelled by an external control plane (e.g. AbstractFlow Web UI)
+        # while we're blocked inside a long-running effect (LLM/tool execution).
+        #
+        # We make `tick()` resilient to that by re-loading the persisted RunState before
+        # committing any updates. If an external pause/cancel is observed, we stop without
+        # overwriting it.
+        def _abort_if_externally_controlled() -> Optional[RunState]:
+            try:
+                latest = self.get_state(run_id)
+            except Exception:
+                return None
+            if latest.status == RunStatus.CANCELLED:
+                return latest
+            if _is_paused_run_vars(latest.vars):
+                return latest
+            return None
+
         steps = 0
         while steps < max_steps:
             steps += 1
+
+            controlled = _abort_if_externally_controlled()
+            if controlled is not None:
+                return controlled
 
             handler = workflow.get_node(run.current_node)
             plan = handler(run, self._ctx)
 
             # Completion
             if plan.complete_output is not None:
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.COMPLETED
                 run.output = plan.complete_output
                 run.updated_at = utc_now_iso()
@@ -657,6 +757,9 @@ class Runtime:
             if plan.effect is None:
                 if not plan.next_node:
                     raise ValueError(f"Node '{plan.node_id}' returned no effect and no next_node")
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.current_node = plan.next_node
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
@@ -690,6 +793,26 @@ class Runtime:
 
             duration_ms = float((time.perf_counter() - t0) * 1000.0)
 
+            # Evidence capture (runtime-owned, durable):
+            # After tool execution completes, record provenance-first evidence for a small set of
+            # external-boundary tools (web_search/fetch_url/execute_command). This must happen
+            # BEFORE we persist node traces / result_key outputs so run state remains bounded.
+            try:
+                if (
+                    not reused_prior_result
+                    and plan.effect.type == EffectType.TOOL_CALLS
+                    and outcome.status == "completed"
+                ):
+                    self._maybe_record_tool_evidence(
+                        run=run,
+                        node_id=plan.node_id,
+                        effect=plan.effect,
+                        tool_results=outcome.result,
+                    )
+            except Exception:
+                # Evidence capture should never crash the run; failures are recorded in run vars.
+                pass
+
             _record_node_trace(
                 run=run,
                 node_id=plan.node_id,
@@ -701,6 +824,9 @@ class Runtime:
             )
 
             if outcome.status == "failed":
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.FAILED
                 run.error = outcome.error or "unknown error"
                 run.updated_at = utc_now_iso()
@@ -709,6 +835,9 @@ class Runtime:
 
             if outcome.status == "waiting":
                 assert outcome.wait is not None
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.WAITING
                 run.waiting = outcome.wait
                 run.updated_at = utc_now_iso()
@@ -726,16 +855,65 @@ class Runtime:
             # complete the run in a single StepPlan. Allowing next_node=None
             # makes "end on an effect node" valid (Blueprint-style UX).
             if not plan.next_node:
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
                 run.status = RunStatus.COMPLETED
                 run.output = {"success": True, "result": outcome.result}
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
                 return run
+            controlled = _abort_if_externally_controlled()
+            if controlled is not None:
+                return controlled
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
             self._run_store.save(run)
 
         return run
+
+    def _maybe_record_tool_evidence(
+        self,
+        *,
+        run: RunState,
+        node_id: str,
+        effect: Effect,
+        tool_results: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort evidence capture for TOOL_CALLS.
+
+        This is intentionally non-fatal: evidence capture must not crash the run,
+        but failures should be visible in durable run state for debugging.
+        """
+        if effect.type != EffectType.TOOL_CALLS:
+            return
+        if not isinstance(tool_results, dict):
+            return
+        payload = effect.payload if isinstance(effect.payload, dict) else {}
+        tool_calls = payload.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return
+
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return
+
+        try:
+            from ..evidence import EvidenceRecorder
+
+            EvidenceRecorder(artifact_store=artifact_store).record_tool_calls(
+                run=run,
+                node_id=str(node_id or ""),
+                tool_calls=list(tool_calls),
+                tool_results=tool_results,
+            )
+        except Exception as e:
+            runtime_ns = _ensure_runtime_namespace(run.vars)
+            warnings = runtime_ns.get("evidence_warnings")
+            if not isinstance(warnings, list):
+                warnings = []
+                runtime_ns["evidence_warnings"] = warnings
+            warnings.append({"ts": utc_now_iso(), "node_id": str(node_id or ""), "error": str(e)})
 
     def resume(
         self,
@@ -759,8 +937,93 @@ class Runtime:
         resume_to = run.waiting.resume_to_node
         result_key = run.waiting.result_key
 
+        # Keep track of what we actually persisted for this resume (tool resumes may
+        # merge blocked-by-allowlist entries back into the payload).
+        stored_payload: Dict[str, Any] = payload
+
         if result_key:
-            _set_nested(run.vars, result_key, payload)
+            # Tool waits may carry blocked-by-allowlist metadata. External hosts typically only execute
+            # the filtered subset of tool calls and resume with results for those calls. To keep agent
+            # semantics correct (and evidence indices aligned), merge blocked entries back into the
+            # resumed payload deterministically.
+            merged_payload: Dict[str, Any] = payload
+            try:
+                details = run.waiting.details if run.waiting is not None else None
+                if isinstance(details, dict):
+                    blocked = details.get("blocked_by_index")
+                    original_count = details.get("original_call_count")
+                    results = payload.get("results") if isinstance(payload, dict) else None
+                    if (
+                        isinstance(blocked, dict)
+                        and isinstance(original_count, int)
+                        and original_count > 0
+                        and isinstance(results, list)
+                        and len(results) != original_count
+                    ):
+                        merged_results: list[Any] = []
+                        executed_iter = iter(results)
+
+                        for idx in range(original_count):
+                            blocked_entry = blocked.get(str(idx))
+                            if isinstance(blocked_entry, dict):
+                                merged_results.append(blocked_entry)
+                                continue
+                            try:
+                                merged_results.append(next(executed_iter))
+                            except StopIteration:
+                                merged_results.append(
+                                    {
+                                        "call_id": "",
+                                        "name": "",
+                                        "success": False,
+                                        "output": None,
+                                        "error": "Missing tool result",
+                                    }
+                                )
+
+                        merged_payload = dict(payload)
+                        merged_payload["results"] = merged_results
+                        merged_payload.setdefault("mode", "executed")
+            except Exception:
+                merged_payload = payload
+
+            _set_nested(run.vars, result_key, merged_payload)
+            stored_payload = merged_payload
+            # Passthrough tool execution: the host resumes with tool results. We still want
+            # evidence capture and payload-bounding (store large parts as artifacts) before
+            # the run continues.
+            try:
+                details = run.waiting.details if run.waiting is not None else None
+                tool_calls_for_evidence = None
+                if isinstance(details, dict):
+                    tool_calls_for_evidence = details.get("tool_calls_for_evidence")
+                    if not isinstance(tool_calls_for_evidence, list):
+                        tool_calls_for_evidence = details.get("tool_calls")
+
+                if isinstance(tool_calls_for_evidence, list):
+                    from ..evidence import EvidenceRecorder
+
+                    artifact_store = self._artifact_store
+                    if artifact_store is not None and isinstance(payload, dict):
+                        EvidenceRecorder(artifact_store=artifact_store).record_tool_calls(
+                            run=run,
+                            node_id=str(run.current_node or ""),
+                            tool_calls=list(tool_calls_for_evidence or []),
+                            tool_results=merged_payload,
+                        )
+            except Exception:
+                pass
+
+        # Terminal waiting node: if there is no resume target, treat the resume payload as
+        # the final output instead of re-executing the waiting node again (which would
+        # otherwise create an infinite wait/resume loop).
+        if resume_to is None:
+            run.status = RunStatus.COMPLETED
+            run.waiting = None
+            run.output = {"success": True, "result": stored_payload}
+            run.updated_at = utc_now_iso()
+            self._run_store.save(run)
+            return run
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)
         run.updated_at = utc_now_iso()
@@ -784,8 +1047,81 @@ class Runtime:
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
         self._handlers[EffectType.MEMORY_NOTE] = self._handle_memory_note
+        self._handlers[EffectType.MEMORY_REHYDRATE] = self._handle_memory_rehydrate
         self._handlers[EffectType.VARS_QUERY] = self._handle_vars_query
         self._handlers[EffectType.START_SUBWORKFLOW] = self._handle_start_subworkflow
+
+    # Built-in memory helpers ------------------------------------------------
+
+    def _global_memory_run_id(self) -> str:
+        """Return the global memory run id (stable).
+
+        Hosts can override via `ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID`.
+        """
+        rid = os.environ.get("ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID")
+        rid = str(rid or "").strip()
+        if rid and _SAFE_RUN_ID_PATTERN.match(rid):
+            return rid
+        return _DEFAULT_GLOBAL_MEMORY_RUN_ID
+
+    def _ensure_global_memory_run(self) -> RunState:
+        """Load or create the global memory run used as the owner for `scope="global"` spans."""
+        rid = self._global_memory_run_id()
+        existing = self._run_store.load(rid)
+        if existing is not None:
+            return existing
+
+        run = RunState(
+            run_id=rid,
+            workflow_id="__global_memory__",
+            status=RunStatus.COMPLETED,
+            current_node="done",
+            vars={
+                "context": {"task": "", "messages": []},
+                "scratchpad": {},
+                "_runtime": {"memory_spans": []},
+                "_temp": {},
+                "_limits": {},
+            },
+            waiting=None,
+            output={"messages": []},
+            error=None,
+            created_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            actor_id=None,
+            session_id=None,
+            parent_run_id=None,
+        )
+        self._run_store.save(run)
+        return run
+
+    def _resolve_session_root_run(self, run: RunState) -> RunState:
+        """Resolve the root run of the current run-tree (walk `parent_run_id`)."""
+        cur = run
+        seen: set[str] = set()
+        while True:
+            parent_id = getattr(cur, "parent_run_id", None)
+            if not isinstance(parent_id, str) or not parent_id.strip():
+                return cur
+            pid = parent_id.strip()
+            if pid in seen:
+                # Defensive: break cycles.
+                return cur
+            seen.add(pid)
+            parent = self._run_store.load(pid)
+            if parent is None:
+                return cur
+            cur = parent
+
+    def _resolve_scope_owner_run(self, base_run: RunState, *, scope: str) -> RunState:
+        s = str(scope or "").strip().lower() or "run"
+        if s == "run":
+            return base_run
+        if s == "session":
+            return self._resolve_session_root_run(base_run)
+        if s == "global":
+            return self._ensure_global_memory_run()
+        raise ValueError(f"Unknown memory scope: {scope}")
 
     def _find_prior_completed_result(
         self, run_id: str, idempotency_key: str
@@ -1174,6 +1510,7 @@ class Runtime:
 
         sub_vars = effect.payload.get("vars") or {}
         is_async = bool(effect.payload.get("async", False))
+        wait_for_completion = bool(effect.payload.get("wait", False))
         include_traces = bool(effect.payload.get("include_traces", False))
         resume_to = effect.payload.get("resume_to_node") or default_next_node
 
@@ -1187,8 +1524,29 @@ class Runtime:
         )
 
         if is_async:
-            # Async mode: return immediately with sub_run_id
-            # The child is started but not ticked - caller is responsible for driving it
+            # Async mode: start the child and return immediately.
+            #
+            # If `wait=True`, we *also* transition the parent into a durable WAITING state
+            # so a host (e.g. AbstractFlow WebSocket runner loop) can:
+            # - tick the child run incrementally (and stream node traces in real time)
+            # - resume the parent once the child completes (by calling runtime.resume(...))
+            #
+            # Without `wait=True`, this remains fire-and-forget.
+            if wait_for_completion:
+                wait = WaitState(
+                    reason=WaitReason.SUBWORKFLOW,
+                    wait_key=f"subworkflow:{sub_run_id}",
+                    resume_to_node=resume_to,
+                    result_key=effect.result_key,
+                    details={
+                        "sub_run_id": sub_run_id,
+                        "sub_workflow_id": workflow_id,
+                        "async": True,
+                    },
+                )
+                return EffectOutcome.waiting(wait)
+
+            # Fire-and-forget: caller is responsible for driving/observing the child.
             return EffectOutcome.completed({"sub_run_id": sub_run_id, "async": True})
 
         # Sync mode: run the subworkflow until completion or waiting
@@ -1245,7 +1603,10 @@ class Runtime:
           - query: str                          (keyword substring match)
           - since: str                          (ISO8601, span intersection filter)
           - until: str                          (ISO8601, span intersection filter)
-          - tags: dict[str,str]                 (span tag filter)
+          - tags: dict[str, str|list[str]]      (span tag filter; values can be multi-valued)
+          - tags_mode: "all"|"any"              (default "all"; AND/OR across tag keys)
+          - authors: list[str]                  (alias: usernames; matches span.created_by case-insensitively)
+          - locations: list[str]                (matches span.location case-insensitively)
           - limit_spans: int                    (default 5)
           - deep: bool                          (default True when query is set; scans archived messages)
           - deep_limit_spans: int               (default 50)
@@ -1275,12 +1636,78 @@ class Runtime:
         tool_name = str(payload.get("tool_name") or "recall_memory")
         call_id = str(payload.get("call_id") or "memory")
 
+        # Scope routing (run-tree/global). Scope affects which run owns the span index queried.
+        scope = str(payload.get("scope") or "run").strip().lower() or "run"
+        if scope not in {"run", "session", "global", "all"}:
+            return EffectOutcome.failed(f"Unknown memory_query scope: {scope}")
+
+        # Return mode controls whether we include structured meta in the tool result.
+        return_mode = str(payload.get("return") or payload.get("return_mode") or "rendered").strip().lower() or "rendered"
+        if return_mode not in {"rendered", "meta", "both"}:
+            return EffectOutcome.failed(f"Unknown memory_query return mode: {return_mode}")
+
         query = payload.get("query")
         query_text = str(query or "").strip()
         since = payload.get("since")
         until = payload.get("until")
         tags = payload.get("tags")
-        tags_dict = dict(tags) if isinstance(tags, dict) else None
+        tags_dict: Optional[Dict[str, Any]] = None
+        if isinstance(tags, dict):
+            # Accept str or list[str] values. Ignore reserved key "kind".
+            out_tags: Dict[str, Any] = {}
+            for k, v in tags.items():
+                if not isinstance(k, str) or not k.strip():
+                    continue
+                if k == "kind":
+                    continue
+                if isinstance(v, str) and v.strip():
+                    out_tags[k.strip()] = v.strip()
+                elif isinstance(v, (list, tuple)):
+                    vals = [str(x).strip() for x in v if isinstance(x, str) and str(x).strip()]
+                    if vals:
+                        out_tags[k.strip()] = vals
+            tags_dict = out_tags or None
+
+        tags_mode_raw = payload.get("tags_mode")
+        if tags_mode_raw is None:
+            tags_mode_raw = payload.get("tagsMode")
+        if tags_mode_raw is None:
+            tags_mode_raw = payload.get("tag_mode")
+        tags_mode = str(tags_mode_raw or "all").strip().lower() or "all"
+        if tags_mode in {"and"}:
+            tags_mode = "all"
+        if tags_mode in {"or"}:
+            tags_mode = "any"
+        if tags_mode not in {"all", "any"}:
+            tags_mode = "all"
+
+        def _norm_str_list(value: Any) -> list[str]:
+            if value is None:
+                return []
+            if isinstance(value, str):
+                v = value.strip()
+                return [v] if v else []
+            if not isinstance(value, list):
+                return []
+            out: list[str] = []
+            for x in value:
+                if isinstance(x, str) and x.strip():
+                    out.append(x.strip())
+            # preserve order but dedup (case-insensitive)
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for s in out:
+                key = s.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(s)
+            return deduped
+
+        authors = _norm_str_list(payload.get("authors") if "authors" in payload else payload.get("usernames"))
+        if not authors:
+            authors = _norm_str_list(payload.get("users"))
+        locations = _norm_str_list(payload.get("locations") if "locations" in payload else payload.get("location"))
 
         try:
             limit_spans = int(payload.get("limit_spans", 5) or 5)
@@ -1335,68 +1762,183 @@ class Runtime:
 
         from ..memory.active_context import ActiveContextPolicy, TimeRange
 
-        spans = ActiveContextPolicy.list_memory_spans_from_run(run)
+        # Select run(s) to query.
+        runs_to_query: list[RunState] = []
+        if scope == "run":
+            runs_to_query = [run]
+        elif scope == "session":
+            runs_to_query = [self._resolve_scope_owner_run(run, scope="session")]
+        elif scope == "global":
+            runs_to_query = [self._resolve_scope_owner_run(run, scope="global")]
+        else:  # all
+            # Deterministic order; dedup by run_id.
+            root = self._resolve_scope_owner_run(run, scope="session")
+            global_run = self._resolve_scope_owner_run(run, scope="global")
+            seen_ids: set[str] = set()
+            for r in (run, root, global_run):
+                if r.run_id in seen_ids:
+                    continue
+                seen_ids.add(r.run_id)
+                runs_to_query.append(r)
+
+        # Collect per-run span indexes (metadata) and summary maps for rendering.
+        spans_by_run_id: dict[str, list[dict[str, Any]]] = {}
+        all_spans: list[dict[str, Any]] = []
+        all_summary_by_artifact: dict[str, str] = {}
+        for target in runs_to_query:
+            spans = ActiveContextPolicy.list_memory_spans_from_run(target)
+            # `memory_spans` is a general span-like index (conversation spans, notes, evidence, etc).
+            # MEMORY_QUERY is specifically for provenance-first *memory recall*, not evidence retrieval.
+            spans = [s for s in spans if not (isinstance(s, dict) and str(s.get("kind") or "") == "evidence")]
+            spans_by_run_id[target.run_id] = spans
+            all_spans.extend([dict(s) for s in spans if isinstance(s, dict)])
+            all_summary_by_artifact.update(ActiveContextPolicy.summary_text_by_artifact_id_from_run(target))
 
         # Resolve explicit span ids if provided.
         span_id_payload = payload.get("span_id")
         span_ids_payload = payload.get("span_ids")
         explicit_ids = span_ids_payload if isinstance(span_ids_payload, list) else span_id_payload
-        explicit_resolved: list[str] = []
-        if explicit_ids is not None:
-            if isinstance(explicit_ids, list):
-                explicit_resolved = ActiveContextPolicy.resolve_span_ids_from_spans(explicit_ids, spans)
-            else:
-                explicit_resolved = ActiveContextPolicy.resolve_span_ids_from_spans([explicit_ids], spans)
 
-        selected: list[str] = []
-        if explicit_resolved:
-            selected = list(explicit_resolved)
+        all_selected: list[str] = []
+
+        if explicit_ids is not None:
+            explicit_list = list(explicit_ids) if isinstance(explicit_ids, list) else [explicit_ids]
+
+            # Indices are inherently scoped to a single run's span list; for `scope="all"`,
+            # require stable artifact ids to avoid ambiguity.
+            if scope == "all":
+                for x in explicit_list:
+                    if isinstance(x, int):
+                        return EffectOutcome.failed("memory_query scope='all' requires explicit span_ids as artifact ids (no indices)")
+                    if isinstance(x, str) and x.strip().isdigit():
+                        return EffectOutcome.failed("memory_query scope='all' requires explicit span_ids as artifact ids (no indices)")
+                # Treat as artifact ids.
+                all_selected = _dedup_preserve_order([str(x).strip() for x in explicit_list if str(x).strip()])
+            else:
+                # Single-run resolution for indices.
+                target = runs_to_query[0]
+                spans = spans_by_run_id.get(target.run_id, [])
+                all_selected = ActiveContextPolicy.resolve_span_ids_from_spans(explicit_list, spans)
         else:
+            # Filter spans per target and union.
             time_range = None
             if since or until:
                 time_range = TimeRange(
                     start=str(since) if since else None,
                     end=str(until) if until else None,
                 )
-            matches = ActiveContextPolicy.filter_spans_from_run(
-                run,
-                artifact_store=artifact_store,
-                time_range=time_range,
-                tags=tags_dict,
-                query=query_text or None,
-                limit=limit_spans,
-            )
-            selected = [str(s.get("artifact_id") or "") for s in matches if isinstance(s, dict) and s.get("artifact_id")]
 
-            if deep_enabled and query_text:
-                selected = _dedup_preserve_order(selected + _deep_scan_span_ids(
-                    spans=spans,
+            for target in runs_to_query:
+                spans = spans_by_run_id.get(target.run_id, [])
+                matches = ActiveContextPolicy.filter_spans_from_run(
+                    target,
                     artifact_store=artifact_store,
-                    query=query_text,
-                    limit_spans=deep_limit_spans,
-                    limit_messages_per_span=deep_limit_messages_per_span,
-                ))
-
-        if connected and selected:
-            selected = _dedup_preserve_order(
-                _expand_connected_span_ids(
-                    spans=spans,
-                    seed_artifact_ids=selected,
-                    connect_keys=connect_keys,
-                    neighbor_hops=neighbor_hops,
-                    limit=max(limit_spans, len(selected)),
+                    time_range=time_range,
+                    tags=tags_dict,
+                    tags_mode=tags_mode,
+                    authors=authors or None,
+                    locations=locations or None,
+                    query=query_text or None,
+                    limit=limit_spans,
                 )
+                selected = [str(s.get("artifact_id") or "") for s in matches if isinstance(s, dict) and s.get("artifact_id")]
+
+                if deep_enabled and query_text:
+                    # Deep scan is bounded and should respect metadata filters (tags/authors/locations/time).
+                    deep_candidates = ActiveContextPolicy.filter_spans_from_run(
+                        target,
+                        artifact_store=artifact_store,
+                        time_range=time_range,
+                        tags=tags_dict,
+                        tags_mode=tags_mode,
+                        authors=authors or None,
+                        locations=locations or None,
+                        query=None,
+                        limit=deep_limit_spans,
+                    )
+                    selected = _dedup_preserve_order(
+                        selected
+                        + _deep_scan_span_ids(
+                            spans=deep_candidates,
+                            artifact_store=artifact_store,
+                            query=query_text,
+                            limit_spans=deep_limit_spans,
+                            limit_messages_per_span=deep_limit_messages_per_span,
+                        )
+                    )
+
+                if connected and selected:
+                    connect_candidates = ActiveContextPolicy.filter_spans_from_run(
+                        target,
+                        artifact_store=artifact_store,
+                        time_range=time_range,
+                        tags=tags_dict,
+                        tags_mode=tags_mode,
+                        authors=authors or None,
+                        locations=locations or None,
+                        query=None,
+                        limit=max(1000, len(spans)),
+                    )
+                    selected = _dedup_preserve_order(
+                        _expand_connected_span_ids(
+                            spans=connect_candidates,
+                            seed_artifact_ids=selected,
+                            connect_keys=connect_keys,
+                            neighbor_hops=neighbor_hops,
+                            limit=max(limit_spans, len(selected)),
+                        )
+                    )
+
+                all_selected = _dedup_preserve_order(all_selected + selected)
+
+        rendered_text = ""
+        if return_mode in {"rendered", "both"}:
+            # Render output (provenance + messages). Note: this may load artifacts.
+            rendered_text = _render_memory_query_output(
+                spans=all_spans,
+                artifact_store=artifact_store,
+                selected_artifact_ids=all_selected,
+                summary_by_artifact=all_summary_by_artifact,
+                max_messages=max_messages,
             )
 
-        # Render output (provenance + messages).
-        summary_by_artifact = ActiveContextPolicy.summary_text_by_artifact_id_from_run(run)
-        text = _render_memory_query_output(
-            spans=spans,
-            artifact_store=artifact_store,
-            selected_artifact_ids=selected,
-            summary_by_artifact=summary_by_artifact,
-            max_messages=max_messages,
-        )
+        # Structured meta output (for deterministic workflows).
+        meta: dict[str, Any] = {}
+        if return_mode in {"meta", "both"}:
+            # Index span record by artifact id (first match wins deterministically).
+            by_artifact: dict[str, dict[str, Any]] = {}
+            for s in all_spans:
+                try:
+                    aid = str(s.get("artifact_id") or "").strip()
+                except Exception:
+                    aid = ""
+                if not aid or aid in by_artifact:
+                    continue
+                by_artifact[aid] = s
+
+            matches: list[dict[str, Any]] = []
+            for aid in all_selected:
+                span = by_artifact.get(aid)
+                if not isinstance(span, dict):
+                    continue
+                m: dict[str, Any] = {
+                    "span_id": aid,
+                    "kind": span.get("kind"),
+                    "created_at": span.get("created_at"),
+                    "from_timestamp": span.get("from_timestamp"),
+                    "to_timestamp": span.get("to_timestamp"),
+                    "tags": span.get("tags") if isinstance(span.get("tags"), dict) else {},
+                }
+                for k in ("created_by", "location"):
+                    if k in span:
+                        m[k] = span.get(k)
+                # Include known preview fields without enforcing a global schema.
+                for k in ("note_preview", "message_count", "summary_message_id"):
+                    if k in span:
+                        m[k] = span.get(k)
+                matches.append(m)
+
+            meta = {"matches": matches, "span_ids": list(all_selected)}
 
         result = {
             "mode": "executed",
@@ -1405,8 +1947,9 @@ class Runtime:
                     "call_id": call_id,
                     "name": tool_name,
                     "success": True,
-                    "output": text,
+                    "output": rendered_text if return_mode in {"rendered", "both"} else "",
                     "error": None,
+                    "meta": meta if meta else None,
                 }
             ],
         }
@@ -1937,21 +2480,22 @@ class Runtime:
         if not isinstance(spans, list):
             spans = []
             runtime_ns["memory_spans"] = spans
-        spans.append(
-            {
-                "kind": "conversation_span",
-                "artifact_id": archived_ref,
-                "created_at": now_iso(),
-                "summary_message_id": summary_message_id,
-                "from_timestamp": span_meta.get("from_timestamp"),
-                "to_timestamp": span_meta.get("to_timestamp"),
-                "from_message_id": span_meta.get("from_message_id"),
-                "to_message_id": span_meta.get("to_message_id"),
-                "message_count": int(span_meta.get("message_count") or 0),
-                "compression_mode": compression_mode,
-                "focus": focus_text,
-            }
-        )
+        span_record: Dict[str, Any] = {
+            "kind": "conversation_span",
+            "artifact_id": archived_ref,
+            "created_at": now_iso(),
+            "summary_message_id": summary_message_id,
+            "from_timestamp": span_meta.get("from_timestamp"),
+            "to_timestamp": span_meta.get("to_timestamp"),
+            "from_message_id": span_meta.get("from_message_id"),
+            "to_message_id": span_meta.get("to_message_id"),
+            "message_count": int(span_meta.get("message_count") or 0),
+            "compression_mode": compression_mode,
+            "focus": focus_text,
+        }
+        if run.actor_id:
+            span_record["created_by"] = str(run.actor_id)
+        spans.append(span_record)
 
         if target_run is not run:
             target_run.updated_at = now_iso()
@@ -2019,14 +2563,21 @@ class Runtime:
         tool_name = str(payload.get("tool_name") or "remember_note")
         call_id = str(payload.get("call_id") or "memory")
 
-        target_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
-        target_run = run
-        if target_run_id != run.run_id:
-            loaded = self._run_store.load(target_run_id)
+        base_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
+        base_run = run
+        if base_run_id != run.run_id:
+            loaded = self._run_store.load(base_run_id)
             if loaded is None:
-                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
-            target_run = loaded
-            ensure_namespaces(target_run.vars)
+                return EffectOutcome.failed(f"Unknown target_run_id: {base_run_id}")
+            base_run = loaded
+            ensure_namespaces(base_run.vars)
+
+        scope = str(payload.get("scope") or "run").strip().lower() or "run"
+        try:
+            target_run = self._resolve_scope_owner_run(base_run, scope=scope)
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+        ensure_namespaces(target_run.vars)
 
         target_runtime_ns = target_run.vars.get("_runtime")
         if not isinstance(target_runtime_ns, dict):
@@ -2041,6 +2592,9 @@ class Runtime:
         note_text = str(note or "").strip()
         if not note_text:
             return EffectOutcome.failed("MEMORY_NOTE requires payload.note (non-empty string)")
+
+        location_raw = payload.get("location")
+        location = str(location_raw).strip() if isinstance(location_raw, str) else ""
 
         tags = payload.get("tags")
         clean_tags: Dict[str, str] = {}
@@ -2075,7 +2629,8 @@ class Runtime:
                 deduped.append(s)
             return deduped
 
-        source_run_id = str(sources_dict.get("run_id") or target_run.run_id).strip() or target_run.run_id
+        # Provenance default: the run that emitted this effect (not the scope owner).
+        source_run_id = str(sources_dict.get("run_id") or run.run_id).strip() or run.run_id
         span_ids = _norm_list(sources_dict.get("span_ids"))
         message_ids = _norm_list(sources_dict.get("message_ids"))
 
@@ -2085,6 +2640,8 @@ class Runtime:
             "sources": {"run_id": source_run_id, "span_ids": span_ids, "message_ids": message_ids},
             "created_at": created_at,
         }
+        if location:
+            artifact_payload["location"] = location
         if run.actor_id:
             artifact_payload["actor_id"] = str(run.actor_id)
         session_id = getattr(target_run, "session_id", None) or getattr(run, "session_id", None)
@@ -2110,6 +2667,8 @@ class Runtime:
             "message_count": 0,
             "note_preview": preview,
         }
+        if location:
+            span_record["location"] = location
         if clean_tags:
             span_record["tags"] = dict(clean_tags)
         if span_ids or message_ids:
@@ -2119,12 +2678,62 @@ class Runtime:
 
         spans.append(span_record)
 
+        def _coerce_bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return bool(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    return float(value) != 0.0
+                except Exception:
+                    return False
+            if isinstance(value, str):
+                s = value.strip().lower()
+                if not s:
+                    return False
+                if s in {"false", "0", "no", "off"}:
+                    return False
+                if s in {"true", "1", "yes", "on"}:
+                    return True
+            return False
+
+        # Optional UX convenience: keep the stored note immediately visible to downstream LLM calls by
+        # rehydrating it into `base_run.context.messages` as a synthetic system message.
+        keep_raw = payload.get("keep_in_context")
+        if keep_raw is None:
+            keep_raw = payload.get("keepInContext")
+        keep_in_context = _coerce_bool(keep_raw)
+        kept: Optional[Dict[str, Any]] = None
+        if keep_in_context:
+            try:
+                from ..memory.active_context import ActiveContextPolicy
+
+                policy = ActiveContextPolicy(run_store=self._run_store, artifact_store=artifact_store)
+                out = policy.rehydrate_into_context_from_run(
+                    base_run,
+                    span_ids=[artifact_id],
+                    placement="end",
+                    dedup_by="message_id",
+                    max_messages=1,
+                )
+                kept = {"inserted": out.get("inserted", 0), "skipped": out.get("skipped", 0)}
+
+                # Persist when mutating a different run than the currently executing one.
+                if base_run is not run:
+                    base_run.updated_at = utc_now_iso()
+                    self._run_store.save(base_run)
+            except Exception as e:
+                kept = {"inserted": 0, "skipped": 0, "error": str(e)}
+
         if target_run is not run:
             target_run.updated_at = utc_now_iso()
             self._run_store.save(target_run)
 
         rendered_tags = json.dumps(clean_tags, ensure_ascii=False, sort_keys=True) if clean_tags else "{}"
         text = f"Stored memory_note span_id={artifact_id} tags={rendered_tags}"
+        meta_out: Dict[str, Any] = {"span_id": artifact_id, "created_at": created_at, "note_preview": preview}
+        if isinstance(kept, dict):
+            meta_out["kept_in_context"] = kept
+
         result = {
             "mode": "executed",
             "results": [
@@ -2134,11 +2743,143 @@ class Runtime:
                     "success": True,
                     "output": text,
                     "error": None,
-                    "meta": {"span_id": artifact_id, "created_at": created_at},
+                    "meta": meta_out,
                 }
             ],
         }
         return EffectOutcome.completed(result=result)
+
+    def _handle_memory_rehydrate(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle MEMORY_REHYDRATE.
+
+        This is a runtime-owned, deterministic mutation of `context.messages`:
+        - loads archived conversation span artifacts from ArtifactStore
+        - inserts them into `context.messages` with dedup
+        - persists the mutated run (RunStore checkpoint)
+
+        Payload (required unless stated):
+          - span_ids: list[str|int]  (required; artifact ids preferred; indices allowed)
+          - placement: str          ("after_summary"|"after_system"|"end", default "after_summary")
+          - dedup_by: str           (default "message_id")
+          - max_messages: int       (optional; max inserted messages)
+          - target_run_id: str      (optional; defaults to current run)
+        """
+        from .vars import ensure_namespaces
+
+        ensure_namespaces(run.vars)
+        artifact_store = self._artifact_store
+        if artifact_store is None:
+            return EffectOutcome.failed(
+                "MEMORY_REHYDRATE requires an ArtifactStore; configure runtime.set_artifact_store(...)"
+            )
+
+        payload = dict(effect.payload or {})
+        target_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
+
+        # Normalize span_ids (accept legacy `span_id` too).
+        raw_span_ids = payload.get("span_ids")
+        if raw_span_ids is None:
+            raw_span_ids = payload.get("span_id")
+        span_ids: list[Any] = []
+        if isinstance(raw_span_ids, list):
+            span_ids = list(raw_span_ids)
+        elif raw_span_ids is not None:
+            span_ids = [raw_span_ids]
+        if not span_ids:
+            return EffectOutcome.failed("MEMORY_REHYDRATE requires payload.span_ids (non-empty list)")
+
+        placement = str(payload.get("placement") or "after_summary").strip() or "after_summary"
+        dedup_by = str(payload.get("dedup_by") or "message_id").strip() or "message_id"
+        max_messages = payload.get("max_messages")
+
+        # Load the target run (may be different from current).
+        target_run = run
+        if target_run_id != run.run_id:
+            loaded = self._run_store.load(target_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {target_run_id}")
+            target_run = loaded
+            ensure_namespaces(target_run.vars)
+
+        # Best-effort: rehydrate only span kinds that are meaningful to inject into
+        # `context.messages` for downstream LLM calls.
+        #
+        # Rationale:
+        # - conversation_span: archived chat messages
+        # - memory_note: durable notes (rehydrated as a synthetic message by ActiveContextPolicy)
+        #
+        # Evidence and other span kinds are intentionally skipped by default.
+        from ..memory.active_context import ActiveContextPolicy
+
+        spans = ActiveContextPolicy.list_memory_spans_from_run(target_run)
+        resolved = ActiveContextPolicy.resolve_span_ids_from_spans(span_ids, spans)
+        if not resolved:
+            return EffectOutcome.completed(result={"inserted": 0, "skipped": 0, "artifacts": []})
+
+        kind_by_artifact: dict[str, str] = {}
+        for s in spans:
+            if not isinstance(s, dict):
+                continue
+            aid = str(s.get("artifact_id") or "").strip()
+            if not aid or aid in kind_by_artifact:
+                continue
+            kind_by_artifact[aid] = str(s.get("kind") or "").strip()
+
+        to_rehydrate: list[str] = []
+        skipped_artifacts: list[dict[str, Any]] = []
+        allowed_kinds = {"conversation_span", "memory_note"}
+        for aid in resolved:
+            kind = kind_by_artifact.get(aid, "")
+            if kind and kind not in allowed_kinds:
+                skipped_artifacts.append(
+                    {"span_id": aid, "inserted": 0, "skipped": 0, "error": None, "kind": kind}
+                )
+                continue
+            to_rehydrate.append(aid)
+
+        # Reuse the canonical policy implementation (no duplicated logic).
+        # Mutate the in-memory RunState to keep runtime tick semantics consistent.
+        policy = ActiveContextPolicy(run_store=self._run_store, artifact_store=artifact_store)
+        out = policy.rehydrate_into_context_from_run(
+            target_run,
+            span_ids=to_rehydrate,
+            placement=placement,
+            dedup_by=dedup_by,
+            max_messages=max_messages,
+        )
+
+        # Persist when mutating a different run than the currently executing one.
+        if target_run is not run:
+            target_run.updated_at = utc_now_iso()
+            self._run_store.save(target_run)
+
+        # Normalize output shape to match backlog expectations (`span_id` field, optional kind).
+        artifacts_out: list[dict[str, Any]] = []
+        artifacts = out.get("artifacts")
+        if isinstance(artifacts, list):
+            for a in artifacts:
+                if not isinstance(a, dict):
+                    continue
+                aid = str(a.get("artifact_id") or "").strip()
+                artifacts_out.append(
+                    {
+                        "span_id": aid,
+                        "inserted": a.get("inserted"),
+                        "skipped": a.get("skipped"),
+                        "error": a.get("error"),
+                        "kind": kind_by_artifact.get(aid) or None,
+                        "preview": a.get("preview"),
+                    }
+                )
+        artifacts_out.extend(skipped_artifacts)
+
+        return EffectOutcome.completed(
+            result={
+                "inserted": out.get("inserted", 0),
+                "skipped": out.get("skipped", 0),
+                "artifacts": artifacts_out,
+            }
+        )
 
 
 def _dedup_preserve_order(values: list[str]) -> list[str]:
@@ -2281,6 +3022,8 @@ def _render_memory_query_output(
         from_ts = span.get("from_timestamp") or ""
         to_ts = span.get("to_timestamp") or ""
         count = span.get("message_count") or ""
+        created_by = span.get("created_by") or ""
+        location = span.get("location") or ""
         tags = span.get("tags") if isinstance(span.get("tags"), dict) else {}
         tags_txt = ", ".join([f"{k}={v}" for k, v in sorted(tags.items()) if isinstance(v, str) and v])
 
@@ -2288,6 +3031,10 @@ def _render_memory_query_output(
         lines.append(f"[{i}] span_id={aid} kind={kind} msgs={count} created_at={created}")
         if from_ts or to_ts:
             lines.append(f"    time_range: {from_ts} .. {to_ts}")
+        if isinstance(created_by, str) and str(created_by).strip():
+            lines.append(f"    created_by: {str(created_by).strip()}")
+        if isinstance(location, str) and str(location).strip():
+            lines.append(f"    location: {str(location).strip()}")
         if tags_txt:
             lines.append(f"    tags: {tags_txt}")
 
@@ -2308,6 +3055,11 @@ def _render_memory_query_output(
                 lines.append("    note: " + note)
             else:
                 lines.append("    (note payload missing note text)")
+
+            if not (isinstance(location, str) and location.strip()):
+                loc = payload.get("location")
+                if isinstance(loc, str) and loc.strip():
+                    lines.append(f"    location: {loc.strip()}")
 
             sources = payload.get("sources")
             if isinstance(sources, dict):

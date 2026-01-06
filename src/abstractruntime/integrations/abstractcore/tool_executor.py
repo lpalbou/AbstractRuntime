@@ -180,6 +180,9 @@ class MappingToolExecutor:
         _SYNONYM_ALIASES: Dict[str, List[str]] = {
             # Common semantic drift across many tools
             "path": ["file_path", "directory_path", "path"],
+            # Common CLI/media naming drift
+            "filename": ["file_path"],
+            "filepath": ["file_path"],
             "dir": ["directory_path", "path"],
             "directory": ["directory_path", "path"],
             "folder": ["directory_path", "path"],

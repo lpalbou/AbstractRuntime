@@ -937,6 +937,10 @@ class Runtime:
         resume_to = run.waiting.resume_to_node
         result_key = run.waiting.result_key
 
+        # Keep track of what we actually persisted for this resume (tool resumes may
+        # merge blocked-by-allowlist entries back into the payload).
+        stored_payload: Dict[str, Any] = payload
+
         if result_key:
             # Tool waits may carry blocked-by-allowlist metadata. External hosts typically only execute
             # the filtered subset of tool calls and resume with results for those calls. To keep agent
@@ -984,6 +988,7 @@ class Runtime:
                 merged_payload = payload
 
             _set_nested(run.vars, result_key, merged_payload)
+            stored_payload = merged_payload
             # Passthrough tool execution: the host resumes with tool results. We still want
             # evidence capture and payload-bounding (store large parts as artifacts) before
             # the run continues.
@@ -1008,6 +1013,17 @@ class Runtime:
                         )
             except Exception:
                 pass
+
+        # Terminal waiting node: if there is no resume target, treat the resume payload as
+        # the final output instead of re-executing the waiting node again (which would
+        # otherwise create an infinite wait/resume loop).
+        if resume_to is None:
+            run.status = RunStatus.COMPLETED
+            run.waiting = None
+            run.output = {"success": True, "result": stored_payload}
+            run.updated_at = utc_now_iso()
+            self._run_store.save(run)
+            return run
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)
         run.updated_at = utc_now_iso()

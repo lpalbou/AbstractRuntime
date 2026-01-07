@@ -1018,11 +1018,38 @@ class Runtime:
         # the final output instead of re-executing the waiting node again (which would
         # otherwise create an infinite wait/resume loop).
         if resume_to is None:
+            # Capture the wait context for observability before clearing it.
+            wait_before = run.waiting
+            wait_reason = None
+            wait_key0 = None
+            try:
+                if wait_before is not None:
+                    r0 = getattr(wait_before, "reason", None)
+                    wait_reason = r0.value if hasattr(r0, "value") else str(r0) if r0 is not None else None
+                    wait_key0 = getattr(wait_before, "wait_key", None)
+            except Exception:
+                wait_reason = None
+                wait_key0 = None
+
             run.status = RunStatus.COMPLETED
             run.waiting = None
             run.output = {"success": True, "result": stored_payload}
             run.updated_at = utc_now_iso()
             self._run_store.save(run)
+
+            # Ledger must remain the source-of-truth for replay/streaming.
+            # When a terminal wait is resumed, there is no follow-up `tick()` to append a
+            # completion record, so we append one here.
+            try:
+                node_id0 = str(getattr(run, "current_node", None) or "")
+                rec = StepRecord.start(run=run, node_id=node_id0 or "unknown", effect=None)
+                rec.status = StepStatus.COMPLETED
+                rec.result = {"completed": True, "via": "resume", "wait_reason": wait_reason, "wait_key": wait_key0}
+                rec.ended_at = utc_now_iso()
+                self._ledger_store.append(rec)
+            except Exception:
+                # Observability must never compromise durability/execution.
+                pass
             return run
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)

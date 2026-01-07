@@ -1261,11 +1261,55 @@ class Runtime:
             except Exception as e:
                 return EffectOutcome.failed(f"wait_event invalid payload: {e}")
         resume_to = effect.payload.get("resume_to_node") or default_next_node
+        # Optional UX metadata for hosts:
+        # - "prompt"/"choices"/"allow_free_text" enable durable human-in-the-loop
+        #   waits using EVENT as the wakeup mechanism (useful for thin clients).
+        prompt: Optional[str] = None
+        try:
+            p = effect.payload.get("prompt")
+            if isinstance(p, str) and p.strip():
+                prompt = p
+        except Exception:
+            prompt = None
+
+        choices: Optional[List[str]] = None
+        try:
+            raw_choices = effect.payload.get("choices")
+            if isinstance(raw_choices, list):
+                normalized: List[str] = []
+                for c in raw_choices:
+                    if isinstance(c, str) and c.strip():
+                        normalized.append(c.strip())
+                choices = normalized
+        except Exception:
+            choices = None
+
+        allow_free_text = True
+        try:
+            aft = effect.payload.get("allow_free_text")
+            if aft is None:
+                aft = effect.payload.get("allowFreeText")
+            if aft is not None:
+                allow_free_text = bool(aft)
+        except Exception:
+            allow_free_text = True
+
+        details = None
+        try:
+            d = effect.payload.get("details")
+            if isinstance(d, dict):
+                details = dict(d)
+        except Exception:
+            details = None
         wait = WaitState(
             reason=WaitReason.EVENT,
             wait_key=str(wait_key),
             resume_to_node=resume_to,
             result_key=effect.result_key,
+            prompt=prompt,
+            choices=choices,
+            allow_free_text=allow_free_text,
+            details=details,
         )
         return EffectOutcome.waiting(wait)
 

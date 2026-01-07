@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture (Current)
 
-> Updated: 2026-01-02  
+> Updated: 2026-01-07  
 > Scope: this describes **what is implemented today** in this monorepo.
 
 AbstractRuntime is the **durable execution kernel** of the AbstractFramework. It runs workflow graphs as a persisted state machine:
@@ -11,6 +11,24 @@ AbstractRuntime is the **durable execution kernel** of the AbstractFramework. It
 
 AbstractRuntime is intentionally dependency-light in the core (`abstractruntime/core/*`):
 - higher-level integrations (LLM providers, tool execution, event bus bridging) live in `abstractruntime/integrations/*`
+
+## High-level runtime loop (data flow)
+
+```
+WorkflowSpec (in-memory handlers)
+   │
+   ▼
+Runtime.tick(run_id)
+   │ loads + updates
+   ▼
+RunStore  (checkpoint RunState.vars + waiting)
+   │ append
+   ▼
+LedgerStore (StepRecords: started/completed/waiting/failed)
+   │ large payloads
+   ▼
+ArtifactStore (JSON blobs referenced from vars/ledger)
+```
 
 ## Core Types (Durable, JSON-Safe)
 
@@ -141,3 +159,7 @@ For **host-driven external signals**, use the scheduler API:
 - `Scheduler.emit_event(...)` (finds waiting runs and resumes them)
 
 Event envelopes (scope/session/workflow) are encoded via stable wait keys (see `abstractruntime/src/abstractruntime/core/event_keys.py`).
+
+## Deviations / near-term work
+- **Client-agnostic run history contract**: today, some hosts implement bespoke “ledger → UI events” replay logic. A runtime-owned, versioned `RunHistoryBundle` contract (planned: backlog 311) should become the shared format so any client can render consistent history and achieve stronger reproducibility.
+

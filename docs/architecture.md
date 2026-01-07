@@ -133,6 +133,10 @@ Custom eventing is implemented as:
 - emitters request `EffectType.EMIT_EVENT`, handled by the runtime (`Runtime._handle_emit_event`) which resumes matching `WAIT_EVENT` runs via `Runtime.resume(...)`
   - requires a `QueryableRunStore` to find waiting runs and a `workflow_registry` to load target `WorkflowSpec`s
 
+Notes:
+- The emitted event **payload is normalized to a dict** for network-safe stability. If a non-dict is provided, it is wrapped as `{ "value": <payload> }`.
+- `WAIT_EVENT` waits can optionally include UX metadata (`prompt`, `choices`, `allow_free_text`) so hosts can render interactive prompts while remaining fully durable.
+
 For **host-driven external signals**, use the scheduler API:
 - `Scheduler.emit_event(...)` (finds waiting runs and resumes them)
 

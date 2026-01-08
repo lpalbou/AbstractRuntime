@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture (Current)
 
-> Updated: 2026-01-07  
+> Updated: 2026-01-08  
 > Scope: this describes **what is implemented today** in this monorepo.
 
 AbstractRuntime is the **durable execution kernel** of the AbstractFramework. It runs workflow graphs as a persisted state machine:
@@ -11,6 +11,22 @@ AbstractRuntime is the **durable execution kernel** of the AbstractFramework. It
 
 AbstractRuntime is intentionally dependency-light in the core (`abstractruntime/core/*`):
 - higher-level integrations (LLM providers, tool execution, event bus bridging) live in `abstractruntime/integrations/*`
+
+## VisualFlow compilation (single semantics)
+
+AbstractRuntime ships a stdlib-only VisualFlow compiler under `abstractruntime.visualflow_compiler`:
+- VisualFlow JSON → Flow IR → `WorkflowSpec` (Python callables)
+- used by AbstractFlow (authoring host) and AbstractGateway (bundle mode)
+
+Important: `WorkflowSpec` is **not** a portable artifact format (it contains callables). Portability is achieved by distributing **VisualFlow JSON** (typically via WorkflowBundles).
+
+## WorkflowBundles (.flow)
+
+`abstractruntime.workflow_bundle` defines the portable distribution unit:
+- `manifest.json` + `flows/*.json` (+ optional `assets/*`)
+- hosts load bundles, namespace workflow ids as needed, compile flows via the runtime compiler, and register the resulting specs into a `WorkflowRegistry`
+
+`manifest.artifacts` is a legacy field retained for backward compatibility; modern hosts should not rely on it.
 
 ## High-level runtime loop (data flow)
 
@@ -162,4 +178,3 @@ Event envelopes (scope/session/workflow) are encoded via stable wait keys (see `
 
 ## Deviations / near-term work
 - **Client-agnostic run history contract**: today, some hosts implement bespoke “ledger → UI events” replay logic. A runtime-owned, versioned `RunHistoryBundle` contract (planned: backlog 311) should become the shared format so any client can render consistent history and achieve stronger reproducibility.
-

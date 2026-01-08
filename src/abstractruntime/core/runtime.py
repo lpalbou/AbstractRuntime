@@ -18,7 +18,7 @@ We keep the design explicitly modular:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, List
 import copy
@@ -48,6 +48,83 @@ from .event_keys import build_event_wait_key
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _jsonable(value: Any, *, _path: Optional[set[int]] = None, _depth: int = 0) -> Any:
+    """Best-effort conversion to JSON-safe objects.
+
+    The ledger is persisted as JSON. Any value stored in StepRecord.result must be JSON-safe.
+    """
+    if _path is None:
+        _path = set()
+    # Avoid pathological recursion and cyclic structures.
+    if _depth > 200:
+        return "<max_depth>"
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        vid = id(value)
+        if vid in _path:
+            return "<cycle>"
+        _path.add(vid)
+        try:
+            return {str(k): _jsonable(v, _path=_path, _depth=_depth + 1) for k, v in value.items()}
+        finally:
+            _path.discard(vid)
+    if isinstance(value, list):
+        vid = id(value)
+        if vid in _path:
+            return "<cycle>"
+        _path.add(vid)
+        try:
+            return [_jsonable(v, _path=_path, _depth=_depth + 1) for v in value]
+        finally:
+            _path.discard(vid)
+    try:
+        if is_dataclass(value):
+            vid = id(value)
+            if vid in _path:
+                return "<cycle>"
+            _path.add(vid)
+            try:
+                return _jsonable(asdict(value), _path=_path, _depth=_depth + 1)
+            finally:
+                _path.discard(vid)
+    except Exception:
+        pass
+    try:
+        md = getattr(value, "model_dump", None)
+        if callable(md):
+            vid = id(value)
+            if vid in _path:
+                return "<cycle>"
+            _path.add(vid)
+            try:
+                return _jsonable(md(), _path=_path, _depth=_depth + 1)
+            finally:
+                _path.discard(vid)
+    except Exception:
+        pass
+    try:
+        td = getattr(value, "to_dict", None)
+        if callable(td):
+            vid = id(value)
+            if vid in _path:
+                return "<cycle>"
+            _path.add(vid)
+            try:
+                return _jsonable(td(), _path=_path, _depth=_depth + 1)
+            finally:
+                _path.discard(vid)
+    except Exception:
+        pass
+    try:
+        json.dumps(value)
+        return value
+    except Exception:
+        return str(value)
 
 
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
@@ -748,7 +825,7 @@ class Runtime:
                 # ledger: completion record (no effect)
                 rec = StepRecord.start(run=run, node_id=plan.node_id, effect=None)
                 rec.status = StepStatus.COMPLETED
-                rec.result = {"completed": True}
+                rec.result = {"completed": True, "output": _jsonable(run.output)}
                 rec.ended_at = utc_now_iso()
                 self._ledger_store.append(rec)
                 return run
@@ -1044,7 +1121,13 @@ class Runtime:
                 node_id0 = str(getattr(run, "current_node", None) or "")
                 rec = StepRecord.start(run=run, node_id=node_id0 or "unknown", effect=None)
                 rec.status = StepStatus.COMPLETED
-                rec.result = {"completed": True, "via": "resume", "wait_reason": wait_reason, "wait_key": wait_key0}
+                rec.result = {
+                    "completed": True,
+                    "via": "resume",
+                    "wait_reason": wait_reason,
+                    "wait_key": wait_key0,
+                    "output": _jsonable(run.output),
+                }
                 rec.ended_at = utc_now_iso()
                 self._ledger_store.append(rec)
             except Exception:
@@ -1404,12 +1487,6 @@ class Runtime:
         except Exception:
             wildcard_wait_key = None
 
-        if self._workflow_registry is None:
-            return EffectOutcome.failed(
-                "emit_event requires a workflow_registry to resume target runs. "
-                "Set it via Runtime(workflow_registry=...) or runtime.set_workflow_registry(...)."
-            )
-
         if not isinstance(self._run_store, QueryableRunStore):
             return EffectOutcome.failed(
                 "emit_event requires a QueryableRunStore to find waiting runs. "
@@ -1442,6 +1519,11 @@ class Runtime:
         available_in_session: list[str] = []
         prefix = f"evt:session:{session_id}:"
 
+        # First pass: find matching runs and compute best-effort diagnostics without
+        # requiring a workflow_registry. This allows UI-only EMIT_EVENT usage
+        # (e.g. AbstractCode notifications) in deployments that do not use
+        # WAIT_EVENT listeners.
+        matched: list[tuple[RunState, Optional[str]]] = []
         for r in candidates:
             if _is_paused_run_vars(getattr(r, "vars", None)):
                 continue
@@ -1457,6 +1539,31 @@ class Runtime:
             if wk != wait_key and (wildcard_wait_key is None or wk != wildcard_wait_key):
                 continue
 
+            matched.append((r, wk if isinstance(wk, str) else None))
+
+        # If there are no matching listeners, emitting is still a useful side effect
+        # for hosts (ledger observability, UI events). In that case, do not require
+        # a workflow_registry.
+        if not matched:
+            out0: Dict[str, Any] = {
+                "wait_key": wait_key,
+                "name": str(name),
+                "scope": str(scope or "session"),
+                "delivered": 0,
+                "delivered_to": [],
+                "resumed": [],
+            }
+            if available_in_session:
+                out0["available_listeners_in_session"] = available_in_session
+            return EffectOutcome.completed(out0)
+
+        if self._workflow_registry is None:
+            return EffectOutcome.failed(
+                "emit_event requires a workflow_registry to resume target runs. "
+                "Set it via Runtime(workflow_registry=...) or runtime.set_workflow_registry(...)."
+            )
+
+        for r, wk in matched:
             wf = self._workflow_registry.get(r.workflow_id)
             if wf is None:
                 # Can't resume without the spec; skip but include diagnostic in result.

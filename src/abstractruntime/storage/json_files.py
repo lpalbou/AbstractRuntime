@@ -10,6 +10,7 @@ This is meant as a straightforward MVP backend.
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -25,15 +26,70 @@ class JsonFileRunStore(RunStore):
     Implements both RunStore (ABC) and QueryableRunStore (Protocol).
 
     Query operations scan all run_*.json files, which is acceptable for MVP
-    but may need indexing for large deployments.
+    but needs lightweight indexing for interactive workloads (e.g. WS tick loops)
+    once the run directory grows.
     """
 
     def __init__(self, base_dir: str | Path):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
+        self._index_lock = threading.Lock()
+        self._children_index: Optional[Dict[str, set[str]]] = None
+        self._run_parent_index: Dict[str, Optional[str]] = {}
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"run_{run_id}.json"
+
+    def _ensure_children_index(self) -> None:
+        if self._children_index is not None:
+            return
+        with self._index_lock:
+            if self._children_index is not None:
+                return
+
+            children: Dict[str, set[str]] = {}
+            run_parent: Dict[str, Optional[str]] = {}
+
+            for run in self._iter_all_runs():
+                parent = run.parent_run_id
+                run_parent[run.run_id] = parent
+                if isinstance(parent, str) and parent:
+                    children.setdefault(parent, set()).add(run.run_id)
+
+            self._children_index = children
+            self._run_parent_index = run_parent
+
+    def _drop_from_children_index(self, run_id: str) -> None:
+        with self._index_lock:
+            if self._children_index is None:
+                return
+            parent = self._run_parent_index.pop(run_id, None)
+            if isinstance(parent, str) and parent:
+                siblings = self._children_index.get(parent)
+                if siblings is not None:
+                    siblings.discard(run_id)
+                    if not siblings:
+                        self._children_index.pop(parent, None)
+
+    def _update_children_index_on_save(self, run: RunState) -> None:
+        run_id = run.run_id
+        new_parent = run.parent_run_id
+
+        with self._index_lock:
+            if self._children_index is None:
+                return
+
+            old_parent = self._run_parent_index.get(run_id)
+            if isinstance(old_parent, str) and old_parent and old_parent != new_parent:
+                siblings = self._children_index.get(old_parent)
+                if siblings is not None:
+                    siblings.discard(run_id)
+                    if not siblings:
+                        self._children_index.pop(old_parent, None)
+
+            self._run_parent_index[run_id] = new_parent
+            if isinstance(new_parent, str) and new_parent:
+                self._children_index.setdefault(new_parent, set()).add(run_id)
 
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
@@ -51,6 +107,7 @@ class JsonFileRunStore(RunStore):
                     tmp.unlink()
             except Exception:
                 pass
+        self._update_children_index_on_save(run)
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)
@@ -180,10 +237,15 @@ class JsonFileRunStore(RunStore):
         status: Optional[RunStatus] = None,
     ) -> List[RunState]:
         """List child runs of a parent."""
-        results: List[RunState] = []
+        self._ensure_children_index()
+        with self._index_lock:
+            child_ids = list((self._children_index or {}).get(parent_run_id, set()))
 
-        for run in self._iter_all_runs():
-            if run.parent_run_id != parent_run_id:
+        results: List[RunState] = []
+        for run_id in sorted(child_ids):
+            run = self.load(run_id)
+            if run is None:
+                self._drop_from_children_index(run_id)
                 continue
             if status is not None and run.status != status:
                 continue
@@ -218,4 +280,3 @@ class JsonlLedgerStore(LedgerStore):
                     continue
                 out.append(json.loads(line))
         return out
-

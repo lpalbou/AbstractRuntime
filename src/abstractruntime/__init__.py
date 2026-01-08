@@ -66,6 +66,16 @@ from .scheduler import (
     create_scheduled_runtime,
 )
 from .memory import ActiveContextPolicy, TimeRange
+from .workflow_bundle import (
+    WORKFLOW_BUNDLE_FORMAT_VERSION_V1,
+    WorkflowBundle,
+    WorkflowBundleEntrypoint,
+    WorkflowBundleError,
+    WorkflowBundleManifest,
+    open_workflow_bundle,
+    workflow_bundle_manifest_from_dict,
+    workflow_bundle_manifest_to_dict,
+)
 
 __all__ = [
     # Core models
@@ -129,5 +139,14 @@ __all__ = [
     # Memory
     "ActiveContextPolicy",
     "TimeRange",
+    # WorkflowBundles (portable distribution unit)
+    "WORKFLOW_BUNDLE_FORMAT_VERSION_V1",
+    "WorkflowBundleError",
+    "WorkflowBundleEntrypoint",
+    "WorkflowBundleManifest",
+    "WorkflowBundle",
+    "workflow_bundle_manifest_from_dict",
+    "workflow_bundle_manifest_to_dict",
+    "open_workflow_bundle",
 ]
 

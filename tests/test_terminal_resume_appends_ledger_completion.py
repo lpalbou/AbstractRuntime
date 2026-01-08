@@ -52,5 +52,6 @@ def test_terminal_resume_appends_completion_record_to_ledger() -> None:
     assert result.get("completed") is True
     assert result.get("via") == "resume"
     assert result.get("wait_key") == wait_key
+    assert result.get("output") == {"success": True, "result": {"response": "I am a test"}}
 
 

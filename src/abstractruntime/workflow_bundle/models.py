@@ -60,6 +60,10 @@ class WorkflowBundleManifest:
     created_at: str = ""
 
     entrypoints: List[WorkflowBundleEntrypoint] = field(default_factory=list)
+    # Optional explicit default entrypoint (flow id). If omitted:
+    # - single-entrypoint bundles imply a default
+    # - multi-entrypoint bundles require callers to specify flow_id (unless a host chooses otherwise)
+    default_entrypoint: Optional[str] = None
 
     # Maps flow_id -> relative path in the bundle (optional; used by UIs).
     flows: Dict[str, str] = field(default_factory=dict)
@@ -101,6 +105,11 @@ class WorkflowBundleManifest:
                 if not isinstance(it, str):
                     raise WorkflowBundleError(f"entrypoint '{fid}' interfaces must be strings")
 
+        if self.default_entrypoint is not None:
+            de = str(self.default_entrypoint or "").strip()
+            if de and de not in seen:
+                raise WorkflowBundleError(f"default_entrypoint '{de}' must match an entrypoint.flow_id")
+
         for mapping_name, mapping in (("flows", self.flows), ("artifacts", self.artifacts), ("assets", self.assets)):
             if not isinstance(mapping, dict):
                 raise WorkflowBundleError(f"manifest.{mapping_name} must be a dict")
@@ -136,6 +145,15 @@ def workflow_bundle_manifest_from_dict(raw: Dict[str, Any]) -> WorkflowBundleMan
     bundle_id = str(raw.get("bundle_id") or raw.get("bundleId") or "").strip()
     bundle_version = str(raw.get("bundle_version") or raw.get("bundleVersion") or "0.0.0").strip() or "0.0.0"
     created_at = str(raw.get("created_at") or raw.get("createdAt") or "")
+
+    default_entrypoint_raw = (
+        raw.get("default_entrypoint") or raw.get("defaultEntrypoint") or raw.get("default_entrypoint_flow_id") or raw.get("defaultEntrypointFlowId")
+    )
+    default_entrypoint = (
+        str(default_entrypoint_raw).strip()
+        if isinstance(default_entrypoint_raw, str) and str(default_entrypoint_raw).strip()
+        else None
+    )
 
     entrypoints_raw = raw.get("entrypoints")
     entrypoints: list[WorkflowBundleEntrypoint] = []
@@ -180,6 +198,7 @@ def workflow_bundle_manifest_from_dict(raw: Dict[str, Any]) -> WorkflowBundleMan
         bundle_version=bundle_version,
         created_at=created_at,
         entrypoints=entrypoints,
+        default_entrypoint=default_entrypoint,
         flows=flows,
         artifacts=artifacts,
         assets=assets,
@@ -191,7 +210,7 @@ def workflow_bundle_manifest_from_dict(raw: Dict[str, Any]) -> WorkflowBundleMan
 
 def workflow_bundle_manifest_to_dict(manifest: WorkflowBundleManifest) -> Dict[str, Any]:
     manifest.validate()
-    return {
+    out = {
         "bundle_format_version": str(manifest.bundle_format_version),
         "bundle_id": str(manifest.bundle_id),
         "bundle_version": str(manifest.bundle_version),
@@ -205,9 +224,13 @@ def workflow_bundle_manifest_to_dict(manifest: WorkflowBundleManifest) -> Dict[s
             }
             for ep in list(manifest.entrypoints or [])
         ],
+        "default_entrypoint": str(manifest.default_entrypoint) if manifest.default_entrypoint else None,
         "flows": dict(manifest.flows or {}),
         "artifacts": dict(manifest.artifacts or {}),
         "assets": dict(manifest.assets or {}),
         "metadata": dict(manifest.metadata or {}),
     }
-
+    # Keep output stable: omit null default_entrypoint.
+    if out.get("default_entrypoint") is None:
+        out.pop("default_entrypoint", None)
+    return out

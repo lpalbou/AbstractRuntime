@@ -25,6 +25,7 @@ Important: `WorkflowSpec` is **not** a portable artifact format (it contains cal
 `abstractruntime.workflow_bundle` defines the portable distribution unit:
 - `manifest.json` + `flows/*.json` (+ optional `assets/*`)
 - hosts load bundles, namespace workflow ids as needed, compile flows via the runtime compiler, and register the resulting specs into a `WorkflowRegistry`
+- `manifest.default_entrypoint` is optional metadata that hosts may use to pick a default runnable root when clients start a bundle with `{bundle_id, input_data}`.
 
 `manifest.artifacts` is a legacy field retained for backward compatibility; modern hosts should not rely on it.
 

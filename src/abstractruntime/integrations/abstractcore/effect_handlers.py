@@ -297,7 +297,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         system_prompt = payload.get("system_prompt")
         provider = payload.get("provider")
         model = payload.get("model")
-        tools = payload.get("tools")
+        tools_raw = payload.get("tools")
+        tools = tools_raw if isinstance(tools_raw, list) and len(tools_raw) > 0 else None
         response_schema = _normalize_response_schema(payload.get("response_schema"))
         response_schema_name = payload.get("response_schema_name")
         structured_output_fallback = payload.get("structured_output_fallback")

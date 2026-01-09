@@ -74,6 +74,24 @@ class ObservableLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
 
+    def count(self, run_id: str) -> int:
+        """Best-effort record count for run_id.
+
+        When the inner LedgerStore implements a faster `count()` method (e.g. JsonlLedgerStore),
+        delegate to it. Otherwise, fall back to `len(list(run_id))`.
+        """
+        inner = self._inner
+        try:
+            count_fn = getattr(inner, "count", None)
+            if callable(count_fn):
+                return int(count_fn(run_id))
+        except Exception:
+            pass
+        try:
+            return len(inner.list(run_id))
+        except Exception:
+            return 0
+
     def subscribe(
         self,
         callback: LedgerSubscriber,
@@ -96,4 +114,3 @@ class ObservableLedgerStore(LedgerStore):
         """Clear all subscribers (test utility)."""
         with self._lock:
             self._subscribers.clear()
-

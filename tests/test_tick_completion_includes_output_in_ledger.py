@@ -26,12 +26,30 @@ def test_tick_completion_appends_completion_record_with_output() -> None:
     ledger = runtime.get_ledger(run_id)
     assert isinstance(ledger, list)
     assert ledger, "expected at least one ledger record"
-    last = ledger[-1]
-    assert isinstance(last, dict)
-    assert last.get("status") == "completed"
-    result = last.get("result")
+
+    completed = [
+        r
+        for r in ledger
+        if isinstance(r, dict)
+        and isinstance(r.get("result"), dict)
+        and (r.get("result") or {}).get("completed") is True
+    ]
+    assert completed, "expected a completion ledger record"
+    last_completed = completed[-1]
+    assert isinstance(last_completed, dict)
+    assert last_completed.get("status") == "completed"
+    result = last_completed.get("result")
     assert isinstance(result, dict)
     assert result.get("completed") is True
     assert result.get("output") == {"success": True, "result": {"x": 1}}
 
+    # Terminal runs also emit a durable abstract.status for UI clients.
+    last = ledger[-1]
+    assert isinstance(last, dict)
+    eff = last.get("effect")
+    assert isinstance(eff, dict)
+    assert eff.get("type") == "emit_event"
+    payload = eff.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("name") == "abstract.status"
 

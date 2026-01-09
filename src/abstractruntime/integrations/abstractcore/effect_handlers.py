@@ -300,6 +300,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         tools = payload.get("tools")
         response_schema = _normalize_response_schema(payload.get("response_schema"))
         response_schema_name = payload.get("response_schema_name")
+        structured_output_fallback = payload.get("structured_output_fallback")
         raw_params = payload.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}
 
@@ -321,14 +322,28 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")
 
+        def _coerce_boolish(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value != 0
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+            return False
+
+        fallback_enabled = _coerce_boolish(structured_output_fallback)
+        base_params = dict(params)
+
         try:
-            if isinstance(response_schema, dict) and response_schema:
+            structured_requested = isinstance(response_schema, dict) and response_schema
+            params_for_call = dict(params)
+            if structured_requested:
                 model_name = (
                     str(response_schema_name).strip()
                     if isinstance(response_schema_name, str) and response_schema_name.strip()
                     else "StructuredOutput"
                 )
-                params["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
+                params_for_call["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
 
             runtime_observability = {
                 "llm_generate_kwargs": _jsonable(
@@ -337,23 +352,96 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                         "messages": messages,
                         "system_prompt": system_prompt,
                         "tools": tools,
-                        "params": params,
+                        "params": params_for_call,
+                        "structured_output_fallback": fallback_enabled,
                     }
                 ),
             }
 
-            result = llm.generate(
-                prompt=str(prompt or ""),
-                messages=messages,
-                system_prompt=system_prompt,
-                tools=tools,
-                params=params,
-            )
+            structured_failed = False
+            structured_error: Optional[str] = None
+            try:
+                result = llm.generate(
+                    prompt=str(prompt or ""),
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    params=params_for_call,
+                )
+            except Exception as e:
+                looks_like_validation = False
+                try:
+                    from pydantic import ValidationError as PydanticValidationError  # type: ignore
+
+                    looks_like_validation = isinstance(e, PydanticValidationError)
+                except Exception:
+                    looks_like_validation = False
+
+                msg = str(e)
+                if not looks_like_validation:
+                    lowered = msg.lower()
+                    if "validation errors for" in lowered or "structured output generation failed" in lowered:
+                        looks_like_validation = True
+
+                if not (fallback_enabled and structured_requested and looks_like_validation):
+                    raise
+
+                logger.warning(
+                    "LLM_CALL structured output failed; retrying without schema",
+                    error=msg,
+                )
+
+                result = llm.generate(
+                    prompt=str(prompt or ""),
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    params=dict(base_params),
+                )
+                structured_failed = True
+                structured_error = msg
+
+            if structured_requested and isinstance(result, dict):
+                # Best-effort: when structured outputs fail (or providers ignore response_model),
+                # try to parse the returned text into `data` so downstream nodes can consume it.
+                try:
+                    existing_data = result.get("data")
+                except Exception:
+                    existing_data = None
+
+                content_value = result.get("content") if isinstance(result.get("content"), str) else None
+
+                if existing_data is None and isinstance(content_value, str) and content_value.strip():
+                    parsed: Any = None
+                    parse_error: Optional[str] = None
+                    try:
+                        from abstractruntime.visualflow_compiler.visual.builtins import data_parse_json
+
+                        parsed = data_parse_json({"text": content_value, "wrap_scalar": True})
+                    except Exception as e:
+                        parse_error = str(e)
+                        parsed = None
+
+                    # Response schemas in this system are object-only; wrap non-dicts for safety.
+                    if parsed is not None and not isinstance(parsed, dict):
+                        parsed = {"value": parsed}
+                    if parsed is not None:
+                        result["data"] = parsed
+
+                    if parse_error is not None:
+                        meta = result.get("metadata")
+                        if not isinstance(meta, dict):
+                            meta = {}
+                            result["metadata"] = meta
+                        meta["_structured_output_parse_error"] = parse_error
+
             if isinstance(result, dict):
                 meta = result.get("metadata")
                 if not isinstance(meta, dict):
                     meta = {}
                     result["metadata"] = meta
+                if structured_failed:
+                    meta["_structured_output_fallback"] = {"used": True, "error": structured_error or ""}
                 existing = meta.get("_runtime_observability")
                 if not isinstance(existing, dict):
                     existing = {}

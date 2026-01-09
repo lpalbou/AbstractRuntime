@@ -43,15 +43,33 @@ def test_terminal_resume_appends_completion_record_to_ledger() -> None:
     assert st2.status == RunStatus.COMPLETED
 
     ledger_after = runtime.get_ledger(run_id)
-    assert len(ledger_after) == len(ledger_before) + 1
-    last = ledger_after[-1]
-    assert isinstance(last, dict)
-    assert last.get("status") == "completed"
-    result = last.get("result")
+    assert len(ledger_after) == len(ledger_before) + 2  # completion + abstract.status
+
+    completed = [
+        r
+        for r in ledger_after
+        if isinstance(r, dict)
+        and isinstance(r.get("result"), dict)
+        and (r.get("result") or {}).get("completed") is True
+        and (r.get("result") or {}).get("via") == "resume"
+    ]
+    assert completed, "expected a completion record appended by resume()"
+    last_completed = completed[-1]
+    assert isinstance(last_completed, dict)
+    assert last_completed.get("status") == "completed"
+    result = last_completed.get("result")
     assert isinstance(result, dict)
     assert result.get("completed") is True
     assert result.get("via") == "resume"
     assert result.get("wait_key") == wait_key
     assert result.get("output") == {"success": True, "result": {"response": "I am a test"}}
 
+    last = ledger_after[-1]
+    assert isinstance(last, dict)
+    eff = last.get("effect")
+    assert isinstance(eff, dict)
+    assert eff.get("type") == "emit_event"
+    payload = eff.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("name") == "abstract.status"
 

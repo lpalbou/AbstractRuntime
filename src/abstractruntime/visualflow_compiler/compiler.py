@@ -1802,7 +1802,15 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 ctx: Any,
                 *,
                 _base: Any = base_while,
+                _pure_ids: set[str] = pure_ids,
             ) -> StepPlan:
+                # Ensure pure nodes feeding the loop body are re-evaluated per iteration.
+                if flow is not None and _pure_ids and hasattr(flow, "_node_outputs") and hasattr(flow, "_data_edge_map"):
+                    _sync_effect_results_to_node_outputs(run, flow)
+                    node_outputs = getattr(flow, "_node_outputs", None)
+                    if isinstance(node_outputs, dict):
+                        for nid in _pure_ids:
+                            node_outputs.pop(nid, None)
                 plan = _base(run, ctx)
                 # While scheduler persists `index` into run.vars; sync so WS/UI
                 # node_complete events show the latest iteration count.

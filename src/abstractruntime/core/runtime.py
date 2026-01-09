@@ -483,6 +483,7 @@ class Runtime:
             pass
         run.updated_at = utc_now_iso()
         self._run_store.save(run)
+        self._append_terminal_status_event(run)
         return run
 
     def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
@@ -767,6 +768,35 @@ class Runtime:
 
         self._run_store.save(run)
 
+    def _append_terminal_status_event(self, run: RunState) -> None:
+        """Best-effort: append a durable `abstract.status` event on terminal runs.
+
+        This exists for UI clients that rely on `emit_event` records (e.g. status bars)
+        and should not be required for correctness. Failures must be non-fatal.
+        """
+        try:
+            status = getattr(getattr(run, "status", None), "value", None) or str(getattr(run, "status", "") or "")
+            status_str = str(status or "").strip().lower()
+            if status_str not in {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}:
+                return
+
+            node_id = str(getattr(run, "current_node", None) or "").strip() or "runtime"
+            eff = Effect(
+                type=EffectType.EMIT_EVENT,
+                payload={"name": "abstract.status", "scope": "session", "payload": {"text": status_str}},
+            )
+            rec = StepRecord.start(
+                run=run,
+                node_id=node_id,
+                effect=eff,
+                idempotency_key=f"system:terminal_status:{status_str}",
+            )
+            rec.finish_success({"emitted": True, "name": "abstract.status", "payload": {"text": status_str}})
+            self._ledger_store.append(rec)
+        except Exception:
+            # Observability must never compromise durability/execution.
+            return
+
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
         # Terminal runs never progress.
@@ -828,6 +858,7 @@ class Runtime:
                 rec.result = {"completed": True, "output": _jsonable(run.output)}
                 rec.ended_at = utc_now_iso()
                 self._ledger_store.append(rec)
+                self._append_terminal_status_event(run)
                 return run
 
             # Pure transition
@@ -908,6 +939,7 @@ class Runtime:
                 run.error = outcome.error or "unknown error"
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
+                self._append_terminal_status_event(run)
                 return run
 
             if outcome.status == "waiting":
@@ -939,6 +971,7 @@ class Runtime:
                 run.output = {"success": True, "result": outcome.result}
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
+                self._append_terminal_status_event(run)
                 return run
             controlled = _abort_if_externally_controlled()
             if controlled is not None:
@@ -1133,6 +1166,7 @@ class Runtime:
             except Exception:
                 # Observability must never compromise durability/execution.
                 pass
+            self._append_terminal_status_event(run)
             return run
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)

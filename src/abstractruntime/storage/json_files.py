@@ -280,3 +280,18 @@ class JsonlLedgerStore(LedgerStore):
                     continue
                 out.append(json.loads(line))
         return out
+
+    def count(self, run_id: str) -> int:
+        """Return the number of ledger records for run_id (fast path).
+
+        This avoids JSON parsing when only a count is needed (e.g. UI dropdowns).
+        """
+        p = self._path(run_id)
+        if not p.exists():
+            return 0
+        n = 0
+        with p.open("r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    n += 1
+        return n

@@ -1268,6 +1268,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if include_context_cfg is None:
             include_context_cfg = config.get("use_context")
         include_context_default = _coerce_bool(include_context_cfg) if include_context_cfg is not None else False
+        structured_output_fallback_cfg = config.get("structured_output_fallback")
+        structured_output_fallback_default = (
+            _coerce_bool(structured_output_fallback_cfg) if structured_output_fallback_cfg is not None else False
+        )
 
         # Tool definitions (ToolSpecs) are required for tool calling. In the visual editor we
         # store tools as a portable `string[]` allowlist; at execution time we translate to
@@ -1465,6 +1469,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 pending["response_schema"] = response_schema
                 # Name is optional; AbstractRuntime will fall back to a safe default.
                 pending["response_schema_name"] = "LLM_StructuredOutput"
+                if structured_output_fallback_default:
+                    pending["structured_output_fallback"] = True
 
             return {
                 "response": None,

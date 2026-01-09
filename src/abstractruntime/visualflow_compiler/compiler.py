@@ -137,6 +137,7 @@ def _create_effect_node_handler(
             provider=effect_config.get("provider"),
             model=effect_config.get("model"),
             temperature=effect_config.get("temperature", 0.7),
+            seed=effect_config.get("seed", -1),
         )
     elif effect_type == "tool_calls":
         base_handler = create_tool_calls_handler(
@@ -400,6 +401,8 @@ def _create_visual_agent_effect_handler(
         model: str,
         system_prompt: str,
         allowed_tools: list[str],
+        temperature: float = 0.7,
+        seed: int = -1,
         include_context: bool = False,
         max_iterations: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -445,7 +448,14 @@ def _create_visual_agent_effect_handler(
                     continue
                 ctx_ns[str(k)] = v
 
-        runtime_ns: Dict[str, Any] = {"inbox": [], "provider": provider, "model": model, "allowed_tools": list(allowed_tools)}
+        runtime_ns: Dict[str, Any] = {
+            "inbox": [],
+            "provider": provider,
+            "model": model,
+            "allowed_tools": list(allowed_tools),
+            "temperature": float(temperature),
+            "seed": int(seed),
+        }
         if isinstance(system_prompt, str) and system_prompt.strip():
             runtime_ns["system_prompt"] = system_prompt
 
@@ -474,6 +484,22 @@ def _create_visual_agent_effect_handler(
         except Exception:
             return None
         return None
+
+    def _coerce_temperature(value: Any, default: float = 0.7) -> float:
+        try:
+            if value is None or isinstance(value, bool):
+                return float(default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _coerce_seed(value: Any, default: int = -1) -> int:
+        try:
+            if value is None or isinstance(value, bool):
+                return int(default)
+            return int(value)
+        except Exception:
+            return int(default)
 
     def handler(run: Any, ctx: Any) -> "StepPlan":
         del ctx
@@ -547,6 +573,19 @@ def _create_visual_agent_effect_handler(
         max_iterations_override = _coerce_max_iterations(max_iterations_raw)
         if max_iterations_override is None:
             max_iterations_override = _coerce_max_iterations(agent_config.get("max_iterations"))
+
+        # Sampling controls can come from pins or from config.
+        if isinstance(resolved_inputs, dict) and "temperature" in resolved_inputs:
+            temperature_raw = resolved_inputs.get("temperature")
+        else:
+            temperature_raw = agent_config.get("temperature", 0.7)
+        temperature = _coerce_temperature(temperature_raw, default=0.7)
+
+        if isinstance(resolved_inputs, dict) and "seed" in resolved_inputs:
+            seed_raw = resolved_inputs.get("seed")
+        else:
+            seed_raw = agent_config.get("seed", -1)
+        seed = _coerce_seed(seed_raw, default=-1)
 
         # Tools selection:
         # - If the resolved inputs explicitly include `tools` (e.g. tools pin connected),
@@ -622,6 +661,8 @@ def _create_visual_agent_effect_handler(
                             model=model,
                             system_prompt=system_prompt,
                             allowed_tools=allowed_tools,
+                            temperature=temperature,
+                            seed=seed,
                             include_context=include_context,
                             max_iterations=max_iterations_override,
                         ),
@@ -700,7 +741,7 @@ def _create_visual_agent_effect_handler(
                             "model": model,
                             "response_schema": schema,
                             "response_schema_name": f"Agent_{node_id}",
-                            "params": {"temperature": 0.2},
+                            "params": {"temperature": temperature, "seed": seed} if seed >= 0 else {"temperature": temperature},
                         },
                         result_key=f"_temp.agent.{node_id}.structured",
                     ),

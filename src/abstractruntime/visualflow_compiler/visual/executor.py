@@ -819,6 +819,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # Optional pin overrides (passed through for compiler/runtime consumption).
             if isinstance(input_data, dict) and "max_iterations" in input_data:
                 out["max_iterations"] = input_data.get("max_iterations")
+            if isinstance(input_data, dict) and "temperature" in input_data:
+                out["temperature"] = input_data.get("temperature")
+            if isinstance(input_data, dict) and "seed" in input_data:
+                out["seed"] = input_data.get("seed")
 
             if isinstance(input_data, dict) and "response_schema" in input_data:
                 schema = _normalize_response_schema(input_data.get("response_schema"))
@@ -1258,6 +1262,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         provider_default = config.get("provider", "")
         model_default = config.get("model", "")
         temperature = config.get("temperature", 0.7)
+        seed_default = config.get("seed", -1)
         tools_default_raw = config.get("tools")
         include_context_cfg = config.get("include_context")
         if include_context_cfg is None:
@@ -1402,6 +1407,30 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 else model_default
             )
 
+            # Allow pins to override sampling params.
+            temperature_value = temperature
+            if isinstance(input_data, dict) and "temperature" in input_data:
+                raw_temp = input_data.get("temperature")
+                try:
+                    if raw_temp is not None and not isinstance(raw_temp, bool):
+                        temperature_value = float(raw_temp)
+                except Exception:
+                    pass
+
+            seed_value_raw: Any = seed_default
+            if isinstance(input_data, dict) and "seed" in input_data:
+                seed_value_raw = input_data.get("seed")
+            seed_value = -1
+            try:
+                if seed_value_raw is not None and not isinstance(seed_value_raw, bool):
+                    seed_value = int(seed_value_raw)
+            except Exception:
+                seed_value = -1
+
+            params: Dict[str, Any] = {"temperature": float(temperature_value)}
+            if seed_value >= 0:
+                params["seed"] = seed_value
+
             if not provider or not model:
                 return {
                     "response": "[LLM Call: missing provider/model]",
@@ -1410,7 +1439,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                         "prompt": prompt,
                         "system_prompt": system,
                         "tools": tools,
-                        "params": {"temperature": temperature},
+                        "params": dict(params),
                         "include_context": include_context_value,
                     },
                     "error": "Missing provider or model configuration",
@@ -1427,7 +1456,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "prompt": prompt,
                 "system_prompt": system,
                 "tools": tools,
-                "params": {"temperature": temperature},
+                "params": dict(params),
                 "provider": provider,
                 "model": model,
                 "include_context": include_context_value,

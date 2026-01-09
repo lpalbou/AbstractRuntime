@@ -442,6 +442,7 @@ def create_llm_call_handler(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.7,
+    seed: int = -1,
 ) -> Callable:
     """Create a node handler that makes an LLM call.
 
@@ -453,6 +454,7 @@ def create_llm_call_handler(
         provider: LLM provider to use
         model: Model name to use
         temperature: Temperature parameter
+        seed: Seed parameter (-1 means random/unset)
 
     Returns:
         A node handler that produces LLM_CALL effect
@@ -489,11 +491,17 @@ def create_llm_call_handler(
                 "provider": provider,
                 "model": model,
                 "params": {
-                    "temperature": temperature,
+                    "temperature": float(temperature),
                 },
             },
             result_key=output_key or "_temp.llm_response",
         )
+        try:
+            seed_i = int(seed)
+        except Exception:
+            seed_i = -1
+        if seed_i >= 0:
+            effect.payload["params"]["seed"] = seed_i
 
         return StepPlan(
             node_id=node_id,

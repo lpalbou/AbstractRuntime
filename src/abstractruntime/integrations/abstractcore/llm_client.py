@@ -745,6 +745,20 @@ class RemoteAbstractCoreLLMClient:
             "presence_penalty",
         ):
             if key in params and params[key] is not None:
+                if key == "seed":
+                    try:
+                        seed_i = int(params[key])
+                    except Exception:
+                        continue
+                    if seed_i >= 0:
+                        body[key] = seed_i
+                    continue
+                if key == "temperature":
+                    try:
+                        body[key] = float(params[key])
+                    except Exception:
+                        continue
+                    continue
                 body[key] = params[key]
 
         if tools is not None:

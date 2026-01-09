@@ -32,7 +32,5 @@ MONOREPO_ROOT = HERE.parents[2]         # .../abstractframework
 _prepend_sys_path(MONOREPO_ROOT / "abstractcore")
 
 # Ensure `abstractruntime` resolves to .../abstractruntime/src/abstractruntime (src-layout)
-_prepend_sys_path(ABSTRACTRUNTIME_ROOT / "src")
-
-# Keep sibling src-layout packages stable as well.
+_prepend_sys_path(ABSTRACTRUNTIME_ROOT / "src")# Keep sibling src-layout packages stable as well.
 _prepend_sys_path(MONOREPO_ROOT / "abstractagent" / "src")

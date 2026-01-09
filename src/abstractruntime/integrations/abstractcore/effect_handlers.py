@@ -22,6 +22,8 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
+_JSON_SCHEMA_PRIMITIVE_TYPES: Set[str] = {"string", "integer", "number", "boolean", "array", "object", "null"}
+
 
 def _jsonable(value: Any) -> Any:
     """Best-effort conversion to JSON-safe objects.
@@ -41,6 +43,165 @@ def _jsonable(value: Any) -> Any:
         return value
     except Exception:
         return str(value)
+
+
+def _normalize_response_schema(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalize user-provided schema inputs into a JSON Schema dict (object root).
+
+    Supported inputs (best-effort):
+    - JSON Schema object:
+        {"type":"object","properties":{...}, "required":[...], ...}
+      (also accepts missing type when properties exist)
+    - OpenAI/LMStudio wrapper shapes:
+        {"type":"json_schema","json_schema":{"schema":{...}}}
+        {"json_schema":{"schema":{...}}}
+        {"schema":{...}}  (inner wrapper copy/pasted from provider docs)
+    - "Field map" shortcut (common authoring mistake but unambiguous intent):
+        {"choice":"...", "score": 0, "meta": {"foo":"bar"}, ...}
+      Coerces into a JSON Schema object with properties inferred from values.
+    """
+
+    def _is_schema_type(value: Any) -> bool:
+        if isinstance(value, str):
+            return value in _JSON_SCHEMA_PRIMITIVE_TYPES
+        if isinstance(value, list) and value and all(isinstance(x, str) for x in value):
+            return all(x in _JSON_SCHEMA_PRIMITIVE_TYPES for x in value)
+        return False
+
+    def _looks_like_json_schema(obj: Dict[str, Any]) -> bool:
+        if "$schema" in obj or "$id" in obj or "$ref" in obj or "$defs" in obj or "definitions" in obj:
+            return True
+        if "oneOf" in obj or "anyOf" in obj or "allOf" in obj:
+            return True
+        if "enum" in obj or "const" in obj:
+            return True
+        if "items" in obj:
+            return True
+        if "required" in obj and isinstance(obj.get("required"), list):
+            return True
+        props = obj.get("properties")
+        if isinstance(props, dict):
+            return True
+        if "type" in obj and _is_schema_type(obj.get("type")):
+            return True
+        return False
+
+    def _unwrap_wrapper(obj: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(obj)
+
+        # If someone pasted an enclosing request object, tolerate common keys.
+        for wrapper_key in ("response_format", "responseFormat"):
+            inner = current.get(wrapper_key)
+            if isinstance(inner, dict):
+                current = dict(inner)
+
+        # OpenAI/LMStudio wrapper: {type:"json_schema", json_schema:{schema:{...}}}
+        if current.get("type") == "json_schema" and isinstance(current.get("json_schema"), dict):
+            inner = current.get("json_schema")
+            if isinstance(inner, dict) and isinstance(inner.get("schema"), dict):
+                return dict(inner.get("schema") or {})
+
+        # Slightly-less-wrapped: {json_schema:{schema:{...}}}
+        if isinstance(current.get("json_schema"), dict):
+            inner = current.get("json_schema")
+            if isinstance(inner, dict) and isinstance(inner.get("schema"), dict):
+                return dict(inner.get("schema") or {})
+
+        # Inner wrapper copy/paste: {schema:{...}} or {name,strict,schema:{...}}
+        if "schema" in current and isinstance(current.get("schema"), dict) and not _looks_like_json_schema(current):
+            return dict(current.get("schema") or {})
+
+        return current
+
+    def _infer_schema_from_value(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, bool):
+            return {"type": "boolean"}
+        if isinstance(value, int) and not isinstance(value, bool):
+            return {"type": "integer"}
+        if isinstance(value, float):
+            return {"type": "number"}
+        if isinstance(value, str):
+            return {"type": "string", "description": value}
+        if isinstance(value, list):
+            # Prefer a simple, safe array schema; do not attempt enum constraints here.
+            item_schema: Dict[str, Any] = {}
+            for item in value:
+                if item is None:
+                    continue
+                if isinstance(item, bool):
+                    item_schema = {"type": "boolean"}
+                    break
+                if isinstance(item, int) and not isinstance(item, bool):
+                    item_schema = {"type": "integer"}
+                    break
+                if isinstance(item, float):
+                    item_schema = {"type": "number"}
+                    break
+                if isinstance(item, str):
+                    item_schema = {"type": "string"}
+                    break
+                if isinstance(item, dict):
+                    item_schema = _coerce_object_schema(item)
+                    break
+            out: Dict[str, Any] = {"type": "array"}
+            if item_schema:
+                out["items"] = item_schema
+            return out
+        if isinstance(value, dict):
+            # If it already looks like a schema, keep it as-is (with minor fixes).
+            if _looks_like_json_schema(value):
+                return _coerce_object_schema(value)
+            # Otherwise treat nested dict as another field-map object.
+            return _coerce_object_schema(value)
+        return {"type": "string", "description": str(value)}
+
+    def _coerce_object_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
+        # If it's already a JSON schema, normalize the minimal invariants we need.
+        if _looks_like_json_schema(obj):
+            out = dict(obj)
+            props = out.get("properties")
+            if isinstance(props, dict) and out.get("type") is None:
+                out["type"] = "object"
+            # Nothing else to do here; deeper normalization is handled by the pydantic conversion.
+            return out
+
+        # Otherwise, interpret as "properties map" (field → schema/description/example).
+        properties: Dict[str, Any] = {}
+        required: list[str] = []
+        for k, v in obj.items():
+            if not isinstance(k, str) or not k.strip():
+                continue
+            key = k.strip()
+            required.append(key)
+            properties[key] = _infer_schema_from_value(v)
+
+        schema: Dict[str, Any] = {"type": "object", "properties": properties}
+        if required:
+            schema["required"] = required
+        return schema
+
+    if raw is None:
+        return None
+
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            raw = parsed
+        except Exception:
+            # Keep raw string; caller will treat as absent/invalid.
+            return None
+
+    if not isinstance(raw, dict) or not raw:
+        return None
+
+    candidate = _unwrap_wrapper(raw)
+    if not isinstance(candidate, dict) or not candidate:
+        return None
+
+    normalized = _coerce_object_schema(candidate)
+    return normalized if isinstance(normalized, dict) and normalized else None
 
 
 def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Type[Any]:
@@ -77,7 +238,12 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
         return Any
 
     def _model(obj_schema: Dict[str, Any], *, name: str) -> Type[BaseModel]:
-        if obj_schema.get("type") != "object":
+        schema_type = obj_schema.get("type")
+        if schema_type is None and isinstance(obj_schema.get("properties"), dict):
+            schema_type = "object"
+        if isinstance(schema_type, list) and "object" in schema_type:
+            schema_type = "object"
+        if schema_type != "object":
             raise ValueError("response_schema must be a JSON schema object")
         props = obj_schema.get("properties")
         if not isinstance(props, dict) or not props:
@@ -132,7 +298,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         provider = payload.get("provider")
         model = payload.get("model")
         tools = payload.get("tools")
-        response_schema = payload.get("response_schema")
+        response_schema = _normalize_response_schema(payload.get("response_schema"))
         response_schema_name = payload.get("response_schema_name")
         raw_params = payload.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}

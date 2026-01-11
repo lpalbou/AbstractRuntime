@@ -21,6 +21,7 @@ _COMMS_ENABLE_ENV_VARS = (
     "ABSTRACT_ENABLE_COMMS_TOOLS",
     "ABSTRACT_ENABLE_EMAIL_TOOLS",
     "ABSTRACT_ENABLE_WHATSAPP_TOOLS",
+    "ABSTRACT_ENABLE_TELEGRAM_TOOLS",
 )
 
 
@@ -34,6 +35,18 @@ def _env_flag(name: str) -> bool:
 def comms_tools_enabled() -> bool:
     """Return True when the host explicitly opts into comms tools via env."""
     return any(_env_flag(k) for k in _COMMS_ENABLE_ENV_VARS)
+
+
+def email_tools_enabled() -> bool:
+    return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_EMAIL_TOOLS")
+
+
+def whatsapp_tools_enabled() -> bool:
+    return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_WHATSAPP_TOOLS")
+
+
+def telegram_tools_enabled() -> bool:
+    return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_TELEGRAM_TOOLS")
 
 
 def _tool_name(func: ToolCallable) -> str:
@@ -89,29 +102,26 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
     }
 
     if comms_tools_enabled():
-        from abstractcore.tools.comms_tools import (
-            list_emails,
-            list_whatsapp_messages,
-            read_email,
-            read_whatsapp_message,
-            send_email,
-            send_whatsapp_message,
-        )
+        comms: list[ToolCallable] = []
+        if email_tools_enabled():
+            from abstractcore.tools.comms_tools import list_emails, read_email, send_email
 
-        toolsets["comms"] = {
-            "id": "comms",
-            "label": "Comms",
-            "tools": [
-                # Email
-                send_email,
-                list_emails,
-                read_email,
-                # WhatsApp (provider-backed; twilio in v1)
-                send_whatsapp_message,
-                list_whatsapp_messages,
-                read_whatsapp_message,
-            ],
-        }
+            comms.extend([send_email, list_emails, read_email])
+        if whatsapp_tools_enabled():
+            from abstractcore.tools.comms_tools import list_whatsapp_messages, read_whatsapp_message, send_whatsapp_message
+
+            comms.extend([send_whatsapp_message, list_whatsapp_messages, read_whatsapp_message])
+        if telegram_tools_enabled():
+            from abstractcore.tools.telegram_tools import send_telegram_artifact, send_telegram_message
+
+            comms.extend([send_telegram_message, send_telegram_artifact])
+
+        if comms:
+            toolsets["comms"] = {
+                "id": "comms",
+                "label": "Comms",
+                "tools": comms,
+            }
 
     return toolsets
 

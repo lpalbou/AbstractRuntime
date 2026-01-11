@@ -17,13 +17,19 @@ def _tool_names(specs: list[object]) -> set[str]:
 def test_comms_tools_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     from abstractruntime.integrations.abstractcore.default_tools import list_default_tool_specs
 
-    for k in ("ABSTRACT_ENABLE_COMMS_TOOLS", "ABSTRACT_ENABLE_EMAIL_TOOLS", "ABSTRACT_ENABLE_WHATSAPP_TOOLS"):
+    for k in (
+        "ABSTRACT_ENABLE_COMMS_TOOLS",
+        "ABSTRACT_ENABLE_EMAIL_TOOLS",
+        "ABSTRACT_ENABLE_WHATSAPP_TOOLS",
+        "ABSTRACT_ENABLE_TELEGRAM_TOOLS",
+    ):
         monkeypatch.delenv(k, raising=False)
 
     specs = list_default_tool_specs()
     names = _tool_names(specs)
     assert "send_email" not in names
     assert "send_whatsapp_message" not in names
+    assert "send_telegram_message" not in names
 
     monkeypatch.setenv("ABSTRACT_ENABLE_COMMS_TOOLS", "1")
     specs2 = list_default_tool_specs()
@@ -34,4 +40,5 @@ def test_comms_tools_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "send_whatsapp_message" in names2
     assert "list_whatsapp_messages" in names2
     assert "read_whatsapp_message" in names2
-
+    assert "send_telegram_message" in names2
+    assert "send_telegram_artifact" in names2

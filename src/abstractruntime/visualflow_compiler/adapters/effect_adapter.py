@@ -97,12 +97,22 @@ def create_answer_user_handler(
 
         if isinstance(input_data, dict):
             message = input_data.get("message") or input_data.get("text") or ""
+            level_raw = input_data.get("level")
         else:
             message = str(input_data) if input_data is not None else ""
+            level_raw = None
+
+        level = str(level_raw).strip().lower() if isinstance(level_raw, str) else ""
+        if level == "warn":
+            level = "warning"
+        if level == "info":
+            level = "message"
+        if level not in {"message", "warning", "error"}:
+            level = "message"
 
         effect = Effect(
             type=EffectType.ANSWER_USER,
-            payload={"message": str(message)},
+            payload={"message": str(message), "level": level},
             result_key=output_key or "_temp.answer_user",
         )
 

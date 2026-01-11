@@ -32,7 +32,7 @@ def test_answer_user_effect_completes_and_stores_message() -> None:
     state = rt.tick(workflow=wf, run_id=run_id)
 
     assert state.status.value == "completed"
-    assert state.output == {"msg": {"message": "Hello"}}
+    assert state.output == {"msg": {"message": "Hello", "level": "message"}}
 
 
 def test_answer_user_terminal_effect_completes_run() -> None:
@@ -59,5 +59,4 @@ def test_answer_user_terminal_effect_completes_run() -> None:
     state = rt.tick(workflow=wf, run_id=run_id)
 
     assert state.status.value == "completed"
-    assert state.output == {"success": True, "result": {"message": "Done"}}
-
+    assert state.output == {"success": True, "result": {"message": "Done", "level": "message"}}

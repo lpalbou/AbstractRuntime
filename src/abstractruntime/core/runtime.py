@@ -22,6 +22,7 @@ from dataclasses import dataclass, asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, List
 import copy
+import hashlib
 import inspect
 import json
 import os
@@ -128,6 +129,7 @@ def _jsonable(value: Any, *, _path: Optional[set[int]] = None, _depth: int = 0) 
 
 
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
+_DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
@@ -1239,8 +1241,57 @@ class Runtime:
         self._run_store.save(run)
         return run
 
-    def _resolve_session_root_run(self, run: RunState) -> RunState:
-        """Resolve the root run of the current run-tree (walk `parent_run_id`)."""
+    def _session_memory_run_id(self, session_id: str) -> str:
+        """Return a stable session memory run id for a durable `session_id`.
+
+        This run is internal and is used only as the owner for `scope="session"` span indices.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            raise ValueError("session_id is required")
+        if _SAFE_RUN_ID_PATTERN.match(sid):
+            rid = f"{_DEFAULT_SESSION_MEMORY_RUN_PREFIX}{sid}"
+            if _SAFE_RUN_ID_PATTERN.match(rid):
+                return rid
+        digest = hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32]
+        return f"{_DEFAULT_SESSION_MEMORY_RUN_PREFIX}sha_{digest}"
+
+    def _ensure_session_memory_run(self, session_id: str) -> RunState:
+        """Load or create the session memory run used as the owner for `scope=\"session\"` spans."""
+        rid = self._session_memory_run_id(session_id)
+        existing = self._run_store.load(rid)
+        if existing is not None:
+            return existing
+
+        run = RunState(
+            run_id=rid,
+            workflow_id="__session_memory__",
+            status=RunStatus.COMPLETED,
+            current_node="done",
+            vars={
+                "context": {"task": "", "messages": []},
+                "scratchpad": {},
+                "_runtime": {"memory_spans": []},
+                "_temp": {},
+                "_limits": {},
+            },
+            waiting=None,
+            output={"messages": []},
+            error=None,
+            created_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            actor_id=None,
+            session_id=str(session_id or "").strip() or None,
+            parent_run_id=None,
+        )
+        self._run_store.save(run)
+        return run
+
+    def _resolve_run_tree_root_run(self, run: RunState) -> RunState:
+        """Resolve the root run of the current run-tree (walk `parent_run_id`).
+
+        This is used as a backward-compatible fallback for legacy runs without `session_id`.
+        """
         cur = run
         seen: set[str] = set()
         while True:
@@ -1262,7 +1313,10 @@ class Runtime:
         if s == "run":
             return base_run
         if s == "session":
-            return self._resolve_session_root_run(base_run)
+            sid = getattr(base_run, "session_id", None)
+            if isinstance(sid, str) and sid.strip():
+                return self._ensure_session_memory_run(sid.strip())
+            return self._resolve_run_tree_root_run(base_run)
         if s == "global":
             return self._ensure_global_memory_run()
         raise ValueError(f"Unknown memory scope: {scope}")
@@ -1684,7 +1738,15 @@ class Runtime:
             message = effect.payload.get("text") or effect.payload.get("content")
         if message is None:
             return EffectOutcome.failed("answer_user requires payload.message")
-        return EffectOutcome.completed({"message": str(message)})
+        level_raw = effect.payload.get("level")
+        level = str(level_raw).strip().lower() if isinstance(level_raw, str) else ""
+        if level in {"warn"}:
+            level = "warning"
+        if level not in {"message", "warning", "error", "info"}:
+            level = "message"
+        if level == "info":
+            level = "message"
+        return EffectOutcome.completed({"message": str(message), "level": level})
 
     def _handle_start_subworkflow(
         self, run: RunState, effect: Effect, default_next_node: Optional[str]
@@ -1726,12 +1788,23 @@ class Runtime:
         include_traces = bool(effect.payload.get("include_traces", False))
         resume_to = effect.payload.get("resume_to_node") or default_next_node
 
+        # Optional override: allow the caller (e.g. VisualFlow compiler) to pass an explicit
+        # session_id for the child run. When omitted, children inherit the parent's session.
+        session_override = effect.payload.get("session_id")
+        if session_override is None:
+            session_override = effect.payload.get("sessionId")
+        session_id: Optional[str]
+        if isinstance(session_override, str) and session_override.strip():
+            session_id = session_override.strip()
+        else:
+            session_id = getattr(run, "session_id", None)
+
         # Start the subworkflow with parent tracking
         sub_run_id = self.start(
             workflow=sub_workflow,
             vars=sub_vars,
             actor_id=run.actor_id,  # Inherit actor from parent
-            session_id=getattr(run, "session_id", None),  # Inherit session from parent
+            session_id=session_id,
             parent_run_id=run.run_id,  # Track parent for hierarchy
         )
 
@@ -1848,7 +1921,7 @@ class Runtime:
         tool_name = str(payload.get("tool_name") or "recall_memory")
         call_id = str(payload.get("call_id") or "memory")
 
-        # Scope routing (run-tree/global). Scope affects which run owns the span index queried.
+        # Scope routing (run/session/global). Scope affects which run owns the span index queried.
         scope = str(payload.get("scope") or "run").strip().lower() or "run"
         if scope not in {"run", "session", "global", "all"}:
             return EffectOutcome.failed(f"Unknown memory_query scope: {scope}")

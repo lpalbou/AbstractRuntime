@@ -11,10 +11,29 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict, List, Sequence
 
 
 ToolCallable = Callable[..., Any]
+
+_COMMS_ENABLE_ENV_VARS = (
+    "ABSTRACT_ENABLE_COMMS_TOOLS",
+    "ABSTRACT_ENABLE_EMAIL_TOOLS",
+    "ABSTRACT_ENABLE_WHATSAPP_TOOLS",
+)
+
+
+def _env_flag(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def comms_tools_enabled() -> bool:
+    """Return True when the host explicitly opts into comms tools via env."""
+    return any(_env_flag(k) for k in _COMMS_ENABLE_ENV_VARS)
 
 
 def _tool_name(func: ToolCallable) -> str:
@@ -51,7 +70,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         execute_command,
     )
 
-    return {
+    toolsets: Dict[str, Dict[str, Any]] = {
         "files": {
             "id": "files",
             "label": "Files",
@@ -68,6 +87,33 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
             "tools": [execute_command],
         },
     }
+
+    if comms_tools_enabled():
+        from abstractcore.tools.comms_tools import (
+            list_emails,
+            list_whatsapp_messages,
+            read_email,
+            read_whatsapp_message,
+            send_email,
+            send_whatsapp_message,
+        )
+
+        toolsets["comms"] = {
+            "id": "comms",
+            "label": "Comms",
+            "tools": [
+                # Email
+                send_email,
+                list_emails,
+                read_email,
+                # WhatsApp (provider-backed; twilio in v1)
+                send_whatsapp_message,
+                list_whatsapp_messages,
+                read_whatsapp_message,
+            ],
+        }
+
+    return toolsets
 
 
 def get_default_tools() -> List[ToolCallable]:

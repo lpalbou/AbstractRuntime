@@ -68,14 +68,102 @@ def test_memory_query_return_both_includes_meta_matches_and_span_ids() -> None:
     assert isinstance(meta.get("span_ids"), list) and meta["span_ids"]
 
 
-def test_memory_note_scope_session_routes_to_root_run_and_keeps_source_run_id() -> None:
+def test_memory_note_scope_session_routes_to_session_id_authority_run_and_keeps_source_run_id() -> None:
     run_store = InMemoryRunStore()
     ledger_store = InMemoryLedgerStore()
     runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
     artifact_store = InMemoryArtifactStore()
     runtime.set_artifact_store(artifact_store)
 
-    # Create a root run (session authority) and a child run that will write into scope=session.
+    session_id = "sess_1"
+
+    # Create a run-tree root and a child run that will write into scope=session. With `session_id`
+    # set, session-scoped memory should route to the session memory authority run (not the tree root).
+    root_run_id = "run_root"
+    run_store.save(
+        RunState(
+            run_id=root_run_id,
+            workflow_id="wf_root",
+            status=RunStatus.COMPLETED,
+            current_node="done",
+            vars={
+                "context": {"task": "root", "messages": []},
+                "scratchpad": {},
+                "_runtime": {"memory_spans": []},
+                "_temp": {},
+                "_limits": {},
+            },
+            waiting=None,
+            output={"messages": []},
+            error=None,
+            created_at="2025-01-01T00:00:00+00:00",
+            updated_at="2025-01-01T00:00:00+00:00",
+            actor_id=None,
+            session_id=session_id,
+            parent_run_id=None,
+        )
+    )
+
+    vars: dict[str, Any] = {
+        "context": {"task": "child", "messages": []},
+        "scratchpad": {},
+        "_runtime": {"memory_spans": []},
+        "_temp": {},
+        "_limits": {},
+    }
+
+    def note_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="note",
+            effect=Effect(
+                type=EffectType.MEMORY_NOTE,
+                payload={"note": "Session note", "tags": {"topic": "t"}, "scope": "session"},
+                result_key="_temp.note",
+            ),
+            next_node="done",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        return StepPlan(node_id="done", complete_output={"note": run.vars.get("_temp", {}).get("note")})
+
+    wf = WorkflowSpec(workflow_id="wf_child_session_note", entry_node="note", nodes={"note": note_node, "done": done_node})
+    child_run_id = runtime.start(workflow=wf, vars=vars, parent_run_id=root_run_id, session_id=session_id)
+    state = runtime.tick(workflow=wf, run_id=child_run_id)
+    assert state.status == RunStatus.COMPLETED
+
+    # The note should be indexed in the session memory authority run, not the tree root.
+    root = run_store.load(root_run_id)
+    assert root is not None
+    root_spans = root.vars.get("_runtime", {}).get("memory_spans")
+    assert isinstance(root_spans, list)
+    assert root_spans == []
+
+    session_memory = run_store.load(f"session_memory_{session_id}")
+    assert session_memory is not None
+    spans = session_memory.vars.get("_runtime", {}).get("memory_spans")
+    assert isinstance(spans, list) and spans
+    span = spans[0]
+    assert span.get("kind") == "memory_note"
+    assert span.get("tags") == {"topic": "t"}
+    artifact_id = span.get("artifact_id")
+    assert isinstance(artifact_id, str) and artifact_id
+
+    payload = artifact_store.load_json(artifact_id)
+    assert isinstance(payload, dict)
+    sources = payload.get("sources")
+    assert isinstance(sources, dict)
+    # Default provenance should point at the child run that emitted the effect.
+    assert sources.get("run_id") == child_run_id
+
+
+def test_memory_note_scope_session_without_session_id_routes_to_run_tree_root() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
+    artifact_store = InMemoryArtifactStore()
+    runtime.set_artifact_store(artifact_store)
+
+    # Legacy runs without `session_id`: scope=session falls back to the run-tree root (parent chain).
     root_run_id = "run_root"
     run_store.save(
         RunState(
@@ -114,7 +202,7 @@ def test_memory_note_scope_session_routes_to_root_run_and_keeps_source_run_id() 
             node_id="note",
             effect=Effect(
                 type=EffectType.MEMORY_NOTE,
-                payload={"note": "Session note", "tags": {"topic": "t"}, "scope": "session"},
+                payload={"note": "Legacy session note", "tags": {"topic": "t"}, "scope": "session"},
                 result_key="_temp.note",
             ),
             next_node="done",
@@ -123,28 +211,15 @@ def test_memory_note_scope_session_routes_to_root_run_and_keeps_source_run_id() 
     def done_node(run, ctx) -> StepPlan:
         return StepPlan(node_id="done", complete_output={"note": run.vars.get("_temp", {}).get("note")})
 
-    wf = WorkflowSpec(workflow_id="wf_child_session_note", entry_node="note", nodes={"note": note_node, "done": done_node})
+    wf = WorkflowSpec(workflow_id="wf_child_session_note_legacy", entry_node="note", nodes={"note": note_node, "done": done_node})
     child_run_id = runtime.start(workflow=wf, vars=vars, parent_run_id=root_run_id)
     state = runtime.tick(workflow=wf, run_id=child_run_id)
     assert state.status == RunStatus.COMPLETED
 
-    # The note should be indexed in the root run, not the child run.
     root = run_store.load(root_run_id)
     assert root is not None
     spans = root.vars.get("_runtime", {}).get("memory_spans")
     assert isinstance(spans, list) and spans
-    span = spans[0]
-    assert span.get("kind") == "memory_note"
-    assert span.get("tags") == {"topic": "t"}
-    artifact_id = span.get("artifact_id")
-    assert isinstance(artifact_id, str) and artifact_id
-
-    payload = artifact_store.load_json(artifact_id)
-    assert isinstance(payload, dict)
-    sources = payload.get("sources")
-    assert isinstance(sources, dict)
-    # Default provenance should point at the child run that emitted the effect.
-    assert sources.get("run_id") == child_run_id
 
 
 def test_memory_note_scope_global_routes_to_global_memory_run() -> None:
@@ -332,5 +407,4 @@ def test_memory_rehydrate_inserts_conversation_span_and_includes_memory_note() -
     assert [m.get("content") for m in messages if isinstance(m, dict)][0] == "sys"
     assert [m.get("content") for m in messages if isinstance(m, dict)][1] == "[MEMORY NOTE]\nnote"
     assert [m.get("content") for m in messages if isinstance(m, dict)][2:4] == ["u1", "a1"]
-
 

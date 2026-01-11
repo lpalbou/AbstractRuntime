@@ -125,6 +125,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return False
         if type_str == "break_object":
             return False
+        if type_str == "tool_parameters":
+            return False
         if get_builtin_handler(type_str) is not None:
             return False
         return True
@@ -485,6 +487,43 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     out.extend(list(v))
                     continue
                 out.append(v)
+            return out
+
+        return handler
+
+    def _create_tool_parameters_handler(data: Dict[str, Any]):
+        cfg = data.get("toolParametersConfig", {}) if isinstance(data, dict) else {}
+        tool_name = ""
+        if isinstance(cfg, dict):
+            raw = cfg.get("tool") or cfg.get("name")
+            if isinstance(raw, str):
+                tool_name = raw.strip()
+
+        param_ids: list[str] = []
+        pins = data.get("inputs") if isinstance(data, dict) else None
+        if isinstance(pins, list):
+            for p in pins:
+                if not isinstance(p, dict):
+                    continue
+                if p.get("type") == "execution":
+                    continue
+                pid = p.get("id")
+                if isinstance(pid, str) and pid.strip():
+                    param_ids.append(pid.strip())
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+
+            args: Dict[str, Any] = {}
+            out: Dict[str, Any] = {}
+
+            for pid in param_ids:
+                value = payload.get(pid) if isinstance(payload, dict) else None
+                out[pid] = value
+                if value is not None:
+                    args[pid] = value
+
+            out["tool_call"] = {"name": tool_name, "arguments": args}
             return out
 
         return handler
@@ -906,6 +945,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # Never forward control pins into the child run vars.
             sub_vars_dict.pop("inherit_context", None)
             sub_vars_dict.pop("inheritContext", None)
+            sub_vars_dict.pop("child_session_id", None)
+            sub_vars_dict.pop("childSessionId", None)
+            sub_vars_dict.pop("session_id", None)
+            sub_vars_dict.pop("sessionId", None)
 
             inherit_context_specified = isinstance(input_data, dict) and (
                 "inherit_context" in input_data or "inheritContext" in input_data
@@ -920,7 +963,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             else:
                 inherit_context_value = inherit_context_default
 
-            return {
+            pending: Dict[str, Any] = {
                 "output": None,
                 "_pending_effect": (
                     {
@@ -940,6 +983,24 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     }
                 ),
             }
+
+            # Optional: allow overriding the child session_id (useful for scheduling runs where
+            # each execution should be isolated from others). This is a control field and is
+            # not forwarded into the child vars.
+            if isinstance(input_data, dict):
+                raw_sid = None
+                for k in ("child_session_id", "childSessionId", "session_id", "sessionId"):
+                    if k in input_data:
+                        raw_sid = input_data.get(k)
+                        break
+                if isinstance(raw_sid, str) and raw_sid.strip():
+                    # Keep the key name stable for the runtime handler.
+                    eff = pending.get("_pending_effect")
+                    if isinstance(eff, dict):
+                        eff["session_id"] = raw_sid.strip()
+                        pending["_pending_effect"] = eff
+
+            return pending
 
         return handler
 
@@ -1254,7 +1315,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     def _create_answer_user_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data):
             message = input_data.get("message", "") if isinstance(input_data, dict) else str(input_data or "")
-            return {"message": message, "_pending_effect": {"type": "answer_user", "message": message}}
+            raw_level = input_data.get("level") if isinstance(input_data, dict) else None
+            level = str(raw_level).strip().lower() if isinstance(raw_level, str) else ""
+            if level == "warn":
+                level = "warning"
+            if level == "info":
+                level = "message"
+            if level not in {"message", "warning", "error"}:
+                level = "message"
+            return {"message": message, "level": level, "_pending_effect": {"type": "answer_user", "message": message, "level": level}}
 
         return handler
 
@@ -1899,6 +1968,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         if type_str == "break_object":
             return _create_break_object_handler(data)
+
+        if type_str == "tool_parameters":
+            return _create_tool_parameters_handler(data)
 
         if type_str == "function":
             if "code" in data:

@@ -13,6 +13,8 @@ from .adapters.effect_adapter import (
     create_answer_user_handler,
     create_wait_until_handler,
     create_wait_event_handler,
+    create_memory_kg_assert_handler,
+    create_memory_kg_query_handler,
     create_memory_note_handler,
     create_memory_query_handler,
     create_memory_tag_handler,
@@ -144,6 +146,20 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
         )
+    elif effect_type == "memory_kg_assert":
+        base_handler = create_memory_kg_assert_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
+    elif effect_type == "memory_kg_query":
+        base_handler = create_memory_kg_query_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
     elif effect_type == "llm_call":
         base_handler = create_llm_call_handler(
             node_id=node_id,
@@ -234,6 +250,39 @@ def _create_effect_node_handler(
                         prompt_text = prompt_raw if isinstance(prompt_raw, str) else str(prompt_raw or "")
                         messages.append({"role": "user", "content": prompt_text})
 
+                        # Token-budget enforcement (ADR-0008):
+                        # If `_limits.max_input_tokens` is set, trim the oldest non-system messages
+                        # so the final LLM request remains bounded even when contexts grow large.
+                        try:
+                            limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                            limits = limits if isinstance(limits, dict) else {}
+                            raw_max_in = (
+                                pending.get("max_input_tokens")
+                                if isinstance(pending, dict) and "max_input_tokens" in pending
+                                else limits.get("max_input_tokens")
+                            )
+                            if raw_max_in is not None and not isinstance(raw_max_in, bool):
+                                max_in = int(raw_max_in)
+                            else:
+                                max_in = None
+                        except Exception:
+                            max_in = None
+                        if isinstance(max_in, int) and max_in > 0:
+                            try:
+                                from abstractruntime.memory.token_budget import (
+                                    trim_messages_to_max_input_tokens,
+                                )
+
+                                model_name = (
+                                    pending.get("model") if isinstance(pending.get("model"), str) else None
+                                )
+                                messages = trim_messages_to_max_input_tokens(
+                                    messages, max_input_tokens=int(max_in), model=model_name
+                                )
+                            except Exception:
+                                # Never fail compilation/execution due to token trimming.
+                                pass
+
                         pending["messages"] = messages
                         # Avoid double-including prompt/system_prompt if the LLM client also
                         # builds messages from them.
@@ -265,11 +314,54 @@ def _create_effect_node_handler(
                                 sub_ctx = {}
                                 sub_vars["context"] = sub_ctx
 
-                            # Explicit child context wins (do not override).
                             existing = sub_ctx.get("messages")
-                            if not isinstance(existing, list) or not existing:
-                                sub_ctx["messages"] = inherited_msgs
+                            existing_msgs = [dict(m) for m in existing if isinstance(m, dict)] if isinstance(existing, list) else []
 
+                            # Merge semantics:
+                            # - preserve any explicit child system messages at the top
+                            # - include the parent's active context (history) so recursive subflows
+                            #   see the latest turns even when the child pins provide a stale subset
+                            # - keep any extra explicit child messages (e.g. an injected "next step")
+                            #
+                            # Dedup strictly by metadata.message_id when present. (Messages without
+                            # ids are treated as distinct to avoid collapsing legitimate repeats.)
+                            seen_ids: set[str] = set()
+
+                            def _msg_id(m: Dict[str, Any]) -> str:
+                                meta = m.get("metadata")
+                                if isinstance(meta, dict):
+                                    mid = meta.get("message_id")
+                                    if isinstance(mid, str) and mid.strip():
+                                        return mid.strip()
+                                return ""
+
+                            def _append(dst: list[Dict[str, Any]], m: Dict[str, Any]) -> None:
+                                mid = _msg_id(m)
+                                if mid:
+                                    if mid in seen_ids:
+                                        return
+                                    seen_ids.add(mid)
+                                dst.append(m)
+
+                            merged: list[Dict[str, Any]] = []
+                            # 1) Child system messages first (explicit overrides)
+                            for m in existing_msgs:
+                                if m.get("role") == "system":
+                                    _append(merged, m)
+                            # 2) Parent system messages
+                            for m in inherited_msgs:
+                                if m.get("role") == "system":
+                                    _append(merged, m)
+                            # 3) Parent conversation history
+                            for m in inherited_msgs:
+                                if m.get("role") != "system":
+                                    _append(merged, m)
+                            # 4) Remaining child messages (extras)
+                            for m in existing_msgs:
+                                if m.get("role") != "system":
+                                    _append(merged, m)
+
+                            sub_ctx["messages"] = merged
                             pending["vars"] = sub_vars
                     except Exception:
                         pass
@@ -421,13 +513,17 @@ def _create_visual_agent_effect_handler(
         seed: int = -1,
         include_context: bool = False,
         max_iterations: Optional[int] = None,
+        max_input_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         parent_limits = run.vars.get("_limits")
         limits = dict(parent_limits) if isinstance(parent_limits, dict) else {}
         limits.setdefault("max_iterations", 25)
         limits.setdefault("current_iteration", 0)
-        limits.setdefault("max_tokens", 32768)
+        from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
+        limits.setdefault("max_tokens", DEFAULT_MAX_TOKENS)
         limits.setdefault("max_output_tokens", None)
+        limits.setdefault("max_input_tokens", None)
         limits.setdefault("max_history_messages", -1)
         limits.setdefault("estimated_tokens_used", 0)
         limits.setdefault("warn_iterations_pct", 80)
@@ -435,6 +531,9 @@ def _create_visual_agent_effect_handler(
 
         if isinstance(max_iterations, int) and max_iterations > 0:
             limits["max_iterations"] = int(max_iterations)
+
+        if isinstance(max_input_tokens, int) and max_input_tokens > 0:
+            limits["max_input_tokens"] = int(max_input_tokens)
 
         ctx_ns: Dict[str, Any] = {"task": str(task or ""), "messages": []}
 
@@ -490,6 +589,20 @@ def _create_visual_agent_effect_handler(
             if value is None:
                 return None
             if isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                iv = int(float(value))
+                return iv if iv > 0 else None
+            if isinstance(value, str) and value.strip():
+                iv = int(float(value.strip()))
+                return iv if iv > 0 else None
+        except Exception:
+            return None
+        return None
+
+    def _coerce_max_input_tokens(value: Any) -> Optional[int]:
+        try:
+            if value is None or isinstance(value, bool):
                 return None
             if isinstance(value, (int, float)):
                 iv = int(float(value))
@@ -590,6 +703,12 @@ def _create_visual_agent_effect_handler(
         if max_iterations_override is None:
             max_iterations_override = _coerce_max_iterations(agent_config.get("max_iterations"))
 
+        # Token budget (max_input_tokens) can come from a data-edge pin or from config.
+        max_input_tokens_raw = resolved_inputs.get("max_input_tokens") if isinstance(resolved_inputs, dict) else None
+        max_input_tokens_override = _coerce_max_input_tokens(max_input_tokens_raw)
+        if max_input_tokens_override is None:
+            max_input_tokens_override = _coerce_max_input_tokens(agent_config.get("max_input_tokens"))
+
         # Sampling controls can come from pins or from config.
         if isinstance(resolved_inputs, dict) and "temperature" in resolved_inputs:
             temperature_raw = resolved_inputs.get("temperature")
@@ -681,6 +800,7 @@ def _create_visual_agent_effect_handler(
                             seed=seed,
                             include_context=include_context,
                             max_iterations=max_iterations_override,
+                            max_input_tokens=max_input_tokens_override,
                         ),
                         # Run Agent as a durable async subworkflow so the host can:
                         # - tick the child incrementally (real-time observability of each effect)
@@ -733,6 +853,52 @@ def _create_visual_agent_effect_handler(
                 "iterations": iterations,
                 "sub_run_id": sub_run_id,
             }
+
+            # When "Include/Use context" is enabled on the Agent node, persist the turn
+            # into the parent run's active context so subsequent Agent/Subflow/LLM_CALL
+            # nodes can see prior interactions (critical for recursive subflows).
+            try:
+                if include_context:
+                    already = bucket.get("context_appended_sub_run_id")
+                    if already != sub_run_id:
+                        ctx_ns = run.vars.get("context")
+                        if not isinstance(ctx_ns, dict):
+                            ctx_ns = {}
+                            run.vars["context"] = ctx_ns
+                        msgs = ctx_ns.get("messages")
+                        if not isinstance(msgs, list):
+                            msgs = []
+                            ctx_ns["messages"] = msgs
+
+                        def _has_message_id(message_id: str) -> bool:
+                            for m in msgs:
+                                if not isinstance(m, dict):
+                                    continue
+                                meta = m.get("metadata")
+                                if not isinstance(meta, dict):
+                                    continue
+                                if meta.get("message_id") == message_id:
+                                    return True
+                            return False
+
+                        def _append(role: str, content: str, *, suffix: str) -> None:
+                            text = str(content or "").strip()
+                            if not text:
+                                return
+                            mid = f"agent:{sub_run_id or run.run_id}:{node_id}:{suffix}"
+                            if _has_message_id(mid):
+                                return
+                            meta: Dict[str, Any] = {"kind": "agent_turn", "node_id": node_id, "message_id": mid}
+                            if sub_run_id:
+                                meta["sub_run_id"] = sub_run_id
+                            msgs.append({"role": role, "content": text, "metadata": meta})
+
+                        _append("user", task, suffix="task")
+                        _append("assistant", answer, suffix="answer")
+                        bucket["context_appended_sub_run_id"] = sub_run_id
+            except Exception:
+                # Context persistence must never break Agent execution.
+                pass
 
             if schema_enabled and schema:
                 bucket["phase"] = "structured"
@@ -1295,6 +1461,30 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 current["artifacts"] = []
             current["raw"] = raw
             mapped_value = raw
+        elif effect_type == "memory_kg_assert":
+            if isinstance(raw, dict):
+                ids = raw.get("assertion_ids")
+                current["assertion_ids"] = ids if isinstance(ids, list) else []
+                current["count"] = raw.get("count")
+                current["ok"] = raw.get("ok")
+            else:
+                current["assertion_ids"] = []
+                current["count"] = 0
+                current["ok"] = False
+            current["raw"] = raw
+            mapped_value = current.get("assertion_ids")
+        elif effect_type == "memory_kg_query":
+            if isinstance(raw, dict):
+                items = raw.get("items")
+                current["items"] = items if isinstance(items, list) else []
+                current["count"] = raw.get("count")
+                current["ok"] = raw.get("ok")
+            else:
+                current["items"] = []
+                current["count"] = 0
+                current["ok"] = False
+            current["raw"] = raw
+            mapped_value = current.get("items")
         elif effect_type == "start_subworkflow":
             if isinstance(raw, dict):
                 current["sub_run_id"] = raw.get("sub_run_id")

@@ -18,6 +18,7 @@ from .llm_client import (
     LocalAbstractCoreLLMClient,
     RemoteAbstractCoreLLMClient,
 )
+from .embeddings_client import AbstractCoreEmbeddingsClient, EmbeddingsResult
 from .tool_executor import AbstractCoreToolExecutor, MappingToolExecutor, PassthroughToolExecutor, ToolExecutor
 from .effect_handlers import build_effect_handlers
 from .factory import (
@@ -33,6 +34,8 @@ __all__ = [
     "AbstractCoreLLMClient",
     "LocalAbstractCoreLLMClient",
     "RemoteAbstractCoreLLMClient",
+    "AbstractCoreEmbeddingsClient",
+    "EmbeddingsResult",
     "RuntimeConfig",
     "ToolExecutor",
     "MappingToolExecutor",

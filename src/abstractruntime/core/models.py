@@ -60,6 +60,10 @@ class EffectType(str, Enum):
     MEMORY_NOTE = "memory_note"
     MEMORY_REHYDRATE = "memory_rehydrate"
 
+    # Semantic / KG memory (host-provided handlers)
+    MEMORY_KG_ASSERT = "memory_kg_assert"
+    MEMORY_KG_QUERY = "memory_kg_query"
+
     # Debug / inspection (schema-only tools -> runtime effects)
     VARS_QUERY = "vars_query"
 

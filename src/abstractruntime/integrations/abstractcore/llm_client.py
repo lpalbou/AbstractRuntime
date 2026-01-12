@@ -547,14 +547,16 @@ class LocalAbstractCoreLLMClient:
         for resource tracking and warnings.
 
         Returns:
-            Dict with model capabilities. Always includes 'max_tokens' (default 32768).
+            Dict with model capabilities. Always includes 'max_tokens' (default: DEFAULT_MAX_TOKENS).
         """
         try:
             from abstractcore.architectures.detection import get_model_capabilities
             return get_model_capabilities(self._model)
         except Exception:
             # Safe fallback if detection fails
-            return {"max_tokens": 32768}
+            from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
+            return {"max_tokens": DEFAULT_MAX_TOKENS}
 
 
 class MultiLocalAbstractCoreLLMClient:

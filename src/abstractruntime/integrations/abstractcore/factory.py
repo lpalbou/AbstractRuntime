@@ -65,6 +65,7 @@ def create_local_runtime(
     effect_policy: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
     artifact_store: Optional[ArtifactStore] = None,
+    extra_effect_handlers: Optional[Dict[Any, Any]] = None,
 ) -> Runtime:
     """Create a runtime with local LLM execution via AbstractCore.
 
@@ -109,6 +110,8 @@ def create_local_runtime(
     except Exception:
         pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools)
+    if extra_effect_handlers:
+        handlers.update(dict(extra_effect_handlers))
 
     # Query model capabilities and merge into config
     capabilities = llm_client.get_model_capabilities()

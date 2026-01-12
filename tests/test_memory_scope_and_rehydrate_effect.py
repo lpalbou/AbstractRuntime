@@ -263,6 +263,82 @@ def test_memory_note_scope_global_routes_to_global_memory_run() -> None:
     assert spans[0].get("kind") == "memory_note"
 
 
+def test_memory_tag_scope_session_routes_to_session_memory_owner_run() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
+    artifact_store = InMemoryArtifactStore()
+    runtime.set_artifact_store(artifact_store)
+
+    session_id = "sess_1"
+
+    vars: dict[str, Any] = {
+        "context": {"task": "t", "messages": []},
+        "scratchpad": {},
+        "_runtime": {"memory_spans": []},
+        "_temp": {},
+        "_limits": {},
+    }
+
+    def note_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="note",
+            effect=Effect(
+                type=EffectType.MEMORY_NOTE,
+                payload={"note": "Session note", "tags": {"topic": "t"}, "scope": "session"},
+                result_key="_temp.note",
+            ),
+            next_node="tag",
+        )
+
+    def tag_node(run, ctx) -> StepPlan:
+        tmp = run.vars.get("_temp", {}) if isinstance(run.vars.get("_temp"), dict) else {}
+        note_res = tmp.get("note")
+        span_id = None
+        if isinstance(note_res, dict):
+            results = note_res.get("results")
+            if isinstance(results, list) and results:
+                first = results[0]
+                if isinstance(first, dict):
+                    meta = first.get("meta")
+                    if isinstance(meta, dict) and isinstance(meta.get("span_id"), str):
+                        span_id = meta.get("span_id")
+
+        return StepPlan(
+            node_id="tag",
+            effect=Effect(
+                type=EffectType.MEMORY_TAG,
+                payload={"span_id": span_id, "tags": {"status": "deprecated", "kind": "ignored"}, "scope": "session"},
+                result_key="_temp.tag",
+            ),
+            next_node="done",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        tmp = run.vars.get("_temp", {}) if isinstance(run.vars.get("_temp"), dict) else {}
+        return StepPlan(node_id="done", complete_output={"note": tmp.get("note"), "tag": tmp.get("tag")})
+
+    wf = WorkflowSpec(workflow_id="wf_session_tag", entry_node="note", nodes={"note": note_node, "tag": tag_node, "done": done_node})
+    run_id = runtime.start(workflow=wf, vars=vars, session_id=session_id)
+    state = runtime.tick(workflow=wf, run_id=run_id)
+    assert state.status == RunStatus.COMPLETED
+
+    # Session-scoped span is owned by the session memory authority run (not the current run).
+    session_memory = run_store.load(f"session_memory_{session_id}")
+    assert session_memory is not None
+    spans = session_memory.vars.get("_runtime", {}).get("memory_spans")
+    assert isinstance(spans, list) and spans
+    tags = spans[0].get("tags")
+    assert tags == {"topic": "t", "status": "deprecated"}
+
+    # The current run should not own session-scoped spans.
+    cur = run_store.load(run_id)
+    assert cur is not None
+    cur_spans = cur.vars.get("_runtime", {}).get("memory_spans")
+    assert isinstance(cur_spans, list)
+    assert cur_spans == []
+
+
 def test_memory_note_keep_in_context_inserts_synthetic_message() -> None:
     run_store = InMemoryRunStore()
     ledger_store = InMemoryLedgerStore()
@@ -407,4 +483,3 @@ def test_memory_rehydrate_inserts_conversation_span_and_includes_memory_note() -
     assert [m.get("content") for m in messages if isinstance(m, dict)][0] == "sys"
     assert [m.get("content") for m in messages if isinstance(m, dict)][1] == "[MEMORY NOTE]\nnote"
     assert [m.get("content") for m in messages if isinstance(m, dict)][2:4] == ["u1", "a1"]
-

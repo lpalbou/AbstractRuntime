@@ -191,6 +191,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "memory_tag",
         "memory_compact",
         "memory_rehydrate",
+        "memory_kg_assert",
+        "memory_kg_query",
     }
 
     literal_node_ids: set[str] = set()
@@ -860,6 +862,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # Optional pin overrides (passed through for compiler/runtime consumption).
             if isinstance(input_data, dict) and "max_iterations" in input_data:
                 out["max_iterations"] = input_data.get("max_iterations")
+            if isinstance(input_data, dict) and ("max_input_tokens" in input_data or "maxInputTokens" in input_data):
+                out["max_input_tokens"] = (
+                    input_data.get("max_input_tokens")
+                    if "max_input_tokens" in input_data
+                    else input_data.get("maxInputTokens")
+                )
             if isinstance(input_data, dict) and "temperature" in input_data:
                 out["temperature"] = input_data.get("temperature")
             if isinstance(input_data, dict) and "seed" in input_data:
@@ -1228,6 +1236,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_memory_compact_handler(data, effect_config)
         if effect_type == "memory_rehydrate":
             return _create_memory_rehydrate_handler(data, effect_config)
+        if effect_type == "memory_kg_assert":
+            return _create_memory_kg_assert_handler(data, effect_config)
+        if effect_type == "memory_kg_query":
+            return _create_memory_kg_query_handler(data, effect_config)
 
         return lambda x: x
 
@@ -1343,6 +1355,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if include_context_cfg is None:
             include_context_cfg = config.get("use_context")
         include_context_default = _coerce_bool(include_context_cfg) if include_context_cfg is not None else False
+
+        max_input_tokens_default = config.get("max_input_tokens")
+        if max_input_tokens_default is None:
+            max_input_tokens_default = config.get("maxInputTokens")
+
         structured_output_fallback_cfg = config.get("structured_output_fallback")
         structured_output_fallback_default = (
             _coerce_bool(structured_output_fallback_cfg) if structured_output_fallback_cfg is not None else False
@@ -1475,6 +1492,24 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             else:
                 include_context_value = include_context_default
 
+            max_input_tokens_value: Optional[int] = None
+            raw_max_in: Any = None
+            if isinstance(input_data, dict):
+                if "max_input_tokens" in input_data:
+                    raw_max_in = input_data.get("max_input_tokens")
+                elif "maxInputTokens" in input_data:
+                    raw_max_in = input_data.get("maxInputTokens")
+            if raw_max_in is None:
+                raw_max_in = max_input_tokens_default
+
+            try:
+                if raw_max_in is not None and not isinstance(raw_max_in, bool):
+                    parsed = int(raw_max_in)
+                    if parsed > 0:
+                        max_input_tokens_value = parsed
+            except Exception:
+                max_input_tokens_value = None
+
             provider = (
                 input_data.get("provider")
                 if isinstance(input_data, dict) and isinstance(input_data.get("provider"), str)
@@ -1540,6 +1575,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "model": model,
                 "include_context": include_context_value,
             }
+            if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
+                pending["max_input_tokens"] = int(max_input_tokens_value)
             if isinstance(response_schema, dict) and response_schema:
                 pending["response_schema"] = response_schema
                 # Name is optional; AbstractRuntime will fall back to a safe default.
@@ -1888,11 +1925,83 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _create_memory_kg_assert_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def _normalize_assertions(raw: Any) -> list[Dict[str, Any]]:
+            if raw is None:
+                return []
+            if isinstance(raw, dict):
+                return [dict(raw)]
+            if isinstance(raw, list):
+                out: list[Dict[str, Any]] = []
+                for x in raw:
+                    if isinstance(x, dict):
+                        out.append(dict(x))
+                return out
+            return []
+
+        def handler(input_data):
+            payload = input_data if isinstance(input_data, dict) else {}
+            assertions_raw = payload.get("assertions")
+            if assertions_raw is None:
+                assertions_raw = payload.get("triples")
+            if assertions_raw is None:
+                assertions_raw = payload.get("items")
+
+            assertions = _normalize_assertions(assertions_raw)
+
+            pending: Dict[str, Any] = {"type": "memory_kg_assert", "assertions": assertions}
+            scope = payload.get("scope")
+            if isinstance(scope, str) and scope.strip():
+                pending["scope"] = scope.strip()
+            owner_id = payload.get("owner_id")
+            if isinstance(owner_id, str) and owner_id.strip():
+                pending["owner_id"] = owner_id.strip()
+            span_id = payload.get("span_id")
+            if isinstance(span_id, str) and span_id.strip():
+                pending["span_id"] = span_id.strip()
+
+            return {"assertion_ids": [], "count": 0, "_pending_effect": pending}
+
+        return handler
+
+    def _create_memory_kg_query_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data):
+            payload = input_data if isinstance(input_data, dict) else {}
+            pending: Dict[str, Any] = {"type": "memory_kg_query"}
+
+            for k in (
+                "subject",
+                "predicate",
+                "object",
+                "scope",
+                "owner_id",
+                "since",
+                "until",
+                "active_at",
+                "query_text",
+                "order",
+            ):
+                v = payload.get(k)
+                if isinstance(v, str) and v.strip():
+                    pending[k] = v.strip()
+
+            limit = payload.get("limit")
+            if limit is not None and not isinstance(limit, bool):
+                try:
+                    pending["limit"] = int(limit)
+                except Exception:
+                    pass
+
+            return {"items": [], "count": 0, "_pending_effect": pending}
+
+        return handler
+
     def _create_memory_tag_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data):
             span_id = None
             tags: Dict[str, Any] = {}
             merge = None
+            scope = None
             if isinstance(input_data, dict):
                 span_id = input_data.get("span_id")
                 if span_id is None:
@@ -1902,10 +2011,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     tags = raw_tags
                 if "merge" in input_data:
                     merge = _coerce_bool(input_data.get("merge"))
+                if isinstance(input_data.get("scope"), str):
+                    scope = str(input_data.get("scope") or "").strip() or None
 
             pending: Dict[str, Any] = {"type": "memory_tag", "span_id": span_id, "tags": tags}
             if merge is not None:
                 pending["merge"] = bool(merge)
+            if scope is not None:
+                pending["scope"] = scope
             return {"rendered": "", "success": False, "_pending_effect": pending}
 
         return handler

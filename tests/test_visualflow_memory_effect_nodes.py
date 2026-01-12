@@ -50,6 +50,52 @@ def test_visualflow_compiler_supports_memory_tag_node() -> None:
     assert plan.effect.type == EffectType.MEMORY_TAG
 
 
+def test_visualflow_compiler_supports_memory_kg_query_node() -> None:
+    flow = {
+        "id": "vf_memory_kg_query",
+        "name": "vf_memory_kg_query",
+        "entryNode": "start",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            {"id": "kgq", "type": "memory_kg_query", "data": {"nodeType": "memory_kg_query"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "kgq", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    assert "kgq" in spec.nodes
+
+    run = RunState(run_id="run", workflow_id=str(spec.workflow_id), status=RunStatus.RUNNING, current_node="kgq", vars={"_temp": {}})
+    plan = spec.nodes["kgq"](run, None)
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.MEMORY_KG_QUERY
+
+
+def test_visualflow_compiler_supports_memory_kg_assert_node() -> None:
+    flow = {
+        "id": "vf_memory_kg_assert",
+        "name": "vf_memory_kg_assert",
+        "entryNode": "start",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            {"id": "kga", "type": "memory_kg_assert", "data": {"nodeType": "memory_kg_assert"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "kga", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    assert "kga" in spec.nodes
+
+    run = RunState(run_id="run", workflow_id=str(spec.workflow_id), status=RunStatus.RUNNING, current_node="kga", vars={"_temp": {}})
+    plan = spec.nodes["kga"](run, None)
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.MEMORY_KG_ASSERT
+
+
 def test_visualflow_memory_note_maps_keep_in_context_and_location() -> None:
     flow = {
         "id": "vf_memory_note_mapping",

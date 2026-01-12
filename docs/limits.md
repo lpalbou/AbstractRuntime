@@ -25,8 +25,9 @@ run.vars["_limits"] = {
     "current_iteration": 0,
 
     # Token/context window
-    "max_tokens": 32768,
-    "max_output_tokens": 4096,
+    "max_tokens": 262144,        # total context window (from model capabilities)
+    "max_output_tokens": 16384,  # output budget (from capabilities or provider default)
+    "max_input_tokens": 50000,   # enforced input budget cap (see ADR-0008 terminology)
     "estimated_tokens_used": 0,
 
     # History management
@@ -37,6 +38,10 @@ run.vars["_limits"] = {
     "warn_tokens_pct": 80,
 }
 ```
+
+Notes:
+- `max_tokens` comes from model capabilities by default (or a conservative fallback when unknown).
+- If `max_input_tokens` is not explicitly set, the runtime derives it from `max_tokens - max_output_tokens - 256` and applies a default quality/latency cap (currently `50000`).
 
 ---
 
@@ -83,7 +88,7 @@ status = runtime.get_limit_status(run_id)
     },
     "tokens": {
         "estimated_used": 8192,
-        "max": 32768,
+        "max": 262144,
         "pct": 25.0,
         "warning": False,
     },
@@ -128,7 +133,7 @@ Update limits mid-session:
 runtime.update_limits(run_id, {"max_tokens": 131072})
 
 # Allowed keys:
-# - max_iterations, max_tokens, max_output_tokens
+# - max_iterations, max_tokens, max_output_tokens, max_input_tokens
 # - max_history_messages
 # - warn_iterations_pct, warn_tokens_pct
 # - estimated_tokens_used, current_iteration
@@ -177,7 +182,9 @@ agent.update_limits(max_tokens=65536)
 |---------|--------|-------|
 | **Warning surfacing to agents** | Not implemented | Agents don't receive warnings automatically |
 | **Observability events** | Not implemented | No events emitted when warnings trigger |
-| **Token counting** | Not implemented | `estimated_tokens_used` is placeholder |
+| **Token counting** | Implemented (best-effort) | `estimated_tokens_used` is populated from provider usage when available |
+
+Token usage is recorded as a **best-effort** estimate from `LLM_CALL` results when providers return usage metadata. This is sufficient for token-budget gating and compaction triggers, but not a perfect tokenizer-accurate accounting.
 | **UI/CLI integration** | Not implemented | Must be polled via `get_limit_status()` |
 | **Agent guidance injection** | Not implemented | Could inject "2 turns remaining" in prompt |
 

@@ -432,6 +432,118 @@ def create_memory_query_handler(
     return handler
 
 
+def create_memory_kg_assert_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that asserts triples into AbstractMemory (host-provided handler)."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def _normalize_assertions(raw: Any) -> list[Dict[str, Any]]:
+        if raw is None:
+            return []
+        if isinstance(raw, dict):
+            return [dict(raw)]
+        if isinstance(raw, list):
+            out: list[Dict[str, Any]] = []
+            for x in raw:
+                if isinstance(x, dict):
+                    out.append(dict(x))
+            return out
+        return []
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        assertions_raw: Any = None
+        scope: Optional[str] = None
+        owner_id: Optional[str] = None
+        span_id: Optional[str] = None
+        if isinstance(input_data, dict):
+            assertions_raw = input_data.get("assertions")
+            if assertions_raw is None:
+                assertions_raw = input_data.get("triples")
+            if assertions_raw is None:
+                assertions_raw = input_data.get("items")
+            scope = input_data.get("scope") if isinstance(input_data.get("scope"), str) else None
+            owner_id = input_data.get("owner_id") if isinstance(input_data.get("owner_id"), str) else None
+            span_id = input_data.get("span_id") if isinstance(input_data.get("span_id"), str) else None
+
+        assertions = _normalize_assertions(assertions_raw)
+        payload: Dict[str, Any] = {"assertions": assertions}
+        if scope:
+            payload["scope"] = scope
+        if owner_id:
+            payload["owner_id"] = owner_id
+        if span_id:
+            payload["span_id"] = span_id
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(type=EffectType.MEMORY_KG_ASSERT, payload=payload, result_key=output_key or "_temp.memory_kg_assert"),
+            next_node=next_node,
+        )
+
+    return handler
+
+
+def create_memory_kg_query_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that queries AbstractMemory triples (host-provided handler)."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        payload: Dict[str, Any] = {}
+        if isinstance(input_data, dict):
+            for k in (
+                "subject",
+                "predicate",
+                "object",
+                "scope",
+                "owner_id",
+                "since",
+                "until",
+                "active_at",
+                "query_text",
+                "order",
+            ):
+                v = input_data.get(k)
+                if isinstance(v, str) and v.strip():
+                    payload[k] = v.strip()
+            limit = input_data.get("limit")
+            if limit is None:
+                limit = input_data.get("limit_spans")
+            if limit is not None and not isinstance(limit, bool):
+                try:
+                    payload["limit"] = int(limit)
+                except Exception:
+                    pass
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(type=EffectType.MEMORY_KG_QUERY, payload=payload, result_key=output_key or "_temp.memory_kg_query"),
+            next_node=next_node,
+        )
+
+    return handler
+
+
 def create_memory_tag_handler(
     node_id: str,
     next_node: Optional[str],
@@ -451,6 +563,7 @@ def create_memory_tag_handler(
         span_id: Any = None
         tags: Dict[str, Any] = {}
         merge: Optional[bool] = None
+        scope: Optional[str] = None
         if isinstance(input_data, dict):
             span_id = input_data.get("span_id")
             if span_id is None:
@@ -459,10 +572,14 @@ def create_memory_tag_handler(
             tags = raw_tags if isinstance(raw_tags, dict) else {}
             if "merge" in input_data:
                 merge = bool(input_data.get("merge"))
+            if isinstance(input_data.get("scope"), str) and str(input_data.get("scope") or "").strip():
+                scope = str(input_data.get("scope") or "").strip()
 
         payload: Dict[str, Any] = {"span_id": span_id, "tags": tags}
         if merge is not None:
             payload["merge"] = merge
+        if scope is not None:
+            payload["scope"] = scope
 
         return StepPlan(
             node_id=node_id,

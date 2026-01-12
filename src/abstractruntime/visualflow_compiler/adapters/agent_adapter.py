@@ -67,13 +67,15 @@ def create_agent_node_handler(
         max_history_messages = getattr(agent, "_max_history_messages", -1)
         max_tokens = getattr(agent, "_max_tokens", None)
         if not isinstance(max_tokens, int) or max_tokens <= 0:
+            from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
             try:
                 runtime = getattr(agent, "runtime", None)
                 config = getattr(runtime, "config", None)
                 base = config.to_limits_dict() if config is not None else {}
-                max_tokens = int(base.get("max_tokens", 32768) or 32768)
+                max_tokens = int(base.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
             except Exception:
-                max_tokens = 32768
+                max_tokens = DEFAULT_MAX_TOKENS
 
         agent_vars = {
             "context": {

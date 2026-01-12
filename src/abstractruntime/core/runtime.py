@@ -675,10 +675,14 @@ class Runtime:
         def pct(current: int, maximum: int) -> float:
             return round(current / maximum * 100, 1) if maximum > 0 else 0
 
+        from .vars import DEFAULT_MAX_TOKENS
+
         current_iter = int(limits.get("current_iteration", 0) or 0)
         max_iter = int(limits.get("max_iterations", 25) or 25)
         tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
-        max_tokens = int(limits.get("max_tokens", 32768) or 32768)
+        max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
+        max_input_tokens = limits.get("max_input_tokens")
+        max_output_tokens = limits.get("max_output_tokens")
 
         return {
             "iterations": {
@@ -690,6 +694,8 @@ class Runtime:
             "tokens": {
                 "estimated_used": tokens_used,
                 "max": max_tokens,
+                "max_input_tokens": max_input_tokens,
+                "max_output_tokens": max_output_tokens,
                 "pct": pct(tokens_used, max_tokens),
                 "warning": pct(tokens_used, max_tokens) >= limits.get("warn_tokens_pct", 80),
             },
@@ -726,7 +732,9 @@ class Runtime:
 
         # Check tokens
         tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
-        max_tokens = int(limits.get("max_tokens", 32768) or 32768)
+        from .vars import DEFAULT_MAX_TOKENS
+
+        max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         warn_tokens_pct = int(limits.get("warn_tokens_pct", 80) or 80)
 
         if max_tokens > 0 and tokens_used > 0:
@@ -757,6 +765,7 @@ class Runtime:
             "max_iterations",
             "max_tokens",
             "max_output_tokens",
+            "max_input_tokens",
             "max_history_messages",
             "warn_iterations_pct",
             "warn_tokens_pct",
@@ -932,6 +941,29 @@ class Runtime:
                 reused_prior_result=reused_prior_result,
                 duration_ms=duration_ms,
             )
+
+            # Best-effort token observability: surface last-known input token usage in `_limits`.
+            #
+            # AbstractCore responses generally populate `usage` (prompt/input/output/total tokens).
+            # We store the input-side usage as `estimated_tokens_used` so host UIs and workflows
+            # can reason about compaction budgets without re-tokenizing.
+            try:
+                if plan.effect.type == EffectType.LLM_CALL and outcome.status == "completed" and isinstance(outcome.result, dict):
+                    usage = outcome.result.get("usage")
+                    if isinstance(usage, dict):
+                        raw_in = usage.get("input_tokens")
+                        if raw_in is None:
+                            raw_in = usage.get("prompt_tokens")
+                        if raw_in is None:
+                            raw_in = usage.get("total_tokens")
+                        if raw_in is not None and not isinstance(raw_in, bool):
+                            limits = run.vars.get("_limits")
+                            if not isinstance(limits, dict):
+                                limits = {}
+                                run.vars["_limits"] = limits
+                            limits["estimated_tokens_used"] = int(raw_in)
+            except Exception:
+                pass
 
             if outcome.status == "failed":
                 controlled = _abort_if_externally_controlled()
@@ -2347,32 +2379,37 @@ class Runtime:
 
         Payload (required unless stated):
           - span_id: str | int   (artifact_id or 1-based index into `_runtime.memory_spans`)
+          - scope: str           (optional, default "run")  "run" | "session" | "global" | "all"
           - tags: dict[str,str]  (merged into span["tags"] by default)
           - merge: bool          (optional, default True; when False, replaces span["tags"])
+          - target_run_id: str   (optional; defaults to current run_id; used as the base run for scope routing)
           - tool_name: str       (optional; for tool-style output, default "remember")
           - call_id: str         (optional; passthrough for tool-style output)
 
         Notes:
-        - This mutates the in-run span index (`_runtime.memory_spans`) only; it does not change artifacts.
+        - This mutates the owner run's span index (`_runtime.memory_spans`) only; it does not change artifacts.
         - Tagging is intentionally JSON-safe (string->string).
         """
         import json
 
         from .vars import ensure_namespaces
 
-        ensure_namespaces(run.vars)
-        runtime_ns = run.vars.get("_runtime")
-        if not isinstance(runtime_ns, dict):
-            runtime_ns = {}
-            run.vars["_runtime"] = runtime_ns
-
-        spans = runtime_ns.get("memory_spans")
-        if not isinstance(spans, list):
-            return EffectOutcome.failed("MEMORY_TAG requires _runtime.memory_spans to be a list")
-
         payload = dict(effect.payload or {})
         tool_name = str(payload.get("tool_name") or "remember")
         call_id = str(payload.get("call_id") or "memory")
+
+        base_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
+        base_run = run
+        if base_run_id != run.run_id:
+            loaded = self._run_store.load(base_run_id)
+            if loaded is None:
+                return EffectOutcome.failed(f"Unknown target_run_id: {base_run_id}")
+            base_run = loaded
+        ensure_namespaces(base_run.vars)
+
+        scope = str(payload.get("scope") or "run").strip().lower() or "run"
+        if scope not in {"run", "session", "global", "all"}:
+            return EffectOutcome.failed(f"Unknown memory_tag scope: {scope}")
 
         span_id = payload.get("span_id")
         tags = payload.get("tags")
@@ -2386,75 +2423,145 @@ class Runtime:
         clean_tags: Dict[str, str] = {}
         for k, v in tags.items():
             if isinstance(k, str) and isinstance(v, str) and k and v:
+                if k == "kind":
+                    continue
                 clean_tags[k] = v
         if not clean_tags:
             return EffectOutcome.failed("MEMORY_TAG requires at least one non-empty string tag")
 
         artifact_id: Optional[str] = None
-        target_index: Optional[int] = None
+        index_hint: Optional[int] = None
 
         if isinstance(span_id, int):
-            idx = span_id - 1
-            if idx < 0 or idx >= len(spans):
-                return EffectOutcome.failed(f"Unknown span index: {span_id}")
-            span = spans[idx]
-            if not isinstance(span, dict):
-                return EffectOutcome.failed(f"Invalid span record at index {span_id}")
-            artifact_id = str(span.get("artifact_id") or "").strip() or None
-            target_index = idx
+            index_hint = span_id
         elif isinstance(span_id, str):
             s = span_id.strip()
             if not s:
                 return EffectOutcome.failed("MEMORY_TAG requires a non-empty span_id")
             if s.isdigit():
-                idx = int(s) - 1
-                if idx < 0 or idx >= len(spans):
-                    return EffectOutcome.failed(f"Unknown span index: {s}")
-                span = spans[idx]
-                if not isinstance(span, dict):
-                    return EffectOutcome.failed(f"Invalid span record at index {s}")
-                artifact_id = str(span.get("artifact_id") or "").strip() or None
-                target_index = idx
+                index_hint = int(s)
             else:
                 artifact_id = s
         else:
             return EffectOutcome.failed("MEMORY_TAG requires span_id as str or int")
 
-        if not artifact_id:
-            return EffectOutcome.failed("Could not resolve span_id to an artifact_id")
+        if scope == "all" and index_hint is not None:
+            return EffectOutcome.failed("memory_tag scope='all' requires span_id as artifact id (no indices)")
 
-        if target_index is None:
-            for i, span in enumerate(spans):
+        def _ensure_spans(target_run: RunState) -> list[dict[str, Any]]:
+            ensure_namespaces(target_run.vars)
+            target_runtime_ns = target_run.vars.get("_runtime")
+            if not isinstance(target_runtime_ns, dict):
+                target_runtime_ns = {}
+                target_run.vars["_runtime"] = target_runtime_ns
+            spans_any = target_runtime_ns.get("memory_spans")
+            if not isinstance(spans_any, list):
+                spans_any = []
+                target_runtime_ns["memory_spans"] = spans_any
+            return spans_any  # type: ignore[return-value]
+
+        def _resolve_target_index(spans_list: list[Any], *, artifact_id_value: str, index_value: Optional[int]) -> Optional[int]:
+            if index_value is not None:
+                idx = int(index_value) - 1
+                if idx < 0 or idx >= len(spans_list):
+                    return None
+                span = spans_list[idx]
+                if not isinstance(span, dict):
+                    return None
+                return idx
+            for i, span in enumerate(spans_list):
                 if not isinstance(span, dict):
                     continue
-                if str(span.get("artifact_id") or "") == artifact_id:
-                    target_index = i
-                    break
+                if str(span.get("artifact_id") or "") == artifact_id_value:
+                    return i
+            return None
 
-        if target_index is None:
-            return EffectOutcome.failed(f"Unknown span_id: {artifact_id}")
+        def _apply_tags(target_run: RunState, spans_list: list[Any]) -> Optional[dict[str, Any]]:
+            artifact_id_local = artifact_id
+            target_index_local: Optional[int] = None
 
-        target = spans[target_index]
-        if not isinstance(target, dict):
-            return EffectOutcome.failed(f"Invalid span record at index {target_index + 1}")
+            # Resolve index->artifact id when an index hint is used.
+            if index_hint is not None:
+                idx = int(index_hint) - 1
+                if idx < 0 or idx >= len(spans_list):
+                    return None
+                span = spans_list[idx]
+                if not isinstance(span, dict):
+                    return None
+                resolved = str(span.get("artifact_id") or "").strip()
+                if not resolved:
+                    return None
+                artifact_id_local = resolved
+                target_index_local = idx
 
-        existing_tags = target.get("tags")
-        if not isinstance(existing_tags, dict):
-            existing_tags = {}
+            if not artifact_id_local:
+                return None
 
-        if merge:
-            merged_tags = dict(existing_tags)
-            merged_tags.update(clean_tags)
+            if target_index_local is None:
+                target_index_local = _resolve_target_index(
+                    spans_list, artifact_id_value=str(artifact_id_local), index_value=None
+                )
+            if target_index_local is None:
+                return None
+
+            target = spans_list[target_index_local]
+            if not isinstance(target, dict):
+                return None
+
+            existing_tags = target.get("tags")
+            if not isinstance(existing_tags, dict):
+                existing_tags = {}
+
+            if merge:
+                merged_tags = dict(existing_tags)
+                merged_tags.update(clean_tags)
+            else:
+                merged_tags = dict(clean_tags)
+
+            target["tags"] = merged_tags
+            target["tagged_at"] = utc_now_iso()
+            if run.actor_id:
+                target["tagged_by"] = str(run.actor_id)
+            return {"run_id": target_run.run_id, "artifact_id": str(artifact_id_local), "tags": merged_tags}
+
+        # Resolve which run(s) to tag.
+        runs_to_tag: list[RunState] = []
+        if scope == "all":
+            root = self._resolve_scope_owner_run(base_run, scope="session")
+            global_run = self._resolve_scope_owner_run(base_run, scope="global")
+            seen_ids: set[str] = set()
+            for r in (base_run, root, global_run):
+                if r.run_id in seen_ids:
+                    continue
+                seen_ids.add(r.run_id)
+                runs_to_tag.append(r)
         else:
-            merged_tags = dict(clean_tags)
+            try:
+                runs_to_tag = [self._resolve_scope_owner_run(base_run, scope=scope)]
+            except Exception as e:
+                return EffectOutcome.failed(str(e))
 
-        target["tags"] = merged_tags
-        target["tagged_at"] = utc_now_iso()
-        if run.actor_id:
-            target["tagged_by"] = str(run.actor_id)
+        applied: list[dict[str, Any]] = []
+        for target_run in runs_to_tag:
+            spans_list = _ensure_spans(target_run)
+            entry = _apply_tags(target_run, spans_list)
+            if entry is None:
+                continue
+            applied.append(entry)
+            if target_run is not run:
+                target_run.updated_at = utc_now_iso()
+                self._run_store.save(target_run)
 
-        rendered_tags = json.dumps(merged_tags, ensure_ascii=False, sort_keys=True)
-        text = f"Tagged span_id={artifact_id} tags={rendered_tags}"
+        if not applied:
+            if artifact_id:
+                return EffectOutcome.failed(f"Unknown span_id: {artifact_id}")
+            if index_hint is not None:
+                return EffectOutcome.failed(f"Unknown span index: {index_hint}")
+            return EffectOutcome.failed("Could not resolve span_id")
+
+        rendered_tags = json.dumps(applied[0].get("tags") or {}, ensure_ascii=False, sort_keys=True)
+        rendered_runs = ",".join([str(x.get("run_id") or "") for x in applied if x.get("run_id")])
+        text = f"Tagged span_id={applied[0].get('artifact_id')} scope={scope} runs=[{rendered_runs}] tags={rendered_tags}"
 
         result = {
             "mode": "executed",
@@ -2465,6 +2572,7 @@ class Runtime:
                     "success": True,
                     "output": text,
                     "error": None,
+                    "meta": {"applied": applied},
                 }
             ],
         }

@@ -23,6 +23,11 @@ TEMP = "_temp"
 LIMITS = "_limits"  # Canonical storage for runtime resource limits
 NODE_TRACES = "node_traces"  # _runtime namespace key for per-node execution traces
 
+# Fallback context window size used only when model capabilities are unavailable.
+# In normal operation (AbstractCore-integrated runtimes), this is derived from
+# `abstractcore.architectures.detection.get_model_capabilities(...)`.
+DEFAULT_MAX_TOKENS = 32768
+
 
 def ensure_namespaces(vars: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure the four canonical namespaces exist and are dicts."""
@@ -70,7 +75,7 @@ def ensure_limits(vars: Dict[str, Any]) -> Dict[str, Any]:
 
     This is the canonical location for runtime resource limits:
     - max_iterations / current_iteration: Iteration control
-    - max_tokens / estimated_tokens_used: Token/context window management
+    - max_tokens / max_input_tokens / max_output_tokens / estimated_tokens_used: Token/context window management
     - max_history_messages: Conversation history limit (-1 = unlimited)
     - warn_*_pct: Warning thresholds for proactive notifications
 
@@ -108,8 +113,9 @@ def _default_limits() -> Dict[str, Any]:
     return {
         "max_iterations": 25,
         "current_iteration": 0,
-        "max_tokens": 32768,
+        "max_tokens": DEFAULT_MAX_TOKENS,
         "max_output_tokens": None,
+        "max_input_tokens": None,
         "max_history_messages": -1,
         "estimated_tokens_used": 0,
         "warn_iterations_pct": 80,

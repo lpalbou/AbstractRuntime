@@ -323,6 +323,33 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")
 
+        # Enforce a per-call (or per-run) input-token budget by trimming oldest non-system messages.
+        #
+        # This is separate from provider limits: it protects reasoning quality and latency by keeping
+        # the active context window bounded even when the model supports very large contexts.
+        max_input_tokens: Optional[int] = None
+        try:
+            raw_max_in = payload.get("max_input_tokens")
+            if raw_max_in is None:
+                limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                raw_max_in = limits.get("max_input_tokens") if isinstance(limits, dict) else None
+            if raw_max_in is not None and not isinstance(raw_max_in, bool):
+                parsed = int(raw_max_in)
+                if parsed > 0:
+                    max_input_tokens = parsed
+        except Exception:
+            max_input_tokens = None
+
+        if isinstance(max_input_tokens, int) and max_input_tokens > 0 and isinstance(messages, list) and messages:
+            try:
+                from abstractruntime.memory.token_budget import trim_messages_to_max_input_tokens
+
+                model_name = model if isinstance(model, str) and model.strip() else None
+                messages = trim_messages_to_max_input_tokens(messages, max_input_tokens=int(max_input_tokens), model=model_name)
+            except Exception:
+                # Never fail an LLM call due to trimming.
+                pass
+
         def _coerce_boolish(value: Any) -> bool:
             if isinstance(value, bool):
                 return value
@@ -448,6 +475,76 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                     existing = {}
                     meta["_runtime_observability"] = existing
                 existing.update(runtime_observability)
+
+            # VisualFlow "Use context" UX: when requested, persist the turn into the run's
+            # active context (`vars.context.messages`) so subsequent LLM/Agent/Subflow nodes
+            # can see the interaction history without extra wiring.
+            #
+            # IMPORTANT: This is opt-in via payload.include_context/use_context; AbstractRuntime
+            # does not implicitly store all LLM calls in context.
+            try:
+                inc_raw = payload.get("include_context")
+                if inc_raw is None:
+                    inc_raw = payload.get("use_context")
+                if _coerce_boolish(inc_raw):
+                    from abstractruntime.core.vars import get_context
+
+                    ctx_ns = get_context(run.vars)
+                    msgs_any = ctx_ns.get("messages")
+                    if not isinstance(msgs_any, list):
+                        msgs_any = []
+                        ctx_ns["messages"] = msgs_any
+
+                    def _extract_last_user_text() -> str:
+                        if isinstance(prompt, str) and prompt.strip():
+                            return prompt.strip()
+                        if isinstance(messages, list):
+                            for m in reversed(messages):
+                                if not isinstance(m, dict):
+                                    continue
+                                if m.get("role") != "user":
+                                    continue
+                                c = m.get("content")
+                                if isinstance(c, str) and c.strip():
+                                    return c.strip()
+                        return ""
+
+                    def _extract_assistant_text() -> str:
+                        if isinstance(result, dict):
+                            c = result.get("content")
+                            if isinstance(c, str) and c.strip():
+                                return c.strip()
+                            d = result.get("data")
+                            if isinstance(d, (dict, list)):
+                                import json as _json
+
+                                return _json.dumps(d, ensure_ascii=False, indent=2)
+                        return ""
+
+                    user_text = _extract_last_user_text()
+                    assistant_text = _extract_assistant_text()
+                    node_id = str(getattr(run, "current_node", None) or "").strip() or "unknown"
+
+                    if user_text:
+                        msgs_any.append(
+                            {
+                                "role": "user",
+                                "content": user_text,
+                                "metadata": {"kind": "llm_turn", "node_id": node_id},
+                            }
+                        )
+                    if assistant_text:
+                        msgs_any.append(
+                            {
+                                "role": "assistant",
+                                "content": assistant_text,
+                                "metadata": {"kind": "llm_turn", "node_id": node_id},
+                            }
+                        )
+                    if isinstance(getattr(run, "output", None), dict):
+                        run.output["messages"] = msgs_any
+            except Exception:
+                pass
             return EffectOutcome.completed(result=result)
         except Exception as e:
             logger.error("LLM_CALL failed", error=str(e))

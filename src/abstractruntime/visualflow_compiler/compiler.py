@@ -15,6 +15,8 @@ from .adapters.effect_adapter import (
     create_wait_event_handler,
     create_memory_note_handler,
     create_memory_query_handler,
+    create_memory_tag_handler,
+    create_memory_compact_handler,
     create_memory_rehydrate_handler,
     create_llm_call_handler,
     create_tool_calls_handler,
@@ -116,6 +118,20 @@ def _create_effect_node_handler(
         )
     elif effect_type == "memory_query":
         base_handler = create_memory_query_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
+    elif effect_type == "memory_tag":
+        base_handler = create_memory_tag_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
+    elif effect_type == "memory_compact":
+        base_handler = create_memory_compact_handler(
             node_id=node_id,
             next_node=next_node,
             input_key=input_key,
@@ -1214,6 +1230,11 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             current["note_id"] = span_id
             current["raw"] = raw
             mapped_value = span_id
+        elif effect_type == "memory_compact":
+            span_id = _get_span_id(raw)
+            current["span_id"] = span_id
+            current["raw"] = raw
+            mapped_value = span_id
         elif effect_type == "memory_query":
             # Runtime returns a tool-results envelope:
             #   {"mode":"executed","results":[{call_id,name,success,output,error,meta?}, ...]}
@@ -1242,6 +1263,27 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             current["span_ids"] = span_ids
             current["raw"] = raw
             mapped_value = current["results"]
+        elif effect_type == "memory_tag":
+            rendered = ""
+            success = False
+            results_list: list[Any] = []
+            if isinstance(raw, dict):
+                rl = raw.get("results")
+                if isinstance(rl, list):
+                    results_list = rl
+                    if results_list:
+                        first = results_list[0]
+                        if isinstance(first, dict):
+                            out = first.get("output")
+                            if isinstance(out, str):
+                                rendered = out
+                            success = first.get("success") is True
+
+            current["rendered"] = rendered
+            current["success"] = bool(success)
+            current["results"] = results_list
+            current["raw"] = raw
+            mapped_value = rendered
         elif effect_type == "memory_rehydrate":
             if isinstance(raw, dict):
                 current["inserted"] = raw.get("inserted")

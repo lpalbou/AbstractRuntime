@@ -295,11 +295,17 @@ def create_memory_note_handler(
             tags = input_data.get("tags") if isinstance(input_data.get("tags"), dict) else {}
             sources = input_data.get("sources") if isinstance(input_data.get("sources"), dict) else None
             scope = input_data.get("scope") if isinstance(input_data.get("scope"), str) else None
+            location = input_data.get("location") if isinstance(input_data.get("location"), str) else None
+            keep_in_context = input_data.get("keep_in_context")
+            if keep_in_context is None:
+                keep_in_context = input_data.get("keepInContext")
         else:
             content = str(input_data) if input_data else ""
             tags = {}
             sources = None
             scope = None
+            location = None
+            keep_in_context = None
 
         # Create the effect
         payload: Dict[str, Any] = {"note": content, "tags": tags}
@@ -307,6 +313,10 @@ def create_memory_note_handler(
             payload["sources"] = sources
         if scope:
             payload["scope"] = scope
+        if isinstance(location, str) and location.strip():
+            payload["location"] = location.strip()
+        if keep_in_context is not None:
+            payload["keep_in_context"] = keep_in_context
 
         effect = Effect(
             type=EffectType.MEMORY_NOTE,
@@ -355,6 +365,11 @@ def create_memory_query_handler(
             query = input_data.get("query", "")
             limit = input_data.get("limit", 10)
             tags = input_data.get("tags") if isinstance(input_data.get("tags"), dict) else None
+            tags_mode = input_data.get("tags_mode")
+            if tags_mode is None:
+                tags_mode = input_data.get("tagsMode")
+            usernames = input_data.get("usernames")
+            locations = input_data.get("locations")
             since = input_data.get("since")
             until = input_data.get("until")
             scope = input_data.get("scope") if isinstance(input_data.get("scope"), str) else None
@@ -362,14 +377,39 @@ def create_memory_query_handler(
             query = str(input_data) if input_data else ""
             limit = 10
             tags = None
+            tags_mode = None
+            usernames = None
+            locations = None
             since = None
             until = None
             scope = None
+
+        def _normalize_str_list(raw: Any) -> Optional[List[str]]:
+            if raw is None:
+                return None
+            if isinstance(raw, str):
+                s = raw.strip()
+                return [s] if s else None
+            if not isinstance(raw, list):
+                return None
+            out: List[str] = []
+            for x in raw:
+                if isinstance(x, str) and x.strip():
+                    out.append(x.strip())
+            return out or None
 
         # Create the effect
         payload: Dict[str, Any] = {"query": query, "limit_spans": limit, "return": "both"}
         if tags is not None:
             payload["tags"] = tags
+        if isinstance(tags_mode, str) and tags_mode.strip():
+            payload["tags_mode"] = tags_mode.strip()
+        usernames_list = _normalize_str_list(usernames)
+        if usernames_list is not None:
+            payload["usernames"] = usernames_list
+        locations_list = _normalize_str_list(locations)
+        if locations_list is not None:
+            payload["locations"] = locations_list
         if since is not None:
             payload["since"] = since
         if until is not None:
@@ -386,6 +426,92 @@ def create_memory_query_handler(
         return StepPlan(
             node_id=node_id,
             effect=effect,
+            next_node=next_node,
+        )
+
+    return handler
+
+
+def create_memory_tag_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that applies tags to an existing memory span record."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        span_id: Any = None
+        tags: Dict[str, Any] = {}
+        merge: Optional[bool] = None
+        if isinstance(input_data, dict):
+            span_id = input_data.get("span_id")
+            if span_id is None:
+                span_id = input_data.get("spanId")
+            raw_tags = input_data.get("tags")
+            tags = raw_tags if isinstance(raw_tags, dict) else {}
+            if "merge" in input_data:
+                merge = bool(input_data.get("merge"))
+
+        payload: Dict[str, Any] = {"span_id": span_id, "tags": tags}
+        if merge is not None:
+            payload["merge"] = merge
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(type=EffectType.MEMORY_TAG, payload=payload, result_key=output_key or "_temp.memory_tag"),
+            next_node=next_node,
+        )
+
+    return handler
+
+
+def create_memory_compact_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that requests runtime-owned memory compaction."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        preserve_recent: Optional[int] = None
+        compression_mode: Optional[str] = None
+        focus: Optional[str] = None
+        if isinstance(input_data, dict):
+            if input_data.get("preserve_recent") is not None:
+                try:
+                    preserve_recent = int(input_data.get("preserve_recent"))
+                except Exception:
+                    preserve_recent = None
+            compression_mode = input_data.get("compression_mode") if isinstance(input_data.get("compression_mode"), str) else None
+            focus = input_data.get("focus") if isinstance(input_data.get("focus"), str) else None
+
+        payload: Dict[str, Any] = {}
+        if preserve_recent is not None:
+            payload["preserve_recent"] = preserve_recent
+        if isinstance(compression_mode, str) and compression_mode.strip():
+            payload["compression_mode"] = compression_mode.strip()
+        if isinstance(focus, str) and focus.strip():
+            payload["focus"] = focus.strip()
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(type=EffectType.MEMORY_COMPACT, payload=payload, result_key=output_key or "_temp.memory_compact"),
             next_node=next_node,
         )
 

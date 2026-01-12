@@ -188,6 +188,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "emit_event",
         "memory_note",
         "memory_query",
+        "memory_tag",
+        "memory_compact",
         "memory_rehydrate",
     }
 
@@ -1220,6 +1222,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_memory_note_handler(data, effect_config)
         if effect_type == "memory_query":
             return _create_memory_query_handler(data, effect_config)
+        if effect_type == "memory_tag":
+            return _create_memory_tag_handler(data, effect_config)
+        if effect_type == "memory_compact":
+            return _create_memory_compact_handler(data, effect_config)
         if effect_type == "memory_rehydrate":
             return _create_memory_rehydrate_handler(data, effect_config)
 
@@ -1879,6 +1885,46 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 pending["scope"] = scope.strip()
 
             return {"results": [], "rendered": "", "_pending_effect": pending}
+
+        return handler
+
+    def _create_memory_tag_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data):
+            span_id = None
+            tags: Dict[str, Any] = {}
+            merge = None
+            if isinstance(input_data, dict):
+                span_id = input_data.get("span_id")
+                if span_id is None:
+                    span_id = input_data.get("spanId")
+                raw_tags = input_data.get("tags")
+                if isinstance(raw_tags, dict):
+                    tags = raw_tags
+                if "merge" in input_data:
+                    merge = _coerce_bool(input_data.get("merge"))
+
+            pending: Dict[str, Any] = {"type": "memory_tag", "span_id": span_id, "tags": tags}
+            if merge is not None:
+                pending["merge"] = bool(merge)
+            return {"rendered": "", "success": False, "_pending_effect": pending}
+
+        return handler
+
+    def _create_memory_compact_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data):
+            preserve_recent = input_data.get("preserve_recent") if isinstance(input_data, dict) else None
+            compression_mode = input_data.get("compression_mode") if isinstance(input_data, dict) else None
+            focus = input_data.get("focus") if isinstance(input_data, dict) else None
+
+            pending: Dict[str, Any] = {"type": "memory_compact"}
+            if preserve_recent is not None:
+                pending["preserve_recent"] = preserve_recent
+            if isinstance(compression_mode, str) and compression_mode.strip():
+                pending["compression_mode"] = compression_mode.strip()
+            if isinstance(focus, str) and focus.strip():
+                pending["focus"] = focus.strip()
+
+            return {"span_id": None, "_pending_effect": pending}
 
         return handler
 

@@ -114,10 +114,17 @@ def build_memory_kg_effect_handlers(
             raw_assertions = payload.get("triples")
         if raw_assertions is None:
             raw_assertions = payload.get("items")
+        if raw_assertions is None:
+            return EffectOutcome.failed("MEMORY_KG_ASSERT requires payload.assertions (list[object])")
+
+        # Empty assertion lists are a valid no-op (e.g. extractor found no facts).
+        # This should not fail the entire run/workflow.
+        if isinstance(raw_assertions, list) and len(raw_assertions) == 0:
+            return EffectOutcome.completed({"ok": True, "count": 0, "assertion_ids": [], "skipped": True})
 
         assertions = _normalize_assertions(raw_assertions)
         if not assertions:
-            return EffectOutcome.failed("MEMORY_KG_ASSERT requires payload.assertions (non-empty list[object])")
+            return EffectOutcome.failed("MEMORY_KG_ASSERT requires payload.assertions (list[object])")
 
         scope_default = str(payload.get("scope") or "run").strip().lower() or "run"
         owner_default = payload.get("owner_id")
@@ -166,6 +173,9 @@ def build_memory_kg_effect_handlers(
         owner_id_raw = payload.get("owner_id")
         owner_id = str(owner_id_raw).strip() if isinstance(owner_id_raw, str) and owner_id_raw.strip() else None
 
+        if scope not in {"run", "session", "global", "all"}:
+            return EffectOutcome.completed({"ok": False, "count": 0, "items": [], "error": f"Unknown memory scope: {scope}"})
+
         def _one_query(*, scope_label: str, owner_id2: str) -> list[Any]:
             q = TripleQuery(
                 subject=str(payload.get("subject")).strip() if isinstance(payload.get("subject"), str) else None,
@@ -183,19 +193,26 @@ def build_memory_kg_effect_handlers(
             return store.query(q)
 
         results: list[Any] = []
-        try:
-            if scope == "all":
-                run_owner = resolve_scope_owner_id(run, scope="run", run_store=run_store)
-                sess_owner = resolve_scope_owner_id(run, scope="session", run_store=run_store)
-                glob_owner = resolve_scope_owner_id(run, scope="global", run_store=run_store)
-                results.extend(_one_query(scope_label="run", owner_id2=run_owner))
-                results.extend(_one_query(scope_label="session", owner_id2=sess_owner))
-                results.extend(_one_query(scope_label="global", owner_id2=glob_owner))
-            else:
+        errors: list[str] = []
+        if scope == "all":
+            owners: list[tuple[str, str]] = []
+            try:
+                owners.append(("run", resolve_scope_owner_id(run, scope="run", run_store=run_store)))
+                owners.append(("session", resolve_scope_owner_id(run, scope="session", run_store=run_store)))
+                owners.append(("global", resolve_scope_owner_id(run, scope="global", run_store=run_store)))
+            except Exception as e:
+                errors.append(str(e))
+            for label, oid in owners:
+                try:
+                    results.extend(_one_query(scope_label=label, owner_id2=oid))
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+        else:
+            try:
                 owner = owner_id or resolve_scope_owner_id(run, scope=scope, run_store=run_store)
                 results.extend(_one_query(scope_label=scope, owner_id2=owner))
-        except Exception as e:
-            return EffectOutcome.failed(f"MEMORY_KG_QUERY failed: {e}")
+            except Exception as e:
+                errors.append(str(e))
 
         # Normalize output to JSON-safe dicts.
         out_items: list[dict[str, Any]] = []
@@ -212,7 +229,20 @@ def build_memory_kg_effect_handlers(
         limit = max(1, min(limit, 10_000))
         out_items = out_items[:limit]
 
-        return EffectOutcome.completed({"ok": True, "count": len(out_items), "items": out_items})
+        if not out_items and errors:
+            return EffectOutcome.completed(
+                {
+                    "ok": False,
+                    "count": 0,
+                    "items": [],
+                    "error": " | ".join([e for e in errors if str(e).strip()]),
+                }
+            )
+
+        result: dict[str, Any] = {"ok": True, "count": len(out_items), "items": out_items}
+        if errors:
+            result["warnings"] = [e for e in errors if str(e).strip()]
+        return EffectOutcome.completed(result)
 
     return {
         EffectType.MEMORY_KG_ASSERT: _handle_assert,

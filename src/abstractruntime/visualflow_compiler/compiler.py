@@ -852,10 +852,34 @@ def _create_visual_agent_effect_handler(
             bucket["scratchpad"] = scratchpad
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
 
+            # Expose an Agent-friendly context object that includes the accumulated
+            # conversation history from the ReAct subworkflow (context.messages).
+            #
+            # Previously, the Agent result echoed the input `context` pin, which is
+            # often `{}` and does not reflect the agent's internal message history.
+            context_out: Dict[str, Any] = {}
+            if isinstance(context, dict) and context:
+                for k, v in context.items():
+                    if k in ("task", "messages"):
+                        continue
+                    context_out[str(k)] = v
+            context_out["task"] = str(task or "")
+
+            raw_messages = output_dict.get("messages")
+            if isinstance(raw_messages, list):
+                context_out["messages"] = [dict(m) if isinstance(m, dict) else m for m in raw_messages]
+            else:
+                msgs: list[Dict[str, Any]] = []
+                if str(task or "").strip():
+                    msgs.append({"role": "user", "content": str(task)})
+                if answer.strip():
+                    msgs.append({"role": "assistant", "content": answer})
+                context_out["messages"] = msgs
+
             result_obj = {
                 "result": answer,
                 "task": task,
-                "context": context,
+                "context": context_out,
                 "success": True,
                 "provider": provider,
                 "model": model,

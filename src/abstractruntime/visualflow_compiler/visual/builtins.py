@@ -552,6 +552,42 @@ def data_make_context(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return {"context": out}
 
 
+def data_add_message(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a canonical message object for context.messages.
+
+    Shape:
+    {
+      "role": "...",
+      "content": "...",
+      "timestamp": "<utc iso>",
+      "metadata": {"message_id": "msg_<hex>"}
+    }
+    """
+    role_raw = inputs.get("role")
+    role = str(role_raw) if role_raw is not None else "user"
+
+    content_raw = inputs.get("content")
+    content = str(content_raw) if content_raw is not None else ""
+
+    try:
+        from datetime import timezone
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        timestamp = datetime.utcnow().isoformat() + "Z"
+
+    import uuid
+
+    return {
+        "message": {
+            "role": role,
+            "content": content,
+            "timestamp": timestamp,
+            "metadata": {"message_id": f"msg_{uuid.uuid4().hex}"},
+        }
+    }
+
+
 def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Build a host-facing meta envelope (portable, no strict schema enforcement)."""
     extra = inputs.get("extra")
@@ -1107,6 +1143,7 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "merge": data_merge,
     "make_object": data_make_object,
     "make_context": data_make_context,
+    "add_message": data_add_message,
     "make_meta": data_make_meta,
     "make_scratchpad": data_make_scratchpad,
     "make_raw_result": data_make_raw_result,

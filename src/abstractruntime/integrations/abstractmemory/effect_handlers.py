@@ -92,6 +92,15 @@ def build_memory_kg_effect_handlers(
     if not callable(getattr(store, "add", None)) or not callable(getattr(store, "query", None)):
         raise TypeError("store must provide add(...) and query(...) methods (abstractmemory TripleStore contract)")
 
+    def _store_warning() -> Optional[str]:
+        name = store.__class__.__name__
+        if name == "InMemoryTripleStore":
+            return (
+                "AbstractMemory KG store is running in-memory (process-local, non-durable). "
+                "Install `AbstractMemory[lancedb]` (or `lancedb`) for persistence across server restarts."
+            )
+        return None
+
     def _normalize_assertions(raw: Any) -> list[dict[str, Any]]:
         if raw is None:
             return []
@@ -162,7 +171,11 @@ def build_memory_kg_effect_handlers(
         except Exception as e:
             return EffectOutcome.failed(f"MEMORY_KG_ASSERT store.add failed: {e}")
 
-        return EffectOutcome.completed({"ok": True, "count": len(ids), "assertion_ids": ids})
+        result: dict[str, Any] = {"ok": True, "count": len(ids), "assertion_ids": ids}
+        warn = _store_warning()
+        if warn:
+            result["warnings"] = [warn]
+        return EffectOutcome.completed(result)
 
     def _handle_query(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         del default_next_node
@@ -240,8 +253,20 @@ def build_memory_kg_effect_handlers(
             )
 
         result: dict[str, Any] = {"ok": True, "count": len(out_items), "items": out_items}
+        warn = _store_warning()
+        if warn:
+            warnings = result.get("warnings")
+            if isinstance(warnings, list):
+                warnings.append(warn)
+            else:
+                result["warnings"] = [warn]
         if errors:
-            result["warnings"] = [e for e in errors if str(e).strip()]
+            cur = result.get("warnings")
+            merged: list[str] = []
+            if isinstance(cur, list):
+                merged.extend([str(x) for x in cur if str(x).strip()])
+            merged.extend([e for e in errors if str(e).strip()])
+            result["warnings"] = merged
         return EffectOutcome.completed(result)
 
     return {

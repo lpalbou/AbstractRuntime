@@ -22,6 +22,7 @@ from .adapters.effect_adapter import (
     create_memory_rehydrate_handler,
     create_llm_call_handler,
     create_tool_calls_handler,
+    create_call_tool_handler,
     create_start_subworkflow_handler,
 )
 
@@ -173,6 +174,14 @@ def _create_effect_node_handler(
         )
     elif effect_type == "tool_calls":
         base_handler = create_tool_calls_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+            allowed_tools=effect_config.get("allowed_tools") if isinstance(effect_config, dict) else None,
+        )
+    elif effect_type == "call_tool":
+        base_handler = create_call_tool_handler(
             node_id=node_id,
             next_node=next_node,
             input_key=input_key,
@@ -1313,6 +1322,29 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     current["success"] = all(isinstance(r, dict) and r.get("success") is True for r in results)
                 current["raw"] = raw
                 mapped_value = current["results"]
+        elif effect_type == "call_tool":
+            # Convenience wrapper over TOOL_CALLS: expose a single tool's outcome as
+            # (result, success) instead of an array of per-call results.
+            if isinstance(raw, dict):
+                mode = raw.get("mode")
+                results = raw.get("results")
+                if not isinstance(results, list):
+                    results = []
+                first = results[0] if results else None
+
+                if isinstance(mode, str) and mode.strip() and mode != "executed":
+                    current["success"] = False
+                    current["result"] = f"Tool execution not completed (mode={mode})"
+                elif isinstance(first, dict):
+                    ok = first.get("success") is True
+                    current["success"] = ok
+                    current["result"] = first.get("output") if ok else (first.get("error") or "Tool execution failed")
+                else:
+                    current["success"] = False
+                    current["result"] = "Missing tool result"
+
+                current["raw"] = raw
+                mapped_value = current["result"]
         elif effect_type == "agent":
             current["result"] = raw
             scratchpad = None

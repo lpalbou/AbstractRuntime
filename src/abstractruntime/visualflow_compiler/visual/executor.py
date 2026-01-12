@@ -121,7 +121,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return False
         # These nodes are pure (data-only) even if the JSON document omitted template pins.
         # This keeps programmatic tests and host-built VisualFlows portable.
-        if type_str in {"get_var", "bool_var", "var_decl"}:
+        if type_str in {"get_var", "get_context", "bool_var", "var_decl"}:
             return False
         if type_str == "break_object":
             return False
@@ -183,6 +183,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "answer_user",
         "llm_call",
         "tool_calls",
+        "call_tool",
         "wait_until",
         "wait_event",
         "emit_event",
@@ -604,6 +605,35 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if not isinstance(run_vars, dict) or not name:
                 return {"value": None}
             return {"value": _get_by_path(run_vars, name)}
+
+        return handler
+
+    def _create_get_context_handler(_data: Dict[str, Any]):
+        # Pure node: reads from the current run vars (attached onto the Flow by the compiler).
+        # Mark as volatile so it is recomputed whenever requested (avoids stale cached reads).
+        def handler(_input_data: Any) -> Dict[str, Any]:
+            del _input_data
+            run_vars = getattr(flow, "_run_vars", None)  # type: ignore[attr-defined]
+            if not isinstance(run_vars, dict):
+                return {"context": {}, "task": "", "messages": []}
+
+            ctx = run_vars.get("context")
+            ctx_dict = ctx if isinstance(ctx, dict) else {}
+
+            task = ctx_dict.get("task")
+            task_str = task if isinstance(task, str) else str(task or "")
+
+            msgs = ctx_dict.get("messages")
+            if isinstance(msgs, list):
+                messages = msgs
+            elif isinstance(msgs, tuple):
+                messages = list(msgs)
+            elif msgs is None:
+                messages = []
+            else:
+                messages = [msgs]
+
+            return {"context": ctx_dict, "task": task_str, "messages": messages}
 
         return handler
 
@@ -1222,6 +1252,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_llm_call_handler(data, effect_config)
         if effect_type == "tool_calls":
             return _create_tool_calls_handler(data, effect_config)
+        if effect_type == "call_tool":
+            return _create_call_tool_handler(data, effect_config)
         if effect_type == "wait_until":
             return _create_wait_until_handler(data, effect_config)
         if effect_type == "wait_event":
@@ -1303,6 +1335,70 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             return {
                 "results": None,
+                "success": None,
+                "_pending_effect": pending,
+            }
+
+        return handler
+
+    def _create_call_tool_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        import json
+
+        allowed_default = None
+        if isinstance(config, dict):
+            raw = config.get("allowed_tools")
+            if raw is None:
+                raw = config.get("allowedTools")
+            allowed_default = raw
+
+        def _normalize_str_list(raw: Any) -> list[str]:
+            if not isinstance(raw, list):
+                return []
+            out: list[str] = []
+            for x in raw:
+                if isinstance(x, str) and x.strip():
+                    out.append(x.strip())
+            return out
+
+        def _normalize_tool_call(raw: Any) -> Optional[Dict[str, Any]]:
+            if raw is None:
+                return None
+            if isinstance(raw, dict):
+                return dict(raw)
+            if isinstance(raw, str) and raw.strip():
+                # Best-effort: tolerate JSON strings coming from stringify/parse nodes.
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    return None
+                if isinstance(parsed, dict):
+                    return dict(parsed)
+            return None
+
+        def handler(input_data: Any):
+            payload = input_data if isinstance(input_data, dict) else {}
+
+            raw_call = payload.get("tool_call")
+            if raw_call is None:
+                raw_call = payload.get("toolCall")
+            tool_call = _normalize_tool_call(raw_call)
+            tool_calls = [tool_call] if isinstance(tool_call, dict) else []
+
+            allow_specified = "allowed_tools" in payload or "allowedTools" in payload
+            allowed_raw = payload.get("allowed_tools")
+            if allowed_raw is None:
+                allowed_raw = payload.get("allowedTools")
+            allowed_tools = _normalize_str_list(allowed_raw) if allow_specified else []
+            if not allow_specified:
+                allowed_tools = _normalize_str_list(allowed_default)
+
+            pending: Dict[str, Any] = {"type": "tool_calls", "tool_calls": tool_calls}
+            # Only include allowlist when explicitly provided (empty list means "allow none").
+            if allow_specified or isinstance(allowed_default, list):
+                pending["allowed_tools"] = allowed_tools
+
+            return {
+                "result": None,
                 "success": None,
                 "_pending_effect": pending,
             }
@@ -2072,6 +2168,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if type_str == "get_var":
             return _create_get_var_handler(data)
 
+        if type_str == "get_context":
+            return _create_get_context_handler(data)
+
         if type_str == "bool_var":
             return _create_bool_var_handler(data)
 
@@ -2171,7 +2270,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if not _has_execution_pins(type_str, node.data):
             pure_base_handlers[node.id] = base_handler
             pure_node_ids.add(node.id)
-            if type_str in {"get_var", "bool_var", "var_decl"}:
+            if type_str in {"get_var", "get_context", "bool_var", "var_decl"}:
                 volatile_pure_node_ids.add(node.id)
             continue
 

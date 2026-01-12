@@ -848,6 +848,83 @@ def create_tool_calls_handler(
     return handler
 
 
+def create_call_tool_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+    allowed_tools: Optional[List[str]] = None,
+) -> Callable:
+    """Create a node handler that executes a single tool call via AbstractRuntime.
+
+    This is a convenience wrapper over `EffectType.TOOL_CALLS` that accepts a single
+    tool call dict (instead of an array) and returns a 1-element tool_calls list.
+
+    Inputs:
+    - `tool_call`: dict in the common shape `{name, arguments, call_id?}`.
+    - Optional `allowed_tools`: list[str] allowlist. If provided as a list, the
+      runtime effect handler enforces it (empty list => allow none).
+    """
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def _normalize_tool_call(raw: Any) -> Optional[Dict[str, Any]]:
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return dict(raw)
+        return None
+
+    def _normalize_str_list(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        for x in raw:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+        return out
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        tool_call: Optional[Dict[str, Any]] = None
+        allowlist: Optional[list[str]] = list(allowed_tools) if isinstance(allowed_tools, list) else None
+
+        if isinstance(input_data, dict):
+            raw_call = input_data.get("tool_call")
+            if raw_call is None:
+                raw_call = input_data.get("toolCall")
+            tool_call = _normalize_tool_call(raw_call)
+
+            # Optional override when the input explicitly provides an allowlist.
+            if "allowed_tools" in input_data or "allowedTools" in input_data:
+                raw_allowed = input_data.get("allowed_tools")
+                if raw_allowed is None:
+                    raw_allowed = input_data.get("allowedTools")
+                allowlist = _normalize_str_list(raw_allowed)
+        else:
+            tool_call = _normalize_tool_call(input_data)
+
+        payload: Dict[str, Any] = {"tool_calls": [tool_call] if isinstance(tool_call, dict) else []}
+        if isinstance(allowlist, list):
+            payload["allowed_tools"] = _normalize_str_list(allowlist)
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(
+                type=EffectType.TOOL_CALLS,
+                payload=payload,
+                result_key=output_key or "_temp.call_tool",
+            ),
+            next_node=next_node,
+        )
+
+    return handler
+
+
 def create_start_subworkflow_handler(
     node_id: str,
     next_node: Optional[str],

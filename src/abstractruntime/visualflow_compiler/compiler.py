@@ -926,7 +926,107 @@ def _create_visual_agent_effect_handler(
                                 meta["sub_run_id"] = sub_run_id
                             msgs.append({"role": role, "content": text, "metadata": meta})
 
+                        def _truncate(text: str, *, max_chars: int) -> str:
+                            if max_chars <= 0:
+                                return text
+                            if len(text) <= max_chars:
+                                return text
+                            suffix = f"\n… (truncated, {len(text):,} chars total)"
+                            keep = max_chars - len(suffix)
+                            if keep < 200:
+                                keep = max_chars
+                                suffix = ""
+                            return text[:keep].rstrip() + suffix
+
+                        def _append_tool_observations() -> None:
+                            # Persist a compact transcript of tool results executed by this Agent sub-run.
+                            # This is critical for outer loops (e.g. RALPH) that re-invoke the agent and
+                            # need evidence continuity to avoid repeating the same tool calls forever.
+                            if not isinstance(tr, list) or not tr:
+                                return
+
+                            # Optional: attach arguments when available (from tool_calls).
+                            call_by_id: Dict[str, Dict[str, Any]] = {}
+                            if isinstance(tc, list):
+                                for c in tc:
+                                    if not isinstance(c, dict):
+                                        continue
+                                    cid = str(c.get("call_id") or "").strip()
+                                    if cid:
+                                        call_by_id[cid] = dict(c)
+
+                            max_results = 20
+                            for i, r in enumerate(tr[:max_results]):
+                                if not isinstance(r, dict):
+                                    continue
+                                name = str(r.get("name") or "tool").strip() or "tool"
+                                call_id = str(r.get("call_id") or "").strip()
+                                success = bool(r.get("success"))
+
+                                args = None
+                                if call_id and call_id in call_by_id:
+                                    raw_args = call_by_id[call_id].get("arguments")
+                                    if isinstance(raw_args, dict) and raw_args:
+                                        args = raw_args
+
+                                output = r.get("output")
+                                error = r.get("error")
+
+                                try:
+                                    rendered_out = json.dumps(output, ensure_ascii=False, indent=2) if isinstance(output, (dict, list)) else str(output or "")
+                                except Exception:
+                                    rendered_out = "" if output is None else str(output)
+                                rendered_out = rendered_out.strip()
+
+                                details = str(error or rendered_out).strip() if not success else rendered_out
+                                if args is not None:
+                                    try:
+                                        args_txt = json.dumps(args, ensure_ascii=False, sort_keys=True)
+                                    except Exception:
+                                        args_txt = str(args)
+                                    details = f"args={args_txt}\n{details}".strip()
+
+                                details = _truncate(details, max_chars=2000)
+                                content = f"[{name}]: {details}" if success else f"[{name}]: Error: {details}"
+
+                                # Store as an assistant message for broad provider compatibility.
+                                # (Some OpenAI-compatible servers are strict about role='tool' message shape.)
+                                suffix = f"tool:{call_id or i}"
+                                mid = f"agent:{sub_run_id or run.run_id}:{node_id}:{suffix}"
+                                if _has_message_id(mid):
+                                    continue
+                                meta: Dict[str, Any] = {
+                                    "kind": "tool_observation",
+                                    "node_id": node_id,
+                                    "message_id": mid,
+                                    "tool_name": name,
+                                    "success": success,
+                                }
+                                if call_id:
+                                    meta["call_id"] = call_id
+                                if sub_run_id:
+                                    meta["sub_run_id"] = sub_run_id
+                                msgs.append({"role": "assistant", "content": content, "metadata": meta})
+
+                            if len(tr) > max_results:
+                                omitted = len(tr) - max_results
+                                mid = f"agent:{sub_run_id or run.run_id}:{node_id}:tool:omitted"
+                                if not _has_message_id(mid):
+                                    msgs.append(
+                                        {
+                                            "role": "assistant",
+                                            "content": f"[tools]: (omitted {omitted} additional tool results for brevity; see sub_run_id={sub_run_id})",
+                                            "metadata": {
+                                                "kind": "tool_observation_summary",
+                                                "node_id": node_id,
+                                                "message_id": mid,
+                                                "sub_run_id": sub_run_id,
+                                            },
+                                        }
+                                    )
+
                         _append("user", task, suffix="task")
+                        _append_tool_observations()
                         _append("assistant", answer, suffix="answer")
                         bucket["context_appended_sub_run_id"] = sub_run_id
             except Exception:
@@ -2325,6 +2425,16 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
 
             data_aware_handler = handler_obj if callable(handler_obj) else None
             handlers[node_id] = create_set_var_node_handler(
+                node_id=node_id,
+                next_node=next_node,
+                data_aware_handler=data_aware_handler,
+                flow=flow,
+            )
+        elif visual_type == "add_message":
+            from .adapters.context_adapter import create_add_message_node_handler
+
+            data_aware_handler = handler_obj if callable(handler_obj) else None
+            handlers[node_id] = create_add_message_node_handler(
                 node_id=node_id,
                 next_node=next_node,
                 data_aware_handler=data_aware_handler,

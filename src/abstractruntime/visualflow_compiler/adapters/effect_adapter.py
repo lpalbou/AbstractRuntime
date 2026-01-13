@@ -526,6 +526,12 @@ def create_memory_kg_query_handler(
                 v = input_data.get(k)
                 if isinstance(v, str) and v.strip():
                     payload[k] = v.strip()
+            min_score = input_data.get("min_score")
+            if min_score is not None and not isinstance(min_score, bool):
+                try:
+                    payload["min_score"] = float(min_score)
+                except Exception:
+                    pass
             limit = input_data.get("limit")
             if limit is None:
                 limit = input_data.get("limit_spans")

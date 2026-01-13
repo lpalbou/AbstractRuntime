@@ -189,6 +189,18 @@ def build_memory_kg_effect_handlers(
         if scope not in {"run", "session", "global", "all"}:
             return EffectOutcome.completed({"ok": False, "count": 0, "items": [], "error": f"Unknown memory scope: {scope}"})
 
+        def _parse_min_score() -> Optional[float]:
+            raw = payload.get("min_score")
+            if raw is None:
+                return None
+            try:
+                val = float(raw)
+            except Exception:
+                return None
+            if not (val == val):  # NaN
+                return None
+            return val
+
         def _one_query(*, scope_label: str, owner_id2: str) -> list[Any]:
             q = TripleQuery(
                 subject=str(payload.get("subject")).strip() if isinstance(payload.get("subject"), str) else None,
@@ -202,6 +214,7 @@ def build_memory_kg_effect_handlers(
                 query_text=str(payload.get("query_text")).strip() if isinstance(payload.get("query_text"), str) else None,
                 limit=int(payload.get("limit") or 100),
                 order=str(payload.get("order") or "desc"),
+                min_score=_parse_min_score(),
             )
             return store.query(q)
 
@@ -236,8 +249,32 @@ def build_memory_kg_effect_handlers(
                 if isinstance(d, dict):
                     out_items.append(d)
 
-        # Sort by observed_at desc (stable default).
-        out_items.sort(key=lambda d: str(d.get("observed_at") or ""), reverse=True)
+        # Ordering:
+        # - Pattern queries (no query_text/query_vector): observed_at (asc/desc)
+        # - Semantic queries: preserve similarity ranking via `_retrieval.score` (desc),
+        #   tie-break by observed_at desc for stability.
+        query_text_raw = payload.get("query_text")
+        is_semantic = isinstance(query_text_raw, str) and query_text_raw.strip().lower() != ""
+
+        def _observed_at_key(d: dict[str, Any]) -> str:
+            return str(d.get("observed_at") or "")
+
+        if is_semantic:
+            def _score(d: dict[str, Any]) -> float:
+                attrs = d.get("attributes")
+                if isinstance(attrs, dict):
+                    ret = attrs.get("_retrieval")
+                    if isinstance(ret, dict):
+                        s = ret.get("score")
+                        if isinstance(s, (int, float)):
+                            return float(s)
+                return float("-inf")
+
+            out_items.sort(key=lambda d: (_score(d), _observed_at_key(d)), reverse=True)
+        else:
+            order = str(payload.get("order") or "desc").strip().lower()
+            reverse = order != "asc"
+            out_items.sort(key=_observed_at_key, reverse=reverse)
         limit = int(payload.get("limit") or 100)
         limit = max(1, min(limit, 10_000))
         out_items = out_items[:limit]

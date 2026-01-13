@@ -2081,6 +2081,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 if isinstance(v, str) and v.strip():
                     pending[k] = v.strip()
 
+            min_score = payload.get("min_score")
+            if min_score is not None and not isinstance(min_score, bool):
+                try:
+                    pending["min_score"] = float(min_score)
+                except Exception:
+                    pass
+
             limit = payload.get("limit")
             if limit is not None and not isinstance(limit, bool):
                 try:

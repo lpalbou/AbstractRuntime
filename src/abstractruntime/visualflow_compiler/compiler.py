@@ -577,11 +577,24 @@ def _create_visual_agent_effect_handler(
             "provider": provider,
             "model": model,
             "allowed_tools": list(allowed_tools),
-            "temperature": float(temperature),
-            "seed": int(seed),
         }
+        # Sampling controls:
+        # - Do NOT force default values into the child runtime vars.
+        # - When unset, step-level agent defaults (e.g. lower temperature for tool-followthrough)
+        #   must be able to take effect.
+        #
+        # Policy:
+        # - temperature: only include when it differs from the framework default (0.7)
+        # - seed: only include when explicitly set (>= 0)
+        if abs(float(temperature) - 0.7) > 1e-9:
+            runtime_ns["temperature"] = float(temperature)
+        if int(seed) >= 0:
+            runtime_ns["seed"] = int(seed)
         if isinstance(system_prompt, str) and system_prompt.strip():
-            runtime_ns["system_prompt"] = system_prompt
+            # IMPORTANT: Visual Agent `system` pin provides *additional* high-priority instructions.
+            # We keep the canonical ReAct system prompt (iteration framing + evidence/tool-use rules)
+            # and append this extra guidance so tool-followthrough remains robust.
+            runtime_ns["system_prompt_extra"] = system_prompt
 
         return {
             "context": ctx_ns,

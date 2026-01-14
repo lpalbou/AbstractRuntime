@@ -14,7 +14,10 @@ from typing import Any, Dict, Optional
 
 from .vars import DEFAULT_MAX_TOKENS
 
-DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS = 50000
+# Truncation policy: keep mechanisms, but default to disabled.
+# A positive value enables a conservative auto-cap for `max_input_tokens` when callers do not
+# explicitly set an input budget. `-1` disables this cap (no automatic truncation).
+DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS = -1
 
 
 @dataclass(frozen=True)
@@ -82,9 +85,8 @@ class RuntimeConfig:
             # Best-effort: persist the provider/model default so agent logic can reason about
             # output-size constraints (e.g., chunk large tool arguments like file contents).
             max_output_tokens = self.model_capabilities.get("max_output_tokens")
-        if max_output_tokens is None:
-            # Conservative fallback when capabilities are unavailable.
-            max_output_tokens = 4096
+        # If capabilities are unavailable and max_output_tokens is unset, keep it as None
+        # (meaning: provider default). Do not force a conservative output cap here.
 
         # ADR-0008 alignment:
         # - max_tokens: total context window size
@@ -109,32 +111,30 @@ class RuntimeConfig:
             and max_tokens_int > 0
             and max_output_int is not None
             and max_output_int >= 0
+            and effective_max_input_tokens is not None
         ):
+            # If callers explicitly set max_input_tokens, clamp it to the context-window constraint.
             max_allowed_in = max(0, int(max_tokens_int) - int(max_output_int) - int(delta))
-            if effective_max_input_tokens is None:
+            try:
+                effective_max_input_tokens = int(effective_max_input_tokens)
+            except Exception:
                 effective_max_input_tokens = max_allowed_in
-            else:
-                try:
-                    effective_max_input_tokens = int(effective_max_input_tokens)
-                except Exception:
-                    effective_max_input_tokens = max_allowed_in
-                if effective_max_input_tokens < 0:
-                    effective_max_input_tokens = 0
-                if effective_max_input_tokens > max_allowed_in:
-                    effective_max_input_tokens = max_allowed_in
+            if effective_max_input_tokens < 0:
+                effective_max_input_tokens = 0
+            if effective_max_input_tokens > max_allowed_in:
+                effective_max_input_tokens = max_allowed_in
 
-            # Default policy (heuristic): many models degrade with extremely large inputs.
-            #
-            # When callers do not explicitly set `max_input_tokens`, we apply a conservative cap
-            # so hosts/workflows get a bounded “thinking window” by default. Individual LLM calls
-            # (or sub-runs) can still override this via per-call/per-agent configuration.
-            if self.max_input_tokens is None and effective_max_input_tokens is not None:
-                try:
-                    effective_max_input_tokens = min(
-                        int(effective_max_input_tokens), int(DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS)
-                    )
-                except Exception:
-                    pass
+        # Optional conservative auto-cap (disabled by default with -1).
+        if (
+            self.max_input_tokens is None
+            and effective_max_input_tokens is not None
+            and isinstance(DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS, int)
+            and DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS > 0
+        ):
+            try:
+                effective_max_input_tokens = min(int(effective_max_input_tokens), int(DEFAULT_RECOMMENDED_MAX_INPUT_TOKENS))
+            except Exception:
+                pass
 
         return {
             # Iteration control

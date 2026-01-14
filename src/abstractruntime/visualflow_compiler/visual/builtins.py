@@ -1045,6 +1045,148 @@ def data_agent_trace_report(inputs: Dict[str, Any]) -> str:
     return runtime_render_agent_trace_markdown(scratchpad)
 
 
+def data_format_tool_results(inputs: Dict[str, Any]) -> str:
+    """Render Tool Calls `results` into a condensed, human-readable digest string.
+
+    Expected input shape (Tool Calls node output):
+      results: [{call_id, name, success, output, error}, ...]
+
+    The Tool Calls node does not currently include the original arguments, so this
+    formatter best-effort derives a “primary” argument from:
+    - `result.arguments` (when present)
+    - the tool output object (e.g. execute_command.output.command)
+
+    When available, tool specs (AbstractCore ToolDefinitions) are used to pick a
+    stable primary key without hardcoding tool parameter names.
+    """
+
+    raw = inputs.get("tool_results")
+    if raw is None:
+        raw = inputs.get("results")
+
+    items: list[Any]
+    if raw is None:
+        items = []
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = [raw]
+
+    tool_specs_by_name: Dict[str, Dict[str, Any]] = {}
+    try:
+        from abstractruntime.integrations.abstractcore.default_tools import list_default_tool_specs
+
+        for s in list_default_tool_specs():
+            if not isinstance(s, dict):
+                continue
+            name = s.get("name")
+            if isinstance(name, str) and name.strip():
+                tool_specs_by_name[name.strip()] = dict(s)
+    except Exception:
+        tool_specs_by_name = {}
+
+    def _clamp(text: str, max_len: int) -> str:
+        s = str(text or "").strip()
+        if len(s) <= max_len:
+            return s
+        return f"{s[: max(0, max_len - 1)]}…"
+
+    def _one_line(text: str) -> str:
+        s = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        s = " ".join([p for p in s.split("\n") if p.strip()])
+        return s.strip()
+
+    def _format_value(value: Any, max_len: int = 160) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            return _clamp(_one_line(value), max_len=max_len)
+        try:
+            return _clamp(_one_line(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)), max_len=max_len)
+        except Exception:
+            return _clamp(_one_line(str(value)), max_len=max_len)
+
+    def _primary_key_order(name: str, args_obj: Dict[str, Any], out_obj: Dict[str, Any]) -> list[str]:
+        spec = tool_specs_by_name.get(str(name or "").strip()) or {}
+        order: list[str] = []
+        required = spec.get("required_args")
+        if isinstance(required, list):
+            for k in required:
+                if isinstance(k, str) and k.strip():
+                    order.append(k.strip())
+        if not order:
+            params = spec.get("parameters")
+            if isinstance(params, dict):
+                for k in params.keys():
+                    if isinstance(k, str) and k.strip():
+                        order.append(k.strip())
+        if not order:
+            for k in list(args_obj.keys()) + list(out_obj.keys()):
+                if isinstance(k, str) and k.strip() and k not in order:
+                    order.append(k.strip())
+        return order
+
+    def _signature(name: str, args_obj: Dict[str, Any], out_obj: Dict[str, Any]) -> str:
+        tool = str(name or "").strip() or "tool"
+        order = _primary_key_order(tool, args_obj, out_obj)
+        primary_val: Any = None
+        for k in order:
+            if k in args_obj and args_obj.get(k) is not None:
+                primary_val = args_obj.get(k)
+                break
+        if primary_val is None:
+            for k in order:
+                if k in out_obj and out_obj.get(k) is not None:
+                    primary_val = out_obj.get(k)
+                    break
+        if primary_val is None:
+            return f"{tool}()"
+        return f"{tool}({_format_value(primary_val)})"
+
+    lines: list[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or it.get("tool") or "").strip() or "tool"
+        success_raw = it.get("success")
+        success = success_raw if isinstance(success_raw, bool) else None
+        error_raw = it.get("error")
+        error = str(error_raw).strip() if isinstance(error_raw, str) else (str(error_raw).strip() if error_raw is not None else "")
+        output = it.get("output")
+        args_obj = it.get("arguments") if isinstance(it.get("arguments"), dict) else {}
+        out_obj = output if isinstance(output, dict) else {}
+
+        sig = _signature(name, args_obj, out_obj)
+        status = "SUCCESS" if success is True else "FAILURE" if success is False else "DONE"
+
+        if success is False and error:
+            obs = error
+        else:
+            if isinstance(output, dict):
+                rendered = output.get("rendered")
+                if isinstance(rendered, str) and rendered.strip():
+                    obs = rendered.strip()
+                else:
+                    obs = _format_value(output, max_len=420)
+            elif isinstance(output, str):
+                obs = _clamp(_one_line(output), max_len=420)
+            elif output is None:
+                obs = "(no output)"
+            else:
+                obs = _clamp(_one_line(str(output)), max_len=420)
+
+        if not obs.strip():
+            obs = "(no output)"
+
+        lines.append(f"- {sig} [{status}] : {obs}")
+
+    return "\n".join(lines).strip()
+
+
 # Literal value handlers - return configured constant values
 def literal_string(inputs: Dict[str, Any]) -> str:
     """Return string literal value."""
@@ -1157,6 +1299,7 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "array_dedup": data_array_dedup,
     "parse_json": data_parse_json,
     "stringify_json": data_stringify_json,
+    "format_tool_results": data_format_tool_results,
     "agent_trace_report": data_agent_trace_report,
     "system_datetime": system_datetime,
     # Literals

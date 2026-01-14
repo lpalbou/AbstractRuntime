@@ -323,6 +323,12 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         if not prompt and not messages:
             return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")
 
+        # Some agent loops (notably ReAct) require a strict "no in-loop truncation" policy for
+        # correctness: every iteration must see the full scratchpad/history accumulated so far.
+        # These runs can opt out of runtime-level input trimming via `_runtime.disable_input_trimming`.
+        runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        disable_input_trimming = bool(runtime_ns.get("disable_input_trimming")) if isinstance(runtime_ns, dict) else False
+
         # Enforce a per-call (or per-run) input-token budget by trimming oldest non-system messages.
         #
         # This is separate from provider limits: it protects reasoning quality and latency by keeping
@@ -340,7 +346,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         except Exception:
             max_input_tokens = None
 
-        if isinstance(max_input_tokens, int) and max_input_tokens > 0 and isinstance(messages, list) and messages:
+        if not disable_input_trimming and isinstance(max_input_tokens, int) and max_input_tokens > 0 and isinstance(messages, list) and messages:
             try:
                 from abstractruntime.memory.token_budget import trim_messages_to_max_input_tokens
 

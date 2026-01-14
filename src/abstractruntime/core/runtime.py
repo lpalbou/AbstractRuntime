@@ -1859,6 +1859,7 @@ class Runtime:
                         "sub_run_id": sub_run_id,
                         "sub_workflow_id": workflow_id,
                         "async": True,
+                        "include_traces": include_traces,
                     },
                 )
                 return EffectOutcome.waiting(wait)
@@ -1896,6 +1897,7 @@ class Runtime:
                 details={
                     "sub_run_id": sub_run_id,
                     "sub_workflow_id": workflow_id,
+                    "include_traces": include_traces,
                     "sub_waiting": {
                         "reason": sub_state.waiting.reason.value if sub_state.waiting else None,
                         "wait_key": sub_state.waiting.wait_key if sub_state.waiting else None,

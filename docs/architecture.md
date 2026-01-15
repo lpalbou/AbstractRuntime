@@ -154,12 +154,23 @@ These traces support host UX needs (scratchpad/trace views) without inventing ho
 
 ## Scheduling (Time-Based Waits)
 
-Time-based waits (`WAIT_UNTIL`) are durable. To advance them, a host needs to tick due runs. AbstractRuntime provides:
-- `create_scheduled_runtime(...)` and a `Scheduler` (`abstractruntime/src/abstractruntime/scheduler/*`)
+`WAIT_UNTIL` is a **durable wait state**, not a background timer. Time does not advance “by itself”:
+AbstractRuntime will only resume a time-based wait when **some host process** calls `Runtime.tick(...)`.
 
-Hosts can run a scheduler loop to periodically:
-- query due `WAIT_UNTIL` runs (requires a queryable run store)
-- tick them forward
+Common driver loops:
+- `abstractruntime.scheduler.Scheduler` (`abstractruntime/src/abstractruntime/scheduler/*`): a background polling loop that queries `QueryableRunStore.list_due_wait_until(...)` and ticks due runs.
+- `abstractgateway.runner.GatewayRunner`: the gateway’s background worker that ticks RUNNING runs and resumes due `WAIT_UNTIL` runs (in addition to applying durable commands).
+
+Crash / downtime behavior:
+- While the driver process is down, waiting runs do not progress.
+- On restart, any run with `waiting.until <= now` becomes eligible and will resume on the next poll cycle.
+- Practical start latency is bounded by `downtime + poll_interval`.
+
+Repeat semantics (important):
+- `WAIT_UNTIL` stores an **absolute** ISO timestamp, but repeating schedules are implemented by computing a new `until` each cycle.
+- VisualFlow’s `on_schedule` interval form (e.g. `"20m"`) currently computes `until = now + interval` when the node executes, so a restart introduces drift (it is “every N minutes after the last execution”, not “fixed wall-clock offsets”).
+
+See `docs/guide/scheduled-workflows.md` for end-to-end gateway examples and recommended patterns.
 
 ## Eventing (WAIT_EVENT / EMIT_EVENT)
 

@@ -1086,50 +1086,106 @@ class Runtime:
         stored_payload: Dict[str, Any] = payload
 
         if result_key:
-            # Tool waits may carry blocked-by-allowlist metadata. External hosts typically only execute
-            # the filtered subset of tool calls and resume with results for those calls. To keep agent
-            # semantics correct (and evidence indices aligned), merge blocked entries back into the
-            # resumed payload deterministically.
-            merged_payload: Dict[str, Any] = payload
-            try:
-                details = run.waiting.details if run.waiting is not None else None
-                if isinstance(details, dict):
-                    blocked = details.get("blocked_by_index")
-                    original_count = details.get("original_call_count")
-                    results = payload.get("results") if isinstance(payload, dict) else None
-                    if (
-                        isinstance(blocked, dict)
-                        and isinstance(original_count, int)
-                        and original_count > 0
-                        and isinstance(results, list)
-                        and len(results) != original_count
-                    ):
-                        merged_results: list[Any] = []
-                        executed_iter = iter(results)
+            details = run.waiting.details if run.waiting is not None else None
 
-                        for idx in range(original_count):
-                            blocked_entry = blocked.get(str(idx))
-                            if isinstance(blocked_entry, dict):
-                                merged_results.append(blocked_entry)
-                                continue
-                            try:
-                                merged_results.append(next(executed_iter))
-                            except StopIteration:
-                                merged_results.append(
-                                    {
-                                        "call_id": "",
-                                        "name": "",
-                                        "success": False,
-                                        "output": None,
-                                        "error": "Missing tool result",
-                                    }
-                                )
+            # Special case: subworkflow completion resumed as a tool-style observation.
+            if (
+                run.waiting.reason == WaitReason.SUBWORKFLOW
+                and isinstance(details, dict)
+                and bool(details.get("wrap_as_tool_result", False))
+                and isinstance(payload, dict)
+                and not ("mode" in payload and "results" in payload)
+            ):
+                tool_name = str(details.get("tool_name") or "start_subworkflow").strip() or "start_subworkflow"
+                call_id = str(details.get("call_id") or "subworkflow").strip() or "subworkflow"
+                sub_run_id = str(payload.get("sub_run_id") or details.get("sub_run_id") or "").strip()
+                child_output = payload.get("output")
 
-                        merged_payload = dict(payload)
-                        merged_payload["results"] = merged_results
-                        merged_payload.setdefault("mode", "executed")
-            except Exception:
+                answer = ""
+                report = ""
+                err = None
+                success = True
+                if isinstance(child_output, dict):
+                    # Generic failure envelope support (VisualFlow style).
+                    if child_output.get("success") is False:
+                        success = False
+                        err = str(child_output.get("error") or "Subworkflow failed")
+                    a = child_output.get("answer")
+                    if isinstance(a, str) and a.strip():
+                        answer = a.strip()
+                    r = child_output.get("report")
+                    if isinstance(r, str) and r.strip():
+                        report = r.strip()
+
+                if not answer:
+                    if isinstance(child_output, str) and child_output.strip():
+                        answer = child_output.strip()
+                    else:
+                        try:
+                            answer = json.dumps(child_output, ensure_ascii=False)
+                        except Exception:
+                            answer = "" if child_output is None else str(child_output)
+
+                tool_output: Dict[str, Any] = {"rendered": answer, "answer": answer, "sub_run_id": sub_run_id}
+                if report and len(report) <= 4000:
+                    tool_output["report"] = report
+
+                merged_payload: Dict[str, Any] = {
+                    "mode": "executed",
+                    "results": [
+                        {
+                            "call_id": call_id,
+                            "name": tool_name,
+                            "success": bool(success),
+                            "output": tool_output if success else None,
+                            "error": None if success else err,
+                        }
+                    ],
+                }
+            else:
+                # Tool waits may carry blocked-by-allowlist metadata. External hosts typically only execute
+                # the filtered subset of tool calls and resume with results for those calls. To keep agent
+                # semantics correct (and evidence indices aligned), merge blocked entries back into the
+                # resumed payload deterministically.
                 merged_payload = payload
+                try:
+                    if isinstance(details, dict):
+                        blocked = details.get("blocked_by_index")
+                        original_count = details.get("original_call_count")
+                        results = payload.get("results") if isinstance(payload, dict) else None
+                        if (
+                            isinstance(blocked, dict)
+                            and isinstance(original_count, int)
+                            and original_count > 0
+                            and isinstance(results, list)
+                            and len(results) != original_count
+                        ):
+                            merged_results: list[Any] = []
+                            executed_iter = iter(results)
+
+                            for idx in range(original_count):
+                                blocked_entry = blocked.get(str(idx))
+                                if isinstance(blocked_entry, dict):
+                                    merged_results.append(blocked_entry)
+                                    continue
+                                try:
+                                    merged_results.append(next(executed_iter))
+                                except StopIteration:
+                                    merged_results.append(
+                                        {
+                                            "call_id": "",
+                                            "name": "",
+                                            "success": False,
+                                            "output": None,
+                                            "error": "Missing tool result",
+                                        }
+                                    )
+
+                            merged_payload = dict(payload)
+                            merged_payload["results"] = merged_results
+                            merged_payload.setdefault("mode", "executed")
+                except Exception:
+                    merged_payload = payload
 
             _set_nested(run.vars, result_key, merged_payload)
             stored_payload = merged_payload
@@ -1799,11 +1855,77 @@ class Runtime:
             - Starts the subworkflow and returns immediately
             - Returns {"sub_run_id": "..."} so parent can track it
         """
+        payload0 = effect.payload if isinstance(effect.payload, dict) else {}
+        wrap_as_tool_result = bool(payload0.get("wrap_as_tool_result", False))
+        tool_name_raw = payload0.get("tool_name")
+        if tool_name_raw is None:
+            tool_name_raw = payload0.get("toolName")
+        tool_name = str(tool_name_raw or "").strip()
+        call_id_raw = payload0.get("call_id")
+        if call_id_raw is None:
+            call_id_raw = payload0.get("callId")
+        call_id = str(call_id_raw or "").strip()
+
+        def _tool_result(*, success: bool, output: Any, error: Optional[str]) -> Dict[str, Any]:
+            name = tool_name or "start_subworkflow"
+            cid = call_id or "subworkflow"
+            return {
+                "mode": "executed",
+                "results": [
+                    {
+                        "call_id": cid,
+                        "name": name,
+                        "success": bool(success),
+                        "output": output if success else None,
+                        "error": None if success else str(error or "Subworkflow failed"),
+                    }
+                ],
+            }
+
+        def _tool_output_for_subworkflow(*, sub_run_id: str, output: Any) -> Dict[str, Any]:
+            rendered = ""
+            answer = ""
+            report = ""
+            if isinstance(output, dict):
+                a = output.get("answer")
+                if isinstance(a, str) and a.strip():
+                    answer = a.strip()
+                r = output.get("report")
+                if isinstance(r, str) and r.strip():
+                    report = r.strip()
+            if not answer:
+                if isinstance(output, str) and output.strip():
+                    answer = output.strip()
+                else:
+                    try:
+                        answer = json.dumps(output, ensure_ascii=False)
+                    except Exception:
+                        answer = str(output)
+            rendered = answer
+            out = {"rendered": rendered, "answer": answer, "sub_run_id": str(sub_run_id)}
+            # Keep the tool observation bounded; the full child run can be inspected via run id if needed.
+            if report and len(report) <= 4000:
+                out["report"] = report
+            return out
+
         workflow_id = effect.payload.get("workflow_id")
         if not workflow_id:
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(_tool_result(success=False, output=None, error="start_subworkflow requires payload.workflow_id"))
             return EffectOutcome.failed("start_subworkflow requires payload.workflow_id")
 
         if self._workflow_registry is None:
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=False,
+                        output=None,
+                        error=(
+                            "start_subworkflow requires a workflow_registry. "
+                            "Set it via Runtime(workflow_registry=...) or runtime.set_workflow_registry(...)"
+                        ),
+                    )
+                )
             return EffectOutcome.failed(
                 "start_subworkflow requires a workflow_registry. "
                 "Set it via Runtime(workflow_registry=...) or runtime.set_workflow_registry(...)"
@@ -1812,6 +1934,10 @@ class Runtime:
         # Look up the subworkflow
         sub_workflow = self._workflow_registry.get(workflow_id)
         if sub_workflow is None:
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(success=False, output=None, error=f"Workflow '{workflow_id}' not found in registry")
+                )
             return EffectOutcome.failed(f"Workflow '{workflow_id}' not found in registry")
 
         sub_vars = effect.payload.get("vars") or {}
@@ -1862,9 +1988,22 @@ class Runtime:
                         "include_traces": include_traces,
                     },
                 )
+                if wrap_as_tool_result:
+                    if isinstance(wait.details, dict):
+                        wait.details["wrap_as_tool_result"] = True
+                        wait.details["tool_name"] = tool_name or "start_subworkflow"
+                        wait.details["call_id"] = call_id or "subworkflow"
                 return EffectOutcome.waiting(wait)
 
             # Fire-and-forget: caller is responsible for driving/observing the child.
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=True,
+                        output={"rendered": f"Started subworkflow {sub_run_id}", "sub_run_id": sub_run_id, "async": True},
+                        error=None,
+                    )
+                )
             return EffectOutcome.completed({"sub_run_id": sub_run_id, "async": True})
 
         # Sync mode: run the subworkflow until completion or waiting
@@ -1876,6 +2015,14 @@ class Runtime:
 
         if sub_state.status == RunStatus.COMPLETED:
             # Subworkflow completed - return its output
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=True,
+                        output=_tool_output_for_subworkflow(sub_run_id=sub_run_id, output=sub_state.output),
+                        error=None,
+                    )
+                )
             result: Dict[str, Any] = {"sub_run_id": sub_run_id, "output": sub_state.output}
             if include_traces:
                 result["node_traces"] = self.get_node_traces(sub_run_id)
@@ -1883,9 +2030,15 @@ class Runtime:
 
         if sub_state.status == RunStatus.FAILED:
             # Subworkflow failed - propagate error
-            return EffectOutcome.failed(
-                f"Subworkflow '{workflow_id}' failed: {sub_state.error}"
-            )
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=False,
+                        output=None,
+                        error=f"Subworkflow '{workflow_id}' failed: {sub_state.error}",
+                    )
+                )
+            return EffectOutcome.failed(f"Subworkflow '{workflow_id}' failed: {sub_state.error}")
 
         if sub_state.status == RunStatus.WAITING:
             # Subworkflow is waiting - parent must also wait
@@ -1904,6 +2057,11 @@ class Runtime:
                     },
                 },
             )
+            if wrap_as_tool_result:
+                if isinstance(wait.details, dict):
+                    wait.details["wrap_as_tool_result"] = True
+                    wait.details["tool_name"] = tool_name or "start_subworkflow"
+                    wait.details["call_id"] = call_id or "subworkflow"
             return EffectOutcome.waiting(wait)
 
         # Unexpected status

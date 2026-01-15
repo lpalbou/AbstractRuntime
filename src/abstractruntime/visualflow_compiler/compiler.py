@@ -790,9 +790,21 @@ def _create_visual_agent_effect_handler(
                 }
                 _set_nested(run.vars, f"_temp.effects.{node_id}", out)
                 bucket["phase"] = "done"
+                scratchpad = {"node_id": node_id, "steps": [], "tool_calls": [], "tool_results": []}
+                meta: Dict[str, Any] = {
+                    "schema": "abstractcode.agent.v1.meta",
+                    "version": 1,
+                    "provider": provider or "unknown",
+                    "model": model or "unknown",
+                    "tool_calls": 0,
+                    "tool_results": 0,
+                }
                 flow._node_outputs[node_id] = {
+                    "response": str(out.get("result") or ""),
+                    "meta": meta,
+                    "scratchpad": scratchpad,
                     "result": out,
-                    "scratchpad": {"node_id": node_id, "steps": []},
+                    # Backward-compat / convenience:
                     "tool_calls": [],
                     "tool_results": [],
                 }
@@ -864,6 +876,7 @@ def _create_visual_agent_effect_handler(
             }
             bucket["scratchpad"] = scratchpad
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
+            bucket["answer"] = answer
 
             # Expose an Agent-friendly context object that includes the accumulated
             # conversation history from the ReAct subworkflow (context.messages).
@@ -899,6 +912,27 @@ def _create_visual_agent_effect_handler(
                 "iterations": iterations,
                 "sub_run_id": sub_run_id,
             }
+
+            # Ergonomics: let consumers Break Object on Agent.result to access tool activity.
+            result_obj["tool_calls"] = tc
+            result_obj["tool_results"] = tr
+
+            scratchpad_out = dict(scratchpad)
+            scratchpad_out["tool_calls"] = tc
+            scratchpad_out["tool_results"] = tr
+
+            meta: Dict[str, Any] = {
+                "schema": "abstractcode.agent.v1.meta",
+                "version": 1,
+                "provider": provider,
+                "model": model,
+                "tool_calls": len(tc),
+                "tool_results": len(tr),
+            }
+            if sub_run_id:
+                meta["sub_run_id"] = sub_run_id
+            if iterations is not None:
+                meta["iterations"] = iterations
 
             # When "Include/Use context" is enabled on the Agent node, persist the turn
             # into the parent run's active context so subsequent Agent/Subflow/LLM_CALL
@@ -1078,7 +1112,15 @@ def _create_visual_agent_effect_handler(
 
             _set_nested(run.vars, f"_temp.effects.{node_id}", result_obj)
             bucket["phase"] = "done"
-            flow._node_outputs[node_id] = {"result": result_obj, "scratchpad": scratchpad, "tool_calls": tc, "tool_results": tr}
+            flow._node_outputs[node_id] = {
+                "response": answer,
+                "meta": meta,
+                "scratchpad": scratchpad_out,
+                "result": result_obj,
+                # Backward-compat / convenience:
+                "tool_calls": tc,
+                "tool_results": tr,
+            }
             run.vars["_last_output"] = {"result": result_obj}
             if next_node:
                 return StepPlan(node_id=node_id, next_node=next_node)
@@ -1109,7 +1151,32 @@ def _create_visual_agent_effect_handler(
             if not isinstance(scratchpad, dict):
                 scratchpad = {"node_id": node_id, "steps": []}
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
-            flow._node_outputs[node_id] = {"result": data, "scratchpad": scratchpad, "tool_calls": tc, "tool_results": tr}
+            answer = bucket.get("answer") if isinstance(bucket.get("answer"), str) else ""
+            scratchpad_out = dict(scratchpad)
+            scratchpad_out["tool_calls"] = tc
+            scratchpad_out["tool_results"] = tr
+
+            meta: Dict[str, Any] = {
+                "schema": "abstractcode.agent.v1.meta",
+                "version": 1,
+                "provider": provider,
+                "model": model,
+                "tool_calls": len(tc),
+                "tool_results": len(tr),
+            }
+            sr = scratchpad_out.get("sub_run_id")
+            if isinstance(sr, str) and sr.strip():
+                meta["sub_run_id"] = sr.strip()
+
+            flow._node_outputs[node_id] = {
+                "response": str(answer),
+                "meta": meta,
+                "scratchpad": scratchpad_out,
+                "result": data,
+                # Backward-compat / convenience:
+                "tool_calls": tc,
+                "tool_results": tr,
+            }
             run.vars["_last_output"] = {"result": data}
             if next_node:
                 return StepPlan(node_id=node_id, next_node=next_node)
@@ -1485,11 +1552,15 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
         elif effect_type == "agent":
             current["result"] = raw
             scratchpad = None
+            answer: Optional[str] = None
             agent_ns = temp_data.get("agent")
             if isinstance(agent_ns, dict):
                 bucket = agent_ns.get(node_id)
                 if isinstance(bucket, dict):
                     scratchpad = bucket.get("scratchpad")
+                    ans = bucket.get("answer")
+                    if isinstance(ans, str):
+                        answer = ans
 
             if scratchpad is None:
                 # Fallback: use this node's own trace if present.
@@ -1500,10 +1571,123 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 if callable(_get_node_trace):
                     scratchpad = _get_node_trace(run.vars, node_id)
 
-            current["scratchpad"] = scratchpad if scratchpad is not None else {"node_id": node_id, "steps": []}
+            scratchpad_obj = scratchpad if isinstance(scratchpad, dict) else None
+            if scratchpad_obj is None:
+                scratchpad_obj = {"node_id": node_id, "steps": []}
+
             # Convenience pins: expose tool activity extracted from the scratchpad trace.
             # This is intentionally best-effort and does not change agent execution behavior.
-            tc, tr = _extract_agent_tool_activity(current.get("scratchpad"))
+            tc, tr = _extract_agent_tool_activity(scratchpad_obj)
+
+            # Embed tool activity inside the scratchpad for easy Break Object access.
+            scratchpad_out = dict(scratchpad_obj)
+            scratchpad_out["tool_calls"] = tc
+            scratchpad_out["tool_results"] = tr
+
+            # Best-effort response string:
+            # - prefer preserved unstructured answer (before structured-output post-pass)
+            # - fall back to common keys inside the raw result
+            response = ""
+            if isinstance(answer, str) and answer.strip():
+                response = answer.strip()
+            elif isinstance(raw, dict):
+                r1 = raw.get("result")
+                r2 = raw.get("response")
+                if isinstance(r1, str) and r1.strip():
+                    response = r1.strip()
+                elif isinstance(r2, str) and r2.strip():
+                    response = r2.strip()
+            elif isinstance(raw, str) and raw.strip():
+                response = raw.strip()
+
+            meta: Dict[str, Any] = {"schema": "abstractcode.agent.v1.meta", "version": 1}
+            provider: Optional[str] = None
+            model: Optional[str] = None
+            iterations: Optional[int] = None
+            sub_run_id: Optional[str] = None
+
+            if isinstance(raw, dict):
+                p = raw.get("provider")
+                m = raw.get("model")
+                if isinstance(p, str) and p.strip():
+                    provider = p.strip()
+                if isinstance(m, str) and m.strip():
+                    model = m.strip()
+
+                it = raw.get("iterations")
+                try:
+                    if isinstance(it, bool):
+                        iterations = None
+                    elif isinstance(it, (int, float)):
+                        iterations = int(it)
+                    elif isinstance(it, str) and it.strip():
+                        iterations = int(float(it.strip()))
+                except Exception:
+                    iterations = None
+
+                sr = raw.get("sub_run_id")
+                if isinstance(sr, str) and sr.strip():
+                    sub_run_id = sr.strip()
+
+            if sub_run_id is None:
+                sr = scratchpad_out.get("sub_run_id")
+                if isinstance(sr, str) and sr.strip():
+                    sub_run_id = sr.strip()
+
+            # Structured-output mode stores the final output object under `raw` without
+            # provider/model metadata. When resuming from persisted state, infer these
+            # fields from the last LLM_CALL step in the scratchpad trace (best-effort).
+            if (provider is None or model is None) and isinstance(scratchpad_out.get("steps"), list):
+                steps_any = scratchpad_out.get("steps")
+                steps = steps_any if isinstance(steps_any, list) else []
+                for entry_any in reversed(steps):
+                    entry = entry_any if isinstance(entry_any, dict) else None
+                    if entry is None:
+                        continue
+                    eff = entry.get("effect")
+                    if not isinstance(eff, dict) or str(eff.get("type") or "") != "llm_call":
+                        continue
+                    payload = eff.get("payload")
+                    if isinstance(payload, dict):
+                        if provider is None:
+                            p = payload.get("provider")
+                            if isinstance(p, str) and p.strip():
+                                provider = p.strip()
+                        if model is None:
+                            m = payload.get("model")
+                            if isinstance(m, str) and m.strip():
+                                model = m.strip()
+
+                    res = entry.get("result")
+                    if isinstance(res, dict):
+                        if provider is None:
+                            p = res.get("provider")
+                            if isinstance(p, str) and p.strip():
+                                provider = p.strip()
+                        if model is None:
+                            m = res.get("model")
+                            if isinstance(m, str) and m.strip():
+                                model = m.strip()
+
+                    if provider is not None or model is not None:
+                        break
+
+            if provider:
+                meta["provider"] = provider
+            if model:
+                meta["model"] = model
+            if sub_run_id:
+                meta["sub_run_id"] = sub_run_id
+            if iterations is not None:
+                meta["iterations"] = iterations
+            meta["tool_calls"] = len(tc)
+            meta["tool_results"] = len(tr)
+
+            current["response"] = response
+            current["meta"] = meta
+            current["scratchpad"] = scratchpad_out
+
+            # Backward-compat / convenience: keep top-level tool activity too.
             current["tool_calls"] = tc
             current["tool_results"] = tr
             mapped_value = raw

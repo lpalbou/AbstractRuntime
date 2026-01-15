@@ -172,6 +172,11 @@ Repeat semantics (important):
 
 See `docs/guide/scheduled-workflows.md` for end-to-end gateway examples and recommended patterns.
 
+Gateway extras (implemented):
+- Scheduled workflows are typically implemented as a **gateway-generated wrapper VisualFlow** (`workflow_id = scheduled:<uuid>`) persisted under `dynamic_flows/`.
+- The gateway can **edit a running schedule** by rewriting the wrapper flow + parent run metadata (durably) and letting the runner loop pick up the new spec.
+- Gateways may apply **runtime-owned compaction** (`MEMORY_COMPACT`) to keep long-running scheduled contexts within model limits (best-effort policy; see the guide).
+
 ## Eventing (WAIT_EVENT / EMIT_EVENT)
 
 Custom eventing is implemented as:

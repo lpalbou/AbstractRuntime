@@ -78,6 +78,28 @@ def test_normalize_local_response_extracts_trace_id() -> None:
     assert out["metadata"].get("trace_id") == "tr_123"
 
 
+def test_normalize_local_response_extracts_reasoning_content() -> None:
+    from abstractcore.core.types import GenerateResponse
+
+    resp = GenerateResponse(
+        content="\n\n",
+        raw_response={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "\n\n",
+                        "reasoning_content": "I will call tools now.",
+                        "tool_calls": [{"type": "function", "id": "1", "function": {"name": "list_files", "arguments": "{}"}}],
+                    }
+                }
+            ]
+        },
+    )
+    out = _normalize_local_response(resp)
+    assert out.get("reasoning") == "I will call tools now."
+
+
 def test_remote_client_sends_trace_headers_and_reads_trace_id() -> None:
     captured: Dict[str, Any] = {}
 

@@ -230,6 +230,44 @@ def _normalize_tool_calls(tool_calls: Any) -> Optional[List[Dict[str, Any]]]:
 def _normalize_local_response(resp: Any) -> Dict[str, Any]:
     """Normalize an AbstractCore local `generate()` result into JSON."""
 
+    def _extract_reasoning_from_openai_like(raw: Any) -> Optional[str]:
+        """Best-effort extraction of model reasoning from OpenAI-style payloads.
+
+        LM Studio and some providers store reasoning in `choices[].message.reasoning_content`
+        while leaving `content` empty during tool-call turns.
+        """
+
+        def _from_message(msg: Any) -> Optional[str]:
+            if not isinstance(msg, dict):
+                return None
+            for key in ("reasoning", "reasoning_content", "thinking", "thinking_content"):
+                val = msg.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+            return None
+
+        if isinstance(raw, dict):
+            # OpenAI chat completion: choices[].message
+            choices = raw.get("choices")
+            if isinstance(choices, list):
+                for c in choices:
+                    if not isinstance(c, dict):
+                        continue
+                    r = _from_message(c.get("message"))
+                    if r:
+                        return r
+                    # Streaming-style payloads may use `delta`.
+                    r = _from_message(c.get("delta"))
+                    if r:
+                        return r
+
+            # Some variants store a single message at the top level.
+            r = _from_message(raw.get("message"))
+            if r:
+                return r
+
+        return None
+
     # Dict-like already
     if isinstance(resp, dict):
         out = _jsonable(resp)
@@ -240,6 +278,21 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
             # Some providers place reasoning under metadata (e.g. LM Studio gpt-oss).
             if "reasoning" not in out and isinstance(meta, dict) and isinstance(meta.get("reasoning"), str):
                 out["reasoning"] = meta.get("reasoning")
+            if (
+                (not isinstance(out.get("reasoning"), str) or not str(out.get("reasoning") or "").strip())
+                and isinstance(out.get("raw_response"), dict)
+            ):
+                extracted = _extract_reasoning_from_openai_like(out.get("raw_response"))
+                if extracted:
+                    out["reasoning"] = extracted
+            if (not isinstance(out.get("reasoning"), str) or not str(out.get("reasoning") or "").strip()) and isinstance(out.get("raw"), dict):
+                extracted = _extract_reasoning_from_openai_like(out.get("raw"))
+                if extracted:
+                    out["reasoning"] = extracted
+            if (not isinstance(out.get("reasoning"), str) or not str(out.get("reasoning") or "").strip()) and isinstance(out.get("choices"), list):
+                extracted = _extract_reasoning_from_openai_like(out)
+                if extracted:
+                    out["reasoning"] = extracted
         return out
 
     # Pydantic structured output
@@ -273,6 +326,10 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
         r = metadata.get("reasoning")
         if isinstance(r, str) and r.strip():
             reasoning = r.strip()
+    if reasoning is None and raw_response is not None:
+        extracted = _extract_reasoning_from_openai_like(_jsonable(raw_response))
+        if extracted:
+            reasoning = extracted
 
     return {
         "content": content,
@@ -781,9 +838,16 @@ class RemoteAbstractCoreLLMClient:
             }
             if trace_id:
                 meta["trace_id"] = trace_id
+            reasoning = msg.get("reasoning")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                reasoning = msg.get("reasoning_content")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                reasoning = msg.get("thinking")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                reasoning = msg.get("thinking_content")
             result = {
                 "content": msg.get("content"),
-                "reasoning": msg.get("reasoning"),
+                "reasoning": reasoning,
                 "data": None,
                 "raw_response": _jsonable(resp) if resp is not None else None,
                 "tool_calls": _jsonable(msg.get("tool_calls")) if msg.get("tool_calls") is not None else None,

@@ -13,6 +13,44 @@ _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+_ALLOWED_PREDICATE_IDS: set[str] | None = None
+
+
+def _allowed_predicate_ids() -> set[str]:
+    global _ALLOWED_PREDICATE_IDS
+    if _ALLOWED_PREDICATE_IDS is not None:
+        return _ALLOWED_PREDICATE_IDS
+    try:
+        from abstractsemantics import load_semantics_registry  # type: ignore
+    except Exception as e:  # pragma: no cover
+        # Dev convenience (monorepo):
+        # `abstractsemantics` uses src-layout (abstractsemantics/src). When running from source
+        # without editable installs, add that path if present.
+        try:
+            import sys
+            from pathlib import Path
+
+            here = Path(__file__).resolve()
+            for parent in here.parents:
+                candidate = parent / "abstractsemantics" / "src"
+                if candidate.is_dir():
+                    sys.path.insert(0, str(candidate))
+                    break
+            from abstractsemantics import load_semantics_registry  # type: ignore
+        except Exception:
+            raise RuntimeError(
+                "Semantics registry is required for MEMORY_KG_ASSERT validation. "
+                "Install/enable `abstractsemantics` (or disable validation explicitly in a future mode)."
+            ) from e
+    reg = load_semantics_registry()
+    ids = getattr(reg, "predicate_ids", None)
+    allowed = ids() if callable(ids) else set()
+    if not isinstance(allowed, set) or not allowed:
+        raise RuntimeError("Semantics registry loaded but returned no predicate ids")
+    # Canonical predicate ids are compared case-insensitively to avoid accidental casing drift.
+    _ALLOWED_PREDICATE_IDS = {str(x).strip().lower() for x in allowed if isinstance(x, str) and x.strip()}
+    return _ALLOWED_PREDICATE_IDS
+
 
 def _global_memory_owner_id() -> str:
     rid = os.environ.get("ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID")
@@ -135,6 +173,39 @@ def build_memory_kg_effect_handlers(
         if not assertions:
             return EffectOutcome.failed("MEMORY_KG_ASSERT requires payload.assertions (list[object])")
 
+        allow_custom = bool(payload.get("allow_custom_predicates") or payload.get("allow_custom"))
+        allowed_predicates = _allowed_predicate_ids()
+        invalid_predicates: list[str] = []
+        for a in assertions:
+            pred = a.get("predicate") if isinstance(a, dict) else None
+            pred = pred if isinstance(pred, str) else ""
+            pred2 = pred.strip()
+            if not pred2:
+                invalid_predicates.append("<missing>")
+                continue
+            pred_norm = pred2.lower()
+            if pred_norm in allowed_predicates:
+                continue
+            if allow_custom and pred_norm.startswith("ex:"):
+                continue
+            invalid_predicates.append(pred2)
+
+        if invalid_predicates:
+            uniq = []
+            seen: set[str] = set()
+            for p in invalid_predicates:
+                if p in seen:
+                    continue
+                uniq.append(p)
+                seen.add(p)
+            preview = ", ".join(uniq[:12])
+            suffix = " …" if len(uniq) > 12 else ""
+            return EffectOutcome.failed(
+                "MEMORY_KG_ASSERT rejected unknown predicates. "
+                f"Got: {preview}{suffix}. "
+                "Update the extractor to use allowed semantics (or set allow_custom_predicates=true for ex:* predicates)."
+            )
+
         scope_default = str(payload.get("scope") or "run").strip().lower() or "run"
         owner_default = payload.get("owner_id")
         owner_default = str(owner_default).strip() if isinstance(owner_default, str) and owner_default.strip() else None
@@ -143,6 +214,7 @@ def build_memory_kg_effect_handlers(
 
         observed_at = now_iso()
         out_rows: list[Any] = []
+        parse_errors: list[str] = []
         for a in assertions:
             try:
                 merged = dict(a)
@@ -160,8 +232,13 @@ def build_memory_kg_effect_handlers(
                 prov2.setdefault("writer_workflow_id", str(getattr(run, "workflow_id", "") or ""))
                 merged["provenance"] = prov2
                 out_rows.append(TripleAssertion.from_dict(merged))
-            except Exception:
-                continue
+            except Exception as e:
+                parse_errors.append(str(e))
+
+        if parse_errors:
+            preview = " | ".join([e for e in parse_errors[:5] if str(e).strip()])
+            suffix = " …" if len(parse_errors) > 5 else ""
+            return EffectOutcome.failed(f"MEMORY_KG_ASSERT contained invalid assertions: {preview}{suffix}")
 
         if not out_rows:
             return EffectOutcome.failed("MEMORY_KG_ASSERT contained no valid assertions")

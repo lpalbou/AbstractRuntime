@@ -321,8 +321,20 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
         if isinstance(model, str) and model.strip():
             params["_model"] = model.strip()
 
-        if not prompt and not messages:
-            return EffectOutcome.failed("llm_call requires payload.prompt or payload.messages")
+        def _nonempty_str(value: Any) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            text = value.strip()
+            return text if text else None
+
+        prompt = _nonempty_str(prompt)
+
+        has_messages = isinstance(messages, list) and len(messages) > 0
+        has_prompt = isinstance(prompt, str) and bool(prompt)
+        if not has_prompt and not has_messages:
+            return EffectOutcome.failed(
+                "llm_call requires payload.prompt or payload.messages"
+            )
 
         # Some agent loops (notably ReAct) require a strict "no in-loop truncation" policy for
         # correctness: every iteration must see the full scratchpad/history accumulated so far.

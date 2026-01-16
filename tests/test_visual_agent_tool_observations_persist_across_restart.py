@@ -61,7 +61,7 @@ def test_visual_agent_tool_observations_persist_across_restart():
                     "data": {
                         "outputs": [
                             {"id": "exec-out", "type": "execution"},
-                            {"id": "request", "type": "string"},
+                            {"id": "prompt", "type": "string"},
                             {"id": "provider", "type": "provider"},
                             {"id": "model", "type": "model"},
                             {"id": "tools", "type": "tools"},
@@ -77,7 +77,7 @@ def test_visual_agent_tool_observations_persist_across_restart():
                             {"id": "include_context", "type": "boolean"},
                             {"id": "provider", "type": "provider"},
                             {"id": "model", "type": "model"},
-                            {"id": "task", "type": "string"},
+                            {"id": "prompt", "type": "string"},
                             {"id": "tools", "type": "tools"},
                         ],
                         "pinDefaults": {"include_context": True},
@@ -86,7 +86,7 @@ def test_visual_agent_tool_observations_persist_across_restart():
             ],
             "edges": [
                 {"source": "start", "sourceHandle": "exec-out", "target": node_id, "targetHandle": "exec-in"},
-                {"source": "start", "sourceHandle": "request", "target": node_id, "targetHandle": "task"},
+                {"source": "start", "sourceHandle": "prompt", "target": node_id, "targetHandle": "prompt"},
                 {"source": "start", "sourceHandle": "provider", "target": node_id, "targetHandle": "provider"},
                 {"source": "start", "sourceHandle": "model", "target": node_id, "targetHandle": "model"},
                 {"source": "start", "sourceHandle": "tools", "target": node_id, "targetHandle": "tools"},
@@ -114,7 +114,7 @@ def test_visual_agent_tool_observations_persist_across_restart():
         run_id = rt1.start(
             workflow=parent_spec,
             vars={
-                "request": "List files in the repo.",
+                "prompt": "List files in the repo.",
                 "provider": "lmstudio",
                 "model": "dummy",
                 "tools": ["list_files"],
@@ -166,4 +166,3 @@ def test_visual_agent_tool_observations_persist_across_restart():
         msgs2 = ctx2.get("messages")
         assert isinstance(msgs2, list)
         assert any("[list_files]:" in str(m.get("content") or "") for m in msgs2 if isinstance(m, dict))
-

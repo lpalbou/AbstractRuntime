@@ -465,6 +465,7 @@ def create_memory_kg_assert_handler(
         scope: Optional[str] = None
         owner_id: Optional[str] = None
         span_id: Optional[str] = None
+        allow_custom_predicates: Optional[bool] = None
         if isinstance(input_data, dict):
             assertions_raw = input_data.get("assertions")
             if assertions_raw is None:
@@ -474,6 +475,13 @@ def create_memory_kg_assert_handler(
             scope = input_data.get("scope") if isinstance(input_data.get("scope"), str) else None
             owner_id = input_data.get("owner_id") if isinstance(input_data.get("owner_id"), str) else None
             span_id = input_data.get("span_id") if isinstance(input_data.get("span_id"), str) else None
+            allow_custom_predicates = (
+                input_data.get("allow_custom_predicates")
+                if isinstance(input_data.get("allow_custom_predicates"), bool)
+                else input_data.get("allow_custom")
+                if isinstance(input_data.get("allow_custom"), bool)
+                else None
+            )
 
         assertions = _normalize_assertions(assertions_raw)
         payload: Dict[str, Any] = {"assertions": assertions}
@@ -483,6 +491,8 @@ def create_memory_kg_assert_handler(
             payload["owner_id"] = owner_id
         if span_id:
             payload["span_id"] = span_id
+        if allow_custom_predicates is not None:
+            payload["allow_custom_predicates"] = bool(allow_custom_predicates)
 
         return StepPlan(
             node_id=node_id,

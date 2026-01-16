@@ -41,20 +41,20 @@ def test_memory_kg_query_text_preserves_similarity_ranking_and_supports_min_scor
             payload={
                 "scope": "global",
                 "assertions": [
-                    {
-                        "subject": "Picard",
-                        "predicate": "has_attribute",
-                        "object": "Bald",
-                        "observed_at": "2026-01-02T00:00:00+00:00",
-                        "attributes": {"evidence_quote": "bald"},
-                    },
-                    {
-                        "subject": "Data",
-                        "predicate": "is_a",
-                        "object": "Android",
-                        "observed_at": "2026-01-01T00:00:00+00:00",
-                        "attributes": {"evidence_quote": "android"},
-                    },
+                        {
+                            "subject": "Picard",
+                            "predicate": "dcterms:description",
+                            "object": "Bald",
+                            "observed_at": "2026-01-02T00:00:00+00:00",
+                            "attributes": {"evidence_quote": "bald"},
+                        },
+                        {
+                            "subject": "Data",
+                            "predicate": "dcterms:description",
+                            "object": "Android",
+                            "observed_at": "2026-01-01T00:00:00+00:00",
+                            "attributes": {"evidence_quote": "android"},
+                        },
                 ],
             },
         ),
@@ -94,4 +94,3 @@ def test_memory_kg_query_text_preserves_similarity_ranking_and_supports_min_scor
     assert isinstance(items2, list)
     assert len(items2) == 1
     assert items2[0].get("subject") == "data"
-

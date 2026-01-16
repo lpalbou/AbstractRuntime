@@ -859,9 +859,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         def handler(input_data):
             task = ""
             if isinstance(input_data, dict):
-                raw_task = input_data.get("task")
-                if raw_task is None:
-                    raw_task = input_data.get("prompt")
+                raw_task = input_data.get("prompt")
                 task = "" if raw_task is None else str(raw_task)
             else:
                 task = str(input_data)
@@ -892,19 +890,26 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # Optional pin overrides (passed through for compiler/runtime consumption).
             if isinstance(input_data, dict) and "max_iterations" in input_data:
                 out["max_iterations"] = input_data.get("max_iterations")
-            if isinstance(input_data, dict) and ("max_input_tokens" in input_data or "maxInputTokens" in input_data):
-                out["max_input_tokens"] = (
-                    input_data.get("max_input_tokens")
-                    if "max_input_tokens" in input_data
-                    else input_data.get("maxInputTokens")
-                )
+            if isinstance(input_data, dict) and (
+                "max_in_tokens" in input_data or "max_input_tokens" in input_data or "maxInputTokens" in input_data
+            ):
+                if "max_in_tokens" in input_data:
+                    out["max_input_tokens"] = input_data.get("max_in_tokens")
+                elif "max_input_tokens" in input_data:
+                    out["max_input_tokens"] = input_data.get("max_input_tokens")
+                else:
+                    out["max_input_tokens"] = input_data.get("maxInputTokens")
             if isinstance(input_data, dict) and "temperature" in input_data:
                 out["temperature"] = input_data.get("temperature")
             if isinstance(input_data, dict) and "seed" in input_data:
                 out["seed"] = input_data.get("seed")
 
-            if isinstance(input_data, dict) and "response_schema" in input_data:
-                schema = _normalize_response_schema(input_data.get("response_schema"))
+            if isinstance(input_data, dict) and ("resp_schema" in input_data or "response_schema" in input_data):
+                schema = _normalize_response_schema(
+                    input_data.get("resp_schema")
+                    if "resp_schema" in input_data
+                    else input_data.get("response_schema")
+                )
                 if isinstance(schema, dict) and schema:
                     out["response_schema"] = schema
 
@@ -1566,7 +1571,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return None
 
         def handler(input_data):
-            prompt = input_data.get("prompt", "") if isinstance(input_data, dict) else str(input_data)
+            if isinstance(input_data, dict):
+                raw_prompt = input_data.get("prompt")
+                prompt = "" if raw_prompt is None else str(raw_prompt)
+            else:
+                prompt = str(input_data)
             system = input_data.get("system", "") if isinstance(input_data, dict) else ""
 
             tools_specified = isinstance(input_data, dict) and "tools" in input_data
@@ -1591,7 +1600,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             max_input_tokens_value: Optional[int] = None
             raw_max_in: Any = None
             if isinstance(input_data, dict):
-                if "max_input_tokens" in input_data:
+                if "max_in_tokens" in input_data:
+                    raw_max_in = input_data.get("max_in_tokens")
+                elif "max_input_tokens" in input_data:
                     raw_max_in = input_data.get("max_input_tokens")
                 elif "maxInputTokens" in input_data:
                     raw_max_in = input_data.get("maxInputTokens")
@@ -1655,11 +1666,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     "error": "Missing provider or model configuration",
                 }
 
-            response_schema = (
-                _normalize_response_schema(input_data.get("response_schema"))
-                if isinstance(input_data, dict) and "response_schema" in input_data
-                else None
-            )
+            response_schema = None
+            if isinstance(input_data, dict) and ("resp_schema" in input_data or "response_schema" in input_data):
+                response_schema = _normalize_response_schema(
+                    input_data.get("resp_schema")
+                    if "resp_schema" in input_data
+                    else input_data.get("response_schema")
+                )
 
             pending: Dict[str, Any] = {
                 "type": "llm_call",
@@ -1679,6 +1692,44 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 pending["response_schema_name"] = "LLM_StructuredOutput"
                 if structured_output_fallback_default:
                     pending["structured_output_fallback"] = True
+
+            # Optional explicit context pin: if provided, context.messages overrides inherited run context messages.
+            context_msgs: list[Dict[str, Any]] = []
+            if isinstance(input_data, dict):
+                context_raw = input_data.get("context")
+                context_raw = context_raw if isinstance(context_raw, dict) else {}
+                raw_msgs = context_raw.get("messages")
+                if isinstance(raw_msgs, list):
+                    context_msgs = [dict(m) for m in raw_msgs if isinstance(m, dict)]
+            if context_msgs:
+                messages = list(context_msgs)
+                sys_text = str(system or "").strip() if isinstance(system, str) else ""
+                if sys_text:
+                    insert_at = 0
+                    while insert_at < len(messages):
+                        if messages[insert_at].get("role") != "system":
+                            break
+                        insert_at += 1
+                    messages.insert(insert_at, {"role": "system", "content": sys_text})
+                messages.append({"role": "user", "content": str(prompt or "")})
+
+                if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
+                    try:
+                        from abstractruntime.memory.token_budget import (
+                            trim_messages_to_max_input_tokens,
+                        )
+
+                        messages = trim_messages_to_max_input_tokens(
+                            messages,
+                            max_input_tokens=int(max_input_tokens_value),
+                            model=model if isinstance(model, str) else None,
+                        )
+                    except Exception:
+                        pass
+
+                pending["messages"] = messages
+                pending.pop("prompt", None)
+                pending.pop("system_prompt", None)
 
             return {
                 "response": None,
@@ -2055,6 +2106,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             span_id = payload.get("span_id")
             if isinstance(span_id, str) and span_id.strip():
                 pending["span_id"] = span_id.strip()
+            allow_custom = payload.get("allow_custom_predicates")
+            if isinstance(allow_custom, bool):
+                pending["allow_custom_predicates"] = bool(allow_custom)
 
             return {"assertion_ids": [], "count": 0, "_pending_effect": pending}
 

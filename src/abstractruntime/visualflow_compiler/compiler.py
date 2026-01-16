@@ -2894,17 +2894,32 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 flow=flow,
             )
         elif callable(handler_obj):
-            # Check if this is a visual flow handler (has closure access to node_outputs)
-            # Visual flow handlers need special handling to resolve data edges
-            handlers[node_id] = _create_visual_function_handler(
-                node_id=node_id,
-                func=handler_obj,
-                next_node=next_node,
-                input_key=getattr(flow_node, "input_key", None),
-                output_key=getattr(flow_node, "output_key", None),
-                branch_map=branch_map,
-                flow=flow,
-            )
+            # Plain Flow callables should behave like standard function nodes (input defaults to run.vars).
+            #
+            # VisualFlow callables (builtins/code/function/etc.) need data-edge awareness, `_last_output`
+            # pipelining, and persisted node outputs for pause/resume, so they use the visual handler.
+            is_visual_flow = bool(
+                hasattr(flow, "_data_edge_map") and hasattr(flow, "_node_outputs")
+            ) or isinstance(visual_type, str)
+
+            if not is_visual_flow:
+                handlers[node_id] = create_function_node_handler(
+                    node_id=node_id,
+                    func=handler_obj,
+                    next_node=next_node,
+                    input_key=getattr(flow_node, "input_key", None),
+                    output_key=getattr(flow_node, "output_key", None),
+                )
+            else:
+                handlers[node_id] = _create_visual_function_handler(
+                    node_id=node_id,
+                    func=handler_obj,
+                    next_node=next_node,
+                    input_key=getattr(flow_node, "input_key", None),
+                    output_key=getattr(flow_node, "output_key", None),
+                    branch_map=branch_map,
+                    flow=flow,
+                )
         else:
             raise TypeError(
                 f"Unknown handler type for node '{node_id}': {type(handler_obj)}. "

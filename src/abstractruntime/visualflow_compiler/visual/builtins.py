@@ -527,8 +527,11 @@ def data_make_object(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def data_make_context(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a context object {task, messages, ...extra}."""
-    extra = inputs.get("extra")
+    """Build a context object {task, messages, ...context_extra}."""
+    extra = inputs.get("context_extra")
+    if not isinstance(extra, dict):
+        # Backward-compat: older flows used `extra`.
+        extra = inputs.get("extra")
     out: Dict[str, Any] = dict(extra) if isinstance(extra, dict) else {}
 
     task = inputs.get("task")
@@ -611,6 +614,10 @@ def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
     out["schema"] = schema_str
     out["version"] = version_int
 
+    output_mode = inputs.get("output_mode")
+    if isinstance(output_mode, str) and output_mode.strip():
+        out["output_mode"] = output_mode.strip()
+
     provider = inputs.get("provider")
     if isinstance(provider, str) and provider.strip():
         out["provider"] = provider.strip()
@@ -622,6 +629,55 @@ def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
         out["model"] = model.strip()
     elif model is not None and str(model).strip():
         out["model"] = str(model).strip()
+
+    sub_run_id = inputs.get("sub_run_id")
+    if isinstance(sub_run_id, str) and sub_run_id.strip():
+        out["sub_run_id"] = sub_run_id.strip()
+
+    iterations = inputs.get("iterations")
+    try:
+        if isinstance(iterations, bool):
+            pass
+        elif isinstance(iterations, (int, float)):
+            out["iterations"] = int(iterations)
+        elif isinstance(iterations, str) and iterations.strip():
+            out["iterations"] = int(float(iterations.strip()))
+    except Exception:
+        pass
+
+    tool_calls = inputs.get("tool_calls")
+    try:
+        if isinstance(tool_calls, bool):
+            pass
+        elif isinstance(tool_calls, (int, float)):
+            out["tool_calls"] = int(tool_calls)
+        elif isinstance(tool_calls, str) and tool_calls.strip():
+            out["tool_calls"] = int(float(tool_calls.strip()))
+    except Exception:
+        pass
+
+    tool_results = inputs.get("tool_results")
+    try:
+        if isinstance(tool_results, bool):
+            pass
+        elif isinstance(tool_results, (int, float)):
+            out["tool_results"] = int(tool_results)
+        elif isinstance(tool_results, str) and tool_results.strip():
+            out["tool_results"] = int(float(tool_results.strip()))
+    except Exception:
+        pass
+
+    finish_reason = inputs.get("finish_reason")
+    if isinstance(finish_reason, str) and finish_reason.strip():
+        out["finish_reason"] = finish_reason.strip()
+
+    gen_time = inputs.get("gen_time")
+    if gen_time is not None and not isinstance(gen_time, bool):
+        out["gen_time"] = gen_time
+
+    ttft_ms = inputs.get("ttft_ms")
+    if ttft_ms is not None and not isinstance(ttft_ms, bool):
+        out["ttft_ms"] = ttft_ms
 
     usage = inputs.get("usage")
     if isinstance(usage, dict):
@@ -665,6 +721,28 @@ def data_make_scratchpad(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(workflow_id, str) and workflow_id.strip():
         out["workflow_id"] = workflow_id.strip()
 
+    task = inputs.get("task")
+    if task is None:
+        out["task"] = ""
+    elif isinstance(task, str):
+        out["task"] = task
+    else:
+        out["task"] = str(task)
+
+    messages = inputs.get("messages")
+    if isinstance(messages, list):
+        out["messages"] = list(messages)
+    elif isinstance(messages, tuple):
+        out["messages"] = list(messages)
+    elif messages is None:
+        out["messages"] = []
+    else:
+        out["messages"] = [messages]
+
+    context_extra = inputs.get("context_extra")
+    if isinstance(context_extra, dict):
+        out["context_extra"] = dict(context_extra)
+
     node_traces = inputs.get("node_traces")
     out["node_traces"] = dict(node_traces) if isinstance(node_traces, dict) else {}
 
@@ -677,6 +755,26 @@ def data_make_scratchpad(inputs: Dict[str, Any]) -> Dict[str, Any]:
         out["steps"] = []
     else:
         out["steps"] = [steps]
+
+    tool_calls = inputs.get("tool_calls")
+    if isinstance(tool_calls, list):
+        out["tool_calls"] = list(tool_calls)
+    elif isinstance(tool_calls, tuple):
+        out["tool_calls"] = list(tool_calls)
+    elif tool_calls is None:
+        out["tool_calls"] = []
+    else:
+        out["tool_calls"] = [tool_calls]
+
+    tool_results = inputs.get("tool_results")
+    if isinstance(tool_results, list):
+        out["tool_results"] = list(tool_results)
+    elif isinstance(tool_results, tuple):
+        out["tool_results"] = list(tool_results)
+    elif tool_results is None:
+        out["tool_results"] = []
+    else:
+        out["tool_results"] = [tool_results]
 
     return {"scratchpad": out}
 

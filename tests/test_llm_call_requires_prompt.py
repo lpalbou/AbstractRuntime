@@ -9,12 +9,13 @@ def test_llm_call_accepts_prompt() -> None:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
 
-        def generate(self, *, prompt, messages, system_prompt, tools, params):
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
             self.calls.append(
                 {
                     "prompt": prompt,
                     "messages": messages,
                     "system_prompt": system_prompt,
+                    "media": media,
                     "tools": tools,
                     "params": params,
                 }
@@ -42,7 +43,7 @@ def test_llm_call_rejects_request_alias_when_prompt_missing() -> None:
     from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
 
     class DummyLLM:
-        def generate(self, *, prompt, messages, system_prompt, tools, params):
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
             raise AssertionError("should not be called")
 
     handler = make_llm_call_handler(llm=DummyLLM())

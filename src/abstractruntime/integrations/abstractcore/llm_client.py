@@ -102,6 +102,7 @@ class AbstractCoreLLMClient(Protocol):
         messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
@@ -514,6 +515,7 @@ class LocalAbstractCoreLLMClient:
         messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = dict(params or {})
@@ -538,6 +540,7 @@ class LocalAbstractCoreLLMClient:
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
+            media=media,
             stream=stream,
             **params,
         )
@@ -656,6 +659,7 @@ class MultiLocalAbstractCoreLLMClient:
         messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = dict(params or {})
@@ -673,6 +677,7 @@ class MultiLocalAbstractCoreLLMClient:
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
+            media=media,
             params=params,
         )
 
@@ -749,9 +754,14 @@ class RemoteAbstractCoreLLMClient:
         messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = dict(params or {})
+        if media:
+            raise ValueError(
+                "RemoteAbstractCoreLLMClient does not support media yet (artifact-backed attachments require local/hybrid execution)."
+            )
         req_headers = dict(self._headers)
 
         trace_metadata = params.pop("trace_metadata", None)

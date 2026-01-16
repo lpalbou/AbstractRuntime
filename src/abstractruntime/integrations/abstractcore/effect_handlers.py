@@ -12,10 +12,14 @@ They are designed to keep `RunState.vars` JSON-safe.
 from __future__ import annotations
 
 import json
+import mimetypes
+import tempfile
+from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.models import Effect, EffectType, RunState, WaitReason, WaitState
 from ...core.runtime import EffectOutcome, EffectHandler
+from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient
 from .tool_executor import ToolExecutor
 from .logging import get_logger
@@ -290,12 +294,107 @@ def _trace_context(run: RunState) -> Dict[str, str]:
     return ctx
 
 
-def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
+def _resolve_llm_call_media(
+    media: Any,
+    *,
+    artifact_store: Optional[ArtifactStore],
+    temp_dir: Optional[Path] = None,
+) -> tuple[Optional[list[Any]], Optional[str]]:
+    """Resolve a JSON-safe media list into inputs suitable for AbstractCore `generate(media=...)`.
+
+    Supported media item shapes (best-effort):
+    - str: treated as a local file path (passthrough)
+    - {"$artifact": "...", ...}: ArtifactStore-backed attachment (materialized to a temp file)
+    - {"artifact_id": "...", ...}: alternate artifact ref form (materialized)
+
+    Returns:
+        (resolved_media, error)
+    """
+    if media is None:
+        return None, None
+    if isinstance(media, tuple):
+        media_items = list(media)
+    else:
+        media_items = media
+    if not isinstance(media_items, list) or not media_items:
+        return None, None
+
+    def _artifact_id_from_item(item: Any) -> Optional[str]:
+        if isinstance(item, dict):
+            if is_artifact_ref(item):
+                try:
+                    aid = get_artifact_id(item)
+                except Exception:
+                    aid = None
+                if isinstance(aid, str) and aid.strip():
+                    return aid.strip()
+            raw = item.get("artifact_id")
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        return None
+
+    def _ext_from(content_type: str) -> str:
+        ct = str(content_type or "").strip().lower()
+        if not ct:
+            return ""
+        ext = mimetypes.guess_extension(ct) or ""
+        # Some platforms return ".jpe" for jpeg; prefer ".jpg" for UX.
+        if ext == ".jpe":
+            return ".jpg"
+        return ext
+
+    out: list[Any] = []
+    for item in media_items:
+        if isinstance(item, str):
+            path = item.strip()
+            if path:
+                out.append(path)
+            continue
+
+        artifact_id = _artifact_id_from_item(item)
+        if artifact_id is None:
+            return None, f"Unsupported media item (expected path or artifact ref): {type(item).__name__}"
+        if artifact_store is None:
+            return None, "Artifact-backed media requires an ArtifactStore (missing artifact_store)"
+        if temp_dir is None:
+            return None, "Internal error: temp_dir is required for artifact-backed media"
+
+        artifact = artifact_store.load(str(artifact_id))
+        if artifact is None:
+            return None, f"Artifact '{artifact_id}' not found"
+
+        content = getattr(artifact, "content", None)
+        if not isinstance(content, (bytes, bytearray)):
+            return None, f"Artifact '{artifact_id}' content is not bytes"
+
+        # Preserve best-effort filename extension for downstream media detection.
+        filename = ""
+        if isinstance(item, dict):
+            raw_name = item.get("filename") or item.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                filename = raw_name.strip()
+        ext = Path(filename).suffix if filename else ""
+        if not ext:
+            ct = str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
+            ext = _ext_from(ct)
+
+        p = temp_dir / f"{artifact_id}{ext}"
+        try:
+            p.write_bytes(bytes(content))
+        except Exception as e:
+            return None, f"Failed to materialize artifact '{artifact_id}': {e}"
+        out.append(str(p))
+
+    return (out or None), None
+
+
+def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
         prompt = payload.get("prompt")
         messages = payload.get("messages")
         system_prompt = payload.get("system_prompt")
+        media = payload.get("media")
         provider = payload.get("provider")
         model = payload.get("model")
         tools_raw = payload.get("tools")
@@ -392,12 +491,20 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                 )
                 params_for_call["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
 
+            # Framework default: Glyph compression is experimental and opt-in.
+            #
+            # Avoid noisy warnings and unnecessary decision overhead for non-vision models unless
+            # the caller explicitly requests compression via `params.glyph_compression`.
+            if isinstance(media, list) and media and "glyph_compression" not in params_for_call:
+                params_for_call["glyph_compression"] = "never"
+
             runtime_observability = {
                 "llm_generate_kwargs": _jsonable(
                     {
                         "prompt": str(prompt or ""),
                         "messages": messages,
                         "system_prompt": system_prompt,
+                        "media": media,
                         "tools": tools,
                         "params": params_for_call,
                         "structured_output_fallback": fallback_enabled,
@@ -407,11 +514,29 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
 
             structured_failed = False
             structured_error: Optional[str] = None
+
+            resolved_media: Optional[list[Any]] = None
+            tmpdir: Optional[tempfile.TemporaryDirectory] = None
+            if media is not None:
+                tmpdir = tempfile.TemporaryDirectory(prefix="abstractruntime_media_")
+                try:
+                    resolved_media, err = _resolve_llm_call_media(
+                        media,
+                        artifact_store=artifact_store,
+                        temp_dir=Path(tmpdir.name),
+                    )
+                    if err:
+                        tmpdir.cleanup()
+                        return EffectOutcome.failed(err)
+                except Exception as e:
+                    tmpdir.cleanup()
+                    return EffectOutcome.failed(str(e))
             try:
                 result = llm.generate(
                     prompt=str(prompt or ""),
                     messages=messages,
                     system_prompt=system_prompt,
+                    media=resolved_media,
                     tools=tools,
                     params=params_for_call,
                 )
@@ -442,11 +567,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient) -> EffectHandler:
                     prompt=str(prompt or ""),
                     messages=messages,
                     system_prompt=system_prompt,
+                    media=resolved_media,
                     tools=tools,
                     params=dict(base_params),
                 )
                 structured_failed = True
                 structured_error = msg
+            finally:
+                if tmpdir is not None:
+                    tmpdir.cleanup()
 
             if structured_requested and isinstance(result, dict):
                 # Best-effort: when structured outputs fail (or providers ignore response_model),
@@ -779,8 +908,13 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
     return _handler
 
 
-def build_effect_handlers(*, llm: AbstractCoreLLMClient, tools: ToolExecutor = None) -> Dict[EffectType, Any]:
+def build_effect_handlers(
+    *,
+    llm: AbstractCoreLLMClient,
+    tools: ToolExecutor = None,
+    artifact_store: Optional[ArtifactStore] = None,
+) -> Dict[EffectType, Any]:
     return {
-        EffectType.LLM_CALL: make_llm_call_handler(llm=llm),
+        EffectType.LLM_CALL: make_llm_call_handler(llm=llm, artifact_store=artifact_store),
         EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools),
     }

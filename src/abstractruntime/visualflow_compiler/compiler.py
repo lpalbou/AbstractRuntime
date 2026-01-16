@@ -301,6 +301,29 @@ def _create_effect_node_handler(
                     except Exception:
                         pass
 
+                # If the run has context attachments, forward them into the LLM call as `media`
+                # (unless the node/pins already provided an explicit `media` override).
+                if (
+                    eff_type == EffectType.LLM_CALL
+                    and isinstance(pending, dict)
+                    and pending.get("include_context") is True
+                    and "media" not in pending
+                ):
+                    try:
+                        ctx2 = run.vars.get("context") if isinstance(run.vars, dict) else None
+                        attachments_raw = ctx2.get("attachments") if isinstance(ctx2, dict) else None
+                        if isinstance(attachments_raw, list) and attachments_raw:
+                            cleaned: list[Any] = []
+                            for a in attachments_raw:
+                                if isinstance(a, dict):
+                                    cleaned.append(dict(a))
+                                elif isinstance(a, str) and a.strip():
+                                    cleaned.append(a.strip())
+                            if cleaned:
+                                pending["media"] = cleaned
+                    except Exception:
+                        pass
+
                 # Visual Subflow UX: optionally seed the child run's `context.messages` from the
                 # parent run's active context view (so LLM/Agent nodes inside the subflow can
                 # "Use context" without extra wiring).
@@ -371,6 +394,21 @@ def _create_effect_node_handler(
                                     _append(merged, m)
 
                             sub_ctx["messages"] = merged
+
+                            # Best-effort: also inherit parent context attachments, unless explicitly set on the child.
+                            if "attachments" not in sub_ctx:
+                                parent_ctx = run.vars.get("context") if isinstance(run.vars, dict) else None
+                                raw_attachments = parent_ctx.get("attachments") if isinstance(parent_ctx, dict) else None
+                                if isinstance(raw_attachments, list) and raw_attachments:
+                                    cleaned_att: list[Any] = []
+                                    for a in raw_attachments:
+                                        if isinstance(a, dict):
+                                            cleaned_att.append(dict(a))
+                                        elif isinstance(a, str) and a.strip():
+                                            cleaned_att.append(a.strip())
+                                    if cleaned_att:
+                                        sub_ctx["attachments"] = cleaned_att
+
                             pending["vars"] = sub_vars
                     except Exception:
                         pass
@@ -556,6 +594,21 @@ def _create_visual_agent_effect_handler(
                 base = ActiveContextPolicy.select_active_messages_for_llm_from_run(run)
                 if isinstance(base, list):
                     ctx_ns["messages"] = [dict(m) for m in base if isinstance(m, dict)]
+            except Exception:
+                pass
+            # Best-effort: inherit parent attachments as part of context when "use context" is enabled.
+            try:
+                parent_ctx = run.vars.get("context") if isinstance(run.vars, dict) else None
+                raw_attachments = parent_ctx.get("attachments") if isinstance(parent_ctx, dict) else None
+                if isinstance(raw_attachments, list) and raw_attachments:
+                    cleaned_att: list[Any] = []
+                    for a in raw_attachments:
+                        if isinstance(a, dict):
+                            cleaned_att.append(dict(a))
+                        elif isinstance(a, str) and a.strip():
+                            cleaned_att.append(a.strip())
+                    if cleaned_att:
+                        ctx_ns["attachments"] = cleaned_att
             except Exception:
                 pass
 

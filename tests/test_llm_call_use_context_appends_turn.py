@@ -3,7 +3,7 @@ def test_llm_call_use_context_appends_turn_into_active_context():
     from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
 
     class DummyLLM:
-        def generate(self, *, prompt, messages, system_prompt, tools, params):
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
             return {"content": "OK"}
 
     handler = make_llm_call_handler(llm=DummyLLM())

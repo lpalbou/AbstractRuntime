@@ -1695,12 +1695,29 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             # Optional explicit context pin: if provided, context.messages overrides inherited run context messages.
             context_msgs: list[Dict[str, Any]] = []
+            context_media_override: Optional[list[Any]] = None
             if isinstance(input_data, dict):
                 context_raw = input_data.get("context")
                 context_raw = context_raw if isinstance(context_raw, dict) else {}
                 raw_msgs = context_raw.get("messages")
                 if isinstance(raw_msgs, list):
                     context_msgs = [dict(m) for m in raw_msgs if isinstance(m, dict)]
+                # Attachments are passed as `context.attachments` and mapped into `payload.media`
+                # for the underlying LLM_CALL effect. This keeps the durable context object portable
+                # while letting LLM execution consume media in a single, flat field.
+                if "attachments" in context_raw:
+                    raw_attachments = context_raw.get("attachments")
+                    if isinstance(raw_attachments, list):
+                        cleaned: list[Any] = []
+                        for a in raw_attachments:
+                            if isinstance(a, dict):
+                                cleaned.append(dict(a))
+                            elif isinstance(a, str) and a.strip():
+                                cleaned.append(a.strip())
+                        # Preserve explicit empty list (means "no attachments for this call").
+                        context_media_override = cleaned
+            if context_media_override is not None:
+                pending["media"] = context_media_override
             if context_msgs:
                 messages = list(context_msgs)
                 sys_text = str(system or "").strip() if isinstance(system, str) else ""

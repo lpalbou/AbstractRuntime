@@ -37,6 +37,7 @@ def test_start_subworkflow_inherit_context_merges_parent_context_messages():
         entry_node="node-sub",
         vars={
             "context": {
+                "attachments": [{"$artifact": "a1", "filename": "notes.txt"}],
                 "messages": [
                     {"role": "user", "content": "parent-1", "metadata": {"message_id": "m1"}},
                     {"role": "assistant", "content": "parent-2", "metadata": {"message_id": "m2"}},
@@ -67,6 +68,8 @@ def test_start_subworkflow_inherit_context_merges_parent_context_messages():
     assert isinstance(ctx, dict)
     msgs = ctx.get("messages")
     assert isinstance(msgs, list)
+    attachments = ctx.get("attachments")
+    assert attachments == [{"$artifact": "a1", "filename": "notes.txt"}]
 
     # Child system message remains first.
     assert msgs[0].get("role") == "system"
@@ -84,4 +87,3 @@ def test_start_subworkflow_inherit_context_merges_parent_context_messages():
         if isinstance(meta, dict) and meta.get("message_id") == "m1":
             m1_count += 1
     assert m1_count == 1
-

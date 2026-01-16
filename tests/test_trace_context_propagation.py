@@ -19,6 +19,7 @@ class _StubLLM:
         messages: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         self.calls.append(
@@ -27,6 +28,7 @@ class _StubLLM:
                 "messages": messages,
                 "system_prompt": system_prompt,
                 "tools": tools,
+                "media": media,
                 "params": dict(params or {}),
             }
         )

@@ -868,13 +868,34 @@ def _create_visual_agent_effect_handler(
             iterations = output_dict.get("iterations")
 
             node_traces = sub.get("node_traces")
+            raw_messages = output_dict.get("messages")
+
+            def _normalize_messages(raw: Any) -> list[Dict[str, Any]]:
+                if isinstance(raw, list):
+                    out: list[Dict[str, Any]] = []
+                    for m in raw:
+                        if isinstance(m, dict):
+                            out.append(dict(m))
+                        else:
+                            out.append({"role": "assistant", "content": str(m)})
+                    return out
+                msgs: list[Dict[str, Any]] = []
+                if str(task or "").strip():
+                    msgs.append({"role": "user", "content": str(task)})
+                if answer.strip():
+                    msgs.append({"role": "assistant", "content": answer})
+                return msgs
+
+            messages_out = _normalize_messages(raw_messages)
             scratchpad = {
                 "sub_run_id": sub_run_id,
                 "workflow_id": react_workflow_id,
+                "messages": messages_out,
                 "node_traces": node_traces if isinstance(node_traces, dict) else {},
                 "steps": _flatten_node_traces(node_traces),
             }
             bucket["scratchpad"] = scratchpad
+            bucket["messages"] = messages_out
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
             bucket["answer"] = answer
 
@@ -891,16 +912,7 @@ def _create_visual_agent_effect_handler(
                     context_out[str(k)] = v
             context_out["task"] = str(task or "")
 
-            raw_messages = output_dict.get("messages")
-            if isinstance(raw_messages, list):
-                context_out["messages"] = [dict(m) if isinstance(m, dict) else m for m in raw_messages]
-            else:
-                msgs: list[Dict[str, Any]] = []
-                if str(task or "").strip():
-                    msgs.append({"role": "user", "content": str(task)})
-                if answer.strip():
-                    msgs.append({"role": "assistant", "content": answer})
-                context_out["messages"] = msgs
+            context_out["messages"] = messages_out
 
             result_obj = {
                 "result": answer,
@@ -912,10 +924,6 @@ def _create_visual_agent_effect_handler(
                 "iterations": iterations,
                 "sub_run_id": sub_run_id,
             }
-
-            # Ergonomics: let consumers Break Object on Agent.result to access tool activity.
-            result_obj["tool_calls"] = tc
-            result_obj["tool_results"] = tr
 
             scratchpad_out = dict(scratchpad)
             scratchpad_out["tool_calls"] = tc
@@ -1153,6 +1161,10 @@ def _create_visual_agent_effect_handler(
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
             answer = bucket.get("answer") if isinstance(bucket.get("answer"), str) else ""
             scratchpad_out = dict(scratchpad)
+            if "messages" not in scratchpad_out:
+                msgs = bucket.get("messages")
+                if isinstance(msgs, list):
+                    scratchpad_out["messages"] = list(msgs)
             scratchpad_out["tool_calls"] = tc
             scratchpad_out["tool_results"] = tr
 
@@ -1553,6 +1565,7 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             current["result"] = raw
             scratchpad = None
             answer: Optional[str] = None
+            messages: Any = None
             agent_ns = temp_data.get("agent")
             if isinstance(agent_ns, dict):
                 bucket = agent_ns.get(node_id)
@@ -1561,6 +1574,7 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     ans = bucket.get("answer")
                     if isinstance(ans, str):
                         answer = ans
+                    messages = bucket.get("messages")
 
             if scratchpad is None:
                 # Fallback: use this node's own trace if present.
@@ -1599,6 +1613,40 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     response = r2.strip()
             elif isinstance(raw, str) and raw.strip():
                 response = raw.strip()
+
+            def _normalize_message_list(raw_msgs: Any) -> list[Dict[str, Any]]:
+                if not isinstance(raw_msgs, list):
+                    return []
+                out: list[Dict[str, Any]] = []
+                for m in raw_msgs:
+                    if isinstance(m, dict):
+                        out.append(dict(m))
+                    else:
+                        out.append({"role": "assistant", "content": str(m)})
+                return out
+
+            def _minimal_transcript() -> list[Dict[str, Any]]:
+                task_s = ""
+                if isinstance(raw, dict):
+                    t = raw.get("task")
+                    if isinstance(t, str) and t.strip():
+                        task_s = t.strip()
+                msgs: list[Dict[str, Any]] = []
+                if task_s:
+                    msgs.append({"role": "user", "content": task_s})
+                if response:
+                    msgs.append({"role": "assistant", "content": response})
+                return msgs
+
+            if not isinstance(scratchpad_out.get("messages"), list):
+                msgs_out = _normalize_message_list(messages)
+                if not msgs_out and isinstance(raw, dict):
+                    ctx = raw.get("context")
+                    ctx_d = ctx if isinstance(ctx, dict) else {}
+                    msgs_out = _normalize_message_list(ctx_d.get("messages"))
+                if not msgs_out:
+                    msgs_out = _minimal_transcript()
+                scratchpad_out["messages"] = msgs_out
 
             meta: Dict[str, Any] = {"schema": "abstractcode.agent.v1.meta", "version": 1}
             provider: Optional[str] = None

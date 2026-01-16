@@ -714,7 +714,9 @@ def data_make_raw_result(inputs: Dict[str, Any]) -> Dict[str, Any]:
     trace_id = inputs.get("trace_id")
     out["trace_id"] = trace_id.strip() if isinstance(trace_id, str) else trace_id
 
-    return {"raw_result": out}
+    # Backward-compat: this node historically output `raw_result`. The recommended
+    # host-facing pin name is now `result`, so we emit both keys.
+    return {"result": out, "raw_result": out}
 
 
 def data_get_element(inputs: Dict[str, Any]) -> Dict[str, Any]:

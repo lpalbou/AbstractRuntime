@@ -102,13 +102,10 @@ def test_visualflow_get_element_node_in_range_negative_and_out_of_range() -> Non
     assert state.status == RunStatus.COMPLETED
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
-    assert isinstance(state.output.get("result"), dict)
-
-    out = state.output["result"]
-    assert out["in_range"] == "b"
-    assert out["in_range_found"] is True
-    assert out["negative"] == "c"
-    assert out["negative_found"] is True
-    assert out["oob"] == "x"
-    assert out["oob_found"] is False
-
+    assert "result" not in state.output
+    assert state.output["in_range"] == "b"
+    assert state.output["in_range_found"] is True
+    assert state.output["negative"] == "c"
+    assert state.output["negative_found"] is True
+    assert state.output["oob"] == "x"
+    assert state.output["oob_found"] is False

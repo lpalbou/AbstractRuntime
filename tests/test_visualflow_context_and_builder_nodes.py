@@ -164,9 +164,9 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
     assert state.status == RunStatus.COMPLETED
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
-    assert isinstance(state.output.get("result"), dict)
+    assert "result" not in state.output
 
-    result = state.output["result"]
+    result = state.output
 
     # Get Context
     assert result["got_context"]["task"] == "from_run"
@@ -204,4 +204,3 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
     assert result["built_raw_result"]["finish_reason"] == "stop"
     assert result["built_raw_result"]["metadata"] == {"debug": True}
     assert result["built_raw_result"]["trace_id"] == "trace-x"
-

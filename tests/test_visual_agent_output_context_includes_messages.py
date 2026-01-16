@@ -1,8 +1,8 @@
-def test_visual_agent_output_context_includes_messages_from_subworkflow():
-    """Agent node result.context should include the agent's accumulated messages.
+def test_visual_agent_unstructured_result_is_minimal_and_messages_live_in_scratchpad():
+    """Agent unstructured output should avoid duplicating transcript/context in `result`.
 
-    This enables stateful VisualFlow graphs that pass the agent output context into
-    subsequent loop iterations or subflows.
+    The user-facing answer is surfaced on the `response` output pin, while the agent-internal
+    transcript is stored under the scratchpad (runtime-owned).
     """
     from abstractruntime.core.models import RunState
     from abstractruntime.visualflow_compiler.compiler import compile_visualflow
@@ -70,14 +70,20 @@ def test_visual_agent_output_context_includes_messages_from_subworkflow():
     result = effects.get("node-agent")
     assert isinstance(result, dict)
 
-    ctx = result.get("context")
-    assert isinstance(ctx, dict)
-    assert ctx.get("task") == "Do the thing."
-    assert ctx.get("foo") == "bar"
+    assert result.get("success") is True
+    assert result.get("context") is None
+    assert result.get("messages") is None
 
-    messages = ctx.get("messages")
+    agent_ns = temp.get("agent")
+    assert isinstance(agent_ns, dict)
+    bucket = agent_ns.get("node-agent")
+    assert isinstance(bucket, dict)
+    scratchpad = bucket.get("scratchpad")
+    assert isinstance(scratchpad, dict)
+    assert scratchpad.get("task") == "Do the thing."
+    assert scratchpad.get("context_extra") == {"foo": "bar"}
+    messages = scratchpad.get("messages")
     assert isinstance(messages, list)
     assert [m.get("role") for m in messages] == ["user", "assistant"]
     assert messages[0].get("content") == "Do the thing."
     assert messages[1].get("content") == "Done."
-

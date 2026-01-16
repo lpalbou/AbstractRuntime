@@ -71,5 +71,5 @@ def test_visualflow_make_object_node_builds_flat_object_from_pins() -> None:
     assert state.status == RunStatus.COMPLETED
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
-    assert state.output.get("result") == {"obj": {"my_var1": "hello", "my_var2": 42}}
-
+    assert "result" not in state.output
+    assert state.output.get("obj") == {"my_var1": "hello", "my_var2": 42}

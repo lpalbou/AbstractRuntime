@@ -70,15 +70,13 @@ def test_visualflow_random_int_and_float_nodes_return_values_in_range() -> None:
     assert state.status == RunStatus.COMPLETED
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
-    assert isinstance(state.output.get("result"), dict)
+    assert "result" not in state.output
 
-    out = state.output["result"]
-    int_val = out["int_val"]
-    float_val = out["float_val"]
+    int_val = state.output["int_val"]
+    float_val = state.output["float_val"]
 
     assert isinstance(int_val, int)
     assert 5 <= int_val <= 10
 
     assert isinstance(float_val, float)
     assert 0.0 <= float_val <= 1.0
-

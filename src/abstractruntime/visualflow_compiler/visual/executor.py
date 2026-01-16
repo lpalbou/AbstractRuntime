@@ -1136,12 +1136,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if not pin_ids:
                 if isinstance(input_data, dict):
                     return dict(input_data)
-                return {"result": input_data}
+                return input_data
 
             if not isinstance(input_data, dict):
                 if len(pin_ids) == 1:
                     return {pin_ids[0]: input_data}
-                return {"result": input_data}
+                return {"response": input_data}
 
             return {pid: input_data.get(pid) for pid in pin_ids}
 

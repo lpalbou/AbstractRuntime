@@ -83,10 +83,9 @@ def test_visualflow_call_tool_node_maps_success_output() -> None:
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
 
-    result = state.output.get("result")
-    assert isinstance(result, dict)
-    assert result.get("tool_success") is True
-    assert result.get("tool_result") == {"ok": True, "x": 7}
+    assert "result" not in state.output
+    assert state.output.get("tool_success") is True
+    assert state.output.get("tool_result") == {"ok": True, "x": 7}
 
 
 def test_visualflow_call_tool_node_maps_error_output() -> None:
@@ -154,9 +153,7 @@ def test_visualflow_call_tool_node_maps_error_output() -> None:
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
 
-    result = state.output.get("result")
-    assert isinstance(result, dict)
-    assert result.get("tool_success") is False
-    assert isinstance(result.get("tool_result"), str)
-    assert "boom" in str(result.get("tool_result"))
-
+    assert "result" not in state.output
+    assert state.output.get("tool_success") is False
+    assert isinstance(state.output.get("tool_result"), str)
+    assert "boom" in str(state.output.get("tool_result"))

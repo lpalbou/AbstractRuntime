@@ -19,6 +19,7 @@ from ...core.runtime import EffectOutcome, EffectHandler
 from .llm_client import AbstractCoreLLMClient
 from .tool_executor import ToolExecutor
 from .logging import get_logger
+from .workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
 
 logger = get_logger(__name__)
 
@@ -592,6 +593,31 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
         # *original* tool call order. Blocked entries are represented as empty-args stubs.
         tool_calls_for_evidence: list[Dict[str, Any]] = []
 
+        # Optional workspace policy (run.vars-driven). When configured, this rewrites/blocks
+        # filesystem-ish tool arguments before they reach the ToolExecutor.
+        scope: Optional[WorkspaceScope] = None
+        try:
+            vars0 = getattr(run, "vars", None)
+            scope = WorkspaceScope.from_input_data(vars0) if isinstance(vars0, dict) else None
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+
+        def _loads_dict_like(value: Any) -> Optional[Dict[str, Any]]:
+            if value is None:
+                return None
+            if isinstance(value, dict):
+                return dict(value)
+            if not isinstance(value, str):
+                return None
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
         for idx, tc in enumerate(tool_calls):
             if not isinstance(tc, dict):
                 blocked_by_index[idx] = {
@@ -632,6 +658,28 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
                     continue
 
             # Allowed (or allowlist disabled): include for execution and keep full args for evidence.
+            if scope is not None:
+                try:
+                    raw_arguments = tc.get("arguments") or {}
+                    arguments = (
+                        dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
+                    )
+                    rewritten_args = rewrite_tool_arguments(tool_name=name, args=arguments, scope=scope)
+                    tc2 = dict(tc)
+                    tc2["arguments"] = rewritten_args
+                    filtered_tool_calls.append(tc2)
+                    tool_calls_for_evidence.append(tc2)
+                except Exception as e:
+                    blocked_by_index[idx] = {
+                        "call_id": call_id,
+                        "name": name,
+                        "success": False,
+                        "output": None,
+                        "error": str(e),
+                    }
+                    tool_calls_for_evidence.append({"call_id": call_id, "name": name, "arguments": tc.get("arguments") or {}})
+                continue
+
             filtered_tool_calls.append(tc)
             tool_calls_for_evidence.append(tc)
 

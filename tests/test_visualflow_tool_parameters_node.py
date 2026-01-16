@@ -123,10 +123,9 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
 
     assert state.output.get("success") is True
 
-    result = state.output.get("result")
-    assert isinstance(result, dict)
+    assert "result" not in state.output
 
-    tool_call = result.get("tool_call")
+    tool_call = state.output.get("tool_call")
     assert tool_call == {
         "name": "send_email",
         "arguments": {
@@ -141,6 +140,6 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
         },
     }
 
-    assert result.get("smtp_host") == "smtp.gmail.com"
-    assert result.get("smtp_port") == 587
-    assert result.get("use_starttls") is True
+    assert state.output.get("smtp_host") == "smtp.gmail.com"
+    assert state.output.get("smtp_port") == 587
+    assert state.output.get("use_starttls") is True

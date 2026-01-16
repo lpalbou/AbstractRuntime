@@ -80,12 +80,9 @@ def test_visualflow_get_random_element_node_non_empty_and_empty() -> None:
     assert state.status == RunStatus.COMPLETED
     assert isinstance(state.output, dict)
     assert state.output.get("success") is True
-    assert isinstance(state.output.get("result"), dict)
+    assert "result" not in state.output
+    assert state.output["picked_found"] is True
+    assert state.output["picked"] in {"a", "b", "c"}
 
-    out = state.output["result"]
-    assert out["picked_found"] is True
-    assert out["picked"] in {"a", "b", "c"}
-
-    assert out["empty_found"] is False
-    assert out["empty"] == "x"
-
+    assert state.output["empty_found"] is False
+    assert state.output["empty"] == "x"

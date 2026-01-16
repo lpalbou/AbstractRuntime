@@ -780,7 +780,7 @@ def _create_visual_agent_effect_handler(
                 run.vars["_flow_error"] = "Agent node missing provider/model configuration"
                 run.vars["_flow_error_node"] = node_id
                 out = {
-                    "result": "Agent configuration error: missing provider/model",
+                    "response": "Agent configuration error: missing provider/model",
                     "task": task,
                     "context": context,
                     "success": False,
@@ -790,6 +790,7 @@ def _create_visual_agent_effect_handler(
                 }
                 _set_nested(run.vars, f"_temp.effects.{node_id}", out)
                 bucket["phase"] = "done"
+
                 scratchpad = {"node_id": node_id, "steps": [], "tool_calls": [], "tool_results": []}
                 meta: Dict[str, Any] = {
                     "schema": "abstractcode.agent.v1.meta",
@@ -800,21 +801,37 @@ def _create_visual_agent_effect_handler(
                     "tool_results": 0,
                 }
                 flow._node_outputs[node_id] = {
-                    "response": str(out.get("result") or ""),
+                    "response": str(out.get("response") or ""),
+                    "success": False,
                     "meta": meta,
                     "scratchpad": scratchpad,
-                    "result": out,
                     # Backward-compat / convenience:
                     "tool_calls": [],
                     "tool_results": [],
                 }
-                run.vars["_last_output"] = {"result": out}
+                run.vars["_last_output"] = dict(flow._node_outputs.get(node_id) or {})
                 if next_node:
                     return StepPlan(node_id=node_id, next_node=next_node)
-                return StepPlan(node_id=node_id, complete_output={"result": out, "success": False})
+                return StepPlan(
+                    node_id=node_id,
+                    complete_output={
+                        "response": str(out.get("response") or ""),
+                        "success": False,
+                        "meta": meta,
+                        "scratchpad": scratchpad,
+                    },
+                )
 
             bucket["phase"] = "subworkflow"
-            flow._node_outputs[node_id] = {"status": "running", "task": task, "context": context, "result": None}
+            flow._node_outputs[node_id] = {
+                "status": "running",
+                "task": task,
+                "context": context,
+                "response": "",
+                "success": None,
+                "meta": None,
+                "scratchpad": None,
+            }
 
             return StepPlan(
                 node_id=node_id,
@@ -887,43 +904,40 @@ def _create_visual_agent_effect_handler(
                 return msgs
 
             messages_out = _normalize_messages(raw_messages)
-            scratchpad = {
-                "sub_run_id": sub_run_id,
-                "workflow_id": react_workflow_id,
-                "messages": messages_out,
-                "node_traces": node_traces if isinstance(node_traces, dict) else {},
-                "steps": _flatten_node_traces(node_traces),
-            }
-            bucket["scratchpad"] = scratchpad
-            bucket["messages"] = messages_out
-            tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
-            bucket["answer"] = answer
-
-            # Expose an Agent-friendly context object that includes the accumulated
-            # conversation history from the ReAct subworkflow (context.messages).
-            #
-            # Previously, the Agent result echoed the input `context` pin, which is
-            # often `{}` and does not reflect the agent's internal message history.
-            context_out: Dict[str, Any] = {}
+            context_extra: Dict[str, Any] = {}
             if isinstance(context, dict) and context:
                 for k, v in context.items():
                     if k in ("task", "messages"):
                         continue
-                    context_out[str(k)] = v
-            context_out["task"] = str(task or "")
-
-            context_out["messages"] = messages_out
-
-            result_obj = {
-                "result": answer,
-                "task": task,
-                "context": context_out,
-                "success": True,
-                "provider": provider,
-                "model": model,
-                "iterations": iterations,
+                    context_extra[str(k)] = v
+            scratchpad = {
                 "sub_run_id": sub_run_id,
+                "workflow_id": react_workflow_id,
+                "task": str(task or ""),
+                "messages": messages_out,
+                "node_traces": node_traces if isinstance(node_traces, dict) else {},
+                "steps": _flatten_node_traces(node_traces),
             }
+            if context_extra:
+                scratchpad["context_extra"] = context_extra
+            bucket["scratchpad"] = scratchpad
+            bucket["messages"] = messages_out
+            tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
+            bucket["answer"] = answer
+            bucket["success"] = True
+            bucket["provider"] = provider
+            bucket["model"] = model
+            bucket["output_mode"] = "unstructured"
+            if iterations is not None:
+                bucket["iterations"] = iterations
+            if sub_run_id:
+                bucket["sub_run_id"] = sub_run_id
+
+            # Agent `result` is intentionally minimal in unstructured mode.
+            # - The user-facing answer string is available on the `response` output pin.
+            # - Execution metadata belongs in `meta`.
+            # - The agent-internal transcript lives in `scratchpad.messages`.
+            result_obj: Dict[str, Any] = {"success": True}
 
             scratchpad_out = dict(scratchpad)
             scratchpad_out["tool_calls"] = tc
@@ -932,6 +946,7 @@ def _create_visual_agent_effect_handler(
             meta: Dict[str, Any] = {
                 "schema": "abstractcode.agent.v1.meta",
                 "version": 1,
+                "output_mode": "unstructured",
                 "provider": provider,
                 "model": model,
                 "tool_calls": len(tc),
@@ -1122,17 +1137,25 @@ def _create_visual_agent_effect_handler(
             bucket["phase"] = "done"
             flow._node_outputs[node_id] = {
                 "response": answer,
+                "success": True,
                 "meta": meta,
                 "scratchpad": scratchpad_out,
-                "result": result_obj,
                 # Backward-compat / convenience:
                 "tool_calls": tc,
                 "tool_results": tr,
             }
-            run.vars["_last_output"] = {"result": result_obj}
+            run.vars["_last_output"] = dict(flow._node_outputs.get(node_id) or {})
             if next_node:
                 return StepPlan(node_id=node_id, next_node=next_node)
-            return StepPlan(node_id=node_id, complete_output={"result": result_obj, "success": True})
+            return StepPlan(
+                node_id=node_id,
+                complete_output={
+                    "response": answer,
+                    "success": True,
+                    "meta": meta,
+                    "scratchpad": scratchpad_out,
+                },
+            )
 
         if phase == "structured":
             structured_resp = bucket.get("structured")
@@ -1171,6 +1194,7 @@ def _create_visual_agent_effect_handler(
             meta: Dict[str, Any] = {
                 "schema": "abstractcode.agent.v1.meta",
                 "version": 1,
+                "output_mode": "structured",
                 "provider": provider,
                 "model": model,
                 "tool_calls": len(tc),
@@ -1180,23 +1204,51 @@ def _create_visual_agent_effect_handler(
             if isinstance(sr, str) and sr.strip():
                 meta["sub_run_id"] = sr.strip()
 
+            try:
+                response_text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                response_text = str(data)
+
             flow._node_outputs[node_id] = {
-                "response": str(answer),
+                "response": response_text,
+                "success": True,
                 "meta": meta,
                 "scratchpad": scratchpad_out,
-                "result": data,
                 # Backward-compat / convenience:
                 "tool_calls": tc,
                 "tool_results": tr,
             }
-            run.vars["_last_output"] = {"result": data}
+            bucket["output_mode"] = "structured"
+            run.vars["_last_output"] = dict(flow._node_outputs.get(node_id) or {})
             if next_node:
                 return StepPlan(node_id=node_id, next_node=next_node)
-            return StepPlan(node_id=node_id, complete_output={"result": data, "success": True})
+            return StepPlan(
+                node_id=node_id,
+                complete_output={
+                    "response": response_text,
+                    "success": True,
+                    "meta": meta,
+                    "scratchpad": scratchpad_out,
+                },
+            )
 
         if next_node:
             return StepPlan(node_id=node_id, next_node=next_node)
-        return StepPlan(node_id=node_id, complete_output={"result": run.vars.get("_last_output"), "success": True})
+        last = run.vars.get("_last_output")
+        if isinstance(last, dict):
+            return StepPlan(
+                node_id=node_id,
+                complete_output={
+                    "response": str(last.get("response") or ""),
+                    "success": bool(last.get("success")) if "success" in last else True,
+                    "meta": last.get("meta") if isinstance(last.get("meta"), dict) else {},
+                    "scratchpad": last.get("scratchpad"),
+                },
+            )
+        return StepPlan(
+            node_id=node_id,
+            complete_output={"response": str(last) if last is not None else "", "success": True, "meta": {}, "scratchpad": None},
+        )
 
     return handler
 
@@ -1221,6 +1273,13 @@ def _create_visual_function_handler(
 
     def handler(run: Any, ctx: Any) -> "StepPlan":
         """Execute the function and transition to next node."""
+        def _to_complete_output(value: Any) -> Dict[str, Any]:
+            if isinstance(value, dict):
+                out = dict(value)
+                out.setdefault("success", True)
+                return out
+            return {"response": value, "success": True}
+
         # Sync effect results from run.vars to flow._node_outputs
         # This allows data edges from effect nodes to resolve correctly
         if hasattr(flow, '_node_outputs') and hasattr(flow, '_data_edge_map'):
@@ -1287,7 +1346,7 @@ def _create_visual_function_handler(
                 if branch in {"true", "false", "default"} or branch.startswith("case:"):
                     return StepPlan(
                         node_id=node_id,
-                        complete_output={"result": result, "success": True},
+                        complete_output=_to_complete_output(result),
                     )
 
                 run.vars["_flow_error"] = f"Unknown branch '{branch}'"
@@ -1307,7 +1366,7 @@ def _create_visual_function_handler(
             return StepPlan(node_id=node_id, next_node=next_node)
         return StepPlan(
             node_id=node_id,
-            complete_output={"result": result, "success": True},
+            complete_output=_to_complete_output(result),
         )
 
     return handler
@@ -1380,6 +1439,25 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
     effects = temp_data.get("effects")
     if not isinstance(effects, dict):
         effects = {}
+
+    # Determine which output pins are actually referenced by data edges.
+    # This lets us keep legacy pins (e.g. `result`) working for older saved flows,
+    # without emitting them for new flows that don't wire them.
+    referenced_source_pins: set[tuple[str, str]] = set()
+    try:
+        data_edge_map = getattr(flow, "_data_edge_map", None)
+        if isinstance(data_edge_map, dict):
+            for target_pins in data_edge_map.values():
+                if not isinstance(target_pins, dict):
+                    continue
+                for src_any in target_pins.values():
+                    if not (isinstance(src_any, tuple) and len(src_any) == 2):
+                        continue
+                    src_node_id, src_pin_id = src_any
+                    if isinstance(src_node_id, str) and isinstance(src_pin_id, str):
+                        referenced_source_pins.add((src_node_id, src_pin_id))
+    except Exception:
+        referenced_source_pins = set()
 
     def _get_span_id(raw: Any) -> Optional[str]:
         if not isinstance(raw, dict):
@@ -1507,20 +1585,69 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 mapped_value = raw
         elif effect_type == "llm_call":
             if isinstance(raw, dict):
-                current["response"] = raw.get("content")
+                tool_calls = _as_dict_list(raw.get("tool_calls"))
+                data = raw.get("data")
+                response_text = ""
+                if isinstance(data, (dict, list)):
+                    try:
+                        import json as _json
+
+                        response_text = _json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+                    except Exception:
+                        response_text = ""
+                if not response_text:
+                    content = raw.get("content")
+                    response_text = str(content) if content is not None else ""
+                current["response"] = response_text
                 # Convenience pin: expose tool_calls directly, instead of forcing consumers
                 # to drill into `result.tool_calls` via a Break Object node.
-                current["tool_calls"] = _as_dict_list(raw.get("tool_calls"))
-                # Expose the full normalized LLM result as an object output pin (`result`).
-                # This enables deterministic state-machine workflows to branch on:
-                # - tool_calls
-                # - usage / model / finish_reason
-                # - trace_id / metadata for observability
-                current["result"] = raw
-                current["gen_time"] = raw.get("gen_time")
-                current["ttft_ms"] = raw.get("ttft_ms")
-                current["raw"] = raw
-                mapped_value = current["response"]
+                current["tool_calls"] = tool_calls
+                current["success"] = True
+
+                meta: Dict[str, Any] = {
+                    "schema": "abstractflow.llm_call.v1.meta",
+                    "version": 1,
+                    "output_mode": "structured" if isinstance(data, (dict, list)) else "unstructured",
+                    "tool_calls": len(tool_calls),
+                }
+                provider = raw.get("provider")
+                if isinstance(provider, str) and provider.strip():
+                    meta["provider"] = provider.strip()
+                model = raw.get("model")
+                if isinstance(model, str) and model.strip():
+                    meta["model"] = model.strip()
+                finish_reason = raw.get("finish_reason")
+                if isinstance(finish_reason, str) and finish_reason.strip():
+                    meta["finish_reason"] = finish_reason.strip()
+                usage = raw.get("usage")
+                if isinstance(usage, dict):
+                    meta["usage"] = dict(usage)
+                trace_id = raw.get("trace_id")
+                if not (isinstance(trace_id, str) and trace_id.strip()):
+                    md = raw.get("metadata")
+                    if isinstance(md, dict):
+                        trace_id = md.get("trace_id")
+                if isinstance(trace_id, str) and trace_id.strip():
+                    meta["trace"] = {"trace_id": trace_id.strip()}
+                gen_time = raw.get("gen_time")
+                if gen_time is not None and not isinstance(gen_time, bool):
+                    meta["gen_time"] = gen_time
+                ttft_ms = raw.get("ttft_ms")
+                if ttft_ms is not None and not isinstance(ttft_ms, bool):
+                    meta["ttft_ms"] = ttft_ms
+
+                current["meta"] = meta
+                # Legacy pins for older saved flows.
+                # Only populate if the flow actually references these handles.
+                if (node_id, "result") in referenced_source_pins:
+                    current["result"] = raw
+                if (node_id, "raw") in referenced_source_pins:
+                    current["raw"] = raw
+                if (node_id, "gen_time") in referenced_source_pins:
+                    current["gen_time"] = gen_time
+                if (node_id, "ttft_ms") in referenced_source_pins:
+                    current["ttft_ms"] = ttft_ms
+                mapped_value = response_text
         elif effect_type == "tool_calls":
             # Effect outcome is produced by AbstractRuntime TOOL_CALLS handler:
             # - executed: {"mode":"executed","results":[{call_id,name,success,output,error}, ...]}
@@ -1562,10 +1689,15 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 current["raw"] = raw
                 mapped_value = current["result"]
         elif effect_type == "agent":
-            current["result"] = raw
             scratchpad = None
             answer: Optional[str] = None
             messages: Any = None
+            bucket_success: Optional[bool] = None
+            bucket_provider: Optional[str] = None
+            bucket_model: Optional[str] = None
+            bucket_iterations: Optional[int] = None
+            bucket_sub_run_id: Optional[str] = None
+            bucket_output_mode: Optional[str] = None
             agent_ns = temp_data.get("agent")
             if isinstance(agent_ns, dict):
                 bucket = agent_ns.get(node_id)
@@ -1575,6 +1707,30 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     if isinstance(ans, str):
                         answer = ans
                     messages = bucket.get("messages")
+                    if "success" in bucket:
+                        bucket_success = bool(bucket.get("success"))
+                    bp = bucket.get("provider")
+                    bm = bucket.get("model")
+                    if isinstance(bp, str) and bp.strip():
+                        bucket_provider = bp.strip()
+                    if isinstance(bm, str) and bm.strip():
+                        bucket_model = bm.strip()
+                    bi = bucket.get("iterations")
+                    try:
+                        if isinstance(bi, bool):
+                            bucket_iterations = None
+                        elif isinstance(bi, (int, float)):
+                            bucket_iterations = int(bi)
+                        elif isinstance(bi, str) and bi.strip():
+                            bucket_iterations = int(float(bi.strip()))
+                    except Exception:
+                        bucket_iterations = None
+                    bsr = bucket.get("sub_run_id")
+                    if isinstance(bsr, str) and bsr.strip():
+                        bucket_sub_run_id = bsr.strip()
+                    bom = bucket.get("output_mode")
+                    if isinstance(bom, str) and bom.strip():
+                        bucket_output_mode = bom.strip()
 
             if scratchpad is None:
                 # Fallback: use this node's own trace if present.
@@ -1602,17 +1758,25 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             # - prefer preserved unstructured answer (before structured-output post-pass)
             # - fall back to common keys inside the raw result
             response = ""
-            if isinstance(answer, str) and answer.strip():
-                response = answer.strip()
-            elif isinstance(raw, dict):
-                r1 = raw.get("result")
-                r2 = raw.get("response")
-                if isinstance(r1, str) and r1.strip():
-                    response = r1.strip()
-                elif isinstance(r2, str) and r2.strip():
-                    response = r2.strip()
-            elif isinstance(raw, str) and raw.strip():
-                response = raw.strip()
+            if bucket_output_mode == "structured" and isinstance(raw, dict):
+                try:
+                    import json as _json
+
+                    response = _json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                except Exception:
+                    response = ""
+            if not response:
+                if isinstance(answer, str) and answer.strip():
+                    response = answer.strip()
+                elif isinstance(raw, dict):
+                    r1 = raw.get("result")
+                    r2 = raw.get("response")
+                    if isinstance(r1, str) and r1.strip():
+                        response = r1.strip()
+                    elif isinstance(r2, str) and r2.strip():
+                        response = r2.strip()
+                elif isinstance(raw, str) and raw.strip():
+                    response = raw.strip()
 
             def _normalize_message_list(raw_msgs: Any) -> list[Dict[str, Any]]:
                 if not isinstance(raw_msgs, list):
@@ -1653,6 +1817,7 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             model: Optional[str] = None
             iterations: Optional[int] = None
             sub_run_id: Optional[str] = None
+            success: Optional[bool] = bucket_success
 
             if isinstance(raw, dict):
                 p = raw.get("provider")
@@ -1676,11 +1841,20 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 sr = raw.get("sub_run_id")
                 if isinstance(sr, str) and sr.strip():
                     sub_run_id = sr.strip()
+                if "success" in raw:
+                    success = bool(raw.get("success"))
 
             if sub_run_id is None:
-                sr = scratchpad_out.get("sub_run_id")
+                sr = bucket_sub_run_id or scratchpad_out.get("sub_run_id")
                 if isinstance(sr, str) and sr.strip():
                     sub_run_id = sr.strip()
+
+            if provider is None:
+                provider = bucket_provider
+            if model is None:
+                model = bucket_model
+            if iterations is None:
+                iterations = bucket_iterations
 
             # Structured-output mode stores the final output object under `raw` without
             # provider/model metadata. When resuming from persisted state, infer these
@@ -1730,10 +1904,24 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 meta["iterations"] = iterations
             meta["tool_calls"] = len(tc)
             meta["tool_results"] = len(tr)
+            if bucket_output_mode:
+                meta["output_mode"] = bucket_output_mode
 
             current["response"] = response
+            current["success"] = bool(success) if success is not None else True
             current["meta"] = meta
             current["scratchpad"] = scratchpad_out
+            # Legacy pin: older flows may still wire Agent.result into Break Object.
+            if (node_id, "result") in referenced_source_pins:
+                if isinstance(raw, dict) and (set(raw.keys()) - {"success"}):
+                    current["result"] = raw
+                else:
+                    current["result"] = {
+                        "response": response,
+                        "success": current["success"],
+                        "meta": meta,
+                        "scratchpad": scratchpad_out,
+                    }
 
             # Backward-compat / convenience: keep top-level tool activity too.
             current["tool_calls"] = tc

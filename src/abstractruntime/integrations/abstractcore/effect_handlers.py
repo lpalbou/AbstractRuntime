@@ -220,10 +220,42 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
     except Exception as e:  # pragma: no cover
         raise RuntimeError(f"Pydantic is required for structured outputs: {e}")
 
+    from typing import Literal, Union
+
+    NoneType = type(None)
+
     def _python_type(sub_schema: Any, *, nested_name: str) -> Any:
         if not isinstance(sub_schema, dict):
             return Any
+        # Enums: represent as Literal[...] so Pydantic can enforce allowed values.
+        enum_raw = sub_schema.get("enum")
+        if isinstance(enum_raw, list) and enum_raw:
+            try:
+                return Literal.__getitem__(tuple(enum_raw))  # type: ignore[attr-defined]
+            except Exception:
+                return Any
+
         t = sub_schema.get("type")
+        if isinstance(t, list) and t:
+            # Union types (e.g. ["string","null"]).
+            variants: list[Any] = []
+            for tt in t:
+                if tt == "null":
+                    variants.append(NoneType)
+                    continue
+                if isinstance(tt, str) and tt:
+                    variants.append(_python_type(dict(sub_schema, type=tt), nested_name=nested_name))
+            # Drop Any from unions to avoid masking concrete variants.
+            variants2 = [v for v in variants if v is not Any]
+            variants = variants2 or variants
+            if not variants:
+                return Any
+            if len(variants) == 1:
+                return variants[0]
+            try:
+                return Union.__getitem__(tuple(variants))  # type: ignore[attr-defined]
+            except Exception:
+                return Any
         if t == "string":
             return str
         if t == "integer":
@@ -467,6 +499,41 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             except Exception:
                 # Never fail an LLM call due to trimming.
                 pass
+
+        # Enforce output token budgets (max_output_tokens) when configured.
+        #
+        # Priority:
+        # 1) explicit params (payload.params.max_output_tokens / max_tokens)
+        # 2) explicit payload field (payload.max_output_tokens / max_out_tokens)
+        # 3) run-level default limits (run.vars._limits.max_output_tokens)
+        max_output_tokens: Optional[int] = None
+        try:
+            raw_max_out = None
+            if "max_output_tokens" in params:
+                raw_max_out = params.get("max_output_tokens")
+            elif "max_tokens" in params:
+                raw_max_out = params.get("max_tokens")
+            if raw_max_out is None:
+                raw_max_out = payload.get("max_output_tokens")
+                if raw_max_out is None:
+                    raw_max_out = payload.get("max_out_tokens")
+            if raw_max_out is None:
+                limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                raw_max_out = limits.get("max_output_tokens") if isinstance(limits, dict) else None
+            if raw_max_out is not None and not isinstance(raw_max_out, bool):
+                parsed = int(raw_max_out)
+                if parsed > 0:
+                    max_output_tokens = parsed
+        except Exception:
+            max_output_tokens = None
+
+        if (
+            isinstance(max_output_tokens, int)
+            and max_output_tokens > 0
+            and "max_output_tokens" not in params
+            and "max_tokens" not in params
+        ):
+            params["max_output_tokens"] = int(max_output_tokens)
 
         def _coerce_boolish(value: Any) -> bool:
             if isinstance(value, bool):

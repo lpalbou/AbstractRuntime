@@ -8,7 +8,9 @@ Key concepts:
 - `workspace_access_mode`:
   - `workspace_only` (default): absolute paths must remain under `workspace_root`
   - `all_except_ignored`: absolute paths may escape `workspace_root` unless blocked by `workspace_ignored_paths`
+  - `workspace_or_allowed`: absolute paths may escape `workspace_root` only when under `workspace_allowed_paths`
 - `workspace_ignored_paths`: denylist of directories (absolute or relative-to-workspace_root).
+- `workspace_allowed_paths`: allowlist of directories (absolute or relative-to-workspace_root).
 
 Important limitations:
 - `execute_command` is not a sandbox; commands can still write outside via absolute paths / `cd ..`.
@@ -21,9 +23,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-WorkspaceAccessMode = str  # "workspace_only" | "all_except_ignored"
+WorkspaceAccessMode = str  # "workspace_only" | "all_except_ignored" | "workspace_or_allowed"
 
-_VALID_ACCESS_MODES: set[str] = {"workspace_only", "all_except_ignored"}
+_VALID_ACCESS_MODES: set[str] = {"workspace_only", "all_except_ignored", "workspace_or_allowed"}
 
 
 def _resolve_no_strict(path: Path) -> Path:
@@ -109,6 +111,35 @@ def _parse_ignored_paths(raw: Any) -> list[str]:
     return []
 
 
+def _parse_allowed_paths(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        out: list[str] = []
+        for x in raw:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+        return out
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        # Tolerate users pasting a JSON array into a text field.
+        if text.startswith("["):
+            try:
+                import json
+
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()]
+            except Exception:
+                pass
+        # Newline-separated entries (UI-friendly).
+        lines = [ln.strip() for ln in text.splitlines()]
+        return [ln for ln in lines if ln]
+    return []
+
+
 def _resolve_ignored_paths(*, root: Path, ignored: Iterable[str]) -> Tuple[Path, ...]:
     out: list[Path] = []
     for raw in ignored:
@@ -120,6 +151,19 @@ def _resolve_ignored_paths(*, root: Path, ignored: Iterable[str]) -> Tuple[Path,
             p = root / p
         out.append(_resolve_no_strict(p))
     # Stable ordering for deterministic error messages/tests.
+    return tuple(dict.fromkeys(out))
+
+
+def _resolve_allowed_paths(*, root: Path, allowed: Iterable[str]) -> Tuple[Path, ...]:
+    out: list[Path] = []
+    for raw in allowed:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        p = Path(s).expanduser()
+        if not p.is_absolute():
+            p = root / p
+        out.append(_resolve_no_strict(p))
     return tuple(dict.fromkeys(out))
 
 
@@ -160,6 +204,9 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
         if scope.access_mode == "workspace_only":
             if not _is_under(resolved, scope.root):
                 raise ValueError(f"Path escapes workspace_root: '{user_path}'")
+        elif scope.access_mode == "workspace_or_allowed":
+            if not _is_under(resolved, scope.root) and not any(_is_under(resolved, p) for p in scope.allowed_paths):
+                raise ValueError(f"Path is outside workspace roots: '{user_path}'")
         _ensure_allowed(path=resolved, scope=scope)
         return resolved
 
@@ -191,6 +238,7 @@ class WorkspaceScope:
     root: Path
     access_mode: WorkspaceAccessMode = "workspace_only"
     ignored_paths: Tuple[Path, ...] = ()
+    allowed_paths: Tuple[Path, ...] = ()
 
     @classmethod
     def from_input_data(
@@ -216,8 +264,10 @@ class WorkspaceScope:
         access_mode = _normalize_access_mode(input_data.get("workspace_access_mode") or input_data.get("workspaceAccessMode"))
         ignored = _parse_ignored_paths(input_data.get("workspace_ignored_paths") or input_data.get("workspaceIgnoredPaths"))
         ignored_paths = _resolve_ignored_paths(root=root, ignored=ignored)
+        allowed = _parse_allowed_paths(input_data.get("workspace_allowed_paths") or input_data.get("workspaceAllowedPaths"))
+        allowed_paths = _resolve_allowed_paths(root=root, allowed=allowed)
 
-        return cls(root=root, access_mode=access_mode, ignored_paths=ignored_paths)
+        return cls(root=root, access_mode=access_mode, ignored_paths=ignored_paths, allowed_paths=allowed_paths)
 
 
 class WorkspaceScopedToolExecutor:

@@ -528,11 +528,8 @@ def data_make_object(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def data_make_context(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Build a context object {task, messages, ...context_extra}."""
-    extra = inputs.get("context_extra")
-    if not isinstance(extra, dict):
-        # Backward-compat: older flows used `extra`.
-        extra = inputs.get("extra")
-    out: Dict[str, Any] = dict(extra) if isinstance(extra, dict) else {}
+    context_extra = inputs.get("context_extra")
+    out: Dict[str, Any] = dict(context_extra) if isinstance(context_extra, dict) else {}
 
     task = inputs.get("task")
     if task is None:
@@ -683,6 +680,10 @@ def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(usage, dict):
         out["usage"] = dict(usage)
 
+    trace = inputs.get("trace")
+    if isinstance(trace, dict):
+        out["trace"] = dict(trace)
+
     trace_id = inputs.get("trace_id")
     trace_id_str = trace_id.strip() if isinstance(trace_id, str) and trace_id.strip() else ""
     if trace_id_str:
@@ -710,8 +711,7 @@ def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def data_make_scratchpad(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Build a scratchpad/trace envelope (commonly from Agent outputs)."""
-    extra = inputs.get("extra")
-    out: Dict[str, Any] = dict(extra) if isinstance(extra, dict) else {}
+    out: Dict[str, Any] = {}
 
     sub_run_id = inputs.get("sub_run_id")
     if isinstance(sub_run_id, str) and sub_run_id.strip():
@@ -739,6 +739,7 @@ def data_make_scratchpad(inputs: Dict[str, Any]) -> Dict[str, Any]:
     else:
         out["messages"] = [messages]
 
+    # Optional nested context extras (kept for backwards compatibility).
     context_extra = inputs.get("context_extra")
     if isinstance(context_extra, dict):
         out["context_extra"] = dict(context_extra)
@@ -777,44 +778,6 @@ def data_make_scratchpad(inputs: Dict[str, Any]) -> Dict[str, Any]:
         out["tool_results"] = [tool_results]
 
     return {"scratchpad": out}
-
-
-def data_make_raw_result(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a normalized raw LLM result envelope (best-effort)."""
-    extra = inputs.get("extra")
-    out: Dict[str, Any] = dict(extra) if isinstance(extra, dict) else {}
-
-    # Reserved keys: always set from pins (override extra).
-    out["content"] = inputs.get("content")
-    out["data"] = inputs.get("data")
-
-    tool_calls = inputs.get("tool_calls")
-    if isinstance(tool_calls, list):
-        out["tool_calls"] = list(tool_calls)
-    elif isinstance(tool_calls, tuple):
-        out["tool_calls"] = list(tool_calls)
-    elif tool_calls is None:
-        out["tool_calls"] = []
-    else:
-        out["tool_calls"] = [tool_calls]
-
-    out["usage"] = inputs.get("usage")
-
-    model = inputs.get("model")
-    out["model"] = model.strip() if isinstance(model, str) else model
-
-    finish_reason = inputs.get("finish_reason")
-    out["finish_reason"] = finish_reason.strip() if isinstance(finish_reason, str) else finish_reason
-
-    metadata = inputs.get("metadata")
-    out["metadata"] = dict(metadata) if isinstance(metadata, dict) else metadata
-
-    trace_id = inputs.get("trace_id")
-    out["trace_id"] = trace_id.strip() if isinstance(trace_id, str) else trace_id
-
-    # Backward-compat: this node historically output `raw_result`. The recommended
-    # host-facing pin name is now `result`, so we emit both keys.
-    return {"result": out, "raw_result": out}
 
 
 def data_get_element(inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -1388,7 +1351,6 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "add_message": data_add_message,
     "make_meta": data_make_meta,
     "make_scratchpad": data_make_scratchpad,
-    "make_raw_result": data_make_raw_result,
     "get_element": data_get_element,
     "get_random_element": data_get_random_element,
     "array_map": data_array_map,

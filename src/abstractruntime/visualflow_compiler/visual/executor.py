@@ -899,6 +899,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     out["max_input_tokens"] = input_data.get("max_input_tokens")
                 else:
                     out["max_input_tokens"] = input_data.get("maxInputTokens")
+            if isinstance(input_data, dict) and (
+                "max_out_tokens" in input_data or "max_output_tokens" in input_data or "maxOutputTokens" in input_data
+            ):
+                if "max_out_tokens" in input_data:
+                    out["max_output_tokens"] = input_data.get("max_out_tokens")
+                elif "max_output_tokens" in input_data:
+                    out["max_output_tokens"] = input_data.get("max_output_tokens")
+                else:
+                    out["max_output_tokens"] = input_data.get("maxOutputTokens")
             if isinstance(input_data, dict) and "temperature" in input_data:
                 out["temperature"] = input_data.get("temperature")
             if isinstance(input_data, dict) and "seed" in input_data:
@@ -1461,6 +1470,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if max_input_tokens_default is None:
             max_input_tokens_default = config.get("maxInputTokens")
 
+        max_output_tokens_default = config.get("max_output_tokens")
+        if max_output_tokens_default is None:
+            max_output_tokens_default = config.get("maxOutputTokens")
+
         structured_output_fallback_cfg = config.get("structured_output_fallback")
         structured_output_fallback_default = (
             _coerce_bool(structured_output_fallback_cfg) if structured_output_fallback_cfg is not None else False
@@ -1617,6 +1630,25 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             except Exception:
                 max_input_tokens_value = None
 
+            max_output_tokens_value: Optional[int] = None
+            raw_max_out: Any = None
+            if isinstance(input_data, dict):
+                if "max_out_tokens" in input_data:
+                    raw_max_out = input_data.get("max_out_tokens")
+                elif "max_output_tokens" in input_data:
+                    raw_max_out = input_data.get("max_output_tokens")
+                elif "maxOutputTokens" in input_data:
+                    raw_max_out = input_data.get("maxOutputTokens")
+            if raw_max_out is None:
+                raw_max_out = max_output_tokens_default
+            try:
+                if raw_max_out is not None and not isinstance(raw_max_out, bool):
+                    parsed = int(raw_max_out)
+                    if parsed > 0:
+                        max_output_tokens_value = parsed
+            except Exception:
+                max_output_tokens_value = None
+
             provider = (
                 input_data.get("provider")
                 if isinstance(input_data, dict) and isinstance(input_data.get("provider"), str)
@@ -1651,6 +1683,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             params: Dict[str, Any] = {"temperature": float(temperature_value)}
             if seed_value >= 0:
                 params["seed"] = seed_value
+            if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
+                params["max_output_tokens"] = int(max_output_tokens_value)
 
             if not provider or not model:
                 return {

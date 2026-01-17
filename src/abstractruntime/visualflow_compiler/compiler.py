@@ -561,6 +561,7 @@ def _create_visual_agent_effect_handler(
         include_context: bool = False,
         max_iterations: Optional[int] = None,
         max_input_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         parent_limits = run.vars.get("_limits")
         limits = dict(parent_limits) if isinstance(parent_limits, dict) else {}
@@ -581,6 +582,9 @@ def _create_visual_agent_effect_handler(
 
         if isinstance(max_input_tokens, int) and max_input_tokens > 0:
             limits["max_input_tokens"] = int(max_input_tokens)
+
+        if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+            limits["max_output_tokens"] = int(max_output_tokens)
 
         ctx_ns: Dict[str, Any] = {"task": str(task or ""), "messages": []}
 
@@ -689,6 +693,21 @@ def _create_visual_agent_effect_handler(
             return None
         return None
 
+    def _coerce_max_output_tokens(value: Any) -> Optional[int]:
+        # Same coercion rules as max_input_tokens: accept int/float/string, reject <=0.
+        try:
+            if value is None or isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                iv = int(float(value))
+                return iv if iv > 0 else None
+            if isinstance(value, str) and value.strip():
+                iv = int(float(value.strip()))
+                return iv if iv > 0 else None
+        except Exception:
+            return None
+        return None
+
     def _coerce_temperature(value: Any, default: float = 0.7) -> float:
         try:
             if value is None or isinstance(value, bool):
@@ -783,6 +802,17 @@ def _create_visual_agent_effect_handler(
         max_input_tokens_override = _coerce_max_input_tokens(max_input_tokens_raw)
         if max_input_tokens_override is None:
             max_input_tokens_override = _coerce_max_input_tokens(agent_config.get("max_input_tokens"))
+
+        # Token budget (max_output_tokens) can come from a data-edge pin or from config.
+        max_output_tokens_raw: Any = None
+        if isinstance(resolved_inputs, dict):
+            if "max_output_tokens" in resolved_inputs:
+                max_output_tokens_raw = resolved_inputs.get("max_output_tokens")
+            elif "max_out_tokens" in resolved_inputs:
+                max_output_tokens_raw = resolved_inputs.get("max_out_tokens")
+        max_output_tokens_override = _coerce_max_output_tokens(max_output_tokens_raw)
+        if max_output_tokens_override is None:
+            max_output_tokens_override = _coerce_max_output_tokens(agent_config.get("max_output_tokens"))
 
         # Sampling controls can come from pins or from config.
         if isinstance(resolved_inputs, dict) and "temperature" in resolved_inputs:
@@ -905,6 +935,7 @@ def _create_visual_agent_effect_handler(
                             include_context=include_context,
                             max_iterations=max_iterations_override,
                             max_input_tokens=max_input_tokens_override,
+                            max_output_tokens=max_output_tokens_override,
                         ),
                         # Run Agent as a durable async subworkflow so the host can:
                         # - tick the child incrementally (real-time observability of each effect)

@@ -121,30 +121,6 @@ def _rename_pin_defaults(pin_defaults: Any, renames: Dict[str, str]) -> Any:
     return out
 
 
-def _migrate_node_prompt_pins(node_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize deprecated prompt pin ids (`request`/`task`) to `prompt`."""
-    if not isinstance(data, dict):
-        return data
-    t = str(node_type or "").strip()
-    if not t:
-        return data
-
-    # Only migrate known prompt-carrying nodes to avoid clobbering unrelated "request"/"task" pins.
-    if t == NodeType.ON_FLOW_START.value:
-        renames = {"request": "prompt", "task": "prompt"}
-        if "outputs" in data:
-            data["outputs"] = _rename_pin_ids(data.get("outputs"), renames)
-        if "pinDefaults" in data:
-            data["pinDefaults"] = _rename_pin_defaults(data.get("pinDefaults"), renames)
-    elif t in {NodeType.AGENT.value, "llm_call"}:
-        renames = {"request": "prompt", "task": "prompt"}
-        if "inputs" in data:
-            data["inputs"] = _rename_pin_ids(data.get("inputs"), renames)
-        if "pinDefaults" in data:
-            data["pinDefaults"] = _rename_pin_defaults(data.get("pinDefaults"), renames)
-    return data
-
-
 def load_visualflow_json(raw: Any) -> VisualFlow:
     """Parse a VisualFlow JSON object (dict) into stdlib dataclasses.
 
@@ -190,7 +166,6 @@ def load_visualflow_json(raw: Any) -> VisualFlow:
             node_types_by_id[nid] = str(t)
             data = n.get("data")
             data_d = dict(data) if isinstance(data, dict) else {}
-            data_d = _migrate_node_prompt_pins(str(t), data_d)
             nodes.append(VisualNode(id=nid, type=str(t), data=data_d))
 
     edges_raw = raw.get("edges")
@@ -213,15 +188,6 @@ def load_visualflow_json(raw: Any) -> VisualFlow:
             sh_s = sh.strip()
             th_s = th.strip()
 
-            # Prompt pin migration:
-            # - start outputs: request/task -> prompt
-            # - agent/llm_call inputs: request/task -> prompt
-            src_t = node_types_by_id.get(src)
-            tgt_t = node_types_by_id.get(tgt)
-            if src_t == NodeType.ON_FLOW_START.value and sh_s in {"request", "task"}:
-                sh_s = "prompt"
-            if tgt_t in {NodeType.AGENT.value, "llm_call"} and th_s in {"request", "task"}:
-                th_s = "prompt"
             edges.append(
                 VisualEdge(
                     source=src,

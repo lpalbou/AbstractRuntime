@@ -52,6 +52,39 @@ def _allowed_predicate_ids() -> set[str]:
     return _ALLOWED_PREDICATE_IDS
 
 
+_PREDICATE_ALIAS_MAP: dict[str, str] = {
+    # Common schema.org-ish synonyms → canonical minimal semantics (v4).
+    #
+    # Rationale: extraction models often use `schema:description` / `schema:creator` by default,
+    # but the framework's canonical set is deliberately small and uses `dcterms:*` for metadata.
+    "schema:description": "dcterms:description",
+    "schema:creator": "dcterms:creator",
+    # Structural / membership-y variants seen in practice.
+    "schema:hasparent": "dcterms:ispartof",
+    "schema:hasmember": "dcterms:haspart",
+    # Identity / reference-ish variants (normalize to the canonical set).
+    "schema:recognizedas": "skos:closematch",
+    # "awareness" is not part of our canonical set; treat it as a synonym for "knowsAbout"
+    # (stronger than "mentions", which can be incidental).
+    "schema:awareness": "schema:knowsAbout",
+    "schema:hasmemorysource": "dcterms:references",
+    # Namespace drift + common typos.
+    "schema:haspart": "dcterms:haspart",
+    "schema:ispartof": "dcterms:ispartof",
+    "dcterms:has_part": "dcterms:haspart",
+    "dcterms:is_part_of": "dcterms:ispartof",
+}
+
+
+def _normalize_predicate_id(raw: Any) -> str:
+    value = raw if isinstance(raw, str) else str(raw or "")
+    value2 = value.strip()
+    if not value2:
+        return ""
+    key = value2.lower()
+    return _PREDICATE_ALIAS_MAP.get(key, value2)
+
+
 def _global_memory_owner_id() -> str:
     rid = os.environ.get("ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID")
     rid = str(rid or "").strip()
@@ -173,6 +206,13 @@ def build_memory_kg_effect_handlers(
         if not assertions:
             return EffectOutcome.failed("MEMORY_KG_ASSERT requires payload.assertions (list[object])")
 
+        # Apply predicate alias normalization before validation so common synonyms are accepted.
+        for a in assertions:
+            if not isinstance(a, dict):
+                continue
+            if "predicate" in a:
+                a["predicate"] = _normalize_predicate_id(a.get("predicate"))
+
         allow_custom = bool(payload.get("allow_custom_predicates") or payload.get("allow_custom"))
         allowed_predicates = _allowed_predicate_ids()
         invalid_predicates: list[str] = []
@@ -281,7 +321,7 @@ def build_memory_kg_effect_handlers(
         def _one_query(*, scope_label: str, owner_id2: str) -> list[Any]:
             q = TripleQuery(
                 subject=str(payload.get("subject")).strip() if isinstance(payload.get("subject"), str) else None,
-                predicate=str(payload.get("predicate")).strip() if isinstance(payload.get("predicate"), str) else None,
+                predicate=_normalize_predicate_id(payload.get("predicate")) if payload.get("predicate") is not None else None,
                 object=str(payload.get("object")).strip() if isinstance(payload.get("object"), str) else None,
                 scope=scope_label,
                 owner_id=owner_id2,

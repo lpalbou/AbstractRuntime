@@ -17,23 +17,23 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
                 "type": "on_flow_start",
                 "data": {"inputs": [], "outputs": [{"id": "exec-out", "label": "", "type": "execution"}]},
             },
-            {
-                "id": "node-2",
-                "type": "make_context",
-                "data": {
-                    "inputs": [
-                        {"id": "task", "label": "task", "type": "string"},
-                        {"id": "messages", "label": "messages", "type": "array"},
-                        {"id": "extra", "label": "extra", "type": "object"},
-                    ],
-                    "outputs": [{"id": "context", "label": "context", "type": "object"}],
-                    "pinDefaults": {
-                        "task": "hello",
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "extra": {"foo": 1},
-                    },
-                },
-            },
+	            {
+	                "id": "node-2",
+	                "type": "make_context",
+	                "data": {
+	                    "inputs": [
+	                        {"id": "task", "label": "task", "type": "string"},
+	                        {"id": "messages", "label": "messages", "type": "array"},
+	                        {"id": "context_extra", "label": "context_extra", "type": "object"},
+	                    ],
+	                    "outputs": [{"id": "context", "label": "context", "type": "object"}],
+	                    "pinDefaults": {
+	                        "task": "hello",
+	                        "messages": [{"role": "user", "content": "hi"}],
+	                        "context_extra": {"foo": 1},
+	                    },
+	                },
+	            },
             {
                 "id": "node-3",
                 "type": "make_meta",
@@ -61,59 +61,38 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
                     },
                 },
             },
-            {
-                "id": "node-4",
-                "type": "make_scratchpad",
-                "data": {
-                    "inputs": [
-                        {"id": "sub_run_id", "label": "sub_run_id", "type": "string"},
-                        {"id": "workflow_id", "label": "workflow_id", "type": "string"},
-                        {"id": "node_traces", "label": "node_traces", "type": "object"},
-                        {"id": "steps", "label": "steps", "type": "array"},
-                        {"id": "extra", "label": "extra", "type": "object"},
-                    ],
-                    "outputs": [{"id": "scratchpad", "label": "scratchpad", "type": "object"}],
-                    "pinDefaults": {
-                        "sub_run_id": "sub-1",
-                        "workflow_id": "wf-1",
-                        "node_traces": {"node-9": {"node_id": "node-9", "steps": []}},
-                        "steps": [{"type": "llm_call"}],
-                        "extra": {"foo": "bar"},
-                    },
-                },
-            },
-            {
-                "id": "node-5",
-                "type": "make_raw_result",
-                "data": {
-                    "inputs": [
-                        {"id": "content", "label": "content", "type": "string"},
-                        {"id": "data", "label": "data", "type": "object"},
-                        {"id": "tool_calls", "label": "tool_calls", "type": "array"},
-                        {"id": "usage", "label": "usage", "type": "object"},
-                        {"id": "model", "label": "model", "type": "model"},
-                        {"id": "finish_reason", "label": "finish_reason", "type": "string"},
-                        {"id": "metadata", "label": "metadata", "type": "object"},
-                        {"id": "trace_id", "label": "trace_id", "type": "string"},
-                        {"id": "extra", "label": "extra", "type": "object"},
-                    ],
-                    "outputs": [{"id": "raw_result", "label": "raw_result", "type": "object"}],
-                    "pinDefaults": {
-                        "content": "ok",
-                        "data": {"k": "v"},
-                        "tool_calls": [],
-                        "usage": {"total": 3},
-                        "model": "m1",
-                        "finish_reason": "stop",
-                        "metadata": {"debug": True},
-                        "trace_id": "trace-x",
-                        "extra": {"model": "should_be_overridden"},
-                    },
-                },
-            },
-            {
-                "id": "node-6",
-                "type": "get_context",
+	            {
+	                "id": "node-4",
+	                "type": "make_scratchpad",
+	                "data": {
+	                    "inputs": [
+	                        {"id": "sub_run_id", "label": "sub_run_id", "type": "string"},
+	                        {"id": "workflow_id", "label": "workflow_id", "type": "string"},
+	                        {"id": "task", "label": "task", "type": "string"},
+	                        {"id": "messages", "label": "messages", "type": "array"},
+	                        {"id": "context_extra", "label": "context_extra", "type": "object"},
+	                        {"id": "node_traces", "label": "node_traces", "type": "object"},
+	                        {"id": "steps", "label": "steps", "type": "array"},
+	                        {"id": "tool_calls", "label": "tool_calls", "type": "array"},
+	                        {"id": "tool_results", "label": "tool_results", "type": "array"},
+	                    ],
+	                    "outputs": [{"id": "scratchpad", "label": "scratchpad", "type": "object"}],
+	                    "pinDefaults": {
+	                        "sub_run_id": "sub-1",
+	                        "workflow_id": "wf-1",
+	                        "task": "scratch-task",
+	                        "messages": [{"role": "user", "content": "hi"}],
+	                        "context_extra": {"foo": "bar"},
+	                        "node_traces": {"node-9": {"node_id": "node-9", "steps": []}},
+	                        "steps": [{"type": "llm_call"}],
+	                        "tool_calls": [],
+	                        "tool_results": [],
+	                    },
+	                },
+	            },
+	            {
+	                "id": "node-6",
+	                "type": "get_context",
                 "data": {
                     "inputs": [],
                     "outputs": [
@@ -126,31 +105,29 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
             {
                 "id": "node-7",
                 "type": "on_flow_end",
-                "data": {
-                    "inputs": [
-                        {"id": "exec-in", "label": "", "type": "execution"},
-                        {"id": "built_context", "label": "built_context", "type": "object"},
-                        {"id": "built_meta", "label": "built_meta", "type": "object"},
-                        {"id": "built_scratchpad", "label": "built_scratchpad", "type": "object"},
-                        {"id": "built_raw_result", "label": "built_raw_result", "type": "object"},
-                        {"id": "got_context", "label": "got_context", "type": "object"},
-                        {"id": "got_task", "label": "got_task", "type": "string"},
-                        {"id": "got_messages", "label": "got_messages", "type": "array"},
-                    ],
+	                "data": {
+	                    "inputs": [
+	                        {"id": "exec-in", "label": "", "type": "execution"},
+	                        {"id": "built_context", "label": "built_context", "type": "object"},
+	                        {"id": "built_meta", "label": "built_meta", "type": "object"},
+	                        {"id": "built_scratchpad", "label": "built_scratchpad", "type": "object"},
+	                        {"id": "got_context", "label": "got_context", "type": "object"},
+	                        {"id": "got_task", "label": "got_task", "type": "string"},
+	                        {"id": "got_messages", "label": "got_messages", "type": "array"},
+	                    ],
                     "outputs": [],
                 },
             },
         ],
-        "edges": [
-            {"id": "e-exec", "source": "node-1", "target": "node-7", "sourceHandle": "exec-out", "targetHandle": "exec-in"},
-            {"id": "e-bc", "source": "node-2", "target": "node-7", "sourceHandle": "context", "targetHandle": "built_context"},
-            {"id": "e-bm", "source": "node-3", "target": "node-7", "sourceHandle": "meta", "targetHandle": "built_meta"},
-            {"id": "e-bs", "source": "node-4", "target": "node-7", "sourceHandle": "scratchpad", "targetHandle": "built_scratchpad"},
-            {"id": "e-br", "source": "node-5", "target": "node-7", "sourceHandle": "raw_result", "targetHandle": "built_raw_result"},
-            {"id": "e-gc", "source": "node-6", "target": "node-7", "sourceHandle": "context", "targetHandle": "got_context"},
-            {"id": "e-gt", "source": "node-6", "target": "node-7", "sourceHandle": "task", "targetHandle": "got_task"},
-            {"id": "e-gm", "source": "node-6", "target": "node-7", "sourceHandle": "messages", "targetHandle": "got_messages"},
-        ],
+	        "edges": [
+	            {"id": "e-exec", "source": "node-1", "target": "node-7", "sourceHandle": "exec-out", "targetHandle": "exec-in"},
+	            {"id": "e-bc", "source": "node-2", "target": "node-7", "sourceHandle": "context", "targetHandle": "built_context"},
+	            {"id": "e-bm", "source": "node-3", "target": "node-7", "sourceHandle": "meta", "targetHandle": "built_meta"},
+	            {"id": "e-bs", "source": "node-4", "target": "node-7", "sourceHandle": "scratchpad", "targetHandle": "built_scratchpad"},
+	            {"id": "e-gc", "source": "node-6", "target": "node-7", "sourceHandle": "context", "targetHandle": "got_context"},
+	            {"id": "e-gt", "source": "node-6", "target": "node-7", "sourceHandle": "task", "targetHandle": "got_task"},
+	            {"id": "e-gm", "source": "node-6", "target": "node-7", "sourceHandle": "messages", "targetHandle": "got_messages"},
+	        ],
     }
 
     spec = compile_visualflow(flow)
@@ -191,16 +168,8 @@ def test_visualflow_get_context_and_builder_nodes() -> None:
     # Make Scratchpad
     assert result["built_scratchpad"]["sub_run_id"] == "sub-1"
     assert result["built_scratchpad"]["workflow_id"] == "wf-1"
+    assert result["built_scratchpad"]["task"] == "scratch-task"
+    assert result["built_scratchpad"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert result["built_scratchpad"]["context_extra"]["foo"] == "bar"
     assert result["built_scratchpad"]["node_traces"]["node-9"]["node_id"] == "node-9"
     assert result["built_scratchpad"]["steps"][0]["type"] == "llm_call"
-    assert result["built_scratchpad"]["foo"] == "bar"
-
-    # Make Raw Result (extra.model overridden by pin model)
-    assert result["built_raw_result"]["content"] == "ok"
-    assert result["built_raw_result"]["data"] == {"k": "v"}
-    assert result["built_raw_result"]["tool_calls"] == []
-    assert result["built_raw_result"]["usage"] == {"total": 3}
-    assert result["built_raw_result"]["model"] == "m1"
-    assert result["built_raw_result"]["finish_reason"] == "stop"
-    assert result["built_raw_result"]["metadata"] == {"debug": True}
-    assert result["built_raw_result"]["trace_id"] == "trace-x"

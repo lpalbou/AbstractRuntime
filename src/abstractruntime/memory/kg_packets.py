@@ -119,9 +119,10 @@ def pack_active_memory_text(
 
     packets_list = [p for p in packets if isinstance(p, dict)]
 
+    order_hint = "similarity-desc" if include_scores else "observed_at-desc"
     header_lines = [
         f"## {title}",
-        f"(scope={scope2}; newest-first; budget={budget} max_input_tokens)",
+        f"(scope={scope2}; order={order_hint}; budget={budget} max_input_tokens)",
         "",
     ]
     lines = list(header_lines)

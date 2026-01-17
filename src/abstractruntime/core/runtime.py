@@ -3405,13 +3405,16 @@ class Runtime:
         raw_span_ids = payload.get("span_ids")
         if raw_span_ids is None:
             raw_span_ids = payload.get("span_id")
+        if raw_span_ids is None:
+            return EffectOutcome.failed("MEMORY_REHYDRATE requires payload.span_ids (or legacy span_id)")
         span_ids: list[Any] = []
         if isinstance(raw_span_ids, list):
             span_ids = list(raw_span_ids)
         elif raw_span_ids is not None:
             span_ids = [raw_span_ids]
         if not span_ids:
-            return EffectOutcome.failed("MEMORY_REHYDRATE requires payload.span_ids (non-empty list)")
+            # Empty rehydrate is a valid no-op (common when recall returns no spans).
+            return EffectOutcome.completed(result={"inserted": 0, "skipped": 0, "artifacts": []})
 
         placement = str(payload.get("placement") or "after_summary").strip() or "after_summary"
         dedup_by = str(payload.get("dedup_by") or "message_id").strip() or "message_id"

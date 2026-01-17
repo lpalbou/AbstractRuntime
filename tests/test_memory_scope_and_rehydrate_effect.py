@@ -483,3 +483,53 @@ def test_memory_rehydrate_inserts_conversation_span_and_includes_memory_note() -
     assert [m.get("content") for m in messages if isinstance(m, dict)][0] == "sys"
     assert [m.get("content") for m in messages if isinstance(m, dict)][1] == "[MEMORY NOTE]\nnote"
     assert [m.get("content") for m in messages if isinstance(m, dict)][2:4] == ["u1", "a1"]
+
+
+def test_memory_rehydrate_accepts_empty_span_ids_as_noop() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store)
+    artifact_store = InMemoryArtifactStore()
+    runtime.set_artifact_store(artifact_store)
+
+    vars: dict[str, Any] = {
+        "context": {"task": "t", "messages": [{"role": "system", "content": "sys"}]},
+        "scratchpad": {},
+        "_runtime": {"memory_spans": []},
+        "_temp": {},
+        "_limits": {},
+    }
+
+    def rehydrate_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="rehydrate",
+            effect=Effect(
+                type=EffectType.MEMORY_REHYDRATE,
+                payload={"span_ids": [], "placement": "after_system"},
+                result_key="_temp.rehydrate",
+            ),
+            next_node="done",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="done",
+            complete_output={
+                "rehydrate": run.vars.get("_temp", {}).get("rehydrate"),
+                "messages": run.vars.get("context", {}).get("messages"),
+            },
+        )
+
+    wf = WorkflowSpec(workflow_id="wf_rehydrate_empty", entry_node="rehydrate", nodes={"rehydrate": rehydrate_node, "done": done_node})
+    run_id = runtime.start(workflow=wf, vars=vars)
+    state = runtime.tick(workflow=wf, run_id=run_id)
+    assert state.status == RunStatus.COMPLETED
+
+    out = state.output or {}
+    rehydrate = out.get("rehydrate")
+    assert isinstance(rehydrate, dict)
+    assert rehydrate.get("inserted") == 0
+
+    messages = out.get("messages")
+    assert isinstance(messages, list)
+    assert [m.get("content") for m in messages if isinstance(m, dict)] == ["sys"]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple, Type
@@ -399,10 +400,15 @@ def _resolve_llm_call_media(
         if not isinstance(content, (bytes, bytearray)):
             return None, f"Artifact '{artifact_id}' content is not bytes"
 
-        # Preserve best-effort filename extension for downstream media detection.
+        # Preserve best-effort filename extension for downstream media detection and label
+        # attachments with their original filename/path for better model grounding.
         filename = ""
+        source_path = ""
         if isinstance(item, dict):
-            raw_name = item.get("filename") or item.get("name")
+            raw_source = item.get("source_path") or item.get("path")
+            if isinstance(raw_source, str) and raw_source.strip():
+                source_path = raw_source.strip()
+            raw_name = source_path or item.get("filename") or item.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
                 filename = raw_name.strip()
         ext = Path(filename).suffix if filename else ""
@@ -410,7 +416,24 @@ def _resolve_llm_call_media(
             ct = str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
             ext = _ext_from(ct)
 
-        p = temp_dir / f"{artifact_id}{ext}"
+        desired = source_path or filename
+        safe_name = ""
+        if desired:
+            label = str(desired).replace("\\", "/").strip().strip("/")
+            # Encode the relative path into a single filename (so AbstractCore's media
+            # header includes enough context to disambiguate multiple attachments).
+            label = label.replace("/", "__")
+            if ext and not Path(label).suffix:
+                label = f"{label}{ext}"
+            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", label).strip("._")
+            # Keep filenames under common filesystem limits.
+            max_len = 220
+            if safe_name and len(safe_name) > max_len:
+                suf = Path(safe_name).suffix
+                keep = max_len - len(suf)
+                safe_name = safe_name[: max(1, keep)] + suf
+
+        p = temp_dir / (safe_name or f"{artifact_id}{ext}")
         try:
             p.write_bytes(bytes(content))
         except Exception as e:

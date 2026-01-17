@@ -406,6 +406,45 @@ def build_memory_kg_effect_handlers(
             )
 
         result: dict[str, Any] = {"ok": True, "count": len(out_items), "items": out_items}
+
+        # Optional: packetize + pack into an LLM-friendly Active Memory block.
+        #
+        # This is used by `ltm-ai-kg-map-to-active` and chat-like flows that inject
+        # KG recall into the system prompt without blowing up token budgets.
+        raw_budget = payload.get("max_input_tokens")
+        if raw_budget is None:
+            raw_budget = payload.get("max_in_tokens")
+        budget = None
+        if raw_budget is not None and not isinstance(raw_budget, bool):
+            try:
+                budget = int(float(raw_budget))
+            except Exception:
+                budget = None
+        if isinstance(budget, int) and budget > 0:
+            try:
+                model_name = payload.get("model")
+                model_name = str(model_name).strip() if isinstance(model_name, str) and model_name.strip() else None
+
+                from abstractruntime.memory.kg_packets import packetize_assertions, pack_active_memory_text
+
+                packets_all = packetize_assertions(out_items)
+                active_text, kept_packets, est_tokens, dropped = pack_active_memory_text(
+                    packets_all,
+                    scope=scope,
+                    max_input_tokens=int(budget),
+                    model=model_name,
+                    include_scores=bool(is_semantic),
+                )
+
+                result["packets_version"] = 0
+                result["packets"] = kept_packets
+                result["packed_count"] = len(kept_packets)
+                result["active_memory_text"] = active_text
+                result["estimated_tokens"] = est_tokens
+                result["dropped"] = dropped
+            except Exception as e:
+                return EffectOutcome.failed(f"MEMORY_KG_QUERY packetize failed: {e}")
+
         warn = _store_warning()
         if warn:
             warnings = result.get("warnings")

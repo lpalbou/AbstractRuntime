@@ -824,13 +824,32 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             """
             if raw is None:
                 return None
+
+            schema: Optional[Dict[str, Any]] = None
             if isinstance(raw, dict):
                 if raw.get("type") == "json_schema" and isinstance(raw.get("json_schema"), dict):
                     inner = raw.get("json_schema")
                     if isinstance(inner, dict) and isinstance(inner.get("schema"), dict):
-                        return dict(inner.get("schema") or {})
-                return dict(raw)
-            return None
+                        schema = dict(inner.get("schema") or {})
+                else:
+                    schema = dict(raw)
+
+            if not isinstance(schema, dict) or not schema:
+                return None
+
+            # Resolve stable schema refs (no silent fallback).
+            ref = schema.get("$ref")
+            if isinstance(ref, str) and ref.strip().startswith("abstractsemantics:"):
+                try:
+                    from abstractsemantics import resolve_schema_ref  # type: ignore
+                except Exception as e:
+                    raise RuntimeError(f"Structured-output schema ref requires abstractsemantics: {ref}") from e
+                resolved = resolve_schema_ref(schema)
+                if isinstance(resolved, dict) and resolved:
+                    return resolved
+                raise RuntimeError(f"Unknown structured-output schema ref: {ref}")
+
+            return schema
 
         def _normalize_tool_names(raw: Any) -> list[str]:
             if raw is None:
@@ -1573,15 +1592,34 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             """
             if raw is None:
                 return None
+
+            schema: Optional[Dict[str, Any]] = None
             if isinstance(raw, dict):
                 # Wrapper form (OpenAI "response_format": {type:"json_schema", json_schema:{schema:{...}}})
                 if raw.get("type") == "json_schema" and isinstance(raw.get("json_schema"), dict):
                     inner = raw.get("json_schema")
                     if isinstance(inner, dict) and isinstance(inner.get("schema"), dict):
-                        return dict(inner.get("schema") or {})
-                # Plain JSON Schema dict
-                return dict(raw)
-            return None
+                        schema = dict(inner.get("schema") or {})
+                else:
+                    # Plain JSON Schema dict
+                    schema = dict(raw)
+
+            if not isinstance(schema, dict) or not schema:
+                return None
+
+            # Resolve stable schema refs (no silent fallback).
+            ref = schema.get("$ref")
+            if isinstance(ref, str) and ref.strip().startswith("abstractsemantics:"):
+                try:
+                    from abstractsemantics import resolve_schema_ref  # type: ignore
+                except Exception as e:
+                    raise RuntimeError(f"Structured-output schema ref requires abstractsemantics: {ref}") from e
+                resolved = resolve_schema_ref(schema)
+                if isinstance(resolved, dict) and resolved:
+                    return resolved
+                raise RuntimeError(f"Unknown structured-output schema ref: {ref}")
+
+            return schema
 
         def handler(input_data):
             if isinstance(input_data, dict):
@@ -2181,10 +2219,21 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "active_at",
                 "query_text",
                 "order",
+                # Optional packetization / packing controls (Active Memory mapping).
+                "model",
             ):
                 v = payload.get(k)
                 if isinstance(v, str) and v.strip():
                     pending[k] = v.strip()
+
+            max_input_tokens = payload.get("max_input_tokens")
+            if max_input_tokens is None:
+                max_input_tokens = payload.get("max_in_tokens")
+            if max_input_tokens is not None and not isinstance(max_input_tokens, bool):
+                try:
+                    pending["max_input_tokens"] = int(float(max_input_tokens))
+                except Exception:
+                    pass
 
             min_score = payload.get("min_score")
             if min_score is not None and not isinstance(min_score, bool):

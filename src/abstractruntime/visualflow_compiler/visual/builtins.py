@@ -683,6 +683,8 @@ def data_make_meta(inputs: Dict[str, Any]) -> Dict[str, Any]:
     trace = inputs.get("trace")
     if isinstance(trace, dict):
         out["trace"] = dict(trace)
+    elif isinstance(trace, str) and trace.strip():
+        out["trace"] = {"trace_id": trace.strip()}
 
     trace_id = inputs.get("trace_id")
     trace_id_str = trace_id.strip() if isinstance(trace_id, str) and trace_id.strip() else ""

@@ -132,6 +132,75 @@ _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+_RUNTIME_TOOL_CALL_ID_PREFIX = "rtcall_"
+
+
+def _ensure_tool_calls_have_runtime_ids(
+    *,
+    effect: Effect,
+    idempotency_key: str,
+) -> Effect:
+    """Attach stable runtime-owned IDs to tool calls without mutating semantics.
+
+    - Preserves provider/model `call_id` when present (used for OpenAI transcripts).
+    - Adds `runtime_call_id` derived from the effect idempotency key + call index.
+    - Ensures each tool call has a non-empty `call_id` (falls back to runtime id).
+    - Canonicalizes allowlist ordering (`allowed_tools`) for deterministic payloads.
+    """
+
+    if effect.type != EffectType.TOOL_CALLS:
+        return effect
+    if not isinstance(effect.payload, dict):
+        return effect
+
+    payload = dict(effect.payload)
+    raw_tool_calls = payload.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return effect
+
+    tool_calls: list[Any] = []
+    for idx, tc in enumerate(raw_tool_calls):
+        if not isinstance(tc, dict):
+            tool_calls.append(tc)
+            continue
+
+        tc2 = dict(tc)
+        runtime_call_id = tc2.get("runtime_call_id")
+        runtime_call_id_str = str(runtime_call_id).strip() if runtime_call_id is not None else ""
+        if not runtime_call_id_str:
+            runtime_call_id_str = f"{_RUNTIME_TOOL_CALL_ID_PREFIX}{idempotency_key}_{idx+1}"
+            tc2["runtime_call_id"] = runtime_call_id_str
+
+        call_id = tc2.get("call_id")
+        if call_id is None:
+            call_id = tc2.get("id")
+        call_id_str = str(call_id).strip() if call_id is not None else ""
+        if call_id_str:
+            tc2["call_id"] = call_id_str
+        else:
+            # When the model/provider didn't emit a call id (or the caller omitted it),
+            # fall back to a runtime-owned stable id so result correlation still works.
+            tc2["call_id"] = runtime_call_id_str
+
+        name = tc2.get("name")
+        if isinstance(name, str):
+            tc2["name"] = name.strip()
+
+        tool_calls.append(tc2)
+
+    payload["tool_calls"] = tool_calls
+
+    allowed_tools = payload.get("allowed_tools")
+    if isinstance(allowed_tools, list):
+        uniq = {
+            str(t).strip()
+            for t in allowed_tools
+            if isinstance(t, str) and t.strip()
+        }
+        payload["allowed_tools"] = sorted(uniq)
+
+    return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
+
 
 def _ensure_runtime_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
     runtime_ns = vars.get("_runtime")
@@ -885,9 +954,11 @@ class Runtime:
                 continue
 
             # Effectful step - check for prior completed result (idempotency)
+            effect = plan.effect
             idempotency_key = self._effect_policy.idempotency_key(
-                run=run, node_id=plan.node_id, effect=plan.effect
+                run=run, node_id=plan.node_id, effect=effect
             )
+            effect = _ensure_tool_calls_have_runtime_ids(effect=effect, idempotency_key=idempotency_key)
             prior_result = self._find_prior_completed_result(run.run_id, idempotency_key)
             reused_prior_result = prior_result is not None
 
@@ -905,7 +976,7 @@ class Runtime:
                 outcome = self._execute_effect_with_retry(
                     run=run,
                     node_id=plan.node_id,
-                    effect=plan.effect,
+                    effect=effect,
                     idempotency_key=idempotency_key,
                     default_next_node=plan.next_node,
                 )
@@ -919,13 +990,13 @@ class Runtime:
             try:
                 if (
                     not reused_prior_result
-                    and plan.effect.type == EffectType.TOOL_CALLS
+                    and effect.type == EffectType.TOOL_CALLS
                     and outcome.status == "completed"
                 ):
                     self._maybe_record_tool_evidence(
                         run=run,
                         node_id=plan.node_id,
-                        effect=plan.effect,
+                        effect=effect,
                         tool_results=outcome.result,
                     )
             except Exception:
@@ -935,7 +1006,7 @@ class Runtime:
             _record_node_trace(
                 run=run,
                 node_id=plan.node_id,
-                effect=plan.effect,
+                effect=effect,
                 outcome=outcome,
                 idempotency_key=idempotency_key,
                 reused_prior_result=reused_prior_result,
@@ -948,7 +1019,7 @@ class Runtime:
             # We store the input-side usage as `estimated_tokens_used` so host UIs and workflows
             # can reason about compaction budgets without re-tokenizing.
             try:
-                if plan.effect.type == EffectType.LLM_CALL and outcome.status == "completed" and isinstance(outcome.result, dict):
+                if effect.type == EffectType.LLM_CALL and outcome.status == "completed" and isinstance(outcome.result, dict):
                     usage = outcome.result.get("usage")
                     if isinstance(usage, dict):
                         raw_in = usage.get("input_tokens")
@@ -988,8 +1059,8 @@ class Runtime:
                 return run
 
             # completed
-            if plan.effect.result_key and outcome.result is not None:
-                _set_nested(run.vars, plan.effect.result_key, outcome.result)
+            if effect.result_key and outcome.result is not None:
+                _set_nested(run.vars, effect.result_key, outcome.result)
 
             # Terminal effect node: treat missing next_node as completion.
             #
@@ -1174,6 +1245,7 @@ class Runtime:
                                     merged_results.append(
                                         {
                                             "call_id": "",
+                                            "runtime_call_id": None,
                                             "name": "",
                                             "success": False,
                                             "output": None,

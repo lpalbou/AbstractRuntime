@@ -13,6 +13,7 @@ from abstractruntime import RunState, RunStatus, WaitReason
 from abstractruntime.core.models import WaitState
 from abstractruntime.storage.in_memory import InMemoryRunStore
 from abstractruntime.storage.json_files import JsonFileRunStore
+from abstractruntime.storage.sqlite import SqliteDatabase, SqliteRunStore
 from abstractruntime.storage.base import QueryableRunStore
 
 
@@ -355,6 +356,42 @@ class TestJsonFileRunStoreQuery:
         # Create new instance pointing to same directory
         store2 = JsonFileRunStore(tmp_path)
 
+        result = store2.list_due_wait_until(now_iso=utc_now_iso())
+        assert len(result) == 1
+        assert result[0].run_id == run.run_id
+
+
+class TestSqliteRunStoreQuery:
+    def test_implements_queryable_protocol(self, tmp_path: Path):
+        store = SqliteRunStore(SqliteDatabase(tmp_path / "gateway.sqlite3"))
+        assert isinstance(store, QueryableRunStore)
+
+    def test_list_due_wait_until_uses_wait_index(self, tmp_path: Path):
+        db_path = tmp_path / "gateway.sqlite3"
+        store = SqliteRunStore(SqliteDatabase(db_path))
+
+        past_time = "2020-01-01T00:00:00Z"
+        run_due = make_run(status=RunStatus.WAITING, wait_reason=WaitReason.UNTIL, wait_until=past_time)
+        store.save(run_due)
+
+        result = store.list_due_wait_until(now_iso=utc_now_iso())
+        assert len(result) == 1
+        assert result[0].run_id == run_due.run_id
+
+        # When the run is no longer WAITING(UNTIL), it must be removed from the wait index.
+        run_due.status = RunStatus.RUNNING
+        run_due.waiting = None
+        store.save(run_due)
+        assert store.list_due_wait_until(now_iso=utc_now_iso()) == []
+
+    def test_persists_across_instances(self, tmp_path: Path):
+        db_path = tmp_path / "gateway.sqlite3"
+        store1 = SqliteRunStore(SqliteDatabase(db_path))
+
+        run = make_run(status=RunStatus.WAITING, wait_reason=WaitReason.UNTIL, wait_until="2020-01-01T00:00:00Z")
+        store1.save(run)
+
+        store2 = SqliteRunStore(SqliteDatabase(db_path))
         result = store2.list_due_wait_until(now_iso=utc_now_iso())
         assert len(result) == 1
         assert result[0].run_id == run.run_id

@@ -275,7 +275,7 @@ class MappingToolExecutor:
                 return cleaned or text
             return None
 
-        def _append_result(*, call_id: str, name: str, output: Any) -> None:
+        def _append_result(*, call_id: str, runtime_call_id: Optional[str], name: str, output: Any) -> None:
             error = _error_from_output(output)
             if error is not None:
                 # Preserve structured outputs for provenance/evidence. For string-only error outputs
@@ -284,6 +284,7 @@ class MappingToolExecutor:
                 results.append(
                     {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id,
                         "name": name,
                         "success": False,
                         "output": output_json,
@@ -295,6 +296,7 @@ class MappingToolExecutor:
             results.append(
                 {
                     "call_id": call_id,
+                    "runtime_call_id": runtime_call_id,
                     "name": name,
                     "success": True,
                     "output": _jsonable(output),
@@ -307,12 +309,16 @@ class MappingToolExecutor:
             raw_arguments = tc.get("arguments") or {}
             arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
             call_id = str(tc.get("call_id") or "")
+            runtime_call_id = tc.get("runtime_call_id")
+            runtime_call_id_str = str(runtime_call_id).strip() if runtime_call_id is not None else ""
+            runtime_call_id_out = runtime_call_id_str or None
 
             func = self._tool_map.get(name)
             if func is None:
                 results.append(
                     {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
                         "name": name,
                         "success": False,
                         "output": None,
@@ -335,11 +341,12 @@ class MappingToolExecutor:
 
             ok, output, err = _call_with_timeout(_invoke, timeout_s=self._timeout_s)
             if ok:
-                _append_result(call_id=call_id, name=name, output=output)
+                _append_result(call_id=call_id, runtime_call_id=runtime_call_id_out, name=name, output=output)
             else:
                 results.append(
                     {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
                         "name": name,
                         "success": False,
                         "output": None,
@@ -386,23 +393,29 @@ class AbstractCoreToolExecutor:
         from abstractcore.tools.core import ToolCall
         from abstractcore.tools.registry import execute_tool
 
-        calls = [
-            ToolCall(
-                name=str(tc.get("name")),
-                arguments=dict(tc.get("arguments") or {}),
-                call_id=tc.get("call_id"),
+        calls: list[ToolCall] = []
+        runtime_call_ids: list[Optional[str]] = []
+        for tc in tool_calls:
+            calls.append(
+                ToolCall(
+                    name=str(tc.get("name")),
+                    arguments=dict(tc.get("arguments") or {}),
+                    call_id=tc.get("call_id"),
+                )
             )
-            for tc in tool_calls
-        ]
+            runtime_call_id = tc.get("runtime_call_id")
+            runtime_call_id_str = str(runtime_call_id).strip() if runtime_call_id is not None else ""
+            runtime_call_ids.append(runtime_call_id_str or None)
 
         normalized = []
-        for call in calls:
+        for call, runtime_call_id in zip(calls, runtime_call_ids):
             ok, out, err = _call_with_timeout(lambda c=call: execute_tool(c), timeout_s=self._timeout_s)
             if ok:
                 r = out
                 normalized.append(
                     {
                         "call_id": getattr(r, "call_id", "") if r is not None else "",
+                        "runtime_call_id": runtime_call_id,
                         "name": getattr(call, "name", ""),
                         "success": bool(getattr(r, "success", False)) if r is not None else True,
                         "output": _jsonable(getattr(r, "output", None)) if r is not None else None,
@@ -414,6 +427,7 @@ class AbstractCoreToolExecutor:
             normalized.append(
                 {
                     "call_id": str(getattr(call, "call_id", "") or ""),
+                    "runtime_call_id": runtime_call_id,
                     "name": getattr(call, "name", ""),
                     "success": False,
                     "output": None,
@@ -520,6 +534,9 @@ class McpToolExecutor:
             for tc in tool_calls:
                 name = str(tc.get("name", "") or "")
                 call_id = str(tc.get("call_id") or "")
+                runtime_call_id = tc.get("runtime_call_id")
+                runtime_call_id_str = str(runtime_call_id).strip() if runtime_call_id is not None else ""
+                runtime_call_id_out = runtime_call_id_str or None
                 raw_arguments = tc.get("arguments") or {}
                 arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
 
@@ -531,6 +548,7 @@ class McpToolExecutor:
                         results.append(
                             {
                                 "call_id": call_id,
+                                "runtime_call_id": runtime_call_id_out,
                                 "name": name,
                                 "success": False,
                                 "output": None,
@@ -547,6 +565,7 @@ class McpToolExecutor:
                         results.append(
                             {
                                 "call_id": call_id,
+                                "runtime_call_id": runtime_call_id_out,
                                 "name": name,
                                 "success": False,
                                 "output": None,
@@ -557,6 +576,7 @@ class McpToolExecutor:
                     results.append(
                         {
                             "call_id": call_id,
+                            "runtime_call_id": runtime_call_id_out,
                             "name": name,
                             "success": True,
                             "output": _mcp_result_to_output(mcp_result),
@@ -567,6 +587,7 @@ class McpToolExecutor:
                     results.append(
                         {
                             "call_id": call_id,
+                            "runtime_call_id": runtime_call_id_out,
                             "name": name,
                             "success": False,
                             "output": None,

@@ -15,7 +15,76 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
 
-from .models import Effect, RunState
+from .models import Effect, EffectType, RunState
+
+
+def _loads_dict_like(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_tool_call_for_idempotency(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    out = dict(value)
+    # Provider/model-emitted IDs are not semantic; remove them from the idempotency hash.
+    for k in ("call_id", "id", "runtime_call_id", "model_call_id", "idempotency_key"):
+        out.pop(k, None)
+
+    name = out.get("name")
+    if isinstance(name, str):
+        out["name"] = name.strip()
+
+    args = out.get("arguments")
+    if isinstance(args, str):
+        parsed = _loads_dict_like(args)
+        out["arguments"] = parsed if isinstance(parsed, dict) else {}
+    elif not isinstance(args, dict):
+        out["arguments"] = {}
+
+    func = out.get("function")
+    if isinstance(func, dict):
+        # Some callers pass OpenAI-style shapes; preserve semantics, but strip IDs.
+        out["function"] = _normalize_tool_call_for_idempotency(func)
+
+    return out
+
+
+def _normalize_effect_payload_for_idempotency(effect: Effect) -> Dict[str, Any]:
+    if not isinstance(effect.payload, dict):
+        return {}
+    payload = dict(effect.payload)
+
+    if effect.type != EffectType.TOOL_CALLS:
+        return payload
+
+    tool_calls = payload.get("tool_calls")
+    if isinstance(tool_calls, list):
+        payload["tool_calls"] = [_normalize_tool_call_for_idempotency(tc) for tc in tool_calls]
+
+    allowed_tools = payload.get("allowed_tools")
+    if isinstance(allowed_tools, list):
+        uniq = {
+            str(t).strip()
+            for t in allowed_tools
+            if isinstance(t, str) and t.strip()
+        }
+        payload["allowed_tools"] = sorted(uniq)
+
+    return payload
 
 
 class EffectPolicy(Protocol):
@@ -110,11 +179,12 @@ class DefaultEffectPolicy:
         This ensures the same effect at the same point in the same run
         gets the same key, enabling deduplication on restart.
         """
+        normalized_payload = _normalize_effect_payload_for_idempotency(effect)
         key_data = {
             "run_id": run.run_id,
             "node_id": node_id,
             "effect_type": effect.type.value,
-            "effect_payload": effect.payload,
+            "effect_payload": normalized_payload,
         }
         key_json = json.dumps(key_data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(key_json.encode()).hexdigest()[:32]
@@ -156,11 +226,12 @@ def compute_idempotency_key(
     
     Useful when you need to compute a key without a full policy.
     """
+    normalized_payload = _normalize_effect_payload_for_idempotency(effect)
     key_data = {
         "run_id": run_id,
         "node_id": node_id,
         "effect_type": effect.type.value,
-        "effect_payload": effect.payload,
+        "effect_payload": normalized_payload,
     }
     key_json = json.dumps(key_data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(key_json.encode()).hexdigest()[:32]

@@ -65,10 +65,10 @@ def test_memory_kg_predicate_aliases_are_normalized_on_assert_and_query() -> Non
     assert isinstance(items, list)
     assert items and items[0].get("predicate") == "dcterms:description"
 
-    # Query using canonical predicate for awareness/knowledge.
+    # schema:awareness is normalized to the canonical schema:knowsAbout predicate.
     out_aw1 = query_handler(
         run,
-        Effect(type=EffectType.MEMORY_KG_QUERY, payload={"scope": "global", "predicate": "schema:knowsAbout", "limit": 10}),
+        Effect(type=EffectType.MEMORY_KG_QUERY, payload={"scope": "global", "predicate": "schema:awareness", "limit": 10}),
         None,
     )
     assert out_aw1.status == "completed"
@@ -88,15 +88,3 @@ def test_memory_kg_predicate_aliases_are_normalized_on_assert_and_query() -> Non
     items2 = out3.result.get("items")
     assert isinstance(items2, list)
     assert items2 and items2[0].get("predicate") == "dcterms:description"
-
-    # Query using awareness alias (should be normalized to schema:knowsabout).
-    out_aw2 = query_handler(
-        run,
-        Effect(type=EffectType.MEMORY_KG_QUERY, payload={"scope": "global", "predicate": "schema:awareness", "limit": 10}),
-        None,
-    )
-    assert out_aw2.status == "completed"
-    assert isinstance(out_aw2.result, dict)
-    items_aw2 = out_aw2.result.get("items")
-    assert isinstance(items_aw2, list)
-    assert any(x.get("predicate") == "schema:knowsabout" for x in items_aw2)

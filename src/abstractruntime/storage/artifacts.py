@@ -44,6 +44,7 @@ class ArtifactMetadata:
     content_type: str  # MIME type or semantic type
     size_bytes: int
     created_at: str
+    blob_id: Optional[str] = None  # Global (cross-run) content hash for dedupe
     run_id: Optional[str] = None  # Optional association with a run
     tags: Dict[str, str] = field(default_factory=dict)
 
@@ -54,6 +55,7 @@ class ArtifactMetadata:
     def from_dict(cls, data: Dict[str, Any]) -> "ArtifactMetadata":
         return cls(
             artifact_id=data["artifact_id"],
+            blob_id=data.get("blob_id"),
             content_type=data["content_type"],
             size_bytes=data["size_bytes"],
             created_at=data["created_at"],
@@ -92,9 +94,8 @@ def compute_artifact_id(content: bytes, *, run_id: Optional[str] = None) -> str:
     By default, artifacts are content-addressed (SHA-256, truncated) so the same bytes
     produce the same id.
 
-    If `run_id` is provided, the id is *namespaced to that run* to avoid cross-run
-    collisions when using a shared `FileArtifactStore(base_dir)` and to preserve
-    correct `list_by_run(...)` / purge-by-run semantics.
+    If `run_id` is provided, the id is *namespaced to that run* so each run can have a
+    distinct artifact_id (while still enabling cross-run blob dedupe via `blob_id`).
     """
     h = hashlib.sha256()
     if run_id is not None:
@@ -104,6 +105,11 @@ def compute_artifact_id(content: bytes, *, run_id: Optional[str] = None) -> str:
             h.update(b"\0")
     h.update(content)
     return h.hexdigest()[:32]
+
+
+def compute_blob_id(content: bytes) -> str:
+    """Compute a stable, global content hash for artifact blob dedupe."""
+    return hashlib.sha256(content).hexdigest()
 
 
 def validate_artifact_id(artifact_id: str) -> None:
@@ -337,6 +343,7 @@ class InMemoryArtifactStore(ArtifactStore):
 
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,
+            blob_id=compute_blob_id(content),
             content_type=content_type,
             size_bytes=len(content),
             created_at=utc_now_iso(),
@@ -382,25 +389,76 @@ class InMemoryArtifactStore(ArtifactStore):
 class FileArtifactStore(ArtifactStore):
     """File-based artifact store.
 
-    Directory structure:
+    Directory structure (v1, cross-run blob dedupe):
         base_dir/
             artifacts/
-                {artifact_id}.bin     # content
-                {artifact_id}.meta    # metadata JSON
+                blobs/{blob_id}.bin   # global content-addressed bytes
+                refs/{artifact_id}.meta  # per-artifact metadata (points to blob_id)
+
+    Legacy layout (v0) is still supported for reads:
+        base_dir/
+            artifacts/
+                {artifact_id}.bin
+                {artifact_id}.meta
     """
 
     def __init__(self, base_dir: Union[str, Path]) -> None:
         self._base = Path(base_dir)
         self._artifacts_dir = self._base / "artifacts"
-        self._artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self._blobs_dir = self._artifacts_dir / "blobs"
+        self._refs_dir = self._artifacts_dir / "refs"
+        self._blobs_dir.mkdir(parents=True, exist_ok=True)
+        self._refs_dir.mkdir(parents=True, exist_ok=True)
 
-    def _content_path(self, artifact_id: str) -> Path:
+    def _legacy_content_path(self, artifact_id: str) -> Path:
         validate_artifact_id(artifact_id)
         return self._artifacts_dir / f"{artifact_id}.bin"
 
-    def _metadata_path(self, artifact_id: str) -> Path:
+    def _legacy_metadata_path(self, artifact_id: str) -> Path:
         validate_artifact_id(artifact_id)
         return self._artifacts_dir / f"{artifact_id}.meta"
+
+    def _ref_metadata_path(self, artifact_id: str) -> Path:
+        validate_artifact_id(artifact_id)
+        return self._refs_dir / f"{artifact_id}.meta"
+
+    def _blob_path(self, blob_id: str) -> Path:
+        validate_artifact_id(blob_id)
+        return self._blobs_dir / f"{blob_id}.bin"
+
+    def _write_blob(self, *, blob_id: str, content: bytes) -> Path:
+        path = self._blob_path(blob_id)
+        if path.exists():
+            return path
+        import uuid
+
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(tmp, "wb") as f:
+                f.write(content)
+            tmp.replace(path)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+        return path
+
+    def _content_path(self, artifact_id: str) -> Path:
+        validate_artifact_id(artifact_id)
+        meta = self.get_metadata(artifact_id)
+        blob_id = getattr(meta, "blob_id", None) if meta is not None else None
+        if isinstance(blob_id, str) and blob_id.strip():
+            return self._blob_path(blob_id.strip())
+        return self._legacy_content_path(artifact_id)
+
+    def _metadata_path(self, artifact_id: str) -> Path:
+        validate_artifact_id(artifact_id)
+        p = self._ref_metadata_path(artifact_id)
+        if p.exists():
+            return p
+        return self._legacy_metadata_path(artifact_id)
 
     def store(
         self,
@@ -413,9 +471,11 @@ class FileArtifactStore(ArtifactStore):
     ) -> ArtifactMetadata:
         if artifact_id is None:
             artifact_id = compute_artifact_id(content, run_id=run_id)
+        blob_id = compute_blob_id(content)
 
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,
+            blob_id=blob_id,
             content_type=content_type,
             size_bytes=len(content),
             created_at=utc_now_iso(),
@@ -423,39 +483,40 @@ class FileArtifactStore(ArtifactStore):
             tags=tags or {},
         )
 
-        # Write content
-        content_path = self._content_path(artifact_id)
-        with open(content_path, "wb") as f:
-            f.write(content)
+        # Write blob bytes (deduped across runs)
+        self._write_blob(blob_id=blob_id, content=content)
 
         # Write metadata
-        metadata_path = self._metadata_path(artifact_id)
+        metadata_path = self._ref_metadata_path(artifact_id)
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata.to_dict(), f, ensure_ascii=False, indent=2)
 
         return metadata
 
     def load(self, artifact_id: str) -> Optional[Artifact]:
-        content_path = self._content_path(artifact_id)
         metadata_path = self._metadata_path(artifact_id)
-
-        if not content_path.exists() or not metadata_path.exists():
+        if not metadata_path.exists():
             return None
-
-        with open(content_path, "rb") as f:
-            content = f.read()
 
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata_dict = json.load(f)
 
         metadata = ArtifactMetadata.from_dict(metadata_dict)
+        content_path = self._content_path(artifact_id)
+        if not content_path.exists():
+            return None
+
+        with open(content_path, "rb") as f:
+            content = f.read()
         return Artifact(metadata=metadata, content=content)
 
     def get_metadata(self, artifact_id: str) -> Optional[ArtifactMetadata]:
-        metadata_path = self._metadata_path(artifact_id)
-
+        validate_artifact_id(artifact_id)
+        metadata_path = self._ref_metadata_path(artifact_id)
         if not metadata_path.exists():
-            return None
+            metadata_path = self._legacy_metadata_path(artifact_id)
+            if not metadata_path.exists():
+                return None
 
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata_dict = json.load(f)
@@ -463,28 +524,42 @@ class FileArtifactStore(ArtifactStore):
         return ArtifactMetadata.from_dict(metadata_dict)
 
     def exists(self, artifact_id: str) -> bool:
+        meta = self.get_metadata(artifact_id)
+        if meta is None:
+            return False
         return self._content_path(artifact_id).exists()
 
     def delete(self, artifact_id: str) -> bool:
-        content_path = self._content_path(artifact_id)
-        metadata_path = self._metadata_path(artifact_id)
+        validate_artifact_id(artifact_id)
+        metadata_path = self._ref_metadata_path(artifact_id)
+        legacy_meta = self._legacy_metadata_path(artifact_id)
+        legacy_content = self._legacy_content_path(artifact_id)
 
         deleted = False
-        if content_path.exists():
-            content_path.unlink()
-            deleted = True
         if metadata_path.exists():
             metadata_path.unlink()
+            deleted = True
+        if legacy_meta.exists():
+            legacy_meta.unlink()
+            deleted = True
+        if legacy_content.exists():
+            legacy_content.unlink()
             deleted = True
 
         return deleted
 
     def list_by_run(self, run_id: str) -> List[ArtifactMetadata]:
         results = []
-        for metadata_path in self._artifacts_dir.glob("*.meta"):
+        meta_paths = list(self._refs_dir.glob("*.meta")) + list(self._artifacts_dir.glob("*.meta"))
+        seen: set[str] = set()
+        for metadata_path in meta_paths:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata_dict = json.load(f)
+                artifact_id = str(metadata_dict.get("artifact_id") or "").strip()
+                if not artifact_id or artifact_id in seen:
+                    continue
+                seen.add(artifact_id)
                 if metadata_dict.get("run_id") == run_id:
                     results.append(ArtifactMetadata.from_dict(metadata_dict))
             except (json.JSONDecodeError, IOError):
@@ -493,16 +568,69 @@ class FileArtifactStore(ArtifactStore):
 
     def list_all(self, *, limit: int = 1000) -> List[ArtifactMetadata]:
         results = []
-        for metadata_path in self._artifacts_dir.glob("*.meta"):
+        meta_paths = list(self._refs_dir.glob("*.meta")) + list(self._artifacts_dir.glob("*.meta"))
+        seen: set[str] = set()
+        for metadata_path in meta_paths:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata_dict = json.load(f)
+                artifact_id = str(metadata_dict.get("artifact_id") or "").strip()
+                if not artifact_id or artifact_id in seen:
+                    continue
+                seen.add(artifact_id)
                 results.append(ArtifactMetadata.from_dict(metadata_dict))
             except (json.JSONDecodeError, IOError):
                 continue
         # Sort by created_at descending
         results.sort(key=lambda m: m.created_at, reverse=True)
         return results[:limit]
+
+    def gc(self, *, dry_run: bool = True) -> Dict[str, Any]:
+        """Garbage collect unreferenced blobs.
+
+        Notes:
+        - This only applies to the v1 `artifacts/blobs` layout.
+        - Safe-by-default: `dry_run=True` returns the plan without deleting.
+        """
+
+        report: Dict[str, Any] = {
+            "dry_run": bool(dry_run),
+            "blobs_total": 0,
+            "blobs_referenced": 0,
+            "blobs_deleted": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
+
+        referenced: set[str] = set()
+        for meta in self.list_all(limit=1_000_000):
+            blob_id = getattr(meta, "blob_id", None)
+            if isinstance(blob_id, str) and blob_id.strip():
+                referenced.add(blob_id.strip())
+
+        report["blobs_referenced"] = len(referenced)
+
+        blobs = list(self._blobs_dir.glob("*.bin"))
+        report["blobs_total"] = len(blobs)
+
+        for p in blobs:
+            blob_id = p.stem
+            if blob_id in referenced:
+                continue
+            try:
+                size = p.stat().st_size
+            except Exception:
+                size = 0
+            if not dry_run:
+                try:
+                    p.unlink()
+                except Exception as e:
+                    report["errors"].append({"blob_id": blob_id, "error": str(e)})
+                    continue
+            report["blobs_deleted"] += 1
+            report["bytes_reclaimed"] += int(size)
+
+        return report
 
 
 # Artifact reference helpers for use in RunState.vars

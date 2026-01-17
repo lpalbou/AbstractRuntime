@@ -59,14 +59,13 @@ _PREDICATE_ALIAS_MAP: dict[str, str] = {
     # but the framework's canonical set is deliberately small and uses `dcterms:*` for metadata.
     "schema:description": "dcterms:description",
     "schema:creator": "dcterms:creator",
+    # Awareness is a synonym for the canonical `schema:knowsAbout` predicate.
+    "schema:awareness": "schema:knowsabout",
     # Structural / membership-y variants seen in practice.
     "schema:hasparent": "dcterms:ispartof",
     "schema:hasmember": "dcterms:haspart",
     # Identity / reference-ish variants (normalize to the canonical set).
     "schema:recognizedas": "skos:closematch",
-    # "awareness" is not part of our canonical set; treat it as a synonym for "knowsAbout"
-    # (stronger than "mentions", which can be incidental).
-    "schema:awareness": "schema:knowsAbout",
     "schema:hasmemorysource": "dcterms:references",
     # Namespace drift + common typos.
     "schema:haspart": "dcterms:haspart",

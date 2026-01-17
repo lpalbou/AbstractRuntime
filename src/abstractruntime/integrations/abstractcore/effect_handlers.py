@@ -853,6 +853,7 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
             if not isinstance(tc, dict):
                 blocked_by_index[idx] = {
                     "call_id": "",
+                    "runtime_call_id": None,
                     "name": "",
                     "success": False,
                     "output": None,
@@ -864,28 +865,37 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
             name_raw = tc.get("name")
             name = name_raw.strip() if isinstance(name_raw, str) else ""
             call_id = str(tc.get("call_id") or "")
+            runtime_call_id = tc.get("runtime_call_id")
+            runtime_call_id_str = str(runtime_call_id).strip() if runtime_call_id is not None else ""
+            runtime_call_id_out = runtime_call_id_str or None
 
             if allowlist_enabled:
                 if not name:
                     blocked_by_index[idx] = {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
                         "name": "",
                         "success": False,
                         "output": None,
                         "error": "Tool call missing a valid name",
                     }
-                    tool_calls_for_evidence.append({"call_id": call_id, "name": "", "arguments": {}})
+                    tool_calls_for_evidence.append(
+                        {"call_id": call_id, "runtime_call_id": runtime_call_id_out, "name": "", "arguments": {}}
+                    )
                     continue
                 if name not in allowed_tools:
                     blocked_by_index[idx] = {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
                         "name": name,
                         "success": False,
                         "output": None,
                         "error": f"Tool '{name}' is not allowed for this node",
                     }
                     # Do not leak arguments for disallowed tools into the durable wait payload.
-                    tool_calls_for_evidence.append({"call_id": call_id, "name": name, "arguments": {}})
+                    tool_calls_for_evidence.append(
+                        {"call_id": call_id, "runtime_call_id": runtime_call_id_out, "name": name, "arguments": {}}
+                    )
                     continue
 
             # Allowed (or allowlist disabled): include for execution and keep full args for evidence.
@@ -903,12 +913,20 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
                 except Exception as e:
                     blocked_by_index[idx] = {
                         "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
                         "name": name,
                         "success": False,
                         "output": None,
                         "error": str(e),
                     }
-                    tool_calls_for_evidence.append({"call_id": call_id, "name": name, "arguments": tc.get("arguments") or {}})
+                    tool_calls_for_evidence.append(
+                        {
+                            "call_id": call_id,
+                            "runtime_call_id": runtime_call_id_out,
+                            "name": name,
+                            "arguments": tc.get("arguments") or {},
+                        }
+                    )
                 continue
 
             filtered_tool_calls.append(tc)
@@ -984,6 +1002,7 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
                         merged_results.append(
                             {
                                 "call_id": "",
+                                "runtime_call_id": None,
                                 "name": "",
                                 "success": False,
                                 "output": None,

@@ -227,8 +227,9 @@ class TestFileArtifactStore:
 
             # Verify files exist
             artifacts_dir = Path(tmpdir) / "artifacts"
-            assert (artifacts_dir / f"{metadata.artifact_id}.bin").exists()
-            assert (artifacts_dir / f"{metadata.artifact_id}.meta").exists()
+            assert (artifacts_dir / "refs" / f"{metadata.artifact_id}.meta").exists()
+            assert isinstance(metadata.blob_id, str) and metadata.blob_id
+            assert (artifacts_dir / "blobs" / f"{metadata.blob_id}.bin").exists()
 
             # Load and verify
             artifact = store.load(metadata.artifact_id)
@@ -257,6 +258,7 @@ class TestFileArtifactStore:
             m2 = store.store(b"same-content", run_id="run-2")
 
             assert m1.artifact_id != m2.artifact_id
+            assert m1.blob_id == m2.blob_id
 
             run1 = store.list_by_run("run-1")
             run2 = store.list_by_run("run-2")
@@ -269,22 +271,26 @@ class TestFileArtifactStore:
             assert meta2 is not None and meta2.run_id == "run-2"
 
     def test_delete_removes_files(self):
-        """Delete removes both content and metadata files."""
+        """Delete removes ref metadata; blobs are cleaned up by gc()."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store = FileArtifactStore(tmpdir)
             metadata = store.store(b"content")
 
             artifacts_dir = Path(tmpdir) / "artifacts"
-            content_path = artifacts_dir / f"{metadata.artifact_id}.bin"
-            meta_path = artifacts_dir / f"{metadata.artifact_id}.meta"
+            blob_path = artifacts_dir / "blobs" / f"{metadata.blob_id}.bin"
+            meta_path = artifacts_dir / "refs" / f"{metadata.artifact_id}.meta"
 
-            assert content_path.exists()
+            assert blob_path.exists()
             assert meta_path.exists()
 
             store.delete(metadata.artifact_id)
 
-            assert not content_path.exists()
             assert not meta_path.exists()
+            assert blob_path.exists()
+
+            report = store.gc(dry_run=False)
+            assert report.get("blobs_deleted") == 1
+            assert not blob_path.exists()
 
     def test_list_by_run(self):
         """Can list artifacts by run ID from files."""
@@ -297,6 +303,33 @@ class TestFileArtifactStore:
 
             run1 = store.list_by_run("run-1")
             assert len(run1) == 2
+
+    def test_gc_respects_cross_run_refs(self):
+        """GC must not delete a shared blob while another run still references it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+
+            m1 = store.store(b"shared", run_id="run-1")
+            m2 = store.store(b"shared", run_id="run-2")
+            assert m1.blob_id == m2.blob_id
+
+            artifacts_dir = Path(tmpdir) / "artifacts"
+            blob_path = artifacts_dir / "blobs" / f"{m1.blob_id}.bin"
+            assert blob_path.exists()
+
+            deleted = store.delete_by_run("run-1")
+            assert deleted == 1
+
+            report = store.gc(dry_run=False)
+            assert report.get("blobs_deleted") == 0
+            assert blob_path.exists()
+
+            deleted = store.delete_by_run("run-2")
+            assert deleted == 1
+
+            report = store.gc(dry_run=False)
+            assert report.get("blobs_deleted") == 1
+            assert not blob_path.exists()
 
 
 # -----------------------------------------------------------------------------

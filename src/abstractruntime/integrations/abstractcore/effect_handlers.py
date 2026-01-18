@@ -24,6 +24,12 @@ from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient
 from .tool_executor import ToolExecutor
 from .logging import get_logger
+from .session_attachments import (
+    dedup_messages_view,
+    execute_open_attachment,
+    list_session_attachments,
+    render_session_attachments_system_message,
+)
 from .workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
 
 logger = get_logger(__name__)
@@ -567,10 +573,51 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 return value.strip().lower() in {"1", "true", "yes", "y", "on"}
             return False
 
+        # Optional session attachment registry injection.
+        #
+        # This is a derived view: it does not mutate the durable run context.
+        session_attachments: Optional[list[Dict[str, Any]]] = None
+        try:
+            include_raw = params.get("include_session_attachments_index") if isinstance(params, dict) else None
+            if include_raw is None:
+                # Default heuristic:
+                # - Agents (tools present): include.
+                # - Raw LLM calls: include only when explicitly using context.
+                inc_ctx = payload.get("include_context")
+                if inc_ctx is None:
+                    inc_ctx = payload.get("use_context")
+                include_raw = True if tools is not None else _coerce_boolish(inc_ctx)
+
+            include_index = _coerce_boolish(include_raw)
+            sid = getattr(run, "session_id", None)
+            sid_str = str(sid or "").strip() if isinstance(sid, str) or sid is not None else ""
+            if include_index and artifact_store is not None and sid_str:
+                session_attachments = list_session_attachments(
+                    artifact_store=artifact_store, session_id=sid_str, limit=20
+                )
+                msg = render_session_attachments_system_message(session_attachments, max_entries=20, max_chars=4000)
+                if msg:
+                    if not isinstance(messages, list):
+                        messages = []
+                    # Avoid double-injection if a caller already provided a similar system message.
+                    already = False
+                    if messages and isinstance(messages[0], dict):
+                        if messages[0].get("role") == "system":
+                            c0 = messages[0].get("content")
+                            already = isinstance(c0, str) and c0.strip().startswith("Session attachments")
+                    if not already:
+                        messages = [{"role": "system", "content": msg}] + list(messages)
+        except Exception:
+            session_attachments = None
+
         fallback_enabled = _coerce_boolish(structured_output_fallback)
         base_params = dict(params)
 
         try:
+            # View-time dedup of repeated document reads (keeps LLM-visible context lean).
+            if isinstance(messages, list) and messages:
+                messages = dedup_messages_view(list(messages), session_attachments=session_attachments)
+
             structured_requested = isinstance(response_schema, dict) and response_schema
             params_for_call = dict(params)
             if structured_requested:
@@ -791,7 +838,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
     return _handler
 
 
-def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHandler:
+def make_tool_calls_handler(
+    *,
+    tools: Optional[ToolExecutor] = None,
+    artifact_store: Optional[ArtifactStore] = None,
+) -> EffectHandler:
     """Create a TOOL_CALLS effect handler.
 
     Tool execution is performed exclusively via the host-configured ToolExecutor.
@@ -818,6 +869,7 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
 
         # Always block non-dict tool call entries: passthrough hosts expect dicts and may crash otherwise.
         blocked_by_index: Dict[int, Dict[str, Any]] = {}
+        pre_results_by_index: Dict[int, Dict[str, Any]] = {}
         filtered_tool_calls: list[Dict[str, Any]] = []
 
         # For evidence and deterministic resume merging, keep a positional tool call list aligned to the
@@ -899,6 +951,62 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
                     continue
 
             # Allowed (or allowlist disabled): include for execution and keep full args for evidence.
+            if name == "open_attachment":
+                # Runtime-owned tool: executed directly by the runtime using ArtifactStore.
+                raw_arguments = tc.get("arguments") or {}
+                arguments = (
+                    dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
+                )
+                tool_calls_for_evidence.append(
+                    {
+                        "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
+                        "name": name,
+                        "arguments": dict(arguments),
+                    }
+                )
+
+                if artifact_store is None:
+                    pre_results_by_index[idx] = {
+                        "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
+                        "name": name,
+                        "success": False,
+                        "output": {"rendered": "Error: ArtifactStore is not available (cannot open attachments)."},
+                        "error": "ArtifactStore is not available",
+                    }
+                    continue
+
+                sid = getattr(run, "session_id", None)
+                sid_str = str(sid or "").strip() if isinstance(sid, str) or sid is not None else ""
+
+                aid = arguments.get("artifact_id") or arguments.get("$artifact") or arguments.get("id")
+                handle = arguments.get("handle") or arguments.get("path")
+                expected_sha256 = arguments.get("expected_sha256") or arguments.get("sha256")
+                start_line = arguments.get("start_line") or arguments.get("startLine") or 1
+                end_line = arguments.get("end_line") or arguments.get("endLine")
+                max_chars = arguments.get("max_chars") or arguments.get("maxChars") or 8000
+
+                success, output, err = execute_open_attachment(
+                    artifact_store=artifact_store,
+                    session_id=sid_str,
+                    artifact_id=str(aid).strip() if aid is not None else None,
+                    handle=str(handle).strip() if handle is not None else None,
+                    expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
+                    start_line=int(start_line) if not isinstance(start_line, bool) else 1,
+                    end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
+                    max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
+                )
+                pre_results_by_index[idx] = {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": name,
+                    "success": bool(success),
+                    "output": _jsonable(output),
+                    "error": str(err or "") if not success else None,
+                }
+                continue
+
             if scope is not None:
                 try:
                     raw_arguments = tc.get("arguments") or {}
@@ -933,11 +1041,27 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
             tool_calls_for_evidence.append(tc)
 
         # If everything was blocked, complete immediately with blocked results (no waiting/execution).
-        if not filtered_tool_calls and blocked_by_index:
+        if not filtered_tool_calls and (blocked_by_index or pre_results_by_index):
+            merged_results: list[Any] = []
+            for idx in range(len(tool_calls)):
+                fixed = pre_results_by_index.get(idx) or blocked_by_index.get(idx)
+                if fixed is not None:
+                    merged_results.append(fixed)
+                else:
+                    merged_results.append(
+                        {
+                            "call_id": "",
+                            "runtime_call_id": None,
+                            "name": "",
+                            "success": False,
+                            "output": None,
+                            "error": "Missing tool result",
+                        }
+                    )
             return EffectOutcome.completed(
                 result={
                     "mode": "executed",
-                    "results": [blocked_by_index[i] for i in sorted(blocked_by_index.keys())],
+                    "results": merged_results,
                 }
             )
 
@@ -972,9 +1096,12 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
             if isinstance(executor_details, dict) and executor_details:
                 # Avoid collisions with our reserved keys.
                 details["executor"] = _jsonable(executor_details)
-            if blocked_by_index:
+            if blocked_by_index or pre_results_by_index:
                 details["original_call_count"] = original_call_count
-                details["blocked_by_index"] = {str(k): _jsonable(v) for k, v in blocked_by_index.items()}
+                if blocked_by_index:
+                    details["blocked_by_index"] = {str(k): _jsonable(v) for k, v in blocked_by_index.items()}
+                if pre_results_by_index:
+                    details["pre_results_by_index"] = {str(k): _jsonable(v) for k, v in pre_results_by_index.items()}
                 details["tool_calls_for_evidence"] = _jsonable(tool_calls_for_evidence)
 
             wait = WaitState(
@@ -986,15 +1113,15 @@ def make_tool_calls_handler(*, tools: Optional[ToolExecutor] = None) -> EffectHa
             )
             return EffectOutcome.waiting(wait)
 
-        if blocked_by_index:
+        if blocked_by_index or pre_results_by_index:
             existing_results = result.get("results")
             if isinstance(existing_results, list):
                 merged_results: list[Any] = []
                 executed_iter = iter(existing_results)
                 for idx in range(len(tool_calls)):
-                    blocked = blocked_by_index.get(idx)
-                    if blocked is not None:
-                        merged_results.append(blocked)
+                    fixed = pre_results_by_index.get(idx) or blocked_by_index.get(idx)
+                    if fixed is not None:
+                        merged_results.append(fixed)
                         continue
                     try:
                         merged_results.append(next(executed_iter))
@@ -1025,5 +1152,5 @@ def build_effect_handlers(
 ) -> Dict[EffectType, Any]:
     return {
         EffectType.LLM_CALL: make_llm_call_handler(llm=llm, artifact_store=artifact_store),
-        EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools),
+        EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools, artifact_store=artifact_store),
     }

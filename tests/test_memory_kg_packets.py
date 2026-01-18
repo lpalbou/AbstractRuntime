@@ -6,9 +6,9 @@ from abstractruntime.memory.kg_packets import pack_active_memory_text, packetize
 def test_packetize_assertions_extracts_provenance_and_scores_and_dedups() -> None:
     items = [
         {
-            "subject": "Data",
+            "subject": "data",
             "predicate": "dcterms:description",
-            "object": "Android officer",
+            "object": "android officer",
             "scope": "global",
             "owner_id": "global_memory",
             "observed_at": "2026-01-01T00:00:00Z",
@@ -17,9 +17,9 @@ def test_packetize_assertions_extracts_provenance_and_scores_and_dedups() -> Non
         },
         # Duplicate (case drift); should be deduped.
         {
-            "subject": "data",
+            "subject": "Data",
             "predicate": "DCTERMS:DESCRIPTION",
-            "object": "android officer",
+            "object": "Android officer",
             "scope": "global",
             "owner_id": "global_memory",
             "observed_at": "2026-01-01T00:00:00Z",
@@ -31,10 +31,10 @@ def test_packetize_assertions_extracts_provenance_and_scores_and_dedups() -> Non
     assert len(packets) == 1
     pkt = packets[0]
     assert pkt.get("version") == 0
-    assert pkt.get("subject") == "Data"
+    assert pkt.get("subject") == "data"
     assert pkt.get("predicate") == "dcterms:description"
-    assert pkt.get("object") == "Android officer"
-    assert "Data —dcterms:description→ Android officer" == pkt.get("statement")
+    assert pkt.get("object") == "android officer"
+    assert "data —dcterms:description→ android officer" == pkt.get("statement")
     assert pkt.get("observed_at") == "2026-01-01T00:00:00Z"
     assert pkt.get("scope") == "global"
     assert pkt.get("owner_id") == "global_memory"

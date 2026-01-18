@@ -1222,10 +1222,16 @@ class Runtime:
                 try:
                     if isinstance(details, dict):
                         blocked = details.get("blocked_by_index")
+                        pre_results = details.get("pre_results_by_index")
                         original_count = details.get("original_call_count")
                         results = payload.get("results") if isinstance(payload, dict) else None
+                        fixed_by_index: Dict[str, Any] = {}
+                        if isinstance(blocked, dict):
+                            fixed_by_index.update(blocked)
+                        if isinstance(pre_results, dict):
+                            fixed_by_index.update(pre_results)
                         if (
-                            isinstance(blocked, dict)
+                            fixed_by_index
                             and isinstance(original_count, int)
                             and original_count > 0
                             and isinstance(results, list)
@@ -1235,9 +1241,9 @@ class Runtime:
                             executed_iter = iter(results)
 
                             for idx in range(original_count):
-                                blocked_entry = blocked.get(str(idx))
-                                if isinstance(blocked_entry, dict):
-                                    merged_results.append(blocked_entry)
+                                fixed_entry = fixed_by_index.get(str(idx))
+                                if isinstance(fixed_entry, dict):
+                                    merged_results.append(fixed_entry)
                                     continue
                                 try:
                                     merged_results.append(next(executed_iter))

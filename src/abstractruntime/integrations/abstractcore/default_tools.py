@@ -163,6 +163,41 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
         spec["toolset"] = toolset_by_name.get(name) or "other"
         out.append(spec)
 
+    # Runtime-owned tools (no host callable).
+    #
+    # Rationale: these tools require runtime context/state (e.g., session-scoped ArtifactStore access)
+    # and are executed inside the runtime effect handlers instead of via a host ToolExecutor.
+    out.append(
+        {
+            "name": "open_attachment",
+            "description": "Read an attachment (artifact) from the current session with bounded output.",
+            "when_to_use": (
+                "Use to re-open a previously attached file without re-sending its full contents in the chat context. "
+                "Prefer artifact_id when known; otherwise use handle (e.g. '@docs/notes.md')."
+            ),
+            "parameters": {
+                "artifact_id": {"type": "string", "default": None},
+                "handle": {"type": "string", "default": None},
+                "expected_sha256": {"type": "string", "default": None},
+                "start_line": {"type": "integer", "default": 1},
+                "end_line": {"type": "integer", "default": None},
+                "max_chars": {"type": "integer", "default": 8000},
+            },
+            "required_args": [],
+            "examples": [
+                {
+                    "description": "Open by artifact id (preferred)",
+                    "arguments": {"artifact_id": "abc123", "start_line": 1, "end_line": 80},
+                },
+                {
+                    "description": "Open by handle",
+                    "arguments": {"handle": "@docs/architecture.md", "max_chars": 2000},
+                },
+            ],
+            "toolset": "files",
+        }
+    )
+
     # Stable ordering: toolset then name
     out.sort(key=lambda s: (str(s.get("toolset") or ""), str(s.get("name") or "")))
     return out

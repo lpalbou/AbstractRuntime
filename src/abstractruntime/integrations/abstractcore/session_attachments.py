@@ -297,9 +297,15 @@ def dedup_messages_view(
             ident = _parse_read_file_identity(body)
             if ident is not None:
                 path, sha, start_line, end_line = ident
-                identity = ("read_file", path, sha, start_line, end_line)
+                path_key = path
+                if path_key not in by_handle and path_key.startswith("/"):
+                    suffix_matches = [h for h in by_handle.keys() if path_key.endswith("/" + h)]
+                    if len(suffix_matches) == 1:
+                        path_key = suffix_matches[0]
 
-                candidates = by_handle.get(path) or []
+                identity = ("read_file", path_key, sha, start_line, end_line)
+
+                candidates = by_handle.get(path_key) or []
                 attachment_hint = ""
                 if len(candidates) == 1:
                     a = candidates[0]
@@ -319,7 +325,7 @@ def dedup_messages_view(
 
                 stub = (
                     f"[read_file]: (duplicate) File already shown above: {path} lines {start_line}-{end_line}.\n"
-                    f"Use open_attachment(handle='@{path}', start_line={start_line}, end_line={end_line}) to re-open.{attachment_hint}"
+                    f"Use open_attachment(handle='@{path_key}', start_line={start_line}, end_line={end_line}) to re-open.{attachment_hint}"
                 )
 
         elif tool == "open_attachment":
@@ -405,12 +411,14 @@ def execute_open_attachment(
                 selected_meta = m
                 break
         if selected_meta is None:
-            return (
-                False,
-                {"rendered": f"Error: attachment artifact_id '{artifact_id_norm}' not found in this session."},
-                "attachment not found",
-            )
-    else:
+            # Model robustness: many models confuse `artifact_id` (opaque) with `handle` (path-like).
+            # If a handle is available, fall back to it. Otherwise treat the provided artifact_id as
+            # a best-effort handle candidate (so `artifact_id=\"notes.txt\"` still works).
+            if not handle_norm:
+                handle_norm = _normalize_handle(artifact_id_norm)
+            artifact_id_norm = None
+
+    if selected_meta is None:
         if not handle_norm:
             return False, {"rendered": "Error: provide artifact_id or handle."}, "missing artifact_id/handle"
 
@@ -421,6 +429,22 @@ def execute_open_attachment(
             fn = _normalize_handle(tags.get("filename"))
             if p == handle_norm or fn == handle_norm:
                 matches.append(m)
+                continue
+
+            # Robustness: `read_file` tool outputs typically show absolute paths, while
+            # attachment tags often store workspace-relative virtual paths. Treat a
+            # single unambiguous suffix match as equivalent (disambiguate via sha256
+            # when multiple candidates exist).
+            if handle_norm.startswith("/"):
+                if p and not p.startswith("/") and handle_norm.endswith("/" + p):
+                    matches.append(m)
+                    continue
+                if fn and not fn.startswith("/") and handle_norm.endswith("/" + fn):
+                    matches.append(m)
+                    continue
+            if p and p.startswith("/") and not handle_norm.startswith("/") and p.endswith("/" + handle_norm):
+                matches.append(m)
+                continue
 
         if expected:
             matches2: list[Any] = []

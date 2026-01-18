@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from abstractcore.tools.common_tools import read_file
+
 from abstractruntime import Effect, EffectType, RunState
 from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler, make_tool_calls_handler
 from abstractruntime.integrations.abstractcore.session_attachments import (
@@ -15,6 +17,8 @@ from abstractruntime.integrations.abstractcore.session_attachments import (
     render_session_attachments_system_message,
     session_memory_owner_run_id,
 )
+from abstractruntime.integrations.abstractcore.tool_executor import MappingToolExecutor
+from abstractruntime.storage.in_memory import InMemoryRunStore
 from abstractruntime.storage.artifacts import FileArtifactStore, InMemoryArtifactStore
 
 
@@ -109,6 +113,120 @@ def test_open_attachment_reads_bounded_ranges() -> None:
     assert ok2 is True
     assert isinstance(out2, dict)
     assert out2.get("truncated") is True
+
+
+@pytest.mark.basic
+def test_open_attachment_falls_back_from_invalid_artifact_id_to_handle() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"hello\nworld\n"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+    )
+
+    ok, out, err = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id="notes.txt",  # common model mistake: passes handle as artifact_id
+        handle=None,
+        expected_sha256=None,
+        start_line=1,
+        end_line=1,
+        max_chars=2000,
+    )
+    assert ok is True
+    assert err is None
+    assert isinstance(out, dict)
+    assert out.get("artifact_id") == meta.artifact_id
+    assert "1: hello" in str(out.get("rendered") or "")
+
+
+@pytest.mark.basic
+def test_tool_calls_read_file_registers_session_attachment_and_open_attachment_works_in_order(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    run_store = InMemoryRunStore()
+    sid = "s1"
+
+    (tmp_path / "notes.txt").write_text("hello\nworld\n", encoding="utf-8")
+
+    # Workspace policy must be present in run.vars for path rewriting + relative handle stability.
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"workspace_root": str(tmp_path)})
+
+    handler = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([read_file]), artifact_store=store, run_store=run_store)
+    eff = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={
+            "tool_calls": [
+                {"name": "read_file", "arguments": {"file_path": "notes.txt", "start_line": 1, "end_line": 2}},
+                {"name": "open_attachment", "arguments": {"handle": "@notes.txt", "start_line": 2, "end_line": 2, "max_chars": 4000}},
+            ],
+            "allowed_tools": ["read_file", "open_attachment"],
+        },
+    )
+    out = handler(run, eff, None)
+    assert out.status == "completed"
+    res = out.result or {}
+    assert res.get("mode") == "executed"
+    results = res.get("results") or []
+    assert isinstance(results, list)
+    assert len(results) == 2
+    assert results[0].get("name") == "read_file"
+    assert results[0].get("success") is True
+    assert results[1].get("name") == "open_attachment"
+    assert results[1].get("success") is True
+    rendered = ((results[1].get("output") or {}) if isinstance(results[1].get("output"), dict) else {}).get("rendered")
+    assert isinstance(rendered, str) and "2: world" in rendered
+
+    # Attachment is stored under the session memory owner run with a stable virtual handle.
+    owner = session_memory_owner_run_id(sid)
+    metas = list_session_attachments(artifact_store=store, session_id=sid)
+    assert any(str(m.get("artifact_id") or "").strip() for m in metas)
+    assert any(m.get("handle") == "notes.txt" for m in metas)
+    assert run_store.load(owner) is not None
+
+
+@pytest.mark.integration
+def test_read_file_registered_attachment_persists_across_restart_file_store(tmp_path: Path) -> None:
+    base = tmp_path / "stores"
+    store1 = FileArtifactStore(base)
+    run_store = InMemoryRunStore()
+    sid = "s1"
+
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "notes.txt").write_text("hello\nworld\n", encoding="utf-8")
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"workspace_root": str(ws)})
+
+    handler1 = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([read_file]), artifact_store=store1, run_store=run_store)
+    eff1 = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={"tool_calls": [{"name": "read_file", "arguments": {"file_path": "notes.txt"}}], "allowed_tools": ["read_file"]},
+    )
+    out1 = handler1(run, eff1, None)
+    assert out1.status == "completed"
+
+    # Restart simulation: new store instance can open the attachment created by read_file.
+    store2 = FileArtifactStore(base)
+    ok, out, err = execute_open_attachment(
+        artifact_store=store2,
+        session_id=sid,
+        artifact_id=None,
+        handle="@notes.txt",
+        expected_sha256=None,
+        start_line=1,
+        end_line=1,
+        max_chars=2000,
+    )
+    assert ok is True
+    assert err is None
+    assert isinstance(out, dict)
+    assert "1: hello" in str(out.get("rendered") or "")
 
 
 @pytest.mark.basic
@@ -244,6 +362,7 @@ def test_e2e_open_attachment_tool_call_lmstudio(tmp_path: Path, monkeypatch: pyt
         run_store=run_store,
         ledger_store=ledger_store,
         artifact_store=artifact_store,
+        tool_executor=MappingToolExecutor.from_tools([read_file]),
     )
 
     tool_specs = filter_tool_specs(["open_attachment"])
@@ -321,3 +440,160 @@ def test_e2e_open_attachment_tool_call_lmstudio(tmp_path: Path, monkeypatch: pyt
     assert isinstance(rendered, str)
     assert "1: hello" in rendered
 
+
+@pytest.mark.e2e
+def test_e2e_read_file_registers_attachment_then_open_attachment_lmstudio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Level C: LMStudio native tools; read_file registers attachment; open_attachment works next call."""
+    if os.environ.get("ABSTRACT_E2E_LMSTUDIO") != "1":
+        pytest.skip("Set ABSTRACT_E2E_LMSTUDIO=1 to run this test.")
+
+    import httpx
+
+    base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+    model = os.environ.get("LMSTUDIO_MODEL", "qwen/qwen3-next-80b")
+    try:
+        r = httpx.get(base_url.rstrip("/") + "/models", timeout=2.0)
+        if r.status_code != 200:
+            pytest.skip(f"LMStudio not reachable at {base_url!r}")
+    except Exception:
+        pytest.skip(f"LMStudio not reachable at {base_url!r}")
+
+    monkeypatch.setenv("LMSTUDIO_BASE_URL", base_url)
+
+    from abstractruntime import RunStatus, StepPlan, WorkflowSpec
+    from abstractruntime.integrations.abstractcore import create_local_runtime
+    from abstractruntime.integrations.abstractcore.default_tools import filter_tool_specs
+    from abstractruntime.storage.json_files import JsonFileRunStore, JsonlLedgerStore
+
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "notes.txt").write_text("hello\nworld\n", encoding="utf-8")
+
+    base = tmp_path / "rt"
+    run_store = JsonFileRunStore(base)
+    ledger_store = JsonlLedgerStore(base)
+    artifact_store = FileArtifactStore(base)
+
+    sid = "s1"
+    rt = create_local_runtime(
+        provider="lmstudio",
+        model=model,
+        llm_kwargs={"base_url": base_url},
+        run_store=run_store,
+        ledger_store=ledger_store,
+        artifact_store=artifact_store,
+        tool_executor=MappingToolExecutor.from_tools([read_file]),
+    )
+
+    tool_specs_read = filter_tool_specs(["read_file"])
+    tool_specs_open = filter_tool_specs(["open_attachment"])
+
+    prompt1 = "Call the tool `read_file` exactly once with file_path='notes.txt'. Do not write any other text."
+    prompt2 = (
+        "Call the tool `open_attachment` exactly once with handle='@notes.txt', start_line=2 and end_line=2. "
+        "Do not write any other text."
+    )
+
+    def llm1_node(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(
+            node_id="LLM1",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={
+                    "prompt": prompt1,
+                    "tools": tool_specs_read,
+                    "provider": "lmstudio",
+                    "model": model,
+                    "params": {"temperature": 0.0},
+                },
+                result_key="llm1",
+            ),
+            next_node="TOOLS1",
+        )
+
+    def tools1_node(run, ctx) -> StepPlan:
+        del ctx
+        resp = run.vars.get("llm1")
+        tool_calls = resp.get("tool_calls") if isinstance(resp, dict) else None
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        return StepPlan(
+            node_id="TOOLS1",
+            effect=Effect(type=EffectType.TOOL_CALLS, payload={"tool_calls": tool_calls, "allowed_tools": ["read_file"]}, result_key="tools1"),
+            next_node="LLM2",
+        )
+
+    def llm2_node(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(
+            node_id="LLM2",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={
+                    "prompt": prompt2,
+                    "tools": tool_specs_open,
+                    "provider": "lmstudio",
+                    "model": model,
+                    "params": {"temperature": 0.0},
+                },
+                result_key="llm2",
+            ),
+            next_node="TOOLS2",
+        )
+
+    def tools2_node(run, ctx) -> StepPlan:
+        del ctx
+        resp = run.vars.get("llm2")
+        tool_calls = resp.get("tool_calls") if isinstance(resp, dict) else None
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        return StepPlan(
+            node_id="TOOLS2",
+            effect=Effect(type=EffectType.TOOL_CALLS, payload={"tool_calls": tool_calls, "allowed_tools": ["open_attachment"]}, result_key="tools2"),
+            next_node="DONE",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(node_id="DONE", complete_output={"llm1": run.vars.get("llm1"), "tools1": run.vars.get("tools1"), "llm2": run.vars.get("llm2"), "tools2": run.vars.get("tools2")})
+
+    wf = WorkflowSpec(
+        workflow_id="e2e_read_file_registers_attachment_lmstudio",
+        entry_node="LLM1",
+        nodes={"LLM1": llm1_node, "TOOLS1": tools1_node, "LLM2": llm2_node, "TOOLS2": tools2_node, "DONE": done_node},
+    )
+
+    run_id = rt.start(workflow=wf, session_id=sid, vars={"workspace_root": str(ws)})
+    state = rt.tick(workflow=wf, run_id=run_id, max_steps=12)
+    assert state.status == RunStatus.COMPLETED
+
+    # Ensure `read_file` actually executed and triggered attachment registration.
+    tools1 = state.output.get("tools1") if isinstance(state.output, dict) else None
+    assert isinstance(tools1, dict)
+    res1 = tools1.get("results") or []
+    assert isinstance(res1, list) and res1
+    assert res1[0].get("name") == "read_file"
+    assert res1[0].get("success") is True
+
+    # Validate second LLM call injection includes the new attachment handle.
+    llm2 = state.output.get("llm2") if isinstance(state.output, dict) else None
+    assert isinstance(llm2, dict)
+    meta_resp = llm2.get("metadata") if isinstance(llm2.get("metadata"), dict) else {}
+    obs = meta_resp.get("_runtime_observability") if isinstance(meta_resp.get("_runtime_observability"), dict) else {}
+    captured = obs.get("llm_generate_kwargs") if isinstance(obs.get("llm_generate_kwargs"), dict) else {}
+    msgs = captured.get("messages")
+    assert isinstance(msgs, list) and msgs
+    assert "@notes.txt" in str(msgs[0].get("content") or "")
+
+    # Validate tool output contains the expected line.
+    tools2 = state.output.get("tools2") if isinstance(state.output, dict) else None
+    assert isinstance(tools2, dict)
+    res2 = tools2.get("results") or []
+    assert isinstance(res2, list) and res2
+    r0 = res2[0]
+    assert r0.get("name") == "open_attachment"
+    assert r0.get("success") is True
+    out = r0.get("output") or {}
+    assert isinstance(out, dict)
+    assert "2: world" in str(out.get("rendered") or "")

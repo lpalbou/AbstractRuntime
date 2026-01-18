@@ -12,14 +12,18 @@ They are designed to keep `RunState.vars` JSON-safe.
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import mimetypes
 import re
 import tempfile
+import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
-from ...core.models import Effect, EffectType, RunState, WaitReason, WaitState
+from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
 from ...core.runtime import EffectOutcome, EffectHandler
+from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient
 from .tool_executor import ToolExecutor
@@ -29,6 +33,7 @@ from .session_attachments import (
     execute_open_attachment,
     list_session_attachments,
     render_session_attachments_system_message,
+    session_memory_owner_run_id,
 )
 from .workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
 
@@ -842,6 +847,7 @@ def make_tool_calls_handler(
     *,
     tools: Optional[ToolExecutor] = None,
     artifact_store: Optional[ArtifactStore] = None,
+    run_store: Optional[RunStore] = None,
 ) -> EffectHandler:
     """Create a TOOL_CALLS effect handler.
 
@@ -870,7 +876,7 @@ def make_tool_calls_handler(
         # Always block non-dict tool call entries: passthrough hosts expect dicts and may crash otherwise.
         blocked_by_index: Dict[int, Dict[str, Any]] = {}
         pre_results_by_index: Dict[int, Dict[str, Any]] = {}
-        filtered_tool_calls: list[Dict[str, Any]] = []
+        planned: list[Dict[str, Any]] = []
 
         # For evidence and deterministic resume merging, keep a positional tool call list aligned to the
         # *original* tool call order. Blocked entries are represented as empty-args stubs.
@@ -901,6 +907,137 @@ def make_tool_calls_handler(
                 return None
             return parsed if isinstance(parsed, dict) else None
 
+        def _ensure_session_memory_run_exists(*, session_id: str) -> None:
+            if run_store is None:
+                return
+            sid = str(session_id or "").strip()
+            if not sid:
+                return
+            rid = session_memory_owner_run_id(sid)
+            try:
+                existing = run_store.load(str(rid))
+            except Exception:
+                existing = None
+            if existing is not None:
+                return
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            run0 = RunState(
+                run_id=str(rid),
+                workflow_id="__session_memory__",
+                status=RunStatus.COMPLETED,
+                current_node="done",
+                vars={
+                    "context": {"task": "", "messages": []},
+                    "scratchpad": {},
+                    "_runtime": {"memory_spans": []},
+                    "_temp": {},
+                    "_limits": {},
+                },
+                waiting=None,
+                output={"messages": []},
+                error=None,
+                created_at=now_iso,
+                updated_at=now_iso,
+                actor_id=None,
+                session_id=sid,
+                parent_run_id=None,
+            )
+            try:
+                run_store.save(run0)
+            except Exception:
+                # Best-effort: artifacts can still be stored, but run-scoped APIs may 404.
+                pass
+
+        def _max_attachment_bytes() -> int:
+            raw = str(os.getenv("ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES", "") or "").strip()
+            if raw:
+                try:
+                    v = int(raw)
+                    if v > 0:
+                        return v
+                except Exception:
+                    pass
+            return 25 * 1024 * 1024
+
+        def _register_read_file_as_attachment(*, session_id: str, file_path: str) -> None:
+            if artifact_store is None:
+                return
+            sid = str(session_id or "").strip()
+            if not sid:
+                return
+            fp_raw = str(file_path or "").strip()
+            if not fp_raw:
+                return
+
+            try:
+                p = Path(fp_raw).expanduser()
+            except Exception:
+                return
+            try:
+                resolved = p.resolve()
+            except Exception:
+                resolved = p
+
+            try:
+                size = int(resolved.stat().st_size)
+            except Exception:
+                size = -1
+            max_bytes = _max_attachment_bytes()
+            if size >= 0 and size > max_bytes:
+                return
+
+            try:
+                content = resolved.read_bytes()
+            except Exception:
+                return
+            if len(content) > max_bytes:
+                return
+
+            sha256 = hashlib.sha256(bytes(content)).hexdigest()
+
+            handle = resolved.as_posix()
+            if scope is not None:
+                try:
+                    handle = resolved.relative_to(scope.root).as_posix()
+                except Exception:
+                    handle = resolved.as_posix()
+
+            filename = resolved.name or (handle.split("/")[-1] if handle else "")
+            guessed, _enc = mimetypes.guess_type(filename)
+            content_type = str(guessed or "text/plain")
+
+            rid = session_memory_owner_run_id(sid)
+            try:
+                existing = artifact_store.list_by_run(str(rid))
+            except Exception:
+                existing = []
+            for m in existing or []:
+                tags = getattr(m, "tags", None)
+                if not isinstance(tags, dict):
+                    continue
+                if str(tags.get("kind") or "") != "attachment":
+                    continue
+                if str(tags.get("path") or "") != str(handle):
+                    continue
+                if str(tags.get("sha256") or "") == sha256:
+                    return
+
+            _ensure_session_memory_run_exists(session_id=sid)
+
+            tags: Dict[str, str] = {
+                "kind": "attachment",
+                "source": "tool.read_file",
+                "path": str(handle),
+                "filename": str(filename),
+                "session_id": sid,
+                "sha256": sha256,
+            }
+            try:
+                artifact_store.store(bytes(content), content_type=str(content_type), run_id=str(rid), tags=tags)
+            except Exception:
+                return
+
+        # Parse + plan tool calls (preserve order; runtime-owned tools must not run ahead of host tools).
         for idx, tc in enumerate(tool_calls):
             if not isinstance(tc, dict):
                 blocked_by_index[idx] = {
@@ -950,13 +1087,10 @@ def make_tool_calls_handler(
                     )
                     continue
 
-            # Allowed (or allowlist disabled): include for execution and keep full args for evidence.
+            raw_arguments = tc.get("arguments") or {}
+            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
+
             if name == "open_attachment":
-                # Runtime-owned tool: executed directly by the runtime using ArtifactStore.
-                raw_arguments = tc.get("arguments") or {}
-                arguments = (
-                    dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
-                )
                 tool_calls_for_evidence.append(
                     {
                         "call_id": call_id,
@@ -965,59 +1099,24 @@ def make_tool_calls_handler(
                         "arguments": dict(arguments),
                     }
                 )
-
-                if artifact_store is None:
-                    pre_results_by_index[idx] = {
+                planned.append(
+                    {
+                        "idx": idx,
+                        "kind": "runtime",
+                        "name": name,
                         "call_id": call_id,
                         "runtime_call_id": runtime_call_id_out,
-                        "name": name,
-                        "success": False,
-                        "output": {"rendered": "Error: ArtifactStore is not available (cannot open attachments)."},
-                        "error": "ArtifactStore is not available",
+                        "arguments": dict(arguments),
                     }
-                    continue
-
-                sid = getattr(run, "session_id", None)
-                sid_str = str(sid or "").strip() if isinstance(sid, str) or sid is not None else ""
-
-                aid = arguments.get("artifact_id") or arguments.get("$artifact") or arguments.get("id")
-                handle = arguments.get("handle") or arguments.get("path")
-                expected_sha256 = arguments.get("expected_sha256") or arguments.get("sha256")
-                start_line = arguments.get("start_line") or arguments.get("startLine") or 1
-                end_line = arguments.get("end_line") or arguments.get("endLine")
-                max_chars = arguments.get("max_chars") or arguments.get("maxChars") or 8000
-
-                success, output, err = execute_open_attachment(
-                    artifact_store=artifact_store,
-                    session_id=sid_str,
-                    artifact_id=str(aid).strip() if aid is not None else None,
-                    handle=str(handle).strip() if handle is not None else None,
-                    expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
-                    start_line=int(start_line) if not isinstance(start_line, bool) else 1,
-                    end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
-                    max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
                 )
-                pre_results_by_index[idx] = {
-                    "call_id": call_id,
-                    "runtime_call_id": runtime_call_id_out,
-                    "name": name,
-                    "success": bool(success),
-                    "output": _jsonable(output),
-                    "error": str(err or "") if not success else None,
-                }
                 continue
 
+            # Host tools: rewrite under workspace scope (when configured) before execution.
+            tc2 = dict(tc)
             if scope is not None:
                 try:
-                    raw_arguments = tc.get("arguments") or {}
-                    arguments = (
-                        dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
-                    )
                     rewritten_args = rewrite_tool_arguments(tool_name=name, args=arguments, scope=scope)
-                    tc2 = dict(tc)
                     tc2["arguments"] = rewritten_args
-                    filtered_tool_calls.append(tc2)
-                    tool_calls_for_evidence.append(tc2)
                 except Exception as e:
                     blocked_by_index[idx] = {
                         "call_id": call_id,
@@ -1035,19 +1134,212 @@ def make_tool_calls_handler(
                             "arguments": tc.get("arguments") or {},
                         }
                     )
-                continue
+                    continue
+            else:
+                tc2["arguments"] = dict(arguments)
 
-            filtered_tool_calls.append(tc)
-            tool_calls_for_evidence.append(tc)
+            tool_calls_for_evidence.append(tc2)
+            planned.append({"idx": idx, "kind": "host", "name": name, "tc": tc2})
 
-        # If everything was blocked, complete immediately with blocked results (no waiting/execution).
-        if not filtered_tool_calls and (blocked_by_index or pre_results_by_index):
+        # Fast path: if nothing is planned (everything blocked), return blocked results.
+        if not planned and blocked_by_index:
             merged_results: list[Any] = []
+            for idx in range(len(tool_calls)):
+                fixed = blocked_by_index.get(idx)
+                merged_results.append(
+                    fixed
+                    if fixed is not None
+                    else {
+                        "call_id": "",
+                        "runtime_call_id": None,
+                        "name": "",
+                        "success": False,
+                        "output": None,
+                        "error": "Missing tool result",
+                    }
+                )
+            return EffectOutcome.completed(result={"mode": "executed", "results": merged_results})
+
+        sid_any = getattr(run, "session_id", None)
+        sid_str = str(sid_any or "").strip() if isinstance(sid_any, str) or sid_any is not None else ""
+
+        has_host_calls = any(item.get("kind") == "host" for item in planned)
+        if not has_host_calls:
+            results_by_index: Dict[int, Dict[str, Any]] = dict(blocked_by_index)
+            for item in planned:
+                if item.get("kind") != "runtime":
+                    continue
+                args = dict(item.get("arguments") or {})
+                call_id = str(item.get("call_id") or "")
+                runtime_call_id_out = item.get("runtime_call_id")
+                aid = args.get("artifact_id") or args.get("$artifact") or args.get("id")
+                handle = args.get("handle") or args.get("path")
+                expected_sha256 = args.get("expected_sha256") or args.get("sha256")
+                start_line = args.get("start_line") or args.get("startLine") or 1
+                end_line = args.get("end_line") or args.get("endLine")
+                max_chars = args.get("max_chars") or args.get("maxChars") or 8000
+
+                if artifact_store is None:
+                    results_by_index[item["idx"]] = {
+                        "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
+                        "name": "open_attachment",
+                        "success": False,
+                        "output": {"rendered": "Error: ArtifactStore is not available (cannot open attachments)."},
+                        "error": "ArtifactStore is not available",
+                    }
+                    continue
+
+                success, output, err = execute_open_attachment(
+                    artifact_store=artifact_store,
+                    session_id=sid_str,
+                    artifact_id=str(aid).strip() if aid is not None else None,
+                    handle=str(handle).strip() if handle is not None else None,
+                    expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
+                    start_line=int(start_line) if not isinstance(start_line, bool) else 1,
+                    end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
+                    max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
+                )
+                results_by_index[item["idx"]] = {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": "open_attachment",
+                    "success": bool(success),
+                    "output": _jsonable(output),
+                    "error": str(err or "") if not success else None,
+                }
+
+            merged_results: list[Any] = []
+            for idx in range(len(tool_calls)):
+                r = results_by_index.get(idx)
+                merged_results.append(
+                    r
+                    if r is not None
+                    else {
+                        "call_id": "",
+                        "runtime_call_id": None,
+                        "name": "",
+                        "success": False,
+                        "output": None,
+                        "error": "Missing tool result",
+                    }
+                )
+            return EffectOutcome.completed(result={"mode": "executed", "results": merged_results})
+
+        # Detect delegating executors (best-effort): passthrough/untrusted modes cannot safely
+        # interleave runtime-owned tools with host tools, so we fall back to the legacy wait behavior.
+        executor_delegates = False
+        try:
+            probe = tools.execute(tool_calls=[])
+            mode_probe = probe.get("mode")
+            executor_delegates = bool(mode_probe and mode_probe != "executed")
+        except Exception:
+            executor_delegates = False
+
+        if executor_delegates:
+            host_tool_calls: list[Dict[str, Any]] = []
+            for item in planned:
+                if item.get("kind") == "runtime":
+                    args = dict(item.get("arguments") or {})
+                    aid = args.get("artifact_id") or args.get("$artifact") or args.get("id")
+                    handle = args.get("handle") or args.get("path")
+                    expected_sha256 = args.get("expected_sha256") or args.get("sha256")
+                    start_line = args.get("start_line") or args.get("startLine") or 1
+                    end_line = args.get("end_line") or args.get("endLine")
+                    max_chars = args.get("max_chars") or args.get("maxChars") or 8000
+
+                    if artifact_store is None:
+                        pre_results_by_index[item["idx"]] = {
+                            "call_id": item.get("call_id") or "",
+                            "runtime_call_id": item.get("runtime_call_id"),
+                            "name": "open_attachment",
+                            "success": False,
+                            "output": {"rendered": "Error: ArtifactStore is not available (cannot open attachments)."},
+                            "error": "ArtifactStore is not available",
+                        }
+                        continue
+
+                    success, output, err = execute_open_attachment(
+                        artifact_store=artifact_store,
+                        session_id=sid_str,
+                        artifact_id=str(aid).strip() if aid is not None else None,
+                        handle=str(handle).strip() if handle is not None else None,
+                        expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
+                        start_line=int(start_line) if not isinstance(start_line, bool) else 1,
+                        end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
+                        max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
+                    )
+                    pre_results_by_index[item["idx"]] = {
+                        "call_id": item.get("call_id") or "",
+                        "runtime_call_id": item.get("runtime_call_id"),
+                        "name": "open_attachment",
+                        "success": bool(success),
+                        "output": _jsonable(output),
+                        "error": str(err or "") if not success else None,
+                    }
+                    continue
+
+                if item.get("kind") == "host":
+                    tc2 = item.get("tc")
+                    if isinstance(tc2, dict):
+                        host_tool_calls.append(tc2)
+
+            try:
+                result = tools.execute(tool_calls=host_tool_calls)
+            except Exception as e:
+                logger.error("TOOL_CALLS execution failed", error=str(e))
+                return EffectOutcome.failed(str(e))
+
+            mode = result.get("mode")
+            if mode and mode != "executed":
+                wait_key = payload.get("wait_key") or result.get("wait_key") or f"tool_calls:{run.run_id}:{run.current_node}"
+                raw_wait_reason = result.get("wait_reason")
+                wait_reason = WaitReason.EVENT
+                if isinstance(raw_wait_reason, str) and raw_wait_reason.strip():
+                    try:
+                        wait_reason = WaitReason(raw_wait_reason.strip())
+                    except ValueError:
+                        wait_reason = WaitReason.EVENT
+                elif str(mode).strip().lower() == "delegated":
+                    wait_reason = WaitReason.JOB
+
+                tool_calls_for_wait = result.get("tool_calls")
+                if not isinstance(tool_calls_for_wait, list):
+                    tool_calls_for_wait = host_tool_calls
+
+                details: Dict[str, Any] = {"mode": mode, "tool_calls": _jsonable(tool_calls_for_wait)}
+                executor_details = result.get("details")
+                if isinstance(executor_details, dict) and executor_details:
+                    details["executor"] = _jsonable(executor_details)
+                if blocked_by_index or pre_results_by_index:
+                    details["original_call_count"] = original_call_count
+                    if blocked_by_index:
+                        details["blocked_by_index"] = {str(k): _jsonable(v) for k, v in blocked_by_index.items()}
+                    if pre_results_by_index:
+                        details["pre_results_by_index"] = {str(k): _jsonable(v) for k, v in pre_results_by_index.items()}
+                    details["tool_calls_for_evidence"] = _jsonable(tool_calls_for_evidence)
+
+                wait = WaitState(
+                    reason=wait_reason,
+                    wait_key=str(wait_key),
+                    resume_to_node=payload.get("resume_to_node") or default_next_node,
+                    result_key=effect.result_key,
+                    details=details,
+                )
+                return EffectOutcome.waiting(wait)
+
+            # Defensive: if a delegating executor unexpectedly executes, merge like legacy path.
+            existing_results = result.get("results")
+            merged_results: list[Any] = []
+            executed_iter = iter(existing_results if isinstance(existing_results, list) else [])
             for idx in range(len(tool_calls)):
                 fixed = pre_results_by_index.get(idx) or blocked_by_index.get(idx)
                 if fixed is not None:
                     merged_results.append(fixed)
-                else:
+                    continue
+                try:
+                    merged_results.append(next(executed_iter))
+                except StopIteration:
                     merged_results.append(
                         {
                             "call_id": "",
@@ -1058,88 +1350,150 @@ def make_tool_calls_handler(
                             "error": "Missing tool result",
                         }
                     )
-            return EffectOutcome.completed(
-                result={
-                    "mode": "executed",
-                    "results": merged_results,
+            return EffectOutcome.completed(result={"mode": "executed", "results": merged_results})
+
+        # Executing mode: preserve ordering by interleaving runtime-owned tools and host tools.
+        results_by_index: Dict[int, Dict[str, Any]] = dict(blocked_by_index)
+
+        i = 0
+        while i < len(planned):
+            item = planned[i]
+            kind = item.get("kind")
+            if kind == "runtime":
+                args = dict(item.get("arguments") or {})
+                call_id = str(item.get("call_id") or "")
+                runtime_call_id_out = item.get("runtime_call_id")
+                aid = args.get("artifact_id") or args.get("$artifact") or args.get("id")
+                handle = args.get("handle") or args.get("path")
+                expected_sha256 = args.get("expected_sha256") or args.get("sha256")
+                start_line = args.get("start_line") or args.get("startLine") or 1
+                end_line = args.get("end_line") or args.get("endLine")
+                max_chars = args.get("max_chars") or args.get("maxChars") or 8000
+
+                if artifact_store is None:
+                    results_by_index[item["idx"]] = {
+                        "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
+                        "name": "open_attachment",
+                        "success": False,
+                        "output": {"rendered": "Error: ArtifactStore is not available (cannot open attachments)."},
+                        "error": "ArtifactStore is not available",
+                    }
+                    i += 1
+                    continue
+
+                success, output, err = execute_open_attachment(
+                    artifact_store=artifact_store,
+                    session_id=sid_str,
+                    artifact_id=str(aid).strip() if aid is not None else None,
+                    handle=str(handle).strip() if handle is not None else None,
+                    expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
+                    start_line=int(start_line) if not isinstance(start_line, bool) else 1,
+                    end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
+                    max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
+                )
+                results_by_index[item["idx"]] = {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": "open_attachment",
+                    "success": bool(success),
+                    "output": _jsonable(output),
+                    "error": str(err or "") if not success else None,
                 }
-            )
+                i += 1
+                continue
 
-        try:
-            result = tools.execute(tool_calls=filtered_tool_calls)
-        except Exception as e:
-            logger.error("TOOL_CALLS execution failed", error=str(e))
-            return EffectOutcome.failed(str(e))
+            # Host tool segment.
+            seg_items: list[Dict[str, Any]] = []
+            seg_calls: list[Dict[str, Any]] = []
+            while i < len(planned) and planned[i].get("kind") == "host":
+                seg_items.append(planned[i])
+                tc2 = planned[i].get("tc")
+                if isinstance(tc2, dict):
+                    seg_calls.append(tc2)
+                i += 1
 
-        mode = result.get("mode")
-        if mode and mode != "executed":
-            # Passthrough/untrusted mode: pause until an external host resumes with tool results.
-            #
-            # Correctness/security: persist only allowlist-safe tool calls in the wait payload.
-            wait_key = payload.get("wait_key") or result.get("wait_key") or f"tool_calls:{run.run_id}:{run.current_node}"
-            raw_wait_reason = result.get("wait_reason")
-            wait_reason = WaitReason.EVENT
-            if isinstance(raw_wait_reason, str) and raw_wait_reason.strip():
-                try:
-                    wait_reason = WaitReason(raw_wait_reason.strip())
-                except ValueError:
-                    wait_reason = WaitReason.EVENT
-            elif str(mode).strip().lower() == "delegated":
-                wait_reason = WaitReason.JOB
+            if not seg_calls:
+                continue
 
-            tool_calls_for_wait = result.get("tool_calls")
-            if not isinstance(tool_calls_for_wait, list):
-                tool_calls_for_wait = filtered_tool_calls
+            try:
+                seg_result = tools.execute(tool_calls=seg_calls)
+            except Exception as e:
+                logger.error("TOOL_CALLS execution failed", error=str(e))
+                return EffectOutcome.failed(str(e))
 
-            details: Dict[str, Any] = {"mode": mode, "tool_calls": _jsonable(tool_calls_for_wait)}
-            executor_details = result.get("details")
-            if isinstance(executor_details, dict) and executor_details:
-                # Avoid collisions with our reserved keys.
-                details["executor"] = _jsonable(executor_details)
-            if blocked_by_index or pre_results_by_index:
-                details["original_call_count"] = original_call_count
-                if blocked_by_index:
-                    details["blocked_by_index"] = {str(k): _jsonable(v) for k, v in blocked_by_index.items()}
-                if pre_results_by_index:
-                    details["pre_results_by_index"] = {str(k): _jsonable(v) for k, v in pre_results_by_index.items()}
-                details["tool_calls_for_evidence"] = _jsonable(tool_calls_for_evidence)
+            mode = seg_result.get("mode")
+            if mode and mode != "executed":
+                return EffectOutcome.failed("ToolExecutor returned delegated mode during executed TOOL_CALLS batch")
 
-            wait = WaitState(
-                reason=wait_reason,
-                wait_key=str(wait_key),
-                resume_to_node=payload.get("resume_to_node") or default_next_node,
-                result_key=effect.result_key,
-                details=details,
-            )
-            return EffectOutcome.waiting(wait)
+            seg_results = seg_result.get("results")
+            if not isinstance(seg_results, list):
+                return EffectOutcome.failed("ToolExecutor returned invalid results")
 
-        if blocked_by_index or pre_results_by_index:
-            existing_results = result.get("results")
-            if isinstance(existing_results, list):
-                merged_results: list[Any] = []
-                executed_iter = iter(existing_results)
-                for idx in range(len(tool_calls)):
-                    fixed = pre_results_by_index.get(idx) or blocked_by_index.get(idx)
-                    if fixed is not None:
-                        merged_results.append(fixed)
-                        continue
-                    try:
-                        merged_results.append(next(executed_iter))
-                    except StopIteration:
-                        merged_results.append(
-                            {
-                                "call_id": "",
-                                "runtime_call_id": None,
-                                "name": "",
-                                "success": False,
-                                "output": None,
-                                "error": "Missing tool result",
-                            }
-                        )
-                result = dict(result)
-                result["results"] = merged_results
+            # Map results back to original tool call indices and register read_file outputs as attachments.
+            for seg_item, r in zip(seg_items, seg_results):
+                idx = int(seg_item.get("idx") or 0)
+                if isinstance(r, dict):
+                    results_by_index[idx] = _jsonable(r)
+                else:
+                    tc2 = seg_item.get("tc") if isinstance(seg_item.get("tc"), dict) else {}
+                    results_by_index[idx] = {
+                        "call_id": str(tc2.get("call_id") or ""),
+                        "runtime_call_id": tc2.get("runtime_call_id"),
+                        "name": str(tc2.get("name") or ""),
+                        "success": False,
+                        "output": None,
+                        "error": "Invalid tool result",
+                    }
 
-        return EffectOutcome.completed(result=result)
+                if seg_item.get("name") != "read_file":
+                    continue
+                if not isinstance(r, dict) or r.get("success") is not True:
+                    continue
+                out = r.get("output")
+                if not isinstance(out, str) or not out.lstrip().startswith("File:"):
+                    continue
+                tc2 = seg_item.get("tc")
+                args = tc2.get("arguments") if isinstance(tc2, dict) else None
+                if not isinstance(args, dict):
+                    args = {}
+                fp = args.get("file_path") or args.get("path") or args.get("filename") or args.get("file")
+                if fp is None:
+                    continue
+                _register_read_file_as_attachment(session_id=sid_str, file_path=str(fp))
+
+            # Fill missing results when executor returned fewer entries than expected.
+            if len(seg_results) < len(seg_items):
+                for seg_item in seg_items[len(seg_results) :]:
+                    idx = int(seg_item.get("idx") or 0)
+                    tc2 = seg_item.get("tc") if isinstance(seg_item.get("tc"), dict) else {}
+                    results_by_index[idx] = {
+                        "call_id": str(tc2.get("call_id") or ""),
+                        "runtime_call_id": tc2.get("runtime_call_id"),
+                        "name": str(tc2.get("name") or ""),
+                        "success": False,
+                        "output": None,
+                        "error": "Missing tool result",
+                    }
+
+        merged_results: list[Any] = []
+        for idx in range(len(tool_calls)):
+            r = results_by_index.get(idx)
+            if r is None:
+                merged_results.append(
+                    {
+                        "call_id": "",
+                        "runtime_call_id": None,
+                        "name": "",
+                        "success": False,
+                        "output": None,
+                        "error": "Missing tool result",
+                    }
+                )
+            else:
+                merged_results.append(r)
+
+        return EffectOutcome.completed(result={"mode": "executed", "results": merged_results})
 
     return _handler
 
@@ -1149,8 +1503,9 @@ def build_effect_handlers(
     llm: AbstractCoreLLMClient,
     tools: ToolExecutor = None,
     artifact_store: Optional[ArtifactStore] = None,
+    run_store: Optional[RunStore] = None,
 ) -> Dict[EffectType, Any]:
     return {
         EffectType.LLM_CALL: make_llm_call_handler(llm=llm, artifact_store=artifact_store),
-        EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools, artifact_store=artifact_store),
+        EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools, artifact_store=artifact_store, run_store=run_store),
     }

@@ -360,6 +360,14 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
     root = scope.root
     out = dict(args or {})
 
+    def _alias_field(preferred: str, aliases: Iterable[str]) -> None:
+        if preferred in out and out.get(preferred) is not None:
+            return
+        for a in aliases:
+            if a in out and out.get(a) is not None:
+                out[preferred] = out.get(a)
+                return
+
     def _rewrite_path_field(field: str, *, default_to_root: bool = False) -> None:
         raw = out.get(field)
         if (raw is None or (isinstance(raw, str) and not raw.strip())) and default_to_root:
@@ -380,21 +388,25 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         _rewrite_path_field("path", default_to_root=True)
         return out
     if tool_name == "analyze_code":
+        _alias_field("file_path", ["path", "filename", "file"])
         _rewrite_path_field("file_path")
         if "file_path" not in out:
             raise ValueError("analyze_code requires file_path")
         return out
     if tool_name == "read_file":
+        _alias_field("file_path", ["path", "filename", "file"])
         _rewrite_path_field("file_path")
         if "file_path" not in out:
             raise ValueError("read_file requires file_path")
         return out
     if tool_name == "write_file":
+        _alias_field("file_path", ["path", "filename", "file"])
         _rewrite_path_field("file_path")
         if "file_path" not in out:
             raise ValueError("write_file requires file_path")
         return out
     if tool_name == "edit_file":
+        _alias_field("file_path", ["path", "filename", "file"])
         _rewrite_path_field("file_path")
         if "file_path" not in out:
             raise ValueError("edit_file requires file_path")

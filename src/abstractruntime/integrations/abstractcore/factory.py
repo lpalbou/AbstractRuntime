@@ -109,7 +109,7 @@ def create_local_runtime(
             setter(tool_timeout_s)
     except Exception:
         pass
-    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store)
+    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
     if extra_effect_handlers:
         handlers.update(dict(extra_effect_handlers))
 
@@ -171,7 +171,7 @@ def create_remote_runtime(
         timeout_s=timeout_s,
     )
     tools = tool_executor or PassthroughToolExecutor()
-    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store)
+    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
 
     return Runtime(
         run_store=run_store,
@@ -216,7 +216,7 @@ def create_hybrid_runtime(
             setter(tool_timeout_s)
     except Exception:
         pass
-    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store)
+    handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
 
     return Runtime(
         run_store=run_store,

@@ -2152,10 +2152,30 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 current["items"] = items if isinstance(items, list) else []
                 current["count"] = raw.get("count")
                 current["ok"] = raw.get("ok")
+                # Active Memory packing (optional; only present when max_input_tokens is set).
+                if "packets_version" in raw:
+                    current["packets_version"] = raw.get("packets_version")
+                if "packets" in raw:
+                    current["packets"] = raw.get("packets")
+                if "packed_count" in raw:
+                    current["packed_count"] = raw.get("packed_count")
+                if "active_memory_text" in raw:
+                    current["active_memory_text"] = raw.get("active_memory_text")
+                if "estimated_tokens" in raw:
+                    current["estimated_tokens"] = raw.get("estimated_tokens")
+                if "dropped" in raw:
+                    current["dropped"] = raw.get("dropped")
+                if "warnings" in raw:
+                    current["warnings"] = raw.get("warnings")
             else:
                 current["items"] = []
                 current["count"] = 0
                 current["ok"] = False
+                current["packets"] = []
+                current["packed_count"] = 0
+                current["active_memory_text"] = ""
+                current["estimated_tokens"] = 0
+                current["dropped"] = 0
             current["raw"] = raw
             mapped_value = current.get("items")
         elif effect_type == "start_subworkflow":

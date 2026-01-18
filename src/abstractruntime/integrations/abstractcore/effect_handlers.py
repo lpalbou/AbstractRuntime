@@ -959,20 +959,20 @@ def make_tool_calls_handler(
                     pass
             return 25 * 1024 * 1024
 
-        def _register_read_file_as_attachment(*, session_id: str, file_path: str) -> None:
+        def _register_read_file_as_attachment(*, session_id: str, file_path: str) -> Optional[Dict[str, Any]]:
             if artifact_store is None:
-                return
+                return None
             sid = str(session_id or "").strip()
             if not sid:
-                return
+                return None
             fp_raw = str(file_path or "").strip()
             if not fp_raw:
-                return
+                return None
 
             try:
                 p = Path(fp_raw).expanduser()
             except Exception:
-                return
+                return None
             try:
                 resolved = p.resolve()
             except Exception:
@@ -984,14 +984,14 @@ def make_tool_calls_handler(
                 size = -1
             max_bytes = _max_attachment_bytes()
             if size >= 0 and size > max_bytes:
-                return
+                return None
 
             try:
                 content = resolved.read_bytes()
             except Exception:
-                return
+                return None
             if len(content) > max_bytes:
-                return
+                return None
 
             sha256 = hashlib.sha256(bytes(content)).hexdigest()
 
@@ -1020,7 +1020,13 @@ def make_tool_calls_handler(
                 if str(tags.get("path") or "") != str(handle):
                     continue
                 if str(tags.get("sha256") or "") == sha256:
-                    return
+                    return {
+                        "artifact_id": str(getattr(m, "artifact_id", "") or ""),
+                        "handle": str(handle),
+                        "sha256": sha256,
+                        "content_type": content_type,
+                        "size_bytes": len(content),
+                    }
 
             _ensure_session_memory_run_exists(session_id=sid)
 
@@ -1033,9 +1039,16 @@ def make_tool_calls_handler(
                 "sha256": sha256,
             }
             try:
-                artifact_store.store(bytes(content), content_type=str(content_type), run_id=str(rid), tags=tags)
+                meta = artifact_store.store(bytes(content), content_type=str(content_type), run_id=str(rid), tags=tags)
             except Exception:
-                return
+                return None
+            return {
+                "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
+                "handle": str(handle),
+                "sha256": sha256,
+                "content_type": content_type,
+                "size_bytes": len(content),
+            }
 
         # Parse + plan tool calls (preserve order; runtime-owned tools must not run ahead of host tools).
         for idx, tc in enumerate(tool_calls):
@@ -1431,13 +1444,22 @@ def make_tool_calls_handler(
                 return EffectOutcome.failed("ToolExecutor returned invalid results")
 
             # Map results back to original tool call indices and register read_file outputs as attachments.
+            max_inline_bytes = 256 * 1024
+            try:
+                raw_max_inline = str(os.getenv("ABSTRACTRUNTIME_MAX_INLINE_BYTES", "") or "").strip()
+                if raw_max_inline:
+                    max_inline_bytes = max(1, int(raw_max_inline))
+            except Exception:
+                max_inline_bytes = 256 * 1024
+
             for seg_item, r in zip(seg_items, seg_results):
                 idx = int(seg_item.get("idx") or 0)
+                r_out: Any = r
                 if isinstance(r, dict):
-                    results_by_index[idx] = _jsonable(r)
+                    r_out = dict(r)
                 else:
                     tc2 = seg_item.get("tc") if isinstance(seg_item.get("tc"), dict) else {}
-                    results_by_index[idx] = {
+                    r_out = {
                         "call_id": str(tc2.get("call_id") or ""),
                         "runtime_call_id": tc2.get("runtime_call_id"),
                         "name": str(tc2.get("name") or ""),
@@ -1447,11 +1469,14 @@ def make_tool_calls_handler(
                     }
 
                 if seg_item.get("name") != "read_file":
+                    results_by_index[idx] = _jsonable(r_out)
                     continue
                 if not isinstance(r, dict) or r.get("success") is not True:
+                    results_by_index[idx] = _jsonable(r_out)
                     continue
                 out = r.get("output")
                 if not isinstance(out, str) or not out.lstrip().startswith("File:"):
+                    results_by_index[idx] = _jsonable(r_out)
                     continue
                 tc2 = seg_item.get("tc")
                 args = tc2.get("arguments") if isinstance(tc2, dict) else None
@@ -1459,8 +1484,29 @@ def make_tool_calls_handler(
                     args = {}
                 fp = args.get("file_path") or args.get("path") or args.get("filename") or args.get("file")
                 if fp is None:
+                    results_by_index[idx] = _jsonable(r_out)
                     continue
-                _register_read_file_as_attachment(session_id=sid_str, file_path=str(fp))
+                att = _register_read_file_as_attachment(session_id=sid_str, file_path=str(fp))
+                if att and isinstance(r_out, dict):
+                    # If the read_file output would be offloaded anyway, keep the durable ledger lean by
+                    # returning a stub and rely on the attachment + open_attachment for bounded excerpts.
+                    try:
+                        n = len(out.encode("utf-8"))
+                    except Exception:
+                        n = len(out)
+                    if n > max_inline_bytes:
+                        aid = str(att.get("artifact_id") or "").strip()
+                        handle = str(att.get("handle") or "").strip()
+                        sha = str(att.get("sha256") or "").strip()
+                        sha_disp = (sha[:8] + "…") if sha else ""
+                        hint = (
+                            f"[read_file]: (stored as attachment) @{handle} "
+                            f"(id={aid}{', sha=' + sha_disp if sha_disp else ''}).\n"
+                            f"Use open_attachment(handle='@{handle}', start_line=1, end_line=200) for bounded excerpts."
+                        )
+                        r_out["output"] = hint
+
+                results_by_index[idx] = _jsonable(r_out)
 
             # Fill missing results when executor returned fewer entries than expected.
             if len(seg_results) < len(seg_items):

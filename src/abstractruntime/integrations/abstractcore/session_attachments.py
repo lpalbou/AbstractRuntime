@@ -126,6 +126,11 @@ def render_session_attachments_system_message(
     lines: list[str] = ["Session attachments (most recent first):"]
     used = len(lines[0]) + 1
 
+    hint = "Open via: open_attachment(handle='@…', start_line=..., end_line=...)"
+    if used + len(hint) + 1 <= max_c:
+        lines.append(hint)
+        used += len(hint) + 1
+
     for i, e in enumerate(list(entries)[:max_e]):
         if not isinstance(e, dict):
             continue

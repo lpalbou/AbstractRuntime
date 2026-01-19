@@ -506,6 +506,38 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         # These runs can opt out of runtime-level input trimming via `_runtime.disable_input_trimming`.
         runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
         disable_input_trimming = bool(runtime_ns.get("disable_input_trimming")) if isinstance(runtime_ns, dict) else False
+        if isinstance(runtime_ns, dict):
+            pending_media = runtime_ns.get("pending_media")
+            if isinstance(pending_media, list) and pending_media:
+                combined: list[Any] = []
+                if isinstance(media, tuple):
+                    combined.extend(list(media))
+                elif isinstance(media, list):
+                    combined.extend(list(media))
+                combined.extend(pending_media)
+
+                def _media_key(item: Any) -> Optional[Tuple[str, str]]:
+                    if isinstance(item, str):
+                        s = item.strip()
+                        return ("path", s) if s else None
+                    if isinstance(item, dict):
+                        aid = item.get("$artifact") or item.get("artifact_id")
+                        if isinstance(aid, str) and aid.strip():
+                            return ("artifact", aid.strip())
+                    return None
+
+                merged: list[Any] = []
+                seen: set[Tuple[str, str]] = set()
+                for it in combined:
+                    k = _media_key(it)
+                    if k is None or k in seen:
+                        continue
+                    merged.append(dict(it) if isinstance(it, dict) else it)
+                    seen.add(k)
+
+                media = merged
+            if isinstance(runtime_ns.get("pending_media"), list):
+                runtime_ns["pending_media"] = []
 
         # Enforce a per-call (or per-run) input-token budget by trimming oldest non-system messages.
         #
@@ -959,6 +991,51 @@ def make_tool_calls_handler(
                     pass
             return 25 * 1024 * 1024
 
+        def _enqueue_pending_media(media_items: Any) -> None:
+            if not isinstance(media_items, list) or not media_items:
+                return
+            vars0 = getattr(run, "vars", None)
+            if not isinstance(vars0, dict):
+                return
+            runtime_ns = vars0.get("_runtime")
+            if not isinstance(runtime_ns, dict):
+                runtime_ns = {}
+                vars0["_runtime"] = runtime_ns
+
+            pending = runtime_ns.get("pending_media")
+            if not isinstance(pending, list):
+                pending = []
+
+            def _key(item: Any) -> Optional[Tuple[str, str]]:
+                if isinstance(item, str):
+                    s = item.strip()
+                    return ("path", s) if s else None
+                if isinstance(item, dict):
+                    aid = item.get("$artifact") or item.get("artifact_id")
+                    if isinstance(aid, str) and aid.strip():
+                        return ("artifact", aid.strip())
+                return None
+
+            seen: set[Tuple[str, str]] = set()
+            for it in pending:
+                k = _key(it)
+                if k is not None:
+                    seen.add(k)
+
+            for it in media_items:
+                k = _key(it)
+                if k is None or k in seen:
+                    continue
+                if isinstance(it, str):
+                    pending.append(it.strip())
+                elif isinstance(it, dict):
+                    pending.append(dict(it))
+                else:
+                    continue
+                seen.add(k)
+
+            runtime_ns["pending_media"] = pending
+
         def _register_read_file_as_attachment(*, session_id: str, file_path: str) -> Optional[Dict[str, Any]]:
             if artifact_store is None:
                 return None
@@ -1213,6 +1290,8 @@ def make_tool_calls_handler(
                     end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
                     max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
                 )
+                if bool(success) and isinstance(output, dict):
+                    _enqueue_pending_media(output.get("media"))
                 results_by_index[item["idx"]] = {
                     "call_id": call_id,
                     "runtime_call_id": runtime_call_id_out,
@@ -1282,6 +1361,8 @@ def make_tool_calls_handler(
                         end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
                         max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
                     )
+                    if bool(success) and isinstance(output, dict):
+                        _enqueue_pending_media(output.get("media"))
                     pre_results_by_index[item["idx"]] = {
                         "call_id": item.get("call_id") or "",
                         "runtime_call_id": item.get("runtime_call_id"),
@@ -1405,6 +1486,8 @@ def make_tool_calls_handler(
                     end_line=int(end_line) if end_line is not None and not isinstance(end_line, bool) else None,
                     max_chars=int(max_chars) if not isinstance(max_chars, bool) else 8000,
                 )
+                if bool(success) and isinstance(output, dict):
+                    _enqueue_pending_media(output.get("media"))
                 results_by_index[item["idx"]] = {
                     "call_id": call_id,
                     "runtime_call_id": runtime_call_id_out,
@@ -1471,19 +1554,95 @@ def make_tool_calls_handler(
                 if seg_item.get("name") != "read_file":
                     results_by_index[idx] = _jsonable(r_out)
                     continue
-                if not isinstance(r, dict) or r.get("success") is not True:
-                    results_by_index[idx] = _jsonable(r_out)
-                    continue
-                out = r.get("output")
-                if not isinstance(out, str) or not out.lstrip().startswith("File:"):
-                    results_by_index[idx] = _jsonable(r_out)
-                    continue
                 tc2 = seg_item.get("tc")
                 args = tc2.get("arguments") if isinstance(tc2, dict) else None
                 if not isinstance(args, dict):
                     args = {}
                 fp = args.get("file_path") or args.get("path") or args.get("filename") or args.get("file")
                 if fp is None:
+                    results_by_index[idx] = _jsonable(r_out)
+                    continue
+
+                # Fallback: if filesystem read_file fails, attempt to resolve from the session attachment store.
+                #
+                # This supports browser uploads (no server-side file path) and intentionally bypasses
+                # workspace allow/ignore policies because the user explicitly provided the bytes.
+                if isinstance(r, dict) and r.get("success") is not True and artifact_store is not None and sid_str:
+                    start_line = args.get("start_line") or args.get("startLine") or args.get("start_line_one_indexed") or 1
+                    end_line = (
+                        args.get("end_line")
+                        or args.get("endLine")
+                        or args.get("end_line_one_indexed_inclusive")
+                        or args.get("end_line_one_indexed")
+                    )
+                    try:
+                        start_i = int(start_line) if start_line is not None and not isinstance(start_line, bool) else 1
+                    except Exception:
+                        start_i = 1
+                    end_i: Optional[int] = None
+                    try:
+                        if end_line is not None and not isinstance(end_line, bool):
+                            end_i = int(end_line)
+                    except Exception:
+                        end_i = None
+
+                    success2, out2, _err2 = execute_open_attachment(
+                        artifact_store=artifact_store,
+                        session_id=sid_str,
+                        artifact_id=None,
+                        handle=str(fp),
+                        expected_sha256=None,
+                        start_line=int(start_i),
+                        end_line=int(end_i) if end_i is not None else None,
+                        max_chars=8000,
+                    )
+                    if success2 and isinstance(out2, dict):
+                        rendered = out2.get("rendered")
+                        if isinstance(rendered, str) and rendered.strip():
+                            start2 = out2.get("start_line")
+                            end2 = out2.get("end_line")
+                            count = 0
+                            try:
+                                if isinstance(start2, int) and isinstance(end2, int) and start2 >= 1 and end2 >= start2:
+                                    count = end2 - start2 + 1
+                            except Exception:
+                                count = 0
+                            if count <= 0:
+                                try:
+                                    import re as _re
+
+                                    count = len([ln for ln in rendered.splitlines() if _re.match(r"^\\s*\\d+:\\s", ln)])
+                                except Exception:
+                                    count = 0
+
+                            header = f"File: {str(fp)} ({max(0, int(count))} lines)"
+                            aid2 = str(out2.get("artifact_id") or "").strip()
+                            sha2 = str(out2.get("sha256") or "").strip()
+                            handle2 = str(out2.get("handle") or "").strip()
+                            bits2: list[str] = []
+                            if handle2:
+                                bits2.append(f"@{handle2}")
+                            if aid2:
+                                bits2.append(f"id={aid2}")
+                            if sha2:
+                                bits2.append(f"sha={sha2[:8]}…")
+                            info = f"(from attachment: {', '.join(bits2)})" if bits2 else "(from attachment)"
+
+                            body = "\n".join(rendered.splitlines()[1:]).lstrip("\n")
+                            output_text = header + "\n" + info + ("\n" + body if body else "")
+
+                            if isinstance(r_out, dict):
+                                r_out["success"] = True
+                                r_out["output"] = output_text
+                                r_out["error"] = None
+                            results_by_index[idx] = _jsonable(r_out)
+                            continue
+
+                if not isinstance(r, dict) or r.get("success") is not True:
+                    results_by_index[idx] = _jsonable(r_out)
+                    continue
+                out = r.get("output")
+                if not isinstance(out, str) or not out.lstrip().startswith("File:"):
                     results_by_index[idx] = _jsonable(r_out)
                     continue
                 att = _register_read_file_as_attachment(session_id=sid_str, file_path=str(fp))

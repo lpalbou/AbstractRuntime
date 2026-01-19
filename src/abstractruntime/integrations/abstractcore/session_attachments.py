@@ -126,7 +126,10 @@ def render_session_attachments_system_message(
     lines: list[str] = ["Session attachments (most recent first):"]
     used = len(lines[0]) + 1
 
-    hint = "Open via: open_attachment(handle='@…', start_line=..., end_line=...)"
+    hint = (
+        "Open text via: open_attachment(handle='@…', start_line=..., end_line=...). "
+        "Open media via: open_attachment(handle='@…')."
+    )
     if used + len(hint) + 1 <= max_c:
         lines.append(hint)
         used += len(hint) + 1
@@ -494,7 +497,9 @@ def execute_open_attachment(
     if not handle_final:
         handle_final = aid
 
-    # Only support text-like content in v0.
+    # v0: text-only, bounded excerpts.
+    # v1: non-text attachments return a media ref and are intended to be attached as `payload.media`
+    # for the next LLM call (runtime-owned behavior).
     ct_low = ct.lower().strip()
     text_like = ct_low.startswith("text/") or ct_low in {
         "application/json",
@@ -505,11 +510,37 @@ def execute_open_attachment(
         "application/typescript",
     }
     if not text_like:
-        return (
-            False,
-            {"rendered": f"Error: content_type '{ct}' is not supported by open_attachment(v0)."},
-            "unsupported content_type",
-        )
+        source_path = str(tags.get("source_path") or tags.get("path") or tags.get("filename") or handle_final or "").strip()
+        filename = str(tags.get("filename") or "").strip() or (source_path.rsplit("/", 1)[-1] if source_path else "")
+        media_item: Dict[str, Any] = {"$artifact": aid}
+        if filename:
+            media_item["filename"] = filename
+        if source_path:
+            media_item["source_path"] = source_path
+        if ct:
+            media_item["content_type"] = ct
+
+        header_bits: list[str] = []
+        header_bits.append(f"id={aid}")
+        if sha_tag:
+            header_bits.append(f"sha={sha_tag[:8]}…")
+        if ct:
+            header_bits.append(ct)
+        if size_bytes > 0:
+            header_bits.append(f"{size_bytes:,} bytes")
+
+        header = f"Attachment: @{handle_final} ({', '.join(header_bits)})"
+        rendered = header + "\n\n(binary/media attachment; it will be attached as media for the next LLM call)"
+        out_media: Dict[str, Any] = {
+            "rendered": rendered,
+            "artifact_id": aid,
+            "handle": handle_final,
+            "sha256": sha_tag,
+            "content_type": ct,
+            "size_bytes": size_bytes,
+            "media": [media_item],
+        }
+        return True, out_media, None
 
     artifact = artifact_store.load(aid)
     if artifact is None:

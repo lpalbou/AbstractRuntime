@@ -147,6 +147,41 @@ def test_open_attachment_falls_back_from_invalid_artifact_id_to_handle() -> None
 
 
 @pytest.mark.basic
+def test_open_attachment_binary_returns_media_ref() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"\xff\xd8\xff\xdb\x00\x00fakejpg"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="image/jpeg",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "tmp.jpg", "filename": "tmp.jpg", "session_id": sid, "sha256": sha},
+    )
+
+    ok, out, err = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id=meta.artifact_id,
+        handle=None,
+        expected_sha256=None,
+        start_line=1,
+        end_line=None,
+        max_chars=2000,
+    )
+    assert ok is True
+    assert err is None
+    assert isinstance(out, dict)
+    assert out.get("content_type") == "image/jpeg"
+    media = out.get("media")
+    assert isinstance(media, list) and media
+    m0 = media[0]
+    assert isinstance(m0, dict)
+    assert m0.get("$artifact") == meta.artifact_id
+
+
+@pytest.mark.basic
 def test_tool_calls_read_file_registers_session_attachment_and_open_attachment_works_in_order(tmp_path: Path) -> None:
     store = InMemoryArtifactStore()
     run_store = InMemoryRunStore()
@@ -188,6 +223,62 @@ def test_tool_calls_read_file_registers_session_attachment_and_open_attachment_w
     assert any(str(m.get("artifact_id") or "").strip() for m in metas)
     assert any(m.get("handle") == "notes.txt" for m in metas)
     assert run_store.load(owner) is not None
+
+
+@pytest.mark.basic
+def test_tool_calls_open_attachment_binary_enqueues_pending_media_and_llm_call_consumes(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"\xff\xd8\xff\xdb\x00\x00fakejpg"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="image/jpeg",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "tmp.jpg", "filename": "tmp.jpg", "session_id": sid, "sha256": sha},
+    )
+
+    class _NoopTools:
+        def execute(self, *, tool_calls):
+            raise AssertionError("ToolExecutor should not be invoked for open_attachment-only batches")
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"_runtime": {}})
+    handler_tools = make_tool_calls_handler(tools=_NoopTools(), artifact_store=store)
+    eff_tools = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={"tool_calls": [{"name": "open_attachment", "arguments": {"handle": "@tmp.jpg"}}]},
+    )
+    out_tools = handler_tools(run, eff_tools, None)
+    assert out_tools.status == "completed"
+
+    rt_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+    assert isinstance(rt_ns, dict)
+    pending = rt_ns.get("pending_media")
+    assert isinstance(pending, list) and pending
+    assert any(isinstance(it, dict) and it.get("$artifact") == meta.artifact_id for it in pending)
+
+    captured: dict = {}
+
+    class _StubLLM:
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            # Validate that the resolved media file exists during the call.
+            media = kwargs.get("media")
+            assert isinstance(media, list) and len(media) == 1
+            p = Path(str(media[0]))
+            assert p.exists()
+            assert p.read_bytes() == content
+            return {"content": "ok", "metadata": {}}
+
+    handler_llm = make_llm_call_handler(llm=_StubLLM(), artifact_store=store)
+    eff_llm = Effect(type=EffectType.LLM_CALL, payload={"prompt": "ok", "params": {"temperature": 0.0}})
+    out_llm = handler_llm(run, eff_llm, None)
+    assert out_llm.status == "completed"
+
+    rt_ns2 = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+    assert isinstance(rt_ns2, dict)
+    assert rt_ns2.get("pending_media") == []
 
 
 @pytest.mark.integration
@@ -439,6 +530,120 @@ def test_e2e_open_attachment_tool_call_lmstudio(tmp_path: Path, monkeypatch: pyt
     rendered = out.get("rendered")
     assert isinstance(rendered, str)
     assert "1: hello" in rendered
+
+
+@pytest.mark.e2e
+def test_e2e_open_attachment_media_ref_lmstudio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Level C: LMStudio tool-calling; open_attachment returns media refs for binary attachments."""
+    if os.environ.get("ABSTRACT_E2E_LMSTUDIO") != "1":
+        pytest.skip("Set ABSTRACT_E2E_LMSTUDIO=1 to run this test.")
+
+    import httpx
+
+    base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+    model = os.environ.get("LMSTUDIO_MODEL", "qwen/qwen3-next-80b")
+    try:
+        r = httpx.get(base_url.rstrip("/") + "/models", timeout=2.0)
+        if r.status_code != 200:
+            pytest.skip(f"LMStudio not reachable at {base_url!r}")
+    except Exception:
+        pytest.skip(f"LMStudio not reachable at {base_url!r}")
+
+    monkeypatch.setenv("LMSTUDIO_BASE_URL", base_url)
+
+    from abstractruntime import RunStatus, StepPlan, WorkflowSpec
+    from abstractruntime.integrations.abstractcore import create_local_runtime
+    from abstractruntime.integrations.abstractcore.default_tools import filter_tool_specs
+    from abstractruntime.storage.json_files import JsonFileRunStore, JsonlLedgerStore
+
+    base = tmp_path / "rt"
+    run_store = JsonFileRunStore(base)
+    ledger_store = JsonlLedgerStore(base)
+    artifact_store = FileArtifactStore(base)
+
+    sid = "s1"
+    owner = session_memory_owner_run_id(sid)
+    content = b"\xff\xd8\xff\xdb\x00\x00fakejpg"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = artifact_store.store(
+        content,
+        content_type="image/jpeg",
+        run_id=owner,
+        tags={"kind": "attachment", "path": "tmp.jpg", "filename": "tmp.jpg", "session_id": sid, "sha256": sha},
+    )
+    assert meta.artifact_id
+
+    rt = create_local_runtime(
+        provider="lmstudio",
+        model=model,
+        llm_kwargs={"base_url": base_url},
+        run_store=run_store,
+        ledger_store=ledger_store,
+        artifact_store=artifact_store,
+        tool_executor=MappingToolExecutor.from_tools([read_file]),
+    )
+
+    tool_specs = filter_tool_specs(["open_attachment"])
+    prompt = "Call `open_attachment` exactly once with handle='@tmp.jpg'. Do not write any other text."
+
+    def llm_node(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(
+            node_id="LLM",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={
+                    "prompt": prompt,
+                    "tools": tool_specs,
+                    "provider": "lmstudio",
+                    "model": model,
+                    "params": {"temperature": 0.0},
+                },
+                result_key="llm_response",
+            ),
+            next_node="TOOLS",
+        )
+
+    def tools_node(run, ctx) -> StepPlan:
+        del ctx
+        resp = run.vars.get("llm_response")
+        tool_calls = resp.get("tool_calls") if isinstance(resp, dict) else None
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        return StepPlan(
+            node_id="TOOLS",
+            effect=Effect(
+                type=EffectType.TOOL_CALLS,
+                payload={"tool_calls": tool_calls, "allowed_tools": ["open_attachment"]},
+                result_key="tool_results",
+            ),
+            next_node="DONE",
+        )
+
+    def done_node(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(node_id="DONE", complete_output={"tool_results": run.vars.get("tool_results")})
+
+    wf = WorkflowSpec(workflow_id="e2e_open_attachment_media_ref_lmstudio", entry_node="LLM", nodes={"LLM": llm_node, "TOOLS": tools_node, "DONE": done_node})
+
+    run_id = rt.start(workflow=wf, session_id=sid)
+    state = rt.tick(workflow=wf, run_id=run_id, max_steps=8)
+    assert state.status == RunStatus.COMPLETED
+
+    tool_results = state.output.get("tool_results") if isinstance(state.output, dict) else None
+    assert isinstance(tool_results, dict)
+    results = tool_results.get("results") or []
+    assert isinstance(results, list) and results
+    r0 = results[0]
+    assert r0.get("success") is True
+    out0 = r0.get("output") or {}
+    assert isinstance(out0, dict)
+    assert out0.get("content_type") == "image/jpeg"
+    media = out0.get("media")
+    assert isinstance(media, list) and media
+    m0 = media[0]
+    assert isinstance(m0, dict)
+    assert m0.get("$artifact") == meta.artifact_id
 
 
 @pytest.mark.e2e

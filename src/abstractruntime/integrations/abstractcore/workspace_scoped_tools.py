@@ -26,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 WorkspaceAccessMode = str  # "workspace_only" | "all_except_ignored" | "workspace_or_allowed"
 
 _VALID_ACCESS_MODES: set[str] = {"workspace_only", "all_except_ignored", "workspace_or_allowed"}
+_MOUNT_NAME_RE: set[str] = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
 def _resolve_no_strict(path: Path) -> Path:
@@ -175,6 +176,96 @@ def _is_under(child: Path, parent: Path) -> bool:
         return False
 
 
+def _slug_mount_name(name: str) -> str:
+    """Return a stable mount name (<= 32 chars, lower-case, [a-z0-9_-])."""
+    s = str(name or "").strip().lower()
+    if not s:
+        return "mount"
+    out: list[str] = []
+    for ch in s:
+        if ch in _MOUNT_NAME_RE:
+            out.append(ch)
+        else:
+            out.append("-")
+    slug = "".join(out).strip("-")
+    if not slug:
+        return "mount"
+    return slug[:32]
+
+
+def _mounts_from_allowed_paths(*, allowed_dirs: Iterable[Path], used_names: set[str]) -> Dict[str, Path]:
+    """Build a deterministic {mount_name -> root} map for allowed roots outside workspace_root."""
+    import hashlib
+
+    out: Dict[str, Path] = {}
+    for p in allowed_dirs:
+        try:
+            resolved = p.resolve()
+        except Exception:
+            resolved = p
+        base = _slug_mount_name(resolved.name)
+        name = base
+        if name in used_names:
+            digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+            trim = max(1, 32 - (1 + len(digest)))
+            name = f"{base[:trim]}_{digest}"
+        i = 2
+        while name in used_names:
+            suffix = f"_{i}"
+            trim = max(1, 32 - len(suffix))
+            name = f"{base[:trim]}{suffix}"
+            i += 1
+        used_names.add(name)
+        out[name] = resolved
+    return out
+
+
+def _resolve_virtual_mount_relative_path(*, scope: "WorkspaceScope", raw: str) -> tuple[Path, str]:
+    """Resolve a relative path that may be a virtual mount path.
+
+    Supported forms:
+      - "rel/path.txt" (workspace_root)
+      - "mount/rel/path.txt" (allowed root mount; only when access_mode==workspace_or_allowed)
+      - "<workspace_root_name>/rel/path.txt" (best-effort redundant prefix stripping)
+      - Optional leading "@", tolerated for UX across clients ("@mount/rel/path.txt")
+
+    Returns:
+      (root_used, rel_part) where rel_part is a relative path to join under root_used.
+    """
+    text = str(raw or "").strip().replace("\\", "/")
+    if text.startswith("@"):
+        text = text[1:].lstrip()
+    while text.startswith("./"):
+        text = text[2:]
+
+    parts = [seg for seg in text.split("/") if seg not in ("", ".")]
+    if len(parts) < 2:
+        return (scope.root, text)
+
+    first = parts[0]
+
+    # Mounts: allow a "mount/..." prefix for allowed roots outside workspace_root.
+    if scope.access_mode == "workspace_or_allowed" and scope.allowed_paths:
+        used: set[str] = set()
+        allowed_outside = [p for p in scope.allowed_paths if isinstance(p, Path) and not _is_under(p, scope.root)]
+        mounts = _mounts_from_allowed_paths(allowed_dirs=allowed_outside, used_names=used)
+        if first in mounts:
+            root = mounts[first]
+            rel = "/".join(parts[1:])
+            return (root, rel)
+
+    # Convenience: if the path redundantly begins with the workspace directory name, strip it
+    # when it does not exist as a real child directory (common with "repo-name/..." patterns).
+    try:
+        if first == scope.root.name and not (scope.root / first).exists():
+            rel = "/".join(parts[1:])
+            return (scope.root, rel)
+    except Exception:
+        pass
+
+    return (scope.root, text)
+
+
 def _ensure_allowed(*, path: Path, scope: "WorkspaceScope") -> None:
     for blocked in scope.ignored_paths:
         if _is_under(path, blocked) or _resolve_no_strict(path) == _resolve_no_strict(blocked):
@@ -198,6 +289,10 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
     if not raw:
         raise ValueError("Empty path")
 
+    # Tolerate "@path" handles (used by attachments and some UIs) for filesystem-ish tools.
+    if raw.startswith("@"):
+        raw = raw[1:].lstrip()
+
     p = Path(raw).expanduser()
     if p.is_absolute():
         resolved = _resolve_no_strict(p)
@@ -210,8 +305,10 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
         _ensure_allowed(path=resolved, scope=scope)
         return resolved
 
-    # Relative paths always stay under workspace_root (even in all_except_ignored mode).
-    resolved = _resolve_under_root_strict(root=scope.root, user_path=raw)
+    # Relative paths normally resolve under workspace_root, but we also support a
+    # conservative "mount/..." convention for allowed roots (mirrors gateway file endpoints).
+    root_used, rel_part = _resolve_virtual_mount_relative_path(scope=scope, raw=raw)
+    resolved = _resolve_under_root_strict(root=root_used, user_path=rel_part)
     _ensure_allowed(path=resolved, scope=scope)
     return resolved
 

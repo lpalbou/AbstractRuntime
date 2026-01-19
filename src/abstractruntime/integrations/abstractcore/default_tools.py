@@ -170,10 +170,13 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
     out.append(
         {
             "name": "open_attachment",
-            "description": "Read an attachment (artifact) from the current session with bounded output.",
+            "description": (
+                "Open a session attachment. Text attachments return a bounded excerpt; media attachments "
+                "(image/audio/pdf/etc) are attached as `media` for the next LLM call."
+            ),
             "when_to_use": (
-                "Use to re-open a previously attached file without re-sending its full contents in the chat context. "
-                "Prefer artifact_id when known; otherwise use handle (e.g. '@docs/notes.md')."
+                "Re-open a previously attached file; text returns a bounded excerpt, media is attached as `media` on "
+                "the next call. Do not call if it is already present in the current messages/media."
             ),
             "parameters": {
                 "artifact_id": {"type": "string", "default": None},

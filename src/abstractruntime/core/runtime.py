@@ -2018,7 +2018,31 @@ class Runtime:
                 )
             return EffectOutcome.failed(f"Workflow '{workflow_id}' not found in registry")
 
-        sub_vars = effect.payload.get("vars") or {}
+        sub_vars_raw = effect.payload.get("vars")
+        sub_vars: Dict[str, Any] = dict(sub_vars_raw) if isinstance(sub_vars_raw, dict) else {}
+
+        # Inherit workspace policy into child runs by default.
+        #
+        # Why: in VisualFlow, agents/subflows run as START_SUBWORKFLOW runs. Tool execution inside the
+        # child must respect the same workspace scope the user configured for the parent run.
+        #
+        # Policy: only inherit when the child did not explicitly override the keys.
+        try:
+            parent_vars = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
+            for k in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+                if k in sub_vars:
+                    continue
+                v = parent_vars.get(k)
+                if v is None:
+                    continue
+                if isinstance(v, str):
+                    if not v.strip():
+                        continue
+                    sub_vars[k] = v
+                    continue
+                sub_vars[k] = v
+        except Exception:
+            pass
         is_async = bool(effect.payload.get("async", False))
         wait_for_completion = bool(effect.payload.get("wait", False))
         include_traces = bool(effect.payload.get("include_traces", False))

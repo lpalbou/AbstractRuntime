@@ -1292,6 +1292,64 @@ class Runtime:
             except Exception:
                 pass
 
+        # Append a durable "resume" record to the ledger for replay-first clients.
+        #
+        # Why:
+        # - The ledger is the source-of-truth for replay/streaming (ADR-0011/0018).
+        # - Without a resume record, user input payloads (ASK_USER / abstract.ask / tool approvals)
+        #   only live in RunState.vars and are not visible during ledger-only replay.
+        #
+        # This is best-effort: failure to append must not compromise correctness.
+        try:
+            wait_before = run.waiting
+            wait_reason_value = None
+            wait_key_value = None
+            try:
+                if wait_before is not None:
+                    r0 = getattr(wait_before, "reason", None)
+                    wait_reason_value = r0.value if hasattr(r0, "value") else str(r0) if r0 is not None else None
+                    wait_key_value = getattr(wait_before, "wait_key", None)
+            except Exception:
+                wait_reason_value = None
+                wait_key_value = None
+
+            payload_for_ledger: Any = stored_payload
+            try:
+                from ..storage.offloading import _default_max_inline_bytes, offload_large_values
+
+                if self._artifact_store is not None:
+                    payload_for_ledger = offload_large_values(
+                        stored_payload,
+                        artifact_store=self._artifact_store,
+                        run_id=str(run.run_id or ""),
+                        max_inline_bytes=_default_max_inline_bytes(),
+                        base_tags={"source": "resume", "kind": "resume_payload"},
+                        root_path="resume.payload",
+                        allow_root_replace=False,
+                    )
+            except Exception:
+                payload_for_ledger = stored_payload
+
+            node_id0 = str(getattr(run, "current_node", None) or "")
+            rec = StepRecord.start(run=run, node_id=node_id0 or "unknown", effect=None)
+            rec.status = StepStatus.COMPLETED
+            rec.effect = {
+                "type": "resume",
+                "payload": {
+                    "wait_reason": wait_reason_value,
+                    "wait_key": wait_key_value,
+                    "resume_to_node": resume_to,
+                    "result_key": result_key,
+                    "payload": payload_for_ledger,
+                },
+                "result_key": None,
+            }
+            rec.result = {"resumed": True}
+            rec.ended_at = utc_now_iso()
+            self._ledger_store.append(rec)
+        except Exception:
+            pass
+
         # Terminal waiting node: if there is no resume target, treat the resume payload as
         # the final output instead of re-executing the waiting node again (which would
         # otherwise create an infinite wait/resume loop).

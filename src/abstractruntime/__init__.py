@@ -84,6 +84,11 @@ from .workflow_bundle import (
     workflow_bundle_manifest_from_dict,
     workflow_bundle_manifest_to_dict,
 )
+from .history_bundle import (
+    RUN_HISTORY_BUNDLE_VERSION_V1,
+    export_run_history_bundle,
+    persist_workflow_snapshot,
+)
 
 __all__ = [
     # Core models
@@ -164,4 +169,8 @@ __all__ = [
     "workflow_bundle_manifest_from_dict",
     "workflow_bundle_manifest_to_dict",
     "open_workflow_bundle",
+    # Run history bundle (portable replay)
+    "RUN_HISTORY_BUNDLE_VERSION_V1",
+    "export_run_history_bundle",
+    "persist_workflow_snapshot",
 ]

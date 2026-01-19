@@ -2977,6 +2977,16 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 data_aware_handler=data_aware_handler,
                 flow=flow,
             )
+        elif visual_type == "memact_compose":
+            from .adapters.memact_adapter import create_memact_compose_node_handler
+
+            data_aware_handler = handler_obj if callable(handler_obj) else None
+            handlers[node_id] = create_memact_compose_node_handler(
+                node_id=node_id,
+                next_node=next_node,
+                data_aware_handler=data_aware_handler,
+                flow=flow,
+            )
         elif visual_type == "set_var_property":
             from .adapters.variable_adapter import create_set_var_property_node_handler
 

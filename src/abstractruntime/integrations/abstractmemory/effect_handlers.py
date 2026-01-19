@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from typing import Any, Callable, Dict, Iterable, Optional
 
 from ...core.models import Effect, EffectType, RunState
@@ -82,6 +83,48 @@ def _normalize_predicate_id(raw: Any) -> str:
         return ""
     key = value2.lower()
     return _PREDICATE_ALIAS_MAP.get(key, value2)
+
+
+_EX_PREFIX_RE = re.compile(r"^ex:", re.IGNORECASE)
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_DASH_RUN_RE = re.compile(r"-{2,}")
+
+
+def _slugify_kebab(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    folded = (
+        unicodedata.normalize("NFKD", raw)
+        .encode("ascii", "ignore")
+        .decode("ascii", errors="ignore")
+        .strip()
+    )
+    lowered = folded.lower()
+    # Replace any run of non-alphanumerics with a dash.
+    dashed = _NON_ALNUM_RE.sub("-", lowered)
+    dashed = _DASH_RUN_RE.sub("-", dashed).strip("-")
+    return dashed
+
+
+def _normalize_ex_curie(raw: Any) -> Any:
+    """Normalize `ex:` instance identifiers to `ex:{kind}-{kebab-case}` formatting.
+
+    Notes:
+    - We intentionally do not attempt semantic entity resolution here (synonyms, honorific stripping, etc).
+      This is a formatting normalization layer to reduce accidental drift (spaces/underscores/punctuation).
+    - Returns the original value when normalization cannot be applied safely.
+    """
+    if not isinstance(raw, str):
+        return raw
+    value = raw.strip()
+    if not value or not _EX_PREFIX_RE.match(value):
+        return raw
+    local = value.split(":", 1)[1].strip()
+    slug = _slugify_kebab(local)
+    if not slug:
+        return raw
+    return f"ex:{slug}"
 
 
 def _global_memory_owner_id() -> str:
@@ -257,6 +300,10 @@ def build_memory_kg_effect_handlers(
         for a in assertions:
             try:
                 merged = dict(a)
+                if "subject" in merged:
+                    merged["subject"] = _normalize_ex_curie(merged.get("subject"))
+                if "object" in merged:
+                    merged["object"] = _normalize_ex_curie(merged.get("object"))
                 if "scope" not in merged:
                     merged["scope"] = scope_default
                 if "owner_id" not in merged:
@@ -425,10 +472,12 @@ def build_memory_kg_effect_handlers(
                     budget_value = b
 
         def _one_query(*, scope_label: str, owner_id2: str) -> list[Any]:
+            subject_raw = str(payload.get("subject")).strip() if isinstance(payload.get("subject"), str) else None
+            object_raw = str(payload.get("object")).strip() if isinstance(payload.get("object"), str) else None
             q = TripleQuery(
-                subject=str(payload.get("subject")).strip() if isinstance(payload.get("subject"), str) else None,
+                subject=_normalize_ex_curie(subject_raw) if isinstance(subject_raw, str) else subject_raw,
                 predicate=_normalize_predicate_id(payload.get("predicate")) if payload.get("predicate") is not None else None,
-                object=str(payload.get("object")).strip() if isinstance(payload.get("object"), str) else None,
+                object=_normalize_ex_curie(object_raw) if isinstance(object_raw, str) else object_raw,
                 scope=scope_label,
                 owner_id=owner_id2,
                 since=str(payload.get("since")).strip() if isinstance(payload.get("since"), str) else None,

@@ -15,13 +15,73 @@ from __future__ import annotations
 
 import ast
 import json
+import locale
+import os
 import re
 from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
+_SYSTEM_CONTEXT_HEADER_RE = re.compile(r"^Date:\s*\d{4}-\d{2}-\d{2};\s*Country:\s*.+$", re.IGNORECASE)
+
+
+def _detect_country() -> str:
+    """Best-effort country detection (env override first; fallback to locale region)."""
+
+    def _nonempty(v: Optional[str]) -> Optional[str]:
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        return s if s else None
+
+    # Explicit override (preferred).
+    for key in ("ABSTRACT_COUNTRY", "ABSTRACTFRAMEWORK_COUNTRY"):
+        v = _nonempty(os.environ.get(key))
+        if v is not None:
+            return v
+
+    # Locale inference (e.g. en_US, fr_FR, pt_BR).
+    loc = ""
+    try:
+        loc = str(locale.getlocale()[0] or "")
+    except Exception:
+        loc = ""
+    if not loc:
+        lang = os.environ.get("LC_ALL") or os.environ.get("LANG") or os.environ.get("LC_CTYPE") or ""
+        loc = lang.split(".", 1)[0] if lang else ""
+
+    loc = str(loc or "").strip()
+    if loc:
+        base = loc.split(".", 1)[0].split("@", 1)[0]
+        for sep in ("_", "-"):
+            if sep in base:
+                region = base.split(sep, 1)[1].strip()
+                if region:
+                    return region.upper()
+
+    return "unknown"
+
+
+def _system_context_header() -> str:
+    # Use local date (timezone-aware) to match the user's environment.
+    date_local = datetime.now().astimezone().date().isoformat()
+    return f"Date: {date_local}; Country: {_detect_country()}"
+
+
+def _inject_system_context(system_prompt: Optional[str]) -> str:
+    """Ensure every call has date/country context at the top of the system prompt."""
+    base = str(system_prompt or "").strip()
+    header = _system_context_header()
+    if base:
+        first = base.splitlines()[0].strip()
+        if _SYSTEM_CONTEXT_HEADER_RE.match(first):
+            return base
+        return f"{header}\n\n{base}"
+    return header
 
 
 def _maybe_parse_tool_calls_from_text(
@@ -520,6 +580,9 @@ class LocalAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         params = dict(params or {})
 
+        # Always inject date/country context in the system prompt (even when callers omit it).
+        system_prompt = _inject_system_context(system_prompt)
+
         stream_raw = params.pop("stream", None)
         if stream_raw is None:
             stream_raw = params.pop("streaming", None)
@@ -763,6 +826,9 @@ class RemoteAbstractCoreLLMClient:
                 "RemoteAbstractCoreLLMClient does not support media yet (artifact-backed attachments require local/hybrid execution)."
             )
         req_headers = dict(self._headers)
+
+        # Always inject date/country context in the system prompt (even when callers omit it).
+        system_prompt = _inject_system_context(system_prompt)
 
         trace_metadata = params.pop("trace_metadata", None)
         if isinstance(trace_metadata, dict) and trace_metadata:

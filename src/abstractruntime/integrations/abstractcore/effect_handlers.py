@@ -32,6 +32,7 @@ from .session_attachments import (
     dedup_messages_view,
     execute_open_attachment,
     list_session_attachments,
+    render_active_attachments_system_message,
     render_session_attachments_system_message,
     session_memory_owner_run_id,
 )
@@ -610,9 +611,9 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 return value.strip().lower() in {"1", "true", "yes", "y", "on"}
             return False
 
-        # Optional session attachment registry injection.
+        # Optional attachment registry injections (active + session index).
         #
-        # This is a derived view: it does not mutate the durable run context.
+        # These are derived views: they do not mutate the durable run context.
         session_attachments: Optional[list[Dict[str, Any]]] = None
         try:
             include_raw = params.get("include_session_attachments_index") if isinstance(params, dict) else None
@@ -628,22 +629,43 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             include_index = _coerce_boolish(include_raw)
             sid = getattr(run, "session_id", None)
             sid_str = str(sid or "").strip() if isinstance(sid, str) or sid is not None else ""
+
+            active_msg = ""
+            try:
+                active_msg = render_active_attachments_system_message(media, max_entries=12, max_chars=2000)
+            except Exception:
+                active_msg = ""
+
+            session_msg = ""
             if include_index and artifact_store is not None and sid_str:
                 session_attachments = list_session_attachments(
                     artifact_store=artifact_store, session_id=sid_str, limit=20
                 )
-                msg = render_session_attachments_system_message(session_attachments, max_entries=20, max_chars=4000)
-                if msg:
-                    if not isinstance(messages, list):
-                        messages = []
-                    # Avoid double-injection if a caller already provided a similar system message.
-                    already = False
-                    if messages and isinstance(messages[0], dict):
-                        if messages[0].get("role") == "system":
-                            c0 = messages[0].get("content")
-                            already = isinstance(c0, str) and c0.strip().startswith("Session attachments")
-                    if not already:
-                        messages = [{"role": "system", "content": msg}] + list(messages)
+                session_msg = render_session_attachments_system_message(session_attachments, max_entries=20, max_chars=4000)
+
+            if active_msg or session_msg:
+                if not isinstance(messages, list):
+                    messages = []
+                # Remove any previous injected attachment system messages to avoid staleness/duplication.
+                cleaned: list[Dict[str, Any]] = []
+                for m in messages:
+                    if not isinstance(m, dict):
+                        continue
+                    if m.get("role") != "system":
+                        cleaned.append(m)
+                        continue
+                    c = m.get("content")
+                    c_str = str(c or "")
+                    if c_str.strip().startswith("Active attachments") or c_str.strip().startswith("Stored session attachments") or c_str.strip().startswith("Session attachments"):
+                        continue
+                    cleaned.append(m)
+
+                injected: list[Dict[str, Any]] = []
+                if active_msg:
+                    injected.append({"role": "system", "content": active_msg})
+                if session_msg:
+                    injected.append({"role": "system", "content": session_msg})
+                messages = injected + cleaned
         except Exception:
             session_attachments = None
 

@@ -49,7 +49,7 @@ def test_session_attachments_index_rendering_is_bounded() -> None:
         )
 
     msg = render_session_attachments_system_message(entries, max_entries=20, max_chars=220)
-    assert msg.startswith("Session attachments")
+    assert msg.startswith("Stored session attachments")
     assert len(msg) <= 220
 
 
@@ -358,7 +358,88 @@ def test_llm_call_handler_injects_session_attachment_index_when_enabled() -> Non
     msgs = captured.get("messages")
     assert isinstance(msgs, list) and msgs
     assert msgs[0].get("role") == "system"
-    assert "Session attachments" in str(msgs[0].get("content") or "")
+    assert "Stored session attachments" in str(msgs[0].get("content") or "")
+
+
+@pytest.mark.basic
+def test_llm_call_handler_injects_active_attachments_when_media_present(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"hello\n"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+    )
+
+    captured: dict = {}
+
+    class _StubLLM:
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            return {"content": "ok", "metadata": {}}
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={})
+    effect = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "prompt": "hello",
+            "media": [{"$artifact": meta.artifact_id, "filename": "notes.txt", "source_path": "notes.txt", "sha256": sha, "content_type": "text/plain"}],
+            "params": {"temperature": 0.0},
+        },
+    )
+
+    handler = make_llm_call_handler(llm=_StubLLM(), artifact_store=store)
+    outcome = handler(run, effect, None)
+    assert outcome.status == "completed"
+
+    msgs = captured.get("messages")
+    assert isinstance(msgs, list) and msgs
+    assert msgs[0].get("role") == "system"
+    assert str(msgs[0].get("content") or "").startswith("Active attachments")
+
+
+@pytest.mark.basic
+def test_open_attachment_not_found_returns_suggestions() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"hello\nworld\n"
+    sha = hashlib.sha256(content).hexdigest()
+    store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={
+            "kind": "attachment",
+            "path": "mnemosyne/memory/notes/2025/03/Aletheia-to-my-son-09.md",
+            "filename": "Aletheia-to-my-son-09.md",
+            "session_id": sid,
+            "sha256": sha,
+        },
+    )
+
+    ok, out, err = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id=None,
+        handle="@mnemosyne/memory/notes/2025/12/Aletheia-to-my-son.md",
+        expected_sha256=None,
+        start_line=1,
+        end_line=5,
+        max_chars=2000,
+    )
+    assert ok is False
+    assert err == "attachment not found"
+    assert isinstance(out, dict)
+    suggestions = out.get("suggestions")
+    assert isinstance(suggestions, list) and suggestions
+    assert any(
+        isinstance(s, dict) and str(s.get("handle") or "").endswith("Aletheia-to-my-son-09.md") for s in suggestions
+    )
 
 
 @pytest.mark.integration
@@ -516,7 +597,7 @@ def test_e2e_open_attachment_tool_call_lmstudio(tmp_path: Path, monkeypatch: pyt
     msgs = captured.get("messages")
     assert isinstance(msgs, list) and msgs
     assert msgs[0].get("role") == "system"
-    assert "Session attachments" in str(msgs[0].get("content") or "")
+    assert "Stored session attachments" in str(msgs[0].get("content") or "")
 
     # Validate tool produced the expected excerpt.
     tool_results = state.output.get("tool_results") if isinstance(state.output, dict) else None

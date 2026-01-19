@@ -123,7 +123,7 @@ def render_session_attachments_system_message(
     if max_e <= 0 or max_c <= 0:
         return ""
 
-    lines: list[str] = ["Session attachments (most recent first):"]
+    lines: list[str] = ["Stored session attachments (most recent first; not necessarily active in this call):"]
     used = len(lines[0]) + 1
 
     hint = (
@@ -167,6 +167,96 @@ def render_session_attachments_system_message(
                 lines.append("- … (truncated)")
             break
 
+        lines.append(line)
+        used += len(line) + 1
+
+    rendered = "\n".join(lines)
+    return rendered[:max_c]
+
+
+def render_active_attachments_system_message(
+    media: Any,
+    *,
+    max_entries: int = 12,
+    max_chars: int = 2000,
+) -> str:
+    """Render a bounded system message that lists active media attachments for this call.
+
+    This is metadata-only: it does not inline attachment contents, and should remain stable
+    across `/compact` (system messages are not compacted).
+    """
+    max_e = max(0, int(max_entries))
+    max_c = max(0, int(max_chars))
+    if max_e <= 0 or max_c <= 0:
+        return ""
+
+    if media is None:
+        return ""
+    items = list(media) if isinstance(media, (list, tuple)) else []
+    if not items:
+        return ""
+
+    lines: list[str] = [
+        "Active attachments (included in this call as media; do not call file tools for these):"
+    ]
+    used = len(lines[0]) + 1
+
+    def _fmt_line(item: Any) -> Optional[str]:
+        if isinstance(item, str):
+            raw = item.strip()
+            if not raw:
+                return None
+            disp = _normalize_handle(raw) or raw
+            # Convention: show virtual handles with "@", and absolute paths as-is.
+            if disp.startswith("/"):
+                head = disp
+            else:
+                head = f"@{disp}"
+            return f"- {head}"
+
+        if not isinstance(item, dict):
+            return None
+
+        aid = item.get("$artifact") or item.get("artifact_id") or item.get("id")
+        aid_s = str(aid or "").strip()
+        src = item.get("source_path") or item.get("path") or item.get("filename")
+        handle = _normalize_handle(src)
+        filename = str(item.get("filename") or "").strip()
+
+        head = ""
+        if handle:
+            head = f"@{handle}"
+        elif filename:
+            head = f"@{filename}"
+        elif aid_s:
+            head = f"id={aid_s}"
+        else:
+            head = "attachment"
+
+        bits: list[str] = []
+        if aid_s:
+            bits.append(f"id={aid_s}")
+        sha = str(item.get("sha256") or "").strip().lower()
+        if sha and re.fullmatch(r"[0-9a-f]{8,64}", sha):
+            bits.append(f"sha={sha[:8]}…")
+        ct = str(item.get("content_type") or "").strip()
+        if ct:
+            bits.append(ct)
+        size = item.get("size_bytes")
+        if isinstance(size, int) and size > 0:
+            bits.append(f"{size:,} bytes")
+
+        meta = ", ".join(bits)
+        return f"- {head}" + (f" ({meta})" if meta else "")
+
+    for i, it in enumerate(items[:max_e]):
+        line = _fmt_line(it)
+        if not line:
+            continue
+        if used + len(line) + 1 > max_c:
+            if i > 0 and used + 18 <= max_c:
+                lines.append("- … (truncated)")
+            break
         lines.append(line)
         used += len(line) + 1
 
@@ -464,9 +554,66 @@ def execute_open_attachment(
             matches = matches2
 
         if not matches:
+            # Best-effort suggestions: help models recover when they misremember a handle/path.
+            suggestions: list[dict[str, Any]] = []
+            try:
+                query = _normalize_handle(handle_norm)
+                q_base = query.replace("\\", "/").strip().strip("/").rsplit("/", 1)[-1]
+                q_stem = q_base.rsplit(".", 1)[0].lower() if q_base else ""
+                scored: list[tuple[int, int, str, Any]] = []
+                for m in candidates:
+                    tags = getattr(m, "tags", {}) or {}
+                    p = _normalize_handle(tags.get("path") or tags.get("source_path") or "")
+                    fn = _normalize_handle(tags.get("filename") or "")
+                    cand_handle = p or fn
+                    if not cand_handle:
+                        continue
+                    cand_base = cand_handle.replace("\\", "/").strip().strip("/").rsplit("/", 1)[-1]
+                    cand_stem = cand_base.rsplit(".", 1)[0].lower() if cand_base else ""
+                    score: Optional[int] = None
+                    if q_base and cand_base and cand_base.lower() == q_base.lower():
+                        score = 0
+                    elif q_stem and cand_stem and q_stem in cand_stem:
+                        score = 1
+                    elif q_stem and cand_stem and cand_stem in q_stem:
+                        score = 2
+                    elif q_stem and q_stem in cand_handle.lower():
+                        score = 3
+                    if score is None:
+                        continue
+                    scored.append((score, len(cand_handle), cand_handle, m))
+                scored.sort(key=lambda x: (x[0], x[1], x[2]))
+                for _score, _len, h, m in scored[:5]:
+                    tags = getattr(m, "tags", {}) or {}
+                    suggestions.append(
+                        {
+                            "handle": h,
+                            "artifact_id": str(getattr(m, "artifact_id", "") or ""),
+                            "sha256": str(tags.get("sha256") or "").strip() or None,
+                        }
+                    )
+            except Exception:
+                suggestions = []
+
+            rendered = f"Error: no attachment matches handle '@{handle_norm}' in this session."
+            if suggestions:
+                parts = []
+                for s in suggestions:
+                    h = _normalize_handle(s.get("handle"))
+                    aid = str(s.get("artifact_id") or "").strip()
+                    sha = str(s.get("sha256") or "").strip()
+                    bits: list[str] = []
+                    if aid:
+                        bits.append(f"id={aid}")
+                    if sha:
+                        bits.append(f"sha={sha[:8]}…")
+                    meta = f" ({', '.join(bits)})" if bits else ""
+                    parts.append(f"- @{h}{meta}")
+                rendered += "\nDid you mean:\n" + "\n".join(parts)
+
             return (
                 False,
-                {"rendered": f"Error: no attachment matches handle '@{handle_norm}' in this session."},
+                {"rendered": rendered, "suggestions": suggestions},
                 "attachment not found",
             )
 
@@ -613,6 +760,7 @@ def execute_open_attachment(
 __all__ = [
     "session_memory_owner_run_id",
     "list_session_attachments",
+    "render_active_attachments_system_message",
     "render_session_attachments_system_message",
     "dedup_messages_view",
     "execute_open_attachment",

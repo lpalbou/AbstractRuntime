@@ -74,6 +74,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
     from abstractcore.tools.common_tools import (
         list_files,
         read_file,
+        skim_files,
         search_files,
         analyze_code,
         write_file,
@@ -87,7 +88,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         "files": {
             "id": "files",
             "label": "Files",
-            "tools": [list_files, search_files, analyze_code, read_file, write_file, edit_file],
+            "tools": [list_files, search_files, analyze_code, skim_files, read_file, write_file, edit_file],
         },
         "web": {
             "id": "web",

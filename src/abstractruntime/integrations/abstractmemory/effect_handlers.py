@@ -297,6 +297,19 @@ def build_memory_kg_effect_handlers(
         del default_next_node
         payload = dict(effect.payload or {})
 
+        recall_level_raw = payload.get("recall_level")
+        if recall_level_raw is None:
+            recall_level_raw = payload.get("recallLevel")
+        try:
+            from abstractruntime.memory.recall_levels import parse_recall_level, policy_for
+
+            recall_level = parse_recall_level(recall_level_raw)
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+
+        recall_warnings: list[str] = []
+        recall_effort: dict[str, Any] = {}
+
         scope_raw = payload.get("scope")
         scope = str(scope_raw or "run").strip().lower() or "run"
         owner_id_raw = payload.get("owner_id")
@@ -305,17 +318,103 @@ def build_memory_kg_effect_handlers(
         if scope not in {"run", "session", "global", "all"}:
             return EffectOutcome.completed({"ok": False, "count": 0, "items": [], "error": f"Unknown memory scope: {scope}"})
 
-        def _parse_min_score() -> Optional[float]:
-            raw = payload.get("min_score")
-            if raw is None:
-                return None
+        query_text_raw = payload.get("query_text")
+        is_semantic = isinstance(query_text_raw, str) and query_text_raw.strip().lower() != ""
+
+        # Apply recall budgets when explicitly requested.
+        limit_value: int = 100
+        min_score_value: Optional[float] = None
+        budget_value: Optional[int] = None
+        if recall_level is not None:
+            pol = policy_for(recall_level)
+
+            raw_limit = payload.get("limit")
+            if raw_limit is None:
+                limit_value = pol.kg.limit_default
+            else:
+                try:
+                    limit_value = int(raw_limit)
+                except Exception:
+                    limit_value = pol.kg.limit_default
+            if limit_value < 1:
+                limit_value = 1
+            if limit_value > pol.kg.limit_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped limit from {limit_value} to {pol.kg.limit_max}"
+                )
+                limit_value = pol.kg.limit_max
+
+            if is_semantic:
+                raw_ms = payload.get("min_score")
+                if raw_ms is None:
+                    min_score_value = float(pol.kg.min_score_default)
+                else:
+                    try:
+                        min_score_value = float(raw_ms)
+                    except Exception:
+                        min_score_value = float(pol.kg.min_score_default)
+                if not (min_score_value == min_score_value):  # NaN
+                    min_score_value = float(pol.kg.min_score_default)
+                if min_score_value < pol.kg.min_score_floor:
+                    recall_warnings.append(
+                        f"recall_level={recall_level.value}: raised min_score from {min_score_value} to {pol.kg.min_score_floor}"
+                    )
+                    min_score_value = float(pol.kg.min_score_floor)
+            else:
+                min_score_value = None
+
+            raw_budget = payload.get("max_input_tokens")
+            if raw_budget is None:
+                raw_budget = payload.get("max_in_tokens")
+            if raw_budget is None:
+                budget_value = pol.kg.max_input_tokens_default
+            else:
+                try:
+                    budget_value = int(float(raw_budget))
+                except Exception:
+                    budget_value = pol.kg.max_input_tokens_default
+            if budget_value < 1:
+                budget_value = pol.kg.max_input_tokens_default
+            if budget_value > pol.kg.max_input_tokens_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped max_input_tokens from {budget_value} to {pol.kg.max_input_tokens_max}"
+                )
+                budget_value = pol.kg.max_input_tokens_max
+
+            recall_effort = {
+                "recall_level": recall_level.value,
+                "applied": {
+                    "limit": int(limit_value),
+                    "min_score": float(min_score_value) if min_score_value is not None else None,
+                    "max_input_tokens": int(budget_value) if budget_value is not None else None,
+                },
+            }
+        else:
+            # Backward-compatible defaults (no policy).
             try:
-                val = float(raw)
+                limit_value = int(payload.get("limit") or 100)
             except Exception:
-                return None
-            if not (val == val):  # NaN
-                return None
-            return val
+                limit_value = 100
+            limit_value = max(1, min(limit_value, 10_000))
+            raw_ms = payload.get("min_score")
+            if raw_ms is not None:
+                try:
+                    v = float(raw_ms)
+                except Exception:
+                    v = None
+                if v is not None and (v == v):
+                    min_score_value = v
+
+            raw_budget = payload.get("max_input_tokens")
+            if raw_budget is None:
+                raw_budget = payload.get("max_in_tokens")
+            if raw_budget is not None and not isinstance(raw_budget, bool):
+                try:
+                    b = int(float(raw_budget))
+                except Exception:
+                    b = None
+                if isinstance(b, int) and b > 0:
+                    budget_value = b
 
         def _one_query(*, scope_label: str, owner_id2: str) -> list[Any]:
             q = TripleQuery(
@@ -328,9 +427,9 @@ def build_memory_kg_effect_handlers(
                 until=str(payload.get("until")).strip() if isinstance(payload.get("until"), str) else None,
                 active_at=str(payload.get("active_at")).strip() if isinstance(payload.get("active_at"), str) else None,
                 query_text=str(payload.get("query_text")).strip() if isinstance(payload.get("query_text"), str) else None,
-                limit=int(payload.get("limit") or 100),
+                limit=int(limit_value),
                 order=str(payload.get("order") or "desc"),
-                min_score=_parse_min_score(),
+                min_score=min_score_value,
             )
             return store.query(q)
 
@@ -391,9 +490,7 @@ def build_memory_kg_effect_handlers(
             order = str(payload.get("order") or "desc").strip().lower()
             reverse = order != "asc"
             out_items.sort(key=_observed_at_key, reverse=reverse)
-        limit = int(payload.get("limit") or 100)
-        limit = max(1, min(limit, 10_000))
-        out_items = out_items[:limit]
+        out_items = out_items[: max(1, min(int(limit_value), 10_000))]
 
         if not out_items and errors:
             return EffectOutcome.completed(
@@ -406,20 +503,14 @@ def build_memory_kg_effect_handlers(
             )
 
         result: dict[str, Any] = {"ok": True, "count": len(out_items), "items": out_items}
+        if recall_effort:
+            result["effort"] = recall_effort
 
         # Optional: packetize + pack into an LLM-friendly Active Memory block.
         #
         # This is used by `ltm-ai-kg-map-to-active` and chat-like flows that inject
         # KG recall into the system prompt without blowing up token budgets.
-        raw_budget = payload.get("max_input_tokens")
-        if raw_budget is None:
-            raw_budget = payload.get("max_in_tokens")
-        budget = None
-        if raw_budget is not None and not isinstance(raw_budget, bool):
-            try:
-                budget = int(float(raw_budget))
-            except Exception:
-                budget = None
+        budget = budget_value
         if isinstance(budget, int) and budget > 0:
             try:
                 model_name = payload.get("model")
@@ -458,6 +549,13 @@ def build_memory_kg_effect_handlers(
             if isinstance(cur, list):
                 merged.extend([str(x) for x in cur if str(x).strip()])
             merged.extend([e for e in errors if str(e).strip()])
+            result["warnings"] = merged
+        if recall_warnings:
+            cur = result.get("warnings")
+            merged: list[str] = []
+            if isinstance(cur, list):
+                merged.extend([str(x) for x in cur if str(x).strip()])
+            merged.extend([w for w in recall_warnings if str(w).strip()])
             result["warnings"] = merged
         return EffectOutcome.completed(result)
 

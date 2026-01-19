@@ -39,7 +39,7 @@ def test_memory_query_return_both_includes_meta_matches_and_span_ids() -> None:
             node_id="query",
             effect=Effect(
                 type=EffectType.MEMORY_QUERY,
-                payload={"query": "Alice", "return": "both", "limit_spans": 10},
+                payload={"query": "Alice", "return": "both", "limit_spans": 10, "recall_level": "urgent"},
                 result_key="_temp.recall",
             ),
             next_node="done",
@@ -66,6 +66,16 @@ def test_memory_query_return_both_includes_meta_matches_and_span_ids() -> None:
     matches = meta.get("matches")
     assert isinstance(matches, list) and matches
     assert isinstance(meta.get("span_ids"), list) and meta["span_ids"]
+    # Recall policy transparency (no silent downgrade).
+    assert isinstance(meta.get("effort"), dict)
+    assert meta["effort"].get("recall_level") == "urgent"
+    assert isinstance(meta.get("warnings"), list) and meta["warnings"]
+    applied = meta["effort"].get("applied")
+    assert isinstance(applied, dict)
+    # Urgent clamps limit_spans to a very small number and disables deep scan by default.
+    assert applied.get("limit_spans") == 3
+    assert applied.get("deep") is False
+
 
 
 def test_memory_note_scope_session_routes_to_session_id_authority_run_and_keeps_source_run_id() -> None:

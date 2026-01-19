@@ -194,6 +194,7 @@ def test_visualflow_memory_query_maps_tags_mode_usernames_and_locations() -> Non
                         {"id": "exec-out", "type": "execution"},
                         {"id": "query", "type": "string"},
                         {"id": "limit", "type": "number"},
+                        {"id": "recall_level", "type": "string"},
                         {"id": "tags_mode", "type": "string"},
                         {"id": "usernames", "type": "array"},
                         {"id": "locations", "type": "array"},
@@ -201,6 +202,7 @@ def test_visualflow_memory_query_maps_tags_mode_usernames_and_locations() -> Non
                     "pinDefaults": {
                         "query": "who",
                         "limit": 3,
+                        "recall_level": "urgent",
                         "tags_mode": "any",
                         "usernames": ["alice"],
                         "locations": ["flow:x"],
@@ -213,6 +215,7 @@ def test_visualflow_memory_query_maps_tags_mode_usernames_and_locations() -> Non
             {"source": "start", "sourceHandle": "exec-out", "target": "query", "targetHandle": "exec-in"},
             {"source": "start", "sourceHandle": "query", "target": "query", "targetHandle": "query"},
             {"source": "start", "sourceHandle": "limit", "target": "query", "targetHandle": "limit"},
+            {"source": "start", "sourceHandle": "recall_level", "target": "query", "targetHandle": "recall_level"},
             {"source": "start", "sourceHandle": "tags_mode", "target": "query", "targetHandle": "tags_mode"},
             {"source": "start", "sourceHandle": "usernames", "target": "query", "targetHandle": "usernames"},
             {"source": "start", "sourceHandle": "locations", "target": "query", "targetHandle": "locations"},
@@ -236,6 +239,93 @@ def test_visualflow_memory_query_maps_tags_mode_usernames_and_locations() -> Non
     plan = spec.nodes["query"](run, None)
     assert plan.effect is not None
     assert plan.effect.type == EffectType.MEMORY_QUERY
+    assert plan.effect.payload.get("recall_level") == "urgent"
     assert plan.effect.payload.get("tags_mode") == "any"
     assert plan.effect.payload.get("usernames") == ["alice"]
     assert plan.effect.payload.get("locations") == ["flow:x"]
+
+
+def test_visualflow_memory_kg_query_maps_recall_level() -> None:
+    flow = {
+        "id": "vf_memory_kg_query_recall_level",
+        "name": "vf_memory_kg_query_recall_level",
+        "entryNode": "start",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            {"id": "kgq", "type": "memory_kg_query", "data": {"nodeType": "memory_kg_query"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "kgq", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    run = RunState(
+        run_id="run",
+        workflow_id=str(spec.workflow_id),
+        status=RunStatus.RUNNING,
+        current_node="kgq",
+        vars={"_temp": {}, "_last_output": {"query_text": "android", "min_score": 0.33, "recall_level": "standard"}},
+    )
+    plan = spec.nodes["kgq"](run, None)
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.MEMORY_KG_QUERY
+    assert plan.effect.payload.get("query_text") == "android"
+    assert plan.effect.payload.get("min_score") == 0.33
+    assert plan.effect.payload.get("recall_level") == "standard"
+
+
+def test_visualflow_memory_rehydrate_maps_recall_level() -> None:
+    flow = {
+        "id": "vf_memory_rehydrate_recall_level",
+        "name": "vf_memory_rehydrate_recall_level",
+        "entryNode": "start",
+        "nodes": [
+            {
+                "id": "start",
+                "type": "on_flow_start",
+                "data": {
+                    "nodeType": "on_flow_start",
+                    "outputs": [
+                        {"id": "exec-out", "type": "execution"},
+                        {"id": "span_ids", "type": "array"},
+                        {"id": "max_messages", "type": "number"},
+                        {"id": "recall_level", "type": "string"},
+                    ],
+                    "pinDefaults": {
+                        "span_ids": ["a1", "a2"],
+                        "max_messages": 25,
+                        "recall_level": "urgent",
+                    },
+                },
+            },
+            {"id": "rehydrate", "type": "memory_rehydrate", "data": {"nodeType": "memory_rehydrate"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "rehydrate", "targetHandle": "exec-in"},
+            {"source": "start", "sourceHandle": "span_ids", "target": "rehydrate", "targetHandle": "span_ids"},
+            {"source": "start", "sourceHandle": "max_messages", "target": "rehydrate", "targetHandle": "max_messages"},
+            {"source": "start", "sourceHandle": "recall_level", "target": "rehydrate", "targetHandle": "recall_level"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    assert "rehydrate" in spec.nodes
+
+    run = RunState(
+        run_id="run",
+        workflow_id=str(spec.workflow_id),
+        status=RunStatus.RUNNING,
+        current_node="start",
+        vars={"_temp": {}},
+    )
+    plan = spec.nodes["start"](run, None)
+    assert plan.next_node == "rehydrate"
+    run.current_node = "rehydrate"
+
+    plan2 = spec.nodes["rehydrate"](run, None)
+    assert plan2.effect is not None
+    assert plan2.effect.type == EffectType.MEMORY_REHYDRATE
+    assert plan2.effect.payload.get("span_ids") == ["a1", "a2"]
+    assert plan2.effect.payload.get("max_messages") == 25
+    assert plan2.effect.payload.get("recall_level") == "urgent"

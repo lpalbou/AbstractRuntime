@@ -2215,6 +2215,20 @@ class Runtime:
         tool_name = str(payload.get("tool_name") or "recall_memory")
         call_id = str(payload.get("call_id") or "memory")
 
+        # Recall effort policy (optional; no silent fallback).
+        recall_level_raw = payload.get("recall_level")
+        if recall_level_raw is None:
+            recall_level_raw = payload.get("recallLevel")
+        try:
+            from ..memory.recall_levels import parse_recall_level, policy_for
+
+            recall_level = parse_recall_level(recall_level_raw)
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+
+        recall_warnings: list[str] = []
+        recall_effort: dict[str, Any] = {}
+
         # Scope routing (run/session/global). Scope affects which run owns the span index queried.
         scope = str(payload.get("scope") or "run").strip().lower() or "run"
         if scope not in {"run", "session", "global", "all"}:
@@ -2288,6 +2302,7 @@ class Runtime:
             authors = _norm_str_list(payload.get("users"))
         locations = _norm_str_list(payload.get("locations") if "locations" in payload else payload.get("location"))
 
+        limit_spans_provided = "limit_spans" in payload
         try:
             limit_spans = int(payload.get("limit_spans", 5) or 5)
         except Exception:
@@ -2295,12 +2310,14 @@ class Runtime:
         if limit_spans < 1:
             limit_spans = 1
 
+        deep_provided = "deep" in payload
         deep = payload.get("deep")
         if deep is None:
             deep_enabled = bool(query_text)
         else:
             deep_enabled = bool(deep)
 
+        deep_limit_spans_provided = "deep_limit_spans" in payload
         try:
             deep_limit_spans = int(payload.get("deep_limit_spans", 50) or 50)
         except Exception:
@@ -2308,6 +2325,7 @@ class Runtime:
         if deep_limit_spans < 1:
             deep_limit_spans = 1
 
+        deep_limit_messages_provided = "deep_limit_messages_per_span" in payload
         try:
             deep_limit_messages_per_span = int(payload.get("deep_limit_messages_per_span", 400) or 400)
         except Exception:
@@ -2315,6 +2333,7 @@ class Runtime:
         if deep_limit_messages_per_span < 1:
             deep_limit_messages_per_span = 1
 
+        connected_provided = "connected" in payload
         connected = bool(payload.get("connected", False))
         try:
             neighbor_hops = int(payload.get("neighbor_hops", 1) or 1)
@@ -2329,6 +2348,7 @@ class Runtime:
         else:
             connect_keys = ["topic", "person"]
 
+        max_messages_provided = "max_messages" in payload
         try:
             max_messages = int(payload.get("max_messages", -1) or -1)
         except Exception:
@@ -2338,6 +2358,79 @@ class Runtime:
             max_messages = -1
         if max_messages != -1 and max_messages < 1:
             max_messages = 1
+
+        # Apply recall_level budgets when explicitly provided (no silent downgrade).
+        if recall_level is not None:
+            pol = policy_for(recall_level)
+
+            if not limit_spans_provided:
+                limit_spans = pol.span.limit_spans_default
+            if limit_spans > pol.span.limit_spans_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped limit_spans from {limit_spans} to {pol.span.limit_spans_max}"
+                )
+                limit_spans = pol.span.limit_spans_max
+
+            if deep_enabled and not pol.span.deep_allowed:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: deep scan disabled (not allowed at this level)"
+                )
+                deep_enabled = False
+
+            if deep_enabled and not deep_limit_spans_provided:
+                deep_limit_spans = min(deep_limit_spans, pol.span.deep_limit_spans_max)
+            if deep_limit_spans > pol.span.deep_limit_spans_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped deep_limit_spans from {deep_limit_spans} to {pol.span.deep_limit_spans_max}"
+                )
+                deep_limit_spans = pol.span.deep_limit_spans_max
+
+            if deep_enabled and not deep_limit_messages_provided:
+                deep_limit_messages_per_span = min(deep_limit_messages_per_span, pol.span.deep_limit_messages_per_span_max)
+            if deep_limit_messages_per_span > pol.span.deep_limit_messages_per_span_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped deep_limit_messages_per_span from {deep_limit_messages_per_span} to {pol.span.deep_limit_messages_per_span_max}"
+                )
+                deep_limit_messages_per_span = pol.span.deep_limit_messages_per_span_max
+
+            if connected and not pol.span.connected_allowed:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: connected expansion disabled (not allowed at this level)"
+                )
+                connected = False
+
+            if neighbor_hops > pol.span.neighbor_hops_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped neighbor_hops from {neighbor_hops} to {pol.span.neighbor_hops_max}"
+                )
+                neighbor_hops = pol.span.neighbor_hops_max
+
+            # Enforce bounded rendering budget (max_messages). -1 means "unbounded" and is not allowed when policy is active.
+            if not max_messages_provided:
+                max_messages = pol.span.max_messages_default
+            elif max_messages == -1:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: max_messages=-1 (unbounded) is not allowed; clamped to {pol.span.max_messages_max}"
+                )
+                max_messages = pol.span.max_messages_max
+            elif max_messages > pol.span.max_messages_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped max_messages from {max_messages} to {pol.span.max_messages_max}"
+                )
+                max_messages = pol.span.max_messages_max
+
+            recall_effort = {
+                "recall_level": recall_level.value,
+                "applied": {
+                    "limit_spans": limit_spans,
+                    "deep": bool(deep_enabled),
+                    "deep_limit_spans": deep_limit_spans,
+                    "deep_limit_messages_per_span": deep_limit_messages_per_span,
+                    "connected": bool(connected),
+                    "neighbor_hops": neighbor_hops,
+                    "max_messages": max_messages,
+                },
+            }
 
         from ..memory.active_context import ActiveContextPolicy, TimeRange
 
@@ -2518,6 +2611,17 @@ class Runtime:
                 matches.append(m)
 
             meta = {"matches": matches, "span_ids": list(all_selected)}
+
+        # Attach recall policy transparency (warnings + applied budgets).
+        if recall_level is not None:
+            if return_mode in {"meta", "both"}:
+                if recall_effort:
+                    meta["effort"] = recall_effort
+                if recall_warnings:
+                    meta["warnings"] = list(recall_warnings)
+            if return_mode in {"rendered", "both"} and recall_warnings:
+                warnings_block = "\n".join([f"- {w}" for w in recall_warnings if str(w).strip()])
+                rendered_text = f"[recall warnings]\n{warnings_block}\n\n{rendered_text}".strip()
 
         result = {
             "mode": "executed",
@@ -3431,6 +3535,20 @@ class Runtime:
         payload = dict(effect.payload or {})
         target_run_id = str(payload.get("target_run_id") or run.run_id).strip() or run.run_id
 
+        # Recall effort policy (optional; no silent fallback).
+        recall_level_raw = payload.get("recall_level")
+        if recall_level_raw is None:
+            recall_level_raw = payload.get("recallLevel")
+        try:
+            from ..memory.recall_levels import parse_recall_level, policy_for
+
+            recall_level = parse_recall_level(recall_level_raw)
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+
+        recall_warnings: list[str] = []
+        recall_effort: dict[str, Any] = {}
+
         # Normalize span_ids (accept legacy `span_id` too).
         raw_span_ids = payload.get("span_ids")
         if raw_span_ids is None:
@@ -3449,6 +3567,35 @@ class Runtime:
         placement = str(payload.get("placement") or "after_summary").strip() or "after_summary"
         dedup_by = str(payload.get("dedup_by") or "message_id").strip() or "message_id"
         max_messages = payload.get("max_messages")
+        max_messages_provided = "max_messages" in payload
+
+        if recall_level is not None:
+            pol = policy_for(recall_level)
+            raw_max = max_messages
+            parsed: Optional[int] = None
+            if raw_max is not None and not isinstance(raw_max, bool):
+                try:
+                    parsed = int(float(raw_max))
+                except Exception:
+                    parsed = None
+            if not max_messages_provided or parsed is None:
+                parsed = pol.rehydrate.max_messages_default
+            if parsed < 1:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: max_messages must be >=1; using {pol.rehydrate.max_messages_default}"
+                )
+                parsed = pol.rehydrate.max_messages_default
+            if parsed > pol.rehydrate.max_messages_max:
+                recall_warnings.append(
+                    f"recall_level={recall_level.value}: clamped max_messages from {parsed} to {pol.rehydrate.max_messages_max}"
+                )
+                parsed = pol.rehydrate.max_messages_max
+
+            max_messages = parsed
+            recall_effort = {
+                "recall_level": recall_level.value,
+                "applied": {"max_messages": int(parsed)},
+            }
 
         # Load the target run (may be different from current).
         target_run = run
@@ -3536,6 +3683,8 @@ class Runtime:
                 "inserted": out.get("inserted", 0),
                 "skipped": out.get("skipped", 0),
                 "artifacts": artifacts_out,
+                "effort": recall_effort if recall_effort else None,
+                "warnings": list(recall_warnings) if recall_warnings else None,
             }
         )
 

@@ -2129,6 +2129,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         def handler(input_data):
             query = input_data.get("query", "") if isinstance(input_data, dict) else str(input_data)
             limit = input_data.get("limit", 10) if isinstance(input_data, dict) else 10
+            recall_level = input_data.get("recall_level") if isinstance(input_data, dict) else None
             tags = input_data.get("tags") if isinstance(input_data, dict) else None
             tags_mode = input_data.get("tags_mode") if isinstance(input_data, dict) else None
             usernames = input_data.get("usernames") if isinstance(input_data, dict) else None
@@ -2142,6 +2143,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 limit_int = 10
 
             pending: Dict[str, Any] = {"type": "memory_query", "query": query, "limit_spans": limit_int, "return": "both"}
+            if isinstance(recall_level, str) and recall_level.strip():
+                pending["recall_level"] = recall_level.strip()
             if isinstance(tags, dict):
                 pending["tags"] = tags
             if isinstance(tags_mode, str) and tags_mode.strip():
@@ -2212,6 +2215,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "subject",
                 "predicate",
                 "object",
+                "recall_level",
                 "scope",
                 "owner_id",
                 "since",
@@ -2315,10 +2319,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 placement_str = "after_summary"
 
             max_messages = input_data.get("max_messages") if isinstance(input_data, dict) else None
+            recall_level = input_data.get("recall_level") if isinstance(input_data, dict) else None
 
             pending: Dict[str, Any] = {"type": "memory_rehydrate", "span_ids": span_ids, "placement": placement_str}
             if max_messages is not None:
                 pending["max_messages"] = max_messages
+            if isinstance(recall_level, str) and recall_level.strip():
+                pending["recall_level"] = recall_level.strip()
             return {"inserted": 0, "skipped": 0, "_pending_effect": pending}
 
         return handler

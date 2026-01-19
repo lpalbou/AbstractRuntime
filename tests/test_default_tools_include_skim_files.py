@@ -16,6 +16,16 @@ def test_default_tool_specs_include_skim_files_and_executor_runs(tmp_path: Path)
     names = {s.get("name") for s in specs if isinstance(s, dict)}
     assert "skim_files" in names
 
+    skim = next((s for s in specs if isinstance(s, dict) and s.get("name") == "skim_files"), None)
+    assert isinstance(skim, dict)
+    params = skim.get("parameters") or {}
+    assert isinstance(params, dict)
+    paths_schema = params.get("paths") or {}
+    assert isinstance(paths_schema, dict)
+    assert paths_schema.get("type") == "array"
+    assert "max_output_lines" not in params
+    assert "max_chars_per_excerpt" not in params
+
     target = tmp_path / "demo.txt"
     target.write_text("one.\n\ntwo.\n\nthree.\n", encoding="utf-8")
 

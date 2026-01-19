@@ -370,12 +370,20 @@ def build_memory_kg_effect_handlers(
                 budget_value = pol.kg.max_input_tokens_default
             else:
                 try:
-                    budget_value = int(float(raw_budget))
+                    bf = float(raw_budget)
                 except Exception:
+                    bf = None
+                if bf is None or not (bf == bf):  # NaN
                     budget_value = pol.kg.max_input_tokens_default
-            if budget_value < 1:
-                budget_value = pol.kg.max_input_tokens_default
-            if budget_value > pol.kg.max_input_tokens_max:
+                elif bf == 0:
+                    # Explicitly disable packetization/Active Memory packing.
+                    budget_value = 0
+                elif bf < 1:
+                    budget_value = pol.kg.max_input_tokens_default
+                else:
+                    budget_value = int(bf)
+
+            if budget_value > 0 and budget_value > pol.kg.max_input_tokens_max:
                 recall_warnings.append(
                     f"recall_level={recall_level.value}: clamped max_input_tokens from {budget_value} to {pol.kg.max_input_tokens_max}"
                 )

@@ -87,3 +87,26 @@ def test_memory_kg_query_recall_level_applies_defaults_and_clamps() -> None:
     assert "raised min_score" in joined
     assert "clamped max_input_tokens" in joined
 
+    # Explicitly disabling packetization (max_input_tokens=0) should keep retrieval budgets
+    # but omit packets/active_memory_text.
+    out4 = query_handler(
+        run,
+        Effect(
+            type=EffectType.MEMORY_KG_QUERY,
+            payload={
+                "scope": "global",
+                "query_text": "android",
+                "recall_level": "standard",
+                "max_input_tokens": 0,
+            },
+        ),
+        None,
+    )
+    assert out4.status == "completed"
+    assert isinstance(out4.result, dict)
+    assert isinstance(out4.result.get("effort"), dict)
+    assert out4.result["effort"].get("recall_level") == "standard"
+    assert isinstance(out4.result["effort"].get("applied"), dict)
+    assert out4.result["effort"]["applied"].get("max_input_tokens") == 0
+    assert out4.result.get("packets") is None
+    assert out4.result.get("active_memory_text") is None

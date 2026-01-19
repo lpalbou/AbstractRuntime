@@ -73,6 +73,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
     """Return default toolsets {id -> {label, tools:[callables]}}."""
     from abstractcore.tools.common_tools import (
         list_files,
+        skim_folders,
         read_file,
         skim_files,
         search_files,
@@ -88,7 +89,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         "files": {
             "id": "files",
             "label": "Files",
-            "tools": [list_files, search_files, analyze_code, skim_files, read_file, write_file, edit_file],
+            "tools": [list_files, skim_folders, search_files, analyze_code, skim_files, read_file, write_file, edit_file],
         },
         "web": {
             "id": "web",

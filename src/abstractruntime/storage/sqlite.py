@@ -367,6 +367,67 @@ class SqliteRunStore(RunStore):
                 continue
         return out
 
+    def list_run_index(
+        self,
+        *,
+        status: Optional[RunStatus] = None,
+        workflow_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        root_only: bool = False,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(str(getattr(status, "value", status)))
+        if workflow_id is not None:
+            clauses.append("workflow_id = ?")
+            params.append(str(workflow_id))
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(str(session_id))
+        if bool(root_only):
+            clauses.append("(parent_run_id IS NULL OR parent_run_id = '')")
+
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        lim = max(1, int(limit or 100))
+
+        conn = self._db.connection()
+        rows = conn.execute(
+            f"""
+            SELECT
+              run_id, workflow_id, status,
+              wait_reason, wait_until,
+              parent_run_id, actor_id, session_id,
+              created_at, updated_at
+            FROM runs
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?;
+            """,
+            (*params, lim),
+        ).fetchall()
+
+        out: List[Dict[str, Any]] = []
+        for row in rows or []:
+            out.append(
+                {
+                    "run_id": str(row["run_id"] or ""),
+                    "workflow_id": str(row["workflow_id"] or ""),
+                    "status": str(row["status"] or ""),
+                    "wait_reason": str(row["wait_reason"] or "") or None,
+                    "wait_until": str(row["wait_until"] or "") or None,
+                    "parent_run_id": str(row["parent_run_id"] or "") or None,
+                    "actor_id": str(row["actor_id"] or "") or None,
+                    "session_id": str(row["session_id"] or "") or None,
+                    "created_at": str(row["created_at"] or "") or None,
+                    "updated_at": str(row["updated_at"] or "") or None,
+                }
+            )
+        return out
+
     def list_due_wait_until(
         self,
         *,
@@ -501,6 +562,85 @@ class SqliteLedgerStore(LedgerStore):
             return int(row["last_seq"] or 0)
         except Exception:
             return 0
+
+    def count_many(self, run_ids: List[str]) -> Dict[str, int]:
+        ids = [str(r or "").strip() for r in (run_ids or []) if str(r or "").strip()]
+        if not ids:
+            return {}
+        # SQLite parameter limit is high enough for typical UI pages; chunk defensively.
+        out: Dict[str, int] = {}
+        conn = self._db.connection()
+        for i in range(0, len(ids), 900):
+            chunk = ids[i : i + 900]
+            q = ",".join(["?"] * len(chunk))
+            rows = conn.execute(f"SELECT run_id, last_seq FROM ledger_heads WHERE run_id IN ({q});", tuple(chunk)).fetchall()
+            for row in rows or []:
+                rid = str(row["run_id"] or "").strip()
+                if not rid:
+                    continue
+                try:
+                    out[rid] = int(row["last_seq"] or 0)
+                except Exception:
+                    out[rid] = 0
+        return out
+
+    def metrics_many(self, run_ids: List[str]) -> Dict[str, Dict[str, int]]:
+        """Return best-effort per-run metrics derived from completed ledger records."""
+        ids = [str(r or "").strip() for r in (run_ids or []) if str(r or "").strip()]
+        if not ids:
+            return {}
+        out: Dict[str, Dict[str, int]] = {}
+        conn = self._db.connection()
+        for i in range(0, len(ids), 300):
+            chunk = ids[i : i + 300]
+            q = ",".join(["?"] * len(chunk))
+            rows = conn.execute(
+                f"""
+                WITH completed AS (
+                  SELECT run_id, record_json
+                  FROM ledger
+                  WHERE run_id IN ({q})
+                    AND json_extract(record_json, '$.status') = 'completed'
+                )
+                SELECT
+                  run_id AS run_id,
+                  COUNT(*) AS steps,
+                  SUM(CASE WHEN json_extract(record_json, '$.effect.type') = 'llm_call' THEN 1 ELSE 0 END) AS llm_calls,
+                  SUM(
+                    CASE
+                      WHEN json_extract(record_json, '$.effect.type') = 'tool_calls'
+                        THEN COALESCE(json_array_length(json_extract(record_json, '$.effect.payload.tool_calls')), 0)
+                      ELSE 0
+                    END
+                  ) AS tool_calls,
+                  SUM(
+                    CASE
+                      WHEN json_extract(record_json, '$.effect.type') = 'llm_call'
+                        THEN COALESCE(json_extract(record_json, '$.result.usage.total_tokens'), 0)
+                      ELSE 0
+                    END
+                  ) AS tokens_total
+                FROM completed
+                GROUP BY run_id;
+                """,
+                tuple(chunk),
+            ).fetchall()
+            for row in rows or []:
+                rid = str(row["run_id"] or "").strip()
+                if not rid:
+                    continue
+                def _i(v: Any) -> int:
+                    try:
+                        return int(v or 0)
+                    except Exception:
+                        return 0
+                out[rid] = {
+                    "steps": _i(row["steps"]),
+                    "llm_calls": _i(row["llm_calls"]),
+                    "tool_calls": _i(row["tool_calls"]),
+                    "tokens_total": _i(row["tokens_total"]),
+                }
+        return out
 
     def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
         """Optional cursor API (not part of LedgerStore ABC).
@@ -656,4 +796,3 @@ class SqliteCommandCursorStore(CommandCursorStore):
                 """,
                 (self._consumer_id, cur, _utc_now_iso()),
             )
-

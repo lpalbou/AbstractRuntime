@@ -10,7 +10,10 @@ from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCo
 pytestmark = pytest.mark.basic
 
 
-_HEADER_RE = re.compile(r"^Date:\s*\d{4}-\d{2}-\d{2};\s*Country:\s*.+$", re.IGNORECASE)
+_HEADER_RE = re.compile(
+    r"^Grounding:\s*\d{4}/\d{2}/\d{2}\|\d{2}:\d{2}\|[A-Z]{2}$",
+    re.IGNORECASE,
+)
 
 
 def test_local_llm_client_injects_date_and_country_into_system_prompt(monkeypatch) -> None:
@@ -42,11 +45,11 @@ def test_local_llm_client_injects_date_and_country_into_system_prompt(monkeypatc
     sys = str(client._llm.calls[0].get("system_prompt") or "")
     first = sys.splitlines()[0].strip()
     assert _HEADER_RE.match(first)
-    assert "Country: FR" in first
+    assert first.endswith("|FR")
     assert isinstance(result.get("metadata"), dict)
     payload = result["metadata"]["_provider_request"]["payload"]
     assert payload["messages"][0]["role"] == "system"
-    assert "Country: FR" in payload["messages"][0]["content"]
+    assert str(payload["messages"][0]["content"] or "").splitlines()[0].strip().endswith("|FR")
 
 
 def test_local_llm_client_does_not_double_inject_when_header_is_present(monkeypatch) -> None:
@@ -72,12 +75,12 @@ def test_local_llm_client_does_not_double_inject_when_header_is_present(monkeypa
     client._llm = _DummyLLM()
     client._tool_handler = UniversalToolHandler(client._model)
 
-    sys_in = "Date: 1999-12-31; Country: FR\\n\\nBase system prompt."
+    sys_in = "Grounding: 1999/12/31|23:59|FR\n\nBase system prompt."
     client.generate(prompt="hello", system_prompt=sys_in)
 
     sys = str(client._llm.calls[0].get("system_prompt") or "")
-    assert sys.startswith("Date: 1999-12-31; Country: FR")
-    assert sys.count("Date:") == 1
+    assert sys.startswith("Grounding: 1999/12/31|23:59|FR")
+    assert sys.count("Grounding:") == 1
 
 
 def test_remote_llm_client_injects_system_context_even_without_system_prompt(monkeypatch) -> None:
@@ -109,4 +112,53 @@ def test_remote_llm_client_injects_system_context_even_without_system_prompt(mon
     assert body["messages"][0]["role"] == "system"
     first = str(body["messages"][0]["content"] or "").splitlines()[0].strip()
     assert _HEADER_RE.match(first)
-    assert "Country: FR" in first
+    assert first.endswith("|FR")
+
+
+def test_country_detection_ignores_encoding_only_locale_values(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.delenv("ABSTRACT_COUNTRY", raising=False)
+    monkeypatch.delenv("ABSTRACTFRAMEWORK_COUNTRY", raising=False)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.setenv("LC_CTYPE", "UTF-8")
+
+    monkeypatch.setattr(llm_client.locale, "getlocale", lambda: (None, None))
+    monkeypatch.setattr(llm_client, "_detect_timezone_name", lambda: None)
+    monkeypatch.setattr(llm_client, "_ZONEINFO_TAB_CANDIDATES", [])
+
+    assert llm_client._detect_country() == "XX"
+
+
+def test_country_detection_parses_locale_region_from_lang_env(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.delenv("ABSTRACT_COUNTRY", raising=False)
+    monkeypatch.delenv("ABSTRACTFRAMEWORK_COUNTRY", raising=False)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+
+    monkeypatch.setattr(llm_client.locale, "getlocale", lambda: (None, None))
+
+    assert llm_client._detect_country() == "FR"
+
+
+def test_country_detection_falls_back_to_timezone_zone_tab(monkeypatch, tmp_path) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.delenv("ABSTRACT_COUNTRY", raising=False)
+    monkeypatch.delenv("ABSTRACTFRAMEWORK_COUNTRY", raising=False)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+
+    monkeypatch.setattr(llm_client.locale, "getlocale", lambda: (None, None))
+    monkeypatch.setattr(llm_client, "_detect_timezone_name", lambda: "Europe/Paris")
+
+    zone_tab = tmp_path / "zone.tab"
+    zone_tab.write_text("# test\nFR\t+4852+00220\tEurope/Paris\n", encoding="utf-8")
+    monkeypatch.setattr(llm_client, "_ZONEINFO_TAB_CANDIDATES", [str(zone_tab)])
+
+    assert llm_client._detect_country() == "FR"

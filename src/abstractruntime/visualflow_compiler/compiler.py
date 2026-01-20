@@ -15,6 +15,7 @@ from .adapters.effect_adapter import (
     create_wait_event_handler,
     create_memory_kg_assert_handler,
     create_memory_kg_query_handler,
+    create_memory_kg_resolve_handler,
     create_memory_note_handler,
     create_memory_query_handler,
     create_memory_tag_handler,
@@ -161,6 +162,13 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
         )
+    elif effect_type == "memory_kg_resolve":
+        base_handler = create_memory_kg_resolve_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
     elif effect_type == "llm_call":
         base_handler = create_llm_call_handler(
             node_id=node_id,
@@ -226,6 +234,371 @@ def _create_effect_node_handler(
             except ValueError:
                 pass  # Unknown effect type
             if eff_type:
+                # ------------------------------------------------------------
+                # 467: Memory-source access pins for Visual LLM Call nodes
+                # ------------------------------------------------------------
+                #
+                # Visual executor passes memory controls through on the pending effect dict.
+                # Here we:
+                # - schedule runtime-owned MEMORY_* effects before the LLM call
+                # - inject KG Active Memory into the call (bounded, deterministic)
+                # - map session attachment index pin -> LLM params override
+                #
+                # IMPORTANT:
+                # - Pre-call effects MUST NOT write to `_temp.effects.{node_id}` because that
+                #   slot is reserved for the LLM_CALL outcome and is synced to node outputs.
+                if eff_type == EffectType.LLM_CALL and isinstance(pending, dict):
+                    try:
+                        import hashlib
+                        import json
+
+                        def _ensure_dict(parent: Any, key: str) -> dict:
+                            if not isinstance(parent, dict):
+                                return {}
+                            cur = parent.get(key)
+                            if not isinstance(cur, dict):
+                                cur = {}
+                                parent[key] = cur
+                            return cur
+
+                        def _coerce_boolish(value: Any) -> Optional[bool]:
+                            if value is None:
+                                return None
+                            if isinstance(value, bool):
+                                return bool(value)
+                            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                                try:
+                                    return float(value) != 0.0
+                                except Exception:
+                                    return None
+                            if isinstance(value, str):
+                                s = value.strip().lower()
+                                if not s:
+                                    return None
+                                if s in {"false", "0", "no", "off"}:
+                                    return False
+                                if s in {"true", "1", "yes", "on"}:
+                                    return True
+                            return None
+
+                        def _coerce_int(value: Any) -> Optional[int]:
+                            if value is None or isinstance(value, bool):
+                                return None
+                            try:
+                                iv = int(float(value))
+                            except Exception:
+                                return None
+                            return iv
+
+                        def _coerce_float(value: Any) -> Optional[float]:
+                            if value is None or isinstance(value, bool):
+                                return None
+                            try:
+                                fv = float(value)
+                            except Exception:
+                                return None
+                            if not (fv == fv):  # NaN
+                                return None
+                            return fv
+
+                        def _nonempty_str(value: Any) -> str:
+                            if not isinstance(value, str):
+                                return ""
+                            return value.strip()
+
+                        def _hash_fingerprint(obj: dict) -> str:
+                            try:
+                                raw = json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                            except Exception:
+                                raw = str(obj)
+                            return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+                        temp = _ensure_dict(run.vars, "_temp")
+                        memory_sources = _ensure_dict(temp, "memory_sources")
+                        bucket = memory_sources.get(node_id)
+                        if not isinstance(bucket, dict):
+                            bucket = {}
+                            memory_sources[node_id] = bucket
+                        meta = bucket.get("_meta")
+                        if not isinstance(meta, dict):
+                            meta = {}
+                            bucket["_meta"] = meta
+
+                        # Memory config (tri-state booleans: absent => no override).
+                        use_span_memory = _coerce_boolish(pending.get("use_span_memory")) if "use_span_memory" in pending else None
+                        use_kg_memory = _coerce_boolish(pending.get("use_kg_memory")) if "use_kg_memory" in pending else None
+                        use_semantic_search = (
+                            _coerce_boolish(pending.get("use_semantic_search")) if "use_semantic_search" in pending else None
+                        )
+                        use_session_attachments = (
+                            _coerce_boolish(pending.get("use_session_attachments")) if "use_session_attachments" in pending else None
+                        )
+
+                        recall_level = _nonempty_str(pending.get("recall_level"))
+                        memory_scope = _nonempty_str(pending.get("memory_scope")) or "run"
+
+                        # Derive query text (best-effort) from pins or the call prompt.
+                        query_text = _nonempty_str(pending.get("memory_query"))
+                        if not query_text:
+                            query_text = _nonempty_str(pending.get("prompt"))
+                        if not query_text and isinstance(pending.get("messages"), list):
+                            # Fallback: last user message in a message-based call.
+                            for m in reversed(list(pending.get("messages") or [])):
+                                if not isinstance(m, dict):
+                                    continue
+                                if m.get("role") != "user":
+                                    continue
+                                c = m.get("content")
+                                if isinstance(c, str) and c.strip():
+                                    query_text = c.strip()
+                                    break
+
+                        # Re-entry / loop safety:
+                        # If the node is executed again with different inputs, clear the per-node
+                        # memory-source bucket so we don't reuse stale recall results.
+                        fp = _hash_fingerprint(
+                            {
+                                "prompt": _nonempty_str(pending.get("prompt")),
+                                "system_prompt": _nonempty_str(pending.get("system_prompt")),
+                                "provider": _nonempty_str(pending.get("provider")),
+                                "model": _nonempty_str(pending.get("model")),
+                                "memory_query": query_text,
+                                "memory_scope": memory_scope,
+                                "recall_level": recall_level,
+                                "use_span_memory": use_span_memory,
+                                "use_kg_memory": use_kg_memory,
+                                "use_semantic_search": use_semantic_search,
+                                "use_session_attachments": use_session_attachments,
+                                "max_span_messages": _coerce_int(pending.get("max_span_messages")),
+                                "kg_max_input_tokens": _coerce_int(pending.get("kg_max_input_tokens")),
+                                "kg_limit": _coerce_int(pending.get("kg_limit")),
+                                "kg_min_score": _coerce_float(pending.get("kg_min_score")),
+                            }
+                        )
+                        if meta.get("fingerprint") != fp:
+                            try:
+                                bucket.clear()
+                            except Exception:
+                                bucket = {}
+                                memory_sources[node_id] = bucket
+                            meta = {"fingerprint": fp}
+                            bucket["_meta"] = meta
+
+                        base_key = f"_temp.memory_sources.{node_id}"
+
+                        # Reserved: semantic search over artifacts is planned (464). Avoid silently doing nothing.
+                        if use_semantic_search is True:
+                            warnings = meta.get("warnings")
+                            if not isinstance(warnings, list):
+                                warnings = []
+                                meta["warnings"] = warnings
+                            msg = "use_semantic_search is not implemented yet (planned: 464); ignoring."
+                            if msg not in warnings:
+                                warnings.append(msg)
+
+                        # Phase 1: span-index recall (metadata)
+                        if use_span_memory is True and "span_query" not in bucket and query_text:
+                            mq_payload: Dict[str, Any] = {"query": query_text, "scope": memory_scope, "return": "meta"}
+                            if recall_level:
+                                mq_payload["recall_level"] = recall_level
+                            return StepPlan(
+                                node_id=node_id,
+                                effect=Effect(
+                                    type=EffectType.MEMORY_QUERY,
+                                    payload=mq_payload,
+                                    result_key=f"{base_key}.span_query",
+                                ),
+                                next_node=node_id,
+                            )
+
+                        # Phase 2: span rehydration into context.messages
+                        if use_span_memory is True and "span_rehydrate" not in bucket:
+                            span_ids: list[str] = []
+                            span_query = bucket.get("span_query")
+                            if isinstance(span_query, dict):
+                                results = span_query.get("results")
+                                if isinstance(results, list) and results:
+                                    first = results[0] if isinstance(results[0], dict) else None
+                                    meta2 = first.get("meta") if isinstance(first, dict) else None
+                                    if isinstance(meta2, dict):
+                                        raw_ids = meta2.get("span_ids")
+                                        if isinstance(raw_ids, list):
+                                            span_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+                            meta["span_ids"] = span_ids
+
+                            mr_payload: Dict[str, Any] = {"span_ids": span_ids, "placement": "after_summary"}
+                            if recall_level:
+                                mr_payload["recall_level"] = recall_level
+                            max_span_messages = _coerce_int(pending.get("max_span_messages"))
+                            if max_span_messages is None and not recall_level:
+                                # Safe default (explicit warning): without recall_level, MEMORY_REHYDRATE would
+                                # otherwise insert all messages from selected spans.
+                                max_span_messages = 80
+                                warnings = meta.get("warnings")
+                                if not isinstance(warnings, list):
+                                    warnings = []
+                                    meta["warnings"] = warnings
+                                msg = "use_span_memory enabled without recall_level/max_span_messages; defaulting max_span_messages=80."
+                                if msg not in warnings:
+                                    warnings.append(msg)
+                            if isinstance(max_span_messages, int):
+                                mr_payload["max_messages"] = max_span_messages
+
+                            return StepPlan(
+                                node_id=node_id,
+                                effect=Effect(
+                                    type=EffectType.MEMORY_REHYDRATE,
+                                    payload=mr_payload,
+                                    result_key=f"{base_key}.span_rehydrate",
+                                ),
+                                next_node=node_id,
+                            )
+
+                        # Phase 3: KG recall (packetized Active Memory)
+                        if use_kg_memory is True and "kg_query" not in bucket and query_text:
+                            kg_payload: Dict[str, Any] = {"query_text": query_text, "scope": memory_scope}
+                            if recall_level:
+                                kg_payload["recall_level"] = recall_level
+                            kg_min_score = _coerce_float(pending.get("kg_min_score"))
+                            if isinstance(kg_min_score, float):
+                                kg_payload["min_score"] = kg_min_score
+                            kg_limit = _coerce_int(pending.get("kg_limit"))
+                            if isinstance(kg_limit, int):
+                                kg_payload["limit"] = kg_limit
+                            kg_budget = _coerce_int(pending.get("kg_max_input_tokens"))
+                            if kg_budget is None and not recall_level:
+                                # Safe default (explicit warning): ensure we actually get `active_memory_text`
+                                # even when recall_level is not set.
+                                kg_budget = 1200
+                                warnings = meta.get("warnings")
+                                if not isinstance(warnings, list):
+                                    warnings = []
+                                    meta["warnings"] = warnings
+                                msg = "use_kg_memory enabled without recall_level/kg_max_input_tokens; defaulting kg_max_input_tokens=1200."
+                                if msg not in warnings:
+                                    warnings.append(msg)
+                            if isinstance(kg_budget, int):
+                                kg_payload["max_input_tokens"] = kg_budget
+                            model_name = pending.get("model")
+                            if isinstance(model_name, str) and model_name.strip():
+                                kg_payload["model"] = model_name.strip()
+
+                            return StepPlan(
+                                node_id=node_id,
+                                effect=Effect(
+                                    type=EffectType.MEMORY_KG_QUERY,
+                                    payload=kg_payload,
+                                    result_key=f"{base_key}.kg_query",
+                                ),
+                                next_node=node_id,
+                            )
+
+                        # Map session attachment index pin -> params override (explicit, auditable).
+                        if use_session_attachments is not None:
+                            params = pending.get("params")
+                            if not isinstance(params, dict):
+                                params = {}
+                                pending["params"] = params
+                            params["include_session_attachments_index"] = bool(use_session_attachments)
+
+                        # Inject KG Active Memory.
+                        if use_kg_memory is True:
+                            active_text = ""
+                            kg_query = bucket.get("kg_query")
+                            if isinstance(kg_query, dict):
+                                am = kg_query.get("active_memory_text")
+                                active_text = am.strip() if isinstance(am, str) else ""
+                            if active_text:
+                                meta["kg_active_memory_text_len"] = len(active_text)
+
+                                # Avoid duplicating the same block when the node loops.
+                                def _has_active_memory_block(msgs: list[Any]) -> bool:
+                                    for m in msgs:
+                                        if not isinstance(m, dict) or m.get("role") != "system":
+                                            continue
+                                        c = m.get("content")
+                                        if isinstance(c, str) and "## KG ACTIVE MEMORY" in c:
+                                            return True
+                                    return False
+
+                                if isinstance(pending.get("messages"), list):
+                                    msgs = [dict(m) for m in pending.get("messages") if isinstance(m, dict)]
+                                    if not _has_active_memory_block(msgs):
+                                        insert_at = 0
+                                        while insert_at < len(msgs):
+                                            if msgs[insert_at].get("role") != "system":
+                                                break
+                                            insert_at += 1
+                                        msgs.insert(insert_at, {"role": "system", "content": active_text})
+                                        pending["messages"] = msgs
+                                else:
+                                    sys_raw = pending.get("system_prompt") or pending.get("system")
+                                    sys_text = sys_raw.strip() if isinstance(sys_raw, str) else ""
+                                    combined = f"{sys_text}\n\n{active_text}".strip() if sys_text else active_text
+                                    pending["system_prompt"] = combined
+
+                        # Span rehydrate without conversation history:
+                        # If span recall is enabled but include_context is false, inject the rehydrated
+                        # messages as the call's message history so the current call can use them.
+                        include_ctx = pending.get("include_context") is True or pending.get("use_context") is True
+                        if use_span_memory is True and not include_ctx and "messages" not in pending:
+                            span_ids = meta.get("span_ids")
+                            span_ids_set = {str(x).strip() for x in span_ids if isinstance(x, str) and x.strip()} if isinstance(span_ids, list) else set()
+                            recalled_msgs: list[Dict[str, Any]] = []
+                            ctx_ns = run.vars.get("context") if isinstance(run.vars, dict) else None
+                            raw_msgs = ctx_ns.get("messages") if isinstance(ctx_ns, dict) else None
+                            if isinstance(raw_msgs, list) and span_ids_set:
+                                for m_any in raw_msgs:
+                                    m = m_any if isinstance(m_any, dict) else None
+                                    if m is None:
+                                        continue
+                                    meta_m = m.get("metadata")
+                                    if not isinstance(meta_m, dict) or meta_m.get("rehydrated") is not True:
+                                        continue
+                                    src = meta_m.get("source_artifact_id")
+                                    src_id = str(src).strip() if isinstance(src, str) else ""
+                                    if src_id and src_id in span_ids_set:
+                                        recalled_msgs.append(dict(m))
+
+                            if recalled_msgs:
+                                sys_raw = pending.get("system_prompt") or pending.get("system")
+                                sys_text = sys_raw.strip() if isinstance(sys_raw, str) else ""
+                                prompt_raw = pending.get("prompt")
+                                prompt_text = prompt_raw if isinstance(prompt_raw, str) else str(prompt_raw or "")
+
+                                msgs: list[Dict[str, Any]] = []
+                                if sys_text:
+                                    msgs.append({"role": "system", "content": sys_text})
+                                msgs.extend(recalled_msgs)
+                                msgs.append({"role": "user", "content": prompt_text})
+
+                                # Best-effort token trim when an explicit max_input_tokens budget is provided.
+                                try:
+                                    raw_max_in = pending.get("max_input_tokens")
+                                    max_in = int(raw_max_in) if raw_max_in is not None and not isinstance(raw_max_in, bool) else None
+                                except Exception:
+                                    max_in = None
+                                if isinstance(max_in, int) and max_in > 0:
+                                    try:
+                                        from abstractruntime.memory.token_budget import trim_messages_to_max_input_tokens
+
+                                        model_name = (
+                                            pending.get("model") if isinstance(pending.get("model"), str) else None
+                                        )
+                                        msgs = trim_messages_to_max_input_tokens(
+                                            msgs, max_input_tokens=int(max_in), model=model_name
+                                        )
+                                    except Exception:
+                                        pass
+
+                                pending["messages"] = msgs
+                                pending.pop("prompt", None)
+                                pending.pop("system_prompt", None)
+                                pending.pop("system", None)
+                    except Exception:
+                        # Never fail compilation/execution due to optional memory-source wiring.
+                        pass
+
                 # Visual LLM Call UX: include the run's active context messages when possible.
                 #
                 # Why here (compiler) and not in AbstractRuntime:
@@ -482,6 +855,18 @@ def _create_visual_agent_effect_handler(
             agent[node_id] = bucket
         return bucket
 
+    def _get_memory_sources_bucket(run: Any) -> Dict[str, Any]:
+        temp = _ensure_temp_dict(run)
+        mem = temp.get("memory_sources")
+        if not isinstance(mem, dict):
+            mem = {}
+            temp["memory_sources"] = mem
+        bucket = mem.get(node_id)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            mem[node_id] = bucket
+        return bucket
+
     def _resolve_inputs(run: Any) -> Dict[str, Any]:
         if hasattr(flow, "_node_outputs") and hasattr(flow, "_data_edge_map"):
             _sync_effect_results_to_node_outputs(run, flow)
@@ -562,6 +947,8 @@ def _create_visual_agent_effect_handler(
         max_iterations: Optional[int] = None,
         max_input_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        extra_messages: Optional[list[Dict[str, Any]]] = None,
+        include_session_attachments_index: Optional[bool] = None,
     ) -> Dict[str, Any]:
         parent_limits = run.vars.get("_limits")
         limits = dict(parent_limits) if isinstance(parent_limits, dict) else {}
@@ -623,6 +1010,53 @@ def _create_visual_agent_effect_handler(
             if msgs:
                 ctx_ns["messages"] = msgs
 
+        # Optional: inject additional memory/system messages (467).
+        #
+        # This is used by the Visual Agent node to include span/KG recall even when
+        # include_context is false (without pulling in the full conversation history).
+        if isinstance(extra_messages, list) and extra_messages:
+            base_msgs = ctx_ns.get("messages")
+            base_msgs = [dict(m) for m in base_msgs if isinstance(m, dict)] if isinstance(base_msgs, list) else []
+            extra_msgs = [dict(m) for m in extra_messages if isinstance(m, dict)]
+
+            seen_ids: set[str] = set()
+
+            def _msg_id(m: Dict[str, Any]) -> str:
+                meta = m.get("metadata")
+                if isinstance(meta, dict):
+                    mid = meta.get("message_id")
+                    if isinstance(mid, str) and mid.strip():
+                        return mid.strip()
+                return ""
+
+            def _append(dst: list[Dict[str, Any]], m: Dict[str, Any]) -> None:
+                mid = _msg_id(m)
+                if mid:
+                    if mid in seen_ids:
+                        return
+                    seen_ids.add(mid)
+                dst.append(m)
+
+            merged: list[Dict[str, Any]] = []
+            # Preserve base system messages at the very top.
+            for m in base_msgs:
+                if m.get("role") == "system":
+                    _append(merged, m)
+            # Then injected system messages.
+            for m in extra_msgs:
+                if m.get("role") == "system":
+                    _append(merged, m)
+            # Then base non-system (history/task context).
+            for m in base_msgs:
+                if m.get("role") != "system":
+                    _append(merged, m)
+            # Finally injected non-system messages.
+            for m in extra_msgs:
+                if m.get("role") != "system":
+                    _append(merged, m)
+
+            ctx_ns["messages"] = merged
+
         if isinstance(context, dict) and context:
             for k, v in context.items():
                 if k in ("task", "messages"):
@@ -647,6 +1081,12 @@ def _create_visual_agent_effect_handler(
             runtime_ns["temperature"] = float(temperature)
         if int(seed) >= 0:
             runtime_ns["seed"] = int(seed)
+        if include_session_attachments_index is not None:
+            control = runtime_ns.get("control")
+            if not isinstance(control, dict):
+                control = {}
+                runtime_ns["control"] = control
+            control["include_session_attachments_index"] = bool(include_session_attachments_index)
         if isinstance(system_prompt, str) and system_prompt.strip():
             # IMPORTANT: Visual Agent `system` pin provides *additional* high-priority instructions.
             # We keep the canonical ReAct system prompt (iteration framing + evidence/tool-use rules)
@@ -746,6 +1186,13 @@ def _create_visual_agent_effect_handler(
                 bucket.clear()
             except Exception:
                 # Best-effort; if clear fails, overwrite key fields below.
+                pass
+            # Clear any cached per-node memory-source recall outputs (467) so re-entry
+            # (e.g. inside loops) re-computes recall for the new inputs.
+            try:
+                ms_bucket = _get_memory_sources_bucket(run)
+                ms_bucket.clear()
+            except Exception:
                 pass
             phase = "init"
             bucket["phase"] = "init"
@@ -905,6 +1352,184 @@ def _create_visual_agent_effect_handler(
                     },
                 )
 
+            # ------------------------------------------------------------
+            # 467: Memory-source access pins (pre-agent recall)
+            # ------------------------------------------------------------
+            #
+            # Before we start the durable Agent subworkflow, optionally run runtime-owned
+            # MEMORY_* effects to recall from spans and/or the KG. Results are stored under
+            # `_temp.memory_sources.{node_id}.*` and injected into the child run context.
+            ms_bucket = _get_memory_sources_bucket(run)
+            ms_meta = ms_bucket.get("_meta") if isinstance(ms_bucket.get("_meta"), dict) else {}
+            if not isinstance(ms_meta, dict):
+                ms_meta = {}
+            ms_bucket["_meta"] = ms_meta
+
+            def _pin_bool_opt(name: str) -> Optional[bool]:
+                if not isinstance(resolved_inputs, dict):
+                    return None
+                if name not in resolved_inputs:
+                    return None
+                return bool(resolved_inputs.get(name))
+
+            use_span_memory = _pin_bool_opt("use_span_memory")
+            use_kg_memory = _pin_bool_opt("use_kg_memory")
+            use_semantic_search = _pin_bool_opt("use_semantic_search")
+            use_session_attachments = _pin_bool_opt("use_session_attachments")
+
+            memory_scope = (
+                str(resolved_inputs.get("memory_scope") or "run").strip().lower()
+                if isinstance(resolved_inputs, dict)
+                else "run"
+            ) or "run"
+            recall_level = (
+                str(resolved_inputs.get("recall_level") or "").strip().lower()
+                if isinstance(resolved_inputs, dict)
+                else ""
+            )
+
+            mem_query = (
+                str(resolved_inputs.get("memory_query") or "").strip()
+                if isinstance(resolved_inputs, dict)
+                else ""
+            )
+            query_text = mem_query or str(task or "").strip()
+
+            base_key = f"_temp.memory_sources.{node_id}"
+
+            def _coerce_int(value: Any) -> Optional[int]:
+                if value is None or isinstance(value, bool):
+                    return None
+                try:
+                    return int(float(value))
+                except Exception:
+                    return None
+
+            def _coerce_float(value: Any) -> Optional[float]:
+                if value is None or isinstance(value, bool):
+                    return None
+                try:
+                    v = float(value)
+                except Exception:
+                    return None
+                return v if (v == v) else None
+
+            if use_semantic_search is True:
+                warnings = ms_meta.get("warnings")
+                if not isinstance(warnings, list):
+                    warnings = []
+                    ms_meta["warnings"] = warnings
+                msg = "use_semantic_search is not implemented yet (planned: 464); ignoring."
+                if msg not in warnings:
+                    warnings.append(msg)
+
+            # Span recall (metadata)
+            if use_span_memory is True and "span_query" not in ms_bucket and query_text:
+                mq_payload: Dict[str, Any] = {"query": query_text, "scope": memory_scope, "return": "meta"}
+                if recall_level:
+                    mq_payload["recall_level"] = recall_level
+                return StepPlan(
+                    node_id=node_id,
+                    effect=Effect(
+                        type=EffectType.MEMORY_QUERY,
+                        payload=mq_payload,
+                        result_key=f"{base_key}.span_query",
+                    ),
+                    next_node=node_id,
+                )
+
+            # Span rehydrate into parent context (so we can forward a subset into the child).
+            if use_span_memory is True and "span_rehydrate" not in ms_bucket:
+                span_ids: list[str] = []
+                span_query = ms_bucket.get("span_query")
+                if isinstance(span_query, dict):
+                    results = span_query.get("results")
+                    if isinstance(results, list) and results:
+                        first = results[0] if isinstance(results[0], dict) else None
+                        meta2 = first.get("meta") if isinstance(first, dict) else None
+                        if isinstance(meta2, dict):
+                            raw_ids = meta2.get("span_ids")
+                            if isinstance(raw_ids, list):
+                                span_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+                ms_meta["span_ids"] = span_ids
+
+                mr_payload: Dict[str, Any] = {"span_ids": span_ids, "placement": "after_summary"}
+                if recall_level:
+                    mr_payload["recall_level"] = recall_level
+                max_span_messages = (
+                    _coerce_int(resolved_inputs.get("max_span_messages"))
+                    if isinstance(resolved_inputs, dict)
+                    else None
+                )
+                if max_span_messages is None and not recall_level:
+                    # Safe default (explicit warning): without recall_level, MEMORY_REHYDRATE would
+                    # otherwise insert all messages from selected spans.
+                    max_span_messages = 80
+                    warnings = ms_meta.get("warnings")
+                    if not isinstance(warnings, list):
+                        warnings = []
+                        ms_meta["warnings"] = warnings
+                    msg = "use_span_memory enabled without recall_level/max_span_messages; defaulting max_span_messages=80."
+                    if msg not in warnings:
+                        warnings.append(msg)
+                if isinstance(max_span_messages, int):
+                    mr_payload["max_messages"] = max_span_messages
+
+                return StepPlan(
+                    node_id=node_id,
+                    effect=Effect(
+                        type=EffectType.MEMORY_REHYDRATE,
+                        payload=mr_payload,
+                        result_key=f"{base_key}.span_rehydrate",
+                    ),
+                    next_node=node_id,
+                )
+
+            # KG recall (packetized active memory)
+            if use_kg_memory is True and "kg_query" not in ms_bucket and query_text:
+                kg_payload: Dict[str, Any] = {"query_text": query_text, "scope": memory_scope}
+                if recall_level:
+                    kg_payload["recall_level"] = recall_level
+
+                kg_min_score = (
+                    _coerce_float(resolved_inputs.get("kg_min_score")) if isinstance(resolved_inputs, dict) else None
+                )
+                if isinstance(kg_min_score, float):
+                    kg_payload["min_score"] = kg_min_score
+                kg_limit = _coerce_int(resolved_inputs.get("kg_limit")) if isinstance(resolved_inputs, dict) else None
+                if isinstance(kg_limit, int):
+                    kg_payload["limit"] = kg_limit
+                kg_budget = (
+                    _coerce_int(resolved_inputs.get("kg_max_input_tokens"))
+                    if isinstance(resolved_inputs, dict)
+                    else None
+                )
+                if kg_budget is None and not recall_level:
+                    # Safe default (explicit warning): ensure we actually get `active_memory_text`
+                    # even when recall_level is not set.
+                    kg_budget = 1200
+                    warnings = ms_meta.get("warnings")
+                    if not isinstance(warnings, list):
+                        warnings = []
+                        ms_meta["warnings"] = warnings
+                    msg = "use_kg_memory enabled without recall_level/kg_max_input_tokens; defaulting kg_max_input_tokens=1200."
+                    if msg not in warnings:
+                        warnings.append(msg)
+                if isinstance(kg_budget, int):
+                    kg_payload["max_input_tokens"] = kg_budget
+                if model:
+                    kg_payload["model"] = model
+
+                return StepPlan(
+                    node_id=node_id,
+                    effect=Effect(
+                        type=EffectType.MEMORY_KG_QUERY,
+                        payload=kg_payload,
+                        result_key=f"{base_key}.kg_query",
+                    ),
+                    next_node=node_id,
+                )
+
             bucket["phase"] = "subworkflow"
             flow._node_outputs[node_id] = {
                 "status": "running",
@@ -915,6 +1540,45 @@ def _create_visual_agent_effect_handler(
                 "meta": None,
                 "scratchpad": None,
             }
+
+            # Memory injection into the Agent subworkflow context (467).
+            extra_messages: list[Dict[str, Any]] = []
+            if use_kg_memory is True:
+                kg_query = ms_bucket.get("kg_query")
+                active_text = kg_query.get("active_memory_text") if isinstance(kg_query, dict) else None
+                if isinstance(active_text, str) and active_text.strip():
+                    extra_messages.append(
+                        {
+                            "role": "system",
+                            "content": active_text.strip(),
+                            "metadata": {
+                                "kind": "kg_active_memory",
+                                "message_id": f"kg_active_memory:{node_id}",
+                            },
+                        }
+                    )
+
+            if use_span_memory is True:
+                span_ids_any = ms_meta.get("span_ids")
+                span_ids_set = (
+                    {str(x).strip() for x in span_ids_any if isinstance(x, str) and str(x).strip()}
+                    if isinstance(span_ids_any, list)
+                    else set()
+                )
+                ctx_ns = run.vars.get("context") if isinstance(run.vars, dict) else None
+                raw_msgs = ctx_ns.get("messages") if isinstance(ctx_ns, dict) else None
+                if isinstance(raw_msgs, list) and span_ids_set:
+                    for m_any in raw_msgs:
+                        m = m_any if isinstance(m_any, dict) else None
+                        if m is None:
+                            continue
+                        meta_m = m.get("metadata")
+                        if not isinstance(meta_m, dict) or meta_m.get("rehydrated") is not True:
+                            continue
+                        src = meta_m.get("source_artifact_id")
+                        src_id = str(src).strip() if isinstance(src, str) else ""
+                        if src_id and src_id in span_ids_set:
+                            extra_messages.append(dict(m))
 
             return StepPlan(
                 node_id=node_id,
@@ -936,6 +1600,8 @@ def _create_visual_agent_effect_handler(
                             max_iterations=max_iterations_override,
                             max_input_tokens=max_input_tokens_override,
                             max_output_tokens=max_output_tokens_override,
+                            extra_messages=extra_messages or None,
+                            include_session_attachments_index=use_session_attachments,
                         ),
                         # Run Agent as a durable async subworkflow so the host can:
                         # - tick the child incrementally (real-time observability of each effect)
@@ -2178,6 +2844,20 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 current["dropped"] = 0
             current["raw"] = raw
             mapped_value = current.get("items")
+        elif effect_type == "memory_kg_resolve":
+            if isinstance(raw, dict):
+                candidates = raw.get("candidates")
+                current["candidates"] = candidates if isinstance(candidates, list) else []
+                current["count"] = raw.get("count")
+                current["ok"] = raw.get("ok")
+                if "warnings" in raw:
+                    current["warnings"] = raw.get("warnings")
+            else:
+                current["candidates"] = []
+                current["count"] = 0
+                current["ok"] = False
+            current["raw"] = raw
+            mapped_value = current.get("candidates")
         elif effect_type == "start_subworkflow":
             if isinstance(raw, dict):
                 current["sub_run_id"] = raw.get("sub_run_id")

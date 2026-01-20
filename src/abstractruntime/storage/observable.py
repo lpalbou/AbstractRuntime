@@ -92,6 +92,26 @@ class ObservableLedgerStore(LedgerStore):
         except Exception:
             return 0
 
+    def count_many(self, run_ids: List[str]) -> Dict[str, int]:  # type: ignore[override]
+        fn = getattr(self._inner, "count_many", None)
+        if callable(fn):
+            try:
+                out = fn(run_ids)
+                return out if isinstance(out, dict) else {}
+            except Exception:
+                return {}
+        return {str(r or "").strip(): self.count(str(r or "").strip()) for r in (run_ids or []) if str(r or "").strip()}
+
+    def metrics_many(self, run_ids: List[str]) -> Dict[str, Dict[str, int]]:  # type: ignore[override]
+        fn = getattr(self._inner, "metrics_many", None)
+        if callable(fn):
+            try:
+                out = fn(run_ids)
+                return out if isinstance(out, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
     def subscribe(
         self,
         callback: LedgerSubscriber,

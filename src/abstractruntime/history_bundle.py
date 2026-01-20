@@ -95,6 +95,130 @@ def _extract_context_attachments_from_input(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _parse_iso_ms(raw: Any) -> Optional[int]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = f"{s[:-1]}+00:00"
+    try:
+        return int(datetime.fromisoformat(s).timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _parse_usage_summary(value: Any) -> Optional[Dict[str, int]]:
+    if not isinstance(value, dict):
+        return None
+    v = value
+    in_tok = v.get("input_tokens")
+    if in_tok is None:
+        in_tok = v.get("prompt_tokens")
+    if in_tok is None:
+        in_tok = v.get("prompt")
+    if in_tok is None:
+        in_tok = v.get("input")
+    if in_tok is None:
+        in_tok = v.get("in")
+
+    out_tok = v.get("output_tokens")
+    if out_tok is None:
+        out_tok = v.get("completion_tokens")
+    if out_tok is None:
+        out_tok = v.get("completion")
+    if out_tok is None:
+        out_tok = v.get("output")
+    if out_tok is None:
+        out_tok = v.get("out")
+
+    total_tok = v.get("total_tokens")
+    if total_tok is None:
+        total_tok = v.get("total")
+
+    try:
+        in_i = int(in_tok) if in_tok is not None and not isinstance(in_tok, bool) else 0
+    except Exception:
+        in_i = 0
+    try:
+        out_i = int(out_tok) if out_tok is not None and not isinstance(out_tok, bool) else 0
+    except Exception:
+        out_i = 0
+    try:
+        total_i = int(total_tok) if total_tok is not None and not isinstance(total_tok, bool) else in_i + out_i
+    except Exception:
+        total_i = in_i + out_i
+
+    if in_i <= 0 and out_i <= 0 and total_i <= 0:
+        return None
+    return {
+        "input_tokens": max(0, int(in_i)),
+        "output_tokens": max(0, int(out_i)),
+        "total_tokens": max(0, int(total_i)),
+    }
+
+
+def _extract_usage_from_ledger_record(rec: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    result = rec.get("result")
+    if not isinstance(result, dict):
+        return None
+    usage = result.get("usage") or result.get("token_usage") or result.get("tokens")
+    if not isinstance(usage, dict):
+        output = result.get("output")
+        if isinstance(output, dict):
+            usage = output.get("usage") or output.get("token_usage") or output.get("tokens")
+    if not isinstance(usage, dict):
+        return None
+    return _parse_usage_summary(usage)
+
+
+def _extract_repl_stats_from_ledger(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    llm_calls = 0
+    tool_calls = 0
+    usage_sum = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    min_ms: Optional[int] = None
+    max_ms: Optional[int] = None
+
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        st = _enum_str(rec.get("status")).strip()
+
+        ms_start = _parse_iso_ms(rec.get("started_at"))
+        ms_end = _parse_iso_ms(rec.get("ended_at"))
+        ms = ms_end if ms_end is not None else ms_start
+        if ms is not None:
+            min_ms = ms if min_ms is None else min(min_ms, ms)
+            max_ms = ms if max_ms is None else max(max_ms, ms)
+
+        eff = rec.get("effect") if isinstance(rec.get("effect"), dict) else None
+        eff_type = str((eff or {}).get("type") or "").strip()
+        if eff_type == "llm_call" and st == "completed":
+            llm_calls += 1
+            usage = _extract_usage_from_ledger_record(rec)
+            if usage:
+                usage_sum["input_tokens"] += int(usage.get("input_tokens") or 0)
+                usage_sum["output_tokens"] += int(usage.get("output_tokens") or 0)
+                usage_sum["total_tokens"] += int(usage.get("total_tokens") or 0)
+
+        if eff_type == "tool_calls" and st == "completed":
+            payload = eff.get("payload") if isinstance(eff, dict) and isinstance(eff.get("payload"), dict) else None
+            calls = payload.get("tool_calls") if isinstance(payload, dict) else None
+            if isinstance(calls, list):
+                tool_calls += len([c for c in calls if isinstance(c, dict) or c is not None])
+
+    duration_ms = int(max(0, (max_ms - min_ms))) if min_ms is not None and max_ms is not None else 0
+    tok_s: Optional[float] = None
+    if duration_ms > 0 and usage_sum.get("total_tokens", 0) > 0:
+        tok_s = float(usage_sum["total_tokens"]) / (float(duration_ms) / 1000.0)
+    return {
+        "duration_ms": duration_ms,
+        "llm_calls": int(llm_calls),
+        "tool_calls": int(tool_calls),
+        "usage": usage_sum,
+        "tok_s": tok_s,
+    }
+
+
 def _extract_flow_end_output_from_ledger(records: List[Dict[str, Any]]) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Best-effort extract the final assistant response from ledger records.
 
@@ -394,6 +518,23 @@ def _best_effort_session_turns(
     roots.sort(key=_ts_key)
     roots = roots[-int(limit) :] if limit > 0 else roots
 
+    ledger_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _ledger_for(run_id: str) -> List[Dict[str, Any]]:
+        rid2 = str(run_id or "").strip()
+        if not rid2:
+            return []
+        cached = ledger_cache.get(rid2)
+        if isinstance(cached, list):
+            return cached
+        try:
+            raw = ledger_store.list(rid2) if hasattr(ledger_store, "list") else []
+        except Exception:
+            raw = []
+        records = [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
+        ledger_cache[rid2] = records
+        return records
+
     out: List[Dict[str, Any]] = []
     for r in roots:
         rid = str(getattr(r, "run_id", "") or "").strip()
@@ -410,12 +551,23 @@ def _best_effort_session_turns(
         answer, answer_meta = _extract_answer_from_run_output(r)
         if not answer:
             try:
-                ledger = ledger_store.list(rid) if hasattr(ledger_store, "list") else []
-                if isinstance(ledger, list):
-                    answer, answer_meta = _extract_flow_end_output_from_ledger([x for x in ledger if isinstance(x, dict)])
+                ledger = _ledger_for(rid)
+                if ledger:
+                    answer, answer_meta = _extract_flow_end_output_from_ledger(ledger)
             except Exception:
                 answer = ""
                 answer_meta = None
+
+        stats: Optional[Dict[str, Any]] = None
+        try:
+            run_ids = [rid]
+            run_ids.extend(_list_descendant_run_ids(run_store=run_store, root_run_id=rid))
+            all_records: List[Dict[str, Any]] = []
+            for rid2 in run_ids:
+                all_records.extend(_ledger_for(rid2))
+            stats = _extract_repl_stats_from_ledger(all_records)
+        except Exception:
+            stats = None
 
         out.append(
             {
@@ -429,6 +581,7 @@ def _best_effort_session_turns(
                 "attachments": attachments,
                 "answer": answer or None,
                 "answer_meta": answer_meta,
+                "stats": stats,
             }
         )
     return out

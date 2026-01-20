@@ -33,3 +33,47 @@ def test_sqlite_ledger_store_append_list_count_and_restart(tmp_path: Path) -> No
     assert store2.count(run_id) == 2
     assert [x.get("step_id") for x in store2.list(run_id)] == ["s1", "s2"]
 
+
+def test_sqlite_ledger_store_count_many_and_metrics_many(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.sqlite3"
+    db = SqliteDatabase(db_path)
+    store = SqliteLedgerStore(db)
+
+    run_id = "run_1"
+    # Started record shouldn't count toward metrics_many (completed-only).
+    store.append(
+        StepRecord(
+            run_id=run_id,
+            step_id="s0",
+            node_id="n0",
+            status=StepStatus.STARTED,
+            effect={"type": "llm_call", "payload": {}, "result_key": "_tmp"},
+        )
+    )
+    # Completed LLM call with usage.
+    store.append(
+        StepRecord(
+            run_id=run_id,
+            step_id="s1",
+            node_id="n1",
+            status=StepStatus.COMPLETED,
+            effect={"type": "llm_call", "payload": {}, "result_key": "_tmp"},
+            result={"usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}},
+        )
+    )
+    # Completed tool_calls with 2 tool calls.
+    store.append(
+        StepRecord(
+            run_id=run_id,
+            step_id="s2",
+            node_id="n2",
+            status=StepStatus.COMPLETED,
+            effect={"type": "tool_calls", "payload": {"tool_calls": [{"name": "a"}, {"name": "b"}]}, "result_key": "_tmp"},
+            result={},
+        )
+    )
+
+    assert store.count_many([run_id, "missing"]) == {run_id: 3}
+
+    metrics = store.metrics_many([run_id, "missing"])
+    assert metrics.get(run_id) == {"steps": 2, "llm_calls": 1, "tool_calls": 2, "tokens_total": 12}

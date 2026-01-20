@@ -58,6 +58,47 @@ class InMemoryRunStore(RunStore):
 
         return results[:limit]
 
+    def list_run_index(
+        self,
+        *,
+        status: Optional[RunStatus] = None,
+        workflow_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        root_only: bool = False,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        lim = max(1, int(limit or 100))
+        out: List[Dict[str, Any]] = []
+
+        for run in self._runs.values():
+            if status is not None and run.status != status:
+                continue
+            if workflow_id is not None and run.workflow_id != workflow_id:
+                continue
+            if session_id is not None and str(run.session_id or "").strip() != str(session_id or "").strip():
+                continue
+            if bool(root_only) and str(run.parent_run_id or "").strip():
+                continue
+
+            waiting = run.waiting
+            out.append(
+                {
+                    "run_id": str(run.run_id),
+                    "workflow_id": str(run.workflow_id),
+                    "status": str(getattr(run.status, "value", run.status)),
+                    "wait_reason": str(getattr(getattr(waiting, "reason", None), "value", waiting.reason)) if waiting is not None else None,
+                    "wait_until": str(getattr(waiting, "until", None)) if waiting is not None else None,
+                    "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
+                    "actor_id": str(run.actor_id) if run.actor_id else None,
+                    "session_id": str(run.session_id) if run.session_id else None,
+                    "created_at": str(run.created_at) if run.created_at else None,
+                    "updated_at": str(run.updated_at) if run.updated_at else None,
+                }
+            )
+
+        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        return out[:lim]
+
     def list_due_wait_until(
         self,
         *,
@@ -115,5 +156,4 @@ class InMemoryLedgerStore(LedgerStore):
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return list(self._records.get(run_id, []))
-
 

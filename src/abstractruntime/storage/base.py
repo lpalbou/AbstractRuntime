@@ -95,6 +95,23 @@ class QueryableRunStore(Protocol):
         ...
 
 
+@runtime_checkable
+class QueryableRunIndexStore(Protocol):
+    """Optional fast-path for listing run summaries without loading full RunState payloads."""
+
+    def list_run_index(
+        self,
+        *,
+        status: Optional[RunStatus] = None,
+        workflow_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        root_only: bool = False,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List lightweight run index rows (most recent first)."""
+        ...
+
+
 class LedgerStore(ABC):
     """Append-only journal store."""
 
@@ -103,5 +120,4 @@ class LedgerStore(ABC):
 
     @abstractmethod
     def list(self, run_id: str) -> List[Dict[str, Any]]: ...
-
 

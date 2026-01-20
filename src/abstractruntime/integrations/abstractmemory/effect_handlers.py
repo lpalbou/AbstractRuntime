@@ -616,7 +616,295 @@ def build_memory_kg_effect_handlers(
             result["warnings"] = merged
         return EffectOutcome.completed(result)
 
+    def _handle_resolve(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Resolve candidate entity ids by label (+ optional rdf:type filter)."""
+        del default_next_node
+        payload = dict(effect.payload or {})
+
+        label_raw = payload.get("label")
+        if label_raw is None:
+            label_raw = payload.get("query")
+        if label_raw is None:
+            label_raw = payload.get("query_text")
+
+        label = str(label_raw or "").strip()
+        if not label:
+            return EffectOutcome.completed({"ok": False, "count": 0, "candidates": [], "error": "label is required"})
+
+        expected_type_raw = payload.get("expected_type")
+        if expected_type_raw is None:
+            expected_type_raw = payload.get("expectedType")
+        if expected_type_raw is None:
+            expected_type_raw = payload.get("type")
+
+        expected_type = str(expected_type_raw or "").strip().lower() if expected_type_raw is not None else ""
+        expected_type = expected_type if expected_type else ""
+
+        recall_level_raw = payload.get("recall_level")
+        if recall_level_raw is None:
+            recall_level_raw = payload.get("recallLevel")
+        try:
+            from abstractruntime.memory.recall_levels import parse_recall_level
+
+            recall_level = parse_recall_level(recall_level_raw)
+        except Exception as e:
+            return EffectOutcome.failed(str(e))
+
+        scope_raw = payload.get("scope")
+        scope = str(scope_raw or "run").strip().lower() or "run"
+        owner_id_raw = payload.get("owner_id")
+        owner_id = str(owner_id_raw).strip() if isinstance(owner_id_raw, str) and owner_id_raw.strip() else None
+
+        if scope not in {"run", "session", "global", "all"}:
+            return EffectOutcome.completed({"ok": False, "count": 0, "candidates": [], "error": f"Unknown memory scope: {scope}"})
+
+        def _normalize_label(value: str) -> str:
+            # Collapse whitespace + lowercase to match extractor normalization.
+            return " ".join(str(value or "").split()).strip().lower()
+
+        label_norm = _normalize_label(label)
+
+        # Budgets / behavior flags.
+        max_candidates_raw = payload.get("max_candidates")
+        if max_candidates_raw is None:
+            max_candidates_raw = payload.get("maxCandidates")
+        if max_candidates_raw is None:
+            max_candidates_raw = payload.get("limit")
+
+        default_max = 5
+        semantic_mode: str = "fallback"
+        if recall_level is not None:
+            if recall_level.value == "urgent":
+                default_max = 3
+                semantic_mode = "none"
+            elif recall_level.value == "deep":
+                default_max = 10
+                semantic_mode = "always"
+            else:
+                default_max = 5
+                semantic_mode = "fallback"
+
+        try:
+            max_candidates = int(float(max_candidates_raw)) if max_candidates_raw is not None else int(default_max)
+        except Exception:
+            max_candidates = int(default_max)
+        if max_candidates < 1:
+            max_candidates = 1
+        if max_candidates > 50:
+            max_candidates = 50
+
+        include_semantic_raw = payload.get("include_semantic")
+        if include_semantic_raw is None:
+            include_semantic_raw = payload.get("includeSemantic")
+        include_semantic = None
+        if include_semantic_raw is not None:
+            include_semantic = bool(include_semantic_raw) if isinstance(include_semantic_raw, bool) else None
+        if include_semantic is not None:
+            semantic_mode = "fallback" if include_semantic else "none"
+
+        min_score_raw = payload.get("min_score")
+        if min_score_raw is None:
+            min_score_raw = payload.get("minScore")
+        min_score_value: Optional[float] = None
+        if min_score_raw is not None and not isinstance(min_score_raw, bool):
+            try:
+                min_score_value = float(min_score_raw)
+            except Exception:
+                min_score_value = None
+
+        label_predicates = [
+            "schema:name",
+            "skos:preflabel",
+            "skos:altlabel",
+            "dcterms:title",
+            "dcterms:identifier",
+        ]
+
+        warnings: list[str] = []
+
+        def _score_from_dict(d: dict[str, Any]) -> Optional[float]:
+            attrs = d.get("attributes")
+            if isinstance(attrs, dict):
+                ret = attrs.get("_retrieval")
+                if isinstance(ret, dict):
+                    s = ret.get("score")
+                    if isinstance(s, (int, float)):
+                        return float(s)
+            return None
+
+        def _one_query(
+            *,
+            scope_label: str,
+            owner_id2: str,
+            predicate_id: str,
+            object_value: Optional[str] = None,
+            query_text: Optional[str] = None,
+        ) -> list[dict[str, Any]]:
+            q = TripleQuery(
+                subject=None,
+                predicate=predicate_id,
+                object=object_value,
+                scope=scope_label,
+                owner_id=owner_id2,
+                query_text=query_text,
+                limit=max(10, min(max_candidates * 10, 200)),
+                order="desc",
+                min_score=min_score_value,
+            )
+            rows = store.query(q)
+            out: list[dict[str, Any]] = []
+            for a in rows:
+                to_dict = getattr(a, "to_dict", None)
+                if callable(to_dict):
+                    d = to_dict()
+                    if isinstance(d, dict):
+                        out.append(d)
+            return out
+
+        owners: list[tuple[str, str]] = []
+        if scope == "all":
+            try:
+                owners.append(("run", resolve_scope_owner_id(run, scope="run", run_store=run_store)))
+                owners.append(("session", resolve_scope_owner_id(run, scope="session", run_store=run_store)))
+                owners.append(("global", resolve_scope_owner_id(run, scope="global", run_store=run_store)))
+            except Exception as e:
+                warnings.append(str(e))
+        else:
+            try:
+                owners.append((scope, owner_id or resolve_scope_owner_id(run, scope=scope, run_store=run_store)))
+            except Exception as e:
+                warnings.append(str(e))
+
+        exact_hits: list[dict[str, Any]] = []
+        for scope_label, owner2 in owners:
+            for pid in label_predicates:
+                try:
+                    exact_hits.extend(_one_query(scope_label=scope_label, owner_id2=owner2, predicate_id=pid, object_value=label_norm))
+                except Exception as e:
+                    warnings.append(f"{scope_label}.{pid}: {e}")
+
+        semantic_hits: list[dict[str, Any]] = []
+        if semantic_mode != "none":
+            allow = semantic_mode == "always" or (semantic_mode == "fallback" and not exact_hits)
+            if allow:
+                for scope_label, owner2 in owners:
+                    for pid in label_predicates:
+                        try:
+                            semantic_hits.extend(_one_query(scope_label=scope_label, owner_id2=owner2, predicate_id=pid, query_text=label_norm))
+                        except Exception as e:
+                            warnings.append(f"semantic {scope_label}.{pid}: {e}")
+
+        # Candidate aggregation.
+        cand_by_key: dict[tuple[str, Optional[str], str], dict[str, Any]] = {}
+        for d in list(exact_hits) + list(semantic_hits):
+            subj = d.get("subject")
+            if not isinstance(subj, str) or not subj.strip().lower().startswith("ex:"):
+                continue
+            scope_val = str(d.get("scope") or "").strip().lower() or "run"
+            owner_val = d.get("owner_id") if isinstance(d.get("owner_id"), str) and d.get("owner_id").strip() else None
+            key = (scope_val, owner_val, subj.strip())
+
+            score = _score_from_dict(d)
+            observed_at = str(d.get("observed_at") or "")
+            obj_val = d.get("object")
+            label_val = obj_val if isinstance(obj_val, str) and obj_val.strip() else label_norm
+
+            c = cand_by_key.get(key)
+            if c is None:
+                c = {
+                    "id": key[2],
+                    "label": label_val,
+                    "scope": key[0],
+                    "owner_id": key[1],
+                    "score": score if score is not None else (1.0 if d in exact_hits else None),
+                    "_observed_at": observed_at,
+                    "_evidence": [d],
+                }
+                cand_by_key[key] = c
+            else:
+                if isinstance(label_val, str) and label_val.strip() and not str(c.get("label") or "").strip():
+                    c["label"] = label_val
+                cur_score = c.get("score")
+                if score is not None and (cur_score is None or (isinstance(cur_score, (int, float)) and score > float(cur_score))):
+                    c["score"] = float(score)
+                if observed_at and observed_at > str(c.get("_observed_at") or ""):
+                    c["_observed_at"] = observed_at
+                ev = c.get("_evidence")
+                if isinstance(ev, list) and len(ev) < 3:
+                    ev.append(d)
+
+        candidates = list(cand_by_key.values())
+        candidates.sort(
+            key=lambda c: (
+                float(c.get("score")) if isinstance(c.get("score"), (int, float)) else -1.0,
+                str(c.get("_observed_at") or ""),
+            ),
+            reverse=True,
+        )
+
+        # Bound the number of rdf:type lookups (and the final output).
+        candidates = candidates[: max_candidates * 2]
+
+        out: list[dict[str, Any]] = []
+        for c in candidates:
+            cid = c.get("id")
+            if not isinstance(cid, str) or not cid.strip():
+                continue
+            scope_val = str(c.get("scope") or "run").strip().lower() or "run"
+            owner_val = c.get("owner_id") if isinstance(c.get("owner_id"), str) and c.get("owner_id").strip() else None
+
+            type_rows: list[dict[str, Any]] = []
+            try:
+                q = TripleQuery(
+                    subject=cid.strip(),
+                    predicate="rdf:type",
+                    object=None,
+                    scope=scope_val,
+                    owner_id=owner_val,
+                    limit=50,
+                    order="desc",
+                )
+                for a in store.query(q):
+                    to_dict = getattr(a, "to_dict", None)
+                    if callable(to_dict):
+                        d = to_dict()
+                        if isinstance(d, dict):
+                            type_rows.append(d)
+            except Exception as e:
+                warnings.append(f"type {scope_val}.{cid}: {e}")
+
+            types: list[str] = []
+            for d in type_rows:
+                obj = d.get("object")
+                if isinstance(obj, str) and obj.strip():
+                    types.append(obj.strip().lower())
+            types = list(dict.fromkeys(types))  # stable unique
+
+            if expected_type:
+                if expected_type not in types:
+                    continue
+
+            out.append(
+                {
+                    "id": cid.strip(),
+                    "label": str(c.get("label") or label_norm),
+                    "types": types,
+                    "scope": scope_val,
+                    "owner_id": owner_val,
+                    "score": c.get("score"),
+                    "evidence": c.get("_evidence"),
+                }
+            )
+            if len(out) >= max_candidates:
+                break
+
+        result: dict[str, Any] = {"ok": True, "count": len(out), "candidates": out, "raw": {"label": label_norm, "expected_type": expected_type or None}}
+        if warnings:
+            result["warnings"] = [w for w in warnings if str(w).strip()]
+        return EffectOutcome.completed(result)
+
     return {
         EffectType.MEMORY_KG_ASSERT: _handle_assert,
         EffectType.MEMORY_KG_QUERY: _handle_query,
+        EffectType.MEMORY_KG_RESOLVE: _handle_resolve,
     }

@@ -349,6 +349,12 @@ class OffloadingRunStore(RunStore):
             raise NotImplementedError("Inner RunStore does not support list_runs")
         return fn(status=status, wait_reason=wait_reason, workflow_id=workflow_id, limit=limit)
 
+    def list_run_index(self, *, status=None, workflow_id=None, session_id=None, root_only: bool = False, limit: int = 100):  # type: ignore[override]
+        fn = getattr(self._inner, "list_run_index", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner RunStore does not support list_run_index")
+        return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit)
+
     def list_due_wait_until(self, *, now_iso: str, limit: int = 100):  # type: ignore[override]
         fn = getattr(self._inner, "list_due_wait_until", None)
         if not callable(fn):
@@ -405,3 +411,23 @@ class OffloadingLedgerStore(LedgerStore):
             return int(len(records) if isinstance(records, list) else 0)
         except Exception:
             return 0
+
+    def count_many(self, run_ids: List[str]) -> Dict[str, int]:  # type: ignore[override]
+        fn = getattr(self._inner, "count_many", None)
+        if callable(fn):
+            try:
+                out = fn(run_ids)
+                return out if isinstance(out, dict) else {}
+            except Exception:
+                return {}
+        return {str(r or "").strip(): self.count(str(r or "").strip()) for r in (run_ids or []) if str(r or "").strip()}
+
+    def metrics_many(self, run_ids: List[str]) -> Dict[str, Dict[str, int]]:  # type: ignore[override]
+        fn = getattr(self._inner, "metrics_many", None)
+        if callable(fn):
+            try:
+                out = fn(run_ids)
+                return out if isinstance(out, dict) else {}
+            except Exception:
+                return {}
+        return {}

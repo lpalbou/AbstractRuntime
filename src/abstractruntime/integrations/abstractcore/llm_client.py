@@ -26,54 +26,152 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-_SYSTEM_CONTEXT_HEADER_RE = re.compile(r"^Date:\s*\d{4}-\d{2}-\d{2};\s*Country:\s*.+$", re.IGNORECASE)
+_SYSTEM_CONTEXT_HEADER_RE = re.compile(
+    r"^Grounding:\s*\d{4}/\d{2}/\d{2}\|\d{2}:\d{2}\|[A-Z]{2}$",
+    re.IGNORECASE,
+)
+
+_ZONEINFO_TAB_CANDIDATES = [
+    "/usr/share/zoneinfo/zone.tab",
+    "/usr/share/zoneinfo/zone1970.tab",
+    "/var/db/timezone/zoneinfo/zone.tab",
+    "/var/db/timezone/zoneinfo/zone1970.tab",
+]
+
+
+def _detect_timezone_name() -> Optional[str]:
+    """Best-effort IANA timezone name (e.g. 'Europe/Paris')."""
+
+    tz_env = os.environ.get("TZ")
+    if isinstance(tz_env, str):
+        tz = tz_env.strip().lstrip(":")
+        if tz and "/" in tz:
+            return tz
+
+    # Common on Debian/Ubuntu.
+    try:
+        with open("/etc/timezone", "r", encoding="utf-8", errors="ignore") as f:
+            line = f.readline().strip()
+        if line and "/" in line:
+            return line
+    except Exception:
+        pass
+
+    # Common on macOS + many Linux distros (symlink or copied file).
+    try:
+        real = os.path.realpath("/etc/localtime")
+    except Exception:
+        real = ""
+    if real:
+        match = re.search(r"/zoneinfo/(.+)$", real)
+        if match:
+            tz = match.group(1).strip()
+            if tz and "/" in tz:
+                return tz
+
+    return None
+
+
+def _country_from_zone_tab(*, zone_name: str, tab_paths: Optional[List[str]] = None) -> Optional[str]:
+    """Resolve ISO2 country code from zone.tab / zone1970.tab."""
+    zone = str(zone_name or "").strip()
+    if not zone:
+        return None
+
+    paths = list(tab_paths) if isinstance(tab_paths, list) and tab_paths else list(_ZONEINFO_TAB_CANDIDATES)
+    for tab_path in paths:
+        try:
+            with open(tab_path, "r", encoding="utf-8", errors="ignore") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) < 3:
+                        continue
+                    cc_field = parts[0].strip()
+                    tz_field = parts[2].strip()
+                    if tz_field != zone:
+                        continue
+                    cc = cc_field.split(",", 1)[0].strip()
+                    if len(cc) == 2 and cc.isalpha():
+                        return cc.upper()
+        except Exception:
+            continue
+    return None
 
 
 def _detect_country() -> str:
-    """Best-effort country detection (env override first; fallback to locale region)."""
+    """Best-effort 2-letter country code detection.
 
-    def _nonempty(v: Optional[str]) -> Optional[str]:
-        if not isinstance(v, str):
+    Order:
+    1) Explicit env override: ABSTRACT_COUNTRY / ABSTRACTFRAMEWORK_COUNTRY
+    2) Locale region from `locale.getlocale()` or locale env vars (LANG/LC_ALL/LC_CTYPE)
+    3) Timezone (IANA name) via zone.tab mapping
+
+    Notes:
+    - Avoid parsing encoding-only strings like `UTF-8` as a country (a common locale env pitfall).
+    - If no reliable region is found, return `XX` (unknown).
+    """
+
+    def _normalize_country_code(value: Optional[str]) -> Optional[str]:
+        if not isinstance(value, str):
             return None
-        s = v.strip()
-        return s if s else None
+        raw = value.strip()
+        if not raw:
+            return None
+
+        base = raw.split(".", 1)[0].split("@", 1)[0].strip()
+        if len(base) == 2 and base.isalpha():
+            return base.upper()
+
+        parts = [p.strip() for p in re.split(r"[_-]", base) if p.strip()]
+        for part in parts[1:]:
+            if len(part) == 2 and part.isalpha():
+                return part.upper()
+        return None
 
     # Explicit override (preferred).
     for key in ("ABSTRACT_COUNTRY", "ABSTRACTFRAMEWORK_COUNTRY"):
-        v = _nonempty(os.environ.get(key))
-        if v is not None:
-            return v
+        cc = _normalize_country_code(os.environ.get(key))
+        if cc is not None:
+            return cc
 
-    # Locale inference (e.g. en_US, fr_FR, pt_BR).
-    loc = ""
+    candidates: List[str] = []
     try:
-        loc = str(locale.getlocale()[0] or "")
+        loc = locale.getlocale()[0]
+        if isinstance(loc, str) and loc.strip():
+            candidates.append(loc)
     except Exception:
-        loc = ""
-    if not loc:
-        lang = os.environ.get("LC_ALL") or os.environ.get("LANG") or os.environ.get("LC_CTYPE") or ""
-        loc = lang.split(".", 1)[0] if lang else ""
+        pass
 
-    loc = str(loc or "").strip()
-    if loc:
-        base = loc.split(".", 1)[0].split("@", 1)[0]
-        for sep in ("_", "-"):
-            if sep in base:
-                region = base.split(sep, 1)[1].strip()
-                if region:
-                    return region.upper()
+    for key in ("LC_ALL", "LANG", "LC_CTYPE"):
+        v = os.environ.get(key)
+        if isinstance(v, str) and v.strip():
+            candidates.append(v)
 
-    return "unknown"
+    for cand in candidates:
+        cc = _normalize_country_code(cand)
+        if cc is not None:
+            return cc
+
+    tz_name = _detect_timezone_name()
+    if tz_name:
+        cc = _country_from_zone_tab(zone_name=tz_name)
+        if cc is not None:
+            return cc
+
+    return "XX"
 
 
 def _system_context_header() -> str:
-    # Use local date (timezone-aware) to match the user's environment.
-    date_local = datetime.now().astimezone().date().isoformat()
-    return f"Date: {date_local}; Country: {_detect_country()}"
+    # Use local datetime (timezone-aware) to match the user's environment.
+    stamp = datetime.now().astimezone().strftime("%Y/%m/%d|%H:%M")
+    return f"Grounding: {stamp}|{_detect_country()}"
 
 
 def _inject_system_context(system_prompt: Optional[str]) -> str:
-    """Ensure every call has date/country context at the top of the system prompt."""
+    """Ensure every call has date/time/country context at the top of the system prompt."""
     base = str(system_prompt or "").strip()
     header = _system_context_header()
     if base:

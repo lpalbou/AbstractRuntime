@@ -63,6 +63,7 @@ class EffectType(str, Enum):
     # Semantic / KG memory (host-provided handlers)
     MEMORY_KG_ASSERT = "memory_kg_assert"
     MEMORY_KG_QUERY = "memory_kg_query"
+    MEMORY_KG_RESOLVE = "memory_kg_resolve"
 
     # Debug / inspection (schema-only tools -> runtime effects)
     VARS_QUERY = "vars_query"

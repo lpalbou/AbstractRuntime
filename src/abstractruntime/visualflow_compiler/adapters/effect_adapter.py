@@ -560,6 +560,54 @@ def create_memory_kg_query_handler(
     return handler
 
 
+def create_memory_kg_resolve_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that resolves entity candidates from AbstractMemory triples."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        payload: Dict[str, Any] = {}
+        if isinstance(input_data, dict):
+            for k in ("label", "expected_type", "scope", "owner_id", "recall_level"):
+                v = input_data.get(k)
+                if isinstance(v, str) and v.strip():
+                    payload[k] = v.strip()
+
+            min_score = input_data.get("min_score")
+            if min_score is not None and not isinstance(min_score, bool):
+                try:
+                    payload["min_score"] = float(min_score)
+                except Exception:
+                    pass
+
+            max_candidates = input_data.get("max_candidates")
+            if max_candidates is None:
+                max_candidates = input_data.get("limit")
+            if max_candidates is not None and not isinstance(max_candidates, bool):
+                try:
+                    payload["max_candidates"] = int(max_candidates)
+                except Exception:
+                    pass
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(type=EffectType.MEMORY_KG_RESOLVE, payload=payload, result_key=output_key or "_temp.memory_kg_resolve"),
+            next_node=next_node,
+        )
+
+    return handler
+
+
 def create_memory_tag_handler(
     node_id: str,
     next_node: Optional[str],

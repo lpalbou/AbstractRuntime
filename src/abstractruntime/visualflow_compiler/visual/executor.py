@@ -194,6 +194,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "memory_rehydrate",
         "memory_kg_assert",
         "memory_kg_query",
+        "memory_kg_resolve",
     }
 
     literal_node_ids: set[str] = set()
@@ -952,6 +953,29 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 )
                 out["include_context"] = _coerce_bool(raw_inc)
 
+            # Memory-source access pins (467): pass through for compiler/runtime pre-call scheduling.
+            if isinstance(input_data, dict):
+                for bool_key in (
+                    "use_session_attachments",
+                    "use_span_memory",
+                    "use_semantic_search",
+                    "use_kg_memory",
+                ):
+                    if bool_key in input_data:
+                        out[bool_key] = _coerce_bool(input_data.get(bool_key))
+
+                for raw_key in (
+                    "memory_query",
+                    "memory_scope",
+                    "recall_level",
+                    "max_span_messages",
+                    "kg_max_input_tokens",
+                    "kg_limit",
+                    "kg_min_score",
+                ):
+                    if raw_key in input_data:
+                        out[raw_key] = input_data.get(raw_key)
+
             return out
 
         return handler
@@ -1305,6 +1329,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_memory_kg_assert_handler(data, effect_config)
         if effect_type == "memory_kg_query":
             return _create_memory_kg_query_handler(data, effect_config)
+        if effect_type == "memory_kg_resolve":
+            return _create_memory_kg_resolve_handler(data, effect_config)
 
         return lambda x: x
 
@@ -1724,6 +1750,34 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
                 params["max_output_tokens"] = int(max_output_tokens_value)
 
+            # Memory-source access pins (467): pass through for compiler/runtime pre-call scheduling.
+            #
+            # NOTE: we intentionally keep values JSON-safe and mostly unmodified here.
+            # The compiler layer applies policy defaults/clamping and maps these into
+            # MEMORY_* effects or LLM params as needed.
+            mem_cfg: Dict[str, Any] = {}
+            if isinstance(input_data, dict):
+                for bool_key in (
+                    "use_session_attachments",
+                    "use_span_memory",
+                    "use_semantic_search",
+                    "use_kg_memory",
+                ):
+                    if bool_key in input_data:
+                        mem_cfg[bool_key] = _coerce_bool(input_data.get(bool_key))
+
+                for raw_key in (
+                    "memory_query",
+                    "memory_scope",
+                    "recall_level",
+                    "max_span_messages",
+                    "kg_max_input_tokens",
+                    "kg_limit",
+                    "kg_min_score",
+                ):
+                    if raw_key in input_data:
+                        mem_cfg[raw_key] = input_data.get(raw_key)
+
             if not provider or not model:
                 return {
                     "response": "[LLM Call: missing provider/model]",
@@ -1734,6 +1788,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                         "tools": tools,
                         "params": dict(params),
                         "include_context": include_context_value,
+                        **mem_cfg,
                     },
                     "error": "Missing provider or model configuration",
                 }
@@ -1755,6 +1810,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "provider": provider,
                 "model": model,
                 "include_context": include_context_value,
+                **mem_cfg,
             }
             if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
                 pending["max_input_tokens"] = int(max_input_tokens_value)
@@ -2254,6 +2310,46 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     pass
 
             return {"items": [], "count": 0, "_pending_effect": pending}
+
+        return handler
+
+    def _create_memory_kg_resolve_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data):
+            payload = input_data if isinstance(input_data, dict) else {}
+            pending: Dict[str, Any] = {"type": "memory_kg_resolve"}
+
+            for k in ("label", "expected_type", "recall_level", "scope", "owner_id"):
+                v = payload.get(k)
+                if isinstance(v, str) and v.strip():
+                    pending[k] = v.strip()
+
+            include_semantic = payload.get("include_semantic")
+            if include_semantic is None:
+                include_semantic = payload.get("includeSemantic")
+            if isinstance(include_semantic, bool):
+                pending["include_semantic"] = bool(include_semantic)
+
+            min_score = payload.get("min_score")
+            if min_score is None:
+                min_score = payload.get("minScore")
+            if min_score is not None and not isinstance(min_score, bool):
+                try:
+                    pending["min_score"] = float(min_score)
+                except Exception:
+                    pass
+
+            max_candidates = payload.get("max_candidates")
+            if max_candidates is None:
+                max_candidates = payload.get("maxCandidates")
+            if max_candidates is None:
+                max_candidates = payload.get("limit")
+            if max_candidates is not None and not isinstance(max_candidates, bool):
+                try:
+                    pending["max_candidates"] = int(float(max_candidates))
+                except Exception:
+                    pass
+
+            return {"candidates": [], "count": 0, "_pending_effect": pending}
 
         return handler
 

@@ -618,6 +618,16 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         try:
             include_raw = params.get("include_session_attachments_index") if isinstance(params, dict) else None
             if include_raw is None:
+                # Run-level override (467):
+                # Allow hosts/workflows to control attachment index injection without having to
+                # touch every individual LLM_CALL payload (especially inside Agent subworkflows).
+                runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+                control = runtime_ns.get("control") if isinstance(runtime_ns, dict) else None
+                override = control.get("include_session_attachments_index") if isinstance(control, dict) else None
+                if override is not None:
+                    include_raw = override
+
+            if include_raw is None:
                 # Default heuristic:
                 # - Agents (tools present): include.
                 # - Raw LLM calls: include only when explicitly using context.

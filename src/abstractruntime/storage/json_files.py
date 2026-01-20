@@ -36,9 +36,18 @@ class JsonFileRunStore(RunStore):
         self._index_lock = threading.Lock()
         self._children_index: Optional[Dict[str, set[str]]] = None
         self._run_parent_index: Dict[str, Optional[str]] = {}
+        self._run_cache_lock = threading.Lock()
+        # run_id -> (mtime_ns, RunState)
+        self._run_cache: Dict[str, tuple[int, RunState]] = {}
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"run_{run_id}.json"
+
+    def _run_id_from_path(self, p: Path) -> str:
+        name = str(getattr(p, "name", "") or "")
+        if not name.startswith("run_") or not name.endswith(".json"):
+            return ""
+        return name[len("run_") : -len(".json")]
 
     def _ensure_children_index(self) -> None:
         if self._children_index is not None:
@@ -108,6 +117,14 @@ class JsonFileRunStore(RunStore):
             except Exception:
                 pass
         self._update_children_index_on_save(run)
+        try:
+            st = p.stat()
+            mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+        except Exception:
+            mtime_ns = 0
+        if mtime_ns > 0:
+            with self._run_cache_lock:
+                self._run_cache[str(run.run_id)] = (mtime_ns, run)
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)
@@ -117,6 +134,17 @@ class JsonFileRunStore(RunStore):
 
     def _load_from_path(self, p: Path) -> Optional[RunState]:
         """Load a RunState from a file path."""
+        rid_hint = self._run_id_from_path(p)
+        try:
+            st = p.stat()
+            mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+        except Exception:
+            mtime_ns = 0
+        if rid_hint and mtime_ns > 0:
+            with self._run_cache_lock:
+                cached = self._run_cache.get(rid_hint)
+            if cached is not None and int(cached[0]) == int(mtime_ns):
+                return cached[1]
         try:
             with p.open("r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -146,7 +174,7 @@ class JsonFileRunStore(RunStore):
                 details=raw_waiting.get("details"),
             )
 
-        return RunState(
+        run = RunState(
             run_id=data["run_id"],
             workflow_id=data["workflow_id"],
             status=status,
@@ -161,6 +189,11 @@ class JsonFileRunStore(RunStore):
             session_id=data.get("session_id"),
             parent_run_id=data.get("parent_run_id"),
         )
+        rid = str(getattr(run, "run_id", "") or "").strip() or rid_hint
+        if rid and mtime_ns > 0:
+            with self._run_cache_lock:
+                self._run_cache[rid] = (mtime_ns, run)
+        return run
 
     def _iter_all_runs(self) -> List[RunState]:
         """Iterate over all stored runs."""
@@ -181,11 +214,28 @@ class JsonFileRunStore(RunStore):
         workflow_id: Optional[str] = None,
         limit: int = 100,
     ) -> List[RunState]:
-        """List runs matching the given filters."""
-        results: List[RunState] = []
+        """List runs matching the given filters.
 
-        for run in self._iter_all_runs():
-            # Apply filters
+        Performance note:
+        - We order by run file mtime (close to updated_at) and stop once we have `limit` matches.
+        - This avoids parsing every historical run JSON file on large runtimes.
+        """
+        lim = max(1, int(limit or 100))
+        ranked: list[tuple[int, Path]] = []
+        for p in self._base.glob("run_*.json"):
+            try:
+                st = p.stat()
+                mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+            except Exception:
+                continue
+            ranked.append((mtime_ns, p))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+
+        results: List[RunState] = []
+        for _mtime_ns, p in ranked:
+            run = self._load_from_path(p)
+            if run is None:
+                continue
             if status is not None and run.status != status:
                 continue
             if workflow_id is not None and run.workflow_id != workflow_id:
@@ -193,13 +243,70 @@ class JsonFileRunStore(RunStore):
             if wait_reason is not None:
                 if run.waiting is None or run.waiting.reason != wait_reason:
                     continue
-
             results.append(run)
+            if len(results) >= lim:
+                break
 
-        # Sort by updated_at descending (most recent first)
         results.sort(key=lambda r: r.updated_at or "", reverse=True)
+        return results[:lim]
 
-        return results[:limit]
+    def list_run_index(
+        self,
+        *,
+        status: Optional[RunStatus] = None,
+        workflow_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        root_only: bool = False,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List lightweight run index rows without depending on full RunState consumers."""
+        lim = max(1, int(limit or 100))
+        ranked: list[tuple[int, Path]] = []
+        for p in self._base.glob("run_*.json"):
+            try:
+                st = p.stat()
+                mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+            except Exception:
+                continue
+            ranked.append((mtime_ns, p))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+
+        out: List[Dict[str, Any]] = []
+        sid = str(session_id or "").strip() if session_id is not None else None
+
+        for _mtime_ns, p in ranked:
+            run = self._load_from_path(p)
+            if run is None:
+                continue
+            if status is not None and run.status != status:
+                continue
+            if workflow_id is not None and run.workflow_id != workflow_id:
+                continue
+            if sid is not None and str(run.session_id or "").strip() != sid:
+                continue
+            if bool(root_only) and str(run.parent_run_id or "").strip():
+                continue
+
+            waiting = run.waiting
+            out.append(
+                {
+                    "run_id": str(run.run_id),
+                    "workflow_id": str(run.workflow_id),
+                    "status": str(getattr(run.status, "value", run.status)),
+                    "wait_reason": str(getattr(getattr(waiting, "reason", None), "value", waiting.reason)) if waiting is not None else None,
+                    "wait_until": str(getattr(waiting, "until", None)) if waiting is not None else None,
+                    "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
+                    "actor_id": str(run.actor_id) if run.actor_id else None,
+                    "session_id": str(run.session_id) if run.session_id else None,
+                    "created_at": str(run.created_at) if run.created_at else None,
+                    "updated_at": str(run.updated_at) if run.updated_at else None,
+                }
+            )
+            if len(out) >= lim:
+                break
+
+        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        return out[:lim]
 
     def list_due_wait_until(
         self,

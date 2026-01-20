@@ -14,7 +14,7 @@ from abstractruntime.core.models import WaitState
 from abstractruntime.storage.in_memory import InMemoryRunStore
 from abstractruntime.storage.json_files import JsonFileRunStore
 from abstractruntime.storage.sqlite import SqliteDatabase, SqliteRunStore
-from abstractruntime.storage.base import QueryableRunStore
+from abstractruntime.storage.base import QueryableRunIndexStore, QueryableRunStore
 
 
 def utc_now_iso() -> str:
@@ -365,6 +365,29 @@ class TestSqliteRunStoreQuery:
     def test_implements_queryable_protocol(self, tmp_path: Path):
         store = SqliteRunStore(SqliteDatabase(tmp_path / "gateway.sqlite3"))
         assert isinstance(store, QueryableRunStore)
+        assert isinstance(store, QueryableRunIndexStore)
+
+    def test_list_run_index_filters_session_and_root_only(self, tmp_path: Path):
+        store = SqliteRunStore(SqliteDatabase(tmp_path / "gateway.sqlite3"))
+
+        root = make_run(status=RunStatus.COMPLETED, updated_at="2025-01-02T00:00:00Z")
+        root.session_id = "sess_1"
+        root.parent_run_id = None
+        store.save(root)
+
+        child = make_run(status=RunStatus.COMPLETED, updated_at="2025-01-03T00:00:00Z")
+        child.session_id = "sess_1"
+        child.parent_run_id = root.run_id
+        store.save(child)
+
+        other = make_run(status=RunStatus.COMPLETED, updated_at="2025-01-04T00:00:00Z")
+        other.session_id = "sess_2"
+        other.parent_run_id = None
+        store.save(other)
+
+        rows = store.list_run_index(session_id="sess_1", root_only=True, limit=10)
+        assert [r.get("run_id") for r in rows] == [root.run_id]
+        assert rows[0].get("parent_run_id") in {None, ""}
 
     def test_list_due_wait_until_uses_wait_index(self, tmp_path: Path):
         db_path = tmp_path / "gateway.sqlite3"

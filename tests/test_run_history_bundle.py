@@ -144,6 +144,11 @@ def test_export_run_history_bundle_filters_input_data_and_tails_ledgers() -> Non
     turn0 = next((t for t in turns if t.get("run_id") == run_id), None)
     assert turn0 is not None
     assert turn0.get("answer") == "ok"
+    stats = turn0.get("stats") or {}
+    assert isinstance(stats, dict)
+    assert stats.get("llm_calls") == 5
+    assert stats.get("tool_calls") == 0
+    assert stats.get("duration_ms") == 4000
 
 
 def test_resume_appends_resume_record_to_ledger() -> None:

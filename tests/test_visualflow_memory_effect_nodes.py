@@ -73,6 +73,60 @@ def test_visualflow_compiler_supports_memory_kg_query_node() -> None:
     assert plan.effect.type == EffectType.MEMORY_KG_QUERY
 
 
+def test_visualflow_compiler_supports_memory_kg_resolve_node() -> None:
+    flow = {
+        "id": "vf_memory_kg_resolve",
+        "name": "vf_memory_kg_resolve",
+        "entryNode": "start",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            {"id": "kgr", "type": "memory_kg_resolve", "data": {"nodeType": "memory_kg_resolve"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "kgr", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    assert "kgr" in spec.nodes
+
+    run = RunState(run_id="run", workflow_id=str(spec.workflow_id), status=RunStatus.RUNNING, current_node="kgr", vars={"_temp": {}})
+    plan = spec.nodes["kgr"](run, None)
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.MEMORY_KG_RESOLVE
+
+
+def test_visualflow_memory_kg_resolve_maps_label_and_expected_type() -> None:
+    flow = {
+        "id": "vf_memory_kg_resolve_maps",
+        "name": "vf_memory_kg_resolve_maps",
+        "entryNode": "start",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            {"id": "kgr", "type": "memory_kg_resolve", "data": {"nodeType": "memory_kg_resolve"}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "kgr", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(flow)
+    run = RunState(
+        run_id="run",
+        workflow_id=str(spec.workflow_id),
+        status=RunStatus.RUNNING,
+        current_node="kgr",
+        vars={"_temp": {}, "_last_output": {"label": "doctor noonien soong", "expected_type": "schema:person", "scope": "global"}},
+    )
+    plan = spec.nodes["kgr"](run, None)
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.MEMORY_KG_RESOLVE
+    assert isinstance(plan.effect.payload, dict)
+    assert plan.effect.payload.get("label") == "doctor noonien soong"
+    assert plan.effect.payload.get("expected_type") == "schema:person"
+    assert plan.effect.payload.get("scope") == "global"
+
+
 def test_visualflow_memory_kg_query_maps_min_score() -> None:
     flow = {
         "id": "vf_memory_kg_query_min_score",

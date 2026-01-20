@@ -955,6 +955,35 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             # Memory-source access pins (467): pass through for compiler/runtime pre-call scheduling.
             if isinstance(input_data, dict):
+                # v0: memory object pin (preferred). Expand into legacy per-pin keys so
+                # the compiler/runtime logic remains backward compatible.
+                mem_obj = input_data.get("memory")
+                if isinstance(mem_obj, dict):
+                    for bool_key in (
+                        "use_session_attachments",
+                        "use_span_memory",
+                        "use_semantic_search",
+                        "use_kg_memory",
+                    ):
+                        if bool_key in input_data:
+                            continue
+                        if bool_key in mem_obj and mem_obj.get(bool_key) is not None:
+                            out[bool_key] = _coerce_bool(mem_obj.get(bool_key))
+
+                    for raw_key in (
+                        "memory_query",
+                        "memory_scope",
+                        "recall_level",
+                        "max_span_messages",
+                        "kg_max_input_tokens",
+                        "kg_limit",
+                        "kg_min_score",
+                    ):
+                        if raw_key in input_data:
+                            continue
+                        if raw_key in mem_obj and mem_obj.get(raw_key) is not None:
+                            out[raw_key] = mem_obj.get(raw_key)
+
                 for bool_key in (
                     "use_session_attachments",
                     "use_span_memory",
@@ -1757,6 +1786,35 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # MEMORY_* effects or LLM params as needed.
             mem_cfg: Dict[str, Any] = {}
             if isinstance(input_data, dict):
+                # v0: memory object pin (preferred). Expand into legacy per-pin keys so
+                # the compiler/runtime logic remains backward compatible.
+                mem_obj = input_data.get("memory")
+                if isinstance(mem_obj, dict):
+                    for bool_key in (
+                        "use_session_attachments",
+                        "use_span_memory",
+                        "use_semantic_search",
+                        "use_kg_memory",
+                    ):
+                        if bool_key in input_data:
+                            continue
+                        if bool_key in mem_obj and mem_obj.get(bool_key) is not None:
+                            mem_cfg[bool_key] = _coerce_bool(mem_obj.get(bool_key))
+
+                    for raw_key in (
+                        "memory_query",
+                        "memory_scope",
+                        "recall_level",
+                        "max_span_messages",
+                        "kg_max_input_tokens",
+                        "kg_limit",
+                        "kg_min_score",
+                    ):
+                        if raw_key in input_data:
+                            continue
+                        if raw_key in mem_obj and mem_obj.get(raw_key) is not None:
+                            mem_cfg[raw_key] = mem_obj.get(raw_key)
+
                 for bool_key in (
                     "use_session_attachments",
                     "use_span_memory",

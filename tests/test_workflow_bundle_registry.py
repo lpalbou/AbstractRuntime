@@ -60,3 +60,23 @@ def test_workflow_bundle_registry_install_list_resolve_remove(tmp_path) -> None:
     removed = reg.remove("demo-bundle@0.0.1")
     assert removed == 1
     assert reg.list_entrypoints(interface="abstractcode.agent.v1") == []
+
+
+@pytest.mark.basic
+def test_workflow_bundle_registry_install_bytes(tmp_path) -> None:
+    from abstractruntime.workflow_bundle import WorkflowBundleRegistry, WorkflowBundleRegistryError
+
+    reg_dir = tmp_path / "reg"
+    src = tmp_path / "src.flow"
+    _write_bundle(src, bundle_id="demo-bundle", bundle_version="0.0.1", flow_id="root", name="Demo Bundle")
+
+    reg = WorkflowBundleRegistry(reg_dir)
+    installed = reg.install_bytes(src.read_bytes(), filename_hint=src.name)
+    assert installed.bundle_ref == "demo-bundle@0.0.1"
+    assert installed.path.exists()
+
+    with pytest.raises(WorkflowBundleRegistryError):
+        reg.install_bytes(src.read_bytes(), filename_hint=src.name, overwrite=False)
+
+    installed2 = reg.install_bytes(src.read_bytes(), filename_hint=src.name, overwrite=True)
+    assert installed2.bundle_ref == "demo-bundle@0.0.1"

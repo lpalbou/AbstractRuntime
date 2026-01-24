@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -412,6 +413,80 @@ class WorkflowBundleRegistry:
         except Exception:
             # Best-effort: return what we know even if re-open/hash fails.
             return InstalledWorkflowBundle(bundle_id=bid, bundle_version=bver, path=dest, manifest=man)
+
+    def install_bytes(
+        self,
+        content: bytes,
+        *,
+        filename_hint: str = "upload.flow",
+        overwrite: bool = False,
+    ) -> InstalledWorkflowBundle:
+        """Install bundle bytes into the registry directory.
+
+        This is primarily intended for hosts that receive `.flow` bytes over the network.
+        """
+        data = bytes(content or b"")
+        if not data:
+            raise WorkflowBundleRegistryError("Bundle content is empty")
+
+        self.ensure_dir()
+        suffix = ".flow" if str(filename_hint or "").lower().endswith(".flow") else ".flow"
+        try:
+            fd, tmp_path_str = tempfile.mkstemp(prefix=".upload_", suffix=suffix, dir=str(self.bundles_dir))
+            tmp_path = Path(tmp_path_str)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+        except Exception as e:
+            raise WorkflowBundleRegistryError(f"Failed writing upload temp file: {e}") from e
+
+        try:
+            bundle = open_workflow_bundle(tmp_path)
+            man = bundle.manifest
+            bid = str(getattr(man, "bundle_id", "") or "").strip()
+            bver = str(getattr(man, "bundle_version", "") or "0.0.0").strip() or "0.0.0"
+            if not bid:
+                raise WorkflowBundleRegistryError("Uploaded bundle has empty manifest.bundle_id")
+
+            safe_id = sanitize_bundle_id(bid)
+            safe_ver = sanitize_bundle_version(bver)
+            if safe_id != bid:
+                raise WorkflowBundleRegistryError(
+                    f"Bundle id '{bid}' contains unsafe characters. "
+                    f"Publish with a safe bundle_id (suggested: '{safe_id}')."
+                )
+            if safe_ver != bver:
+                raise WorkflowBundleRegistryError(
+                    f"Bundle version '{bver}' contains unsafe characters. "
+                    f"Publish with a safe bundle_version (suggested: '{safe_ver}')."
+                )
+
+            dest = (self.bundles_dir / f"{bid}@{bver}.flow").resolve()
+            if dest.exists() and not overwrite:
+                raise WorkflowBundleRegistryError(f"Bundle already installed: {dest.name}")
+
+            try:
+                tmp_path.replace(dest)
+            except Exception as e:
+                raise WorkflowBundleRegistryError(f"Failed installing bundle to {dest}: {e}") from e
+
+            try:
+                bundle2 = open_workflow_bundle(dest)
+                sha = _sha256_file(dest)
+                return InstalledWorkflowBundle(
+                    bundle_id=str(bundle2.manifest.bundle_id),
+                    bundle_version=str(bundle2.manifest.bundle_version),
+                    path=dest,
+                    manifest=bundle2.manifest,
+                    sha256=sha,
+                )
+            except Exception:
+                return InstalledWorkflowBundle(bundle_id=bid, bundle_version=bver, path=dest, manifest=man)
+        finally:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
 
     def remove(self, bundle_ref: str) -> int:
         """Remove installed bundle(s).

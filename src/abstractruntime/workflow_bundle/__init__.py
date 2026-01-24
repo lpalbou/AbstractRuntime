@@ -17,6 +17,7 @@ from .models import (
     workflow_bundle_manifest_from_dict,
     workflow_bundle_manifest_to_dict,
 )
+from .packer import PackedWorkflowBundle, inspect_workflow_bundle, pack_workflow_bundle, unpack_workflow_bundle
 from .reader import WorkflowBundle, open_workflow_bundle
 from .registry import (
     InstalledWorkflowBundle,
@@ -35,6 +36,10 @@ __all__ = [
     "WorkflowBundleManifest",
     "workflow_bundle_manifest_from_dict",
     "workflow_bundle_manifest_to_dict",
+    "PackedWorkflowBundle",
+    "pack_workflow_bundle",
+    "inspect_workflow_bundle",
+    "unpack_workflow_bundle",
     "WorkflowBundle",
     "open_workflow_bundle",
     "InstalledWorkflowBundle",
@@ -45,4 +50,3 @@ __all__ = [
     "sanitize_bundle_id",
     "sanitize_bundle_version",
 ]
-

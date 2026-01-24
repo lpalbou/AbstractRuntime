@@ -116,6 +116,41 @@ def test_open_attachment_reads_bounded_ranges() -> None:
 
 
 @pytest.mark.basic
+def test_open_attachment_small_preview_expands_to_full_by_default() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+
+    content_str = "\n".join([f"line{i}" for i in range(1, 31)]) + "\n"
+    content = content_str.encode("utf-8")
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+    )
+
+    ok, out, err = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id=meta.artifact_id,
+        handle=None,
+        expected_sha256=None,
+        start_line=1,
+        end_line=20,  # common "preview" pattern from models
+        max_chars=8000,  # default budget
+    )
+    assert ok is True
+    assert err is None
+    assert isinstance(out, dict)
+    rendered = out.get("rendered")
+    assert isinstance(rendered, str)
+    assert "lines 1-30" in rendered
+    assert "30: line30" in rendered
+
+
+@pytest.mark.basic
 def test_open_attachment_falls_back_from_invalid_artifact_id_to_handle() -> None:
     store = InMemoryArtifactStore()
     sid = "s1"
@@ -399,7 +434,124 @@ def test_llm_call_handler_injects_active_attachments_when_media_present(tmp_path
     msgs = captured.get("messages")
     assert isinstance(msgs, list) and msgs
     assert msgs[0].get("role") == "system"
-    assert str(msgs[0].get("content") or "").startswith("Active attachments")
+    content = str(msgs[0].get("content") or "")
+    assert content.startswith("Active attachments")
+    assert "notes.txt" in content
+    assert "@notes.txt" not in content
+
+
+@pytest.mark.basic
+def test_llm_call_handler_inlines_active_text_attachments_into_messages_and_removes_media() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"hello\nworld\n"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "/Users/albou/Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+    )
+
+    captured: dict = {}
+
+    class _StubLLM:
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            return {"content": "ok", "metadata": {}}
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={})
+    effect = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "messages": [{"role": "user", "content": "Summarize attachments."}],
+            "media": [
+                {
+                    "$artifact": meta.artifact_id,
+                    "source_path": "/Users/albou/Downloads/notes.txt",
+                    "sha256": sha,
+                    "content_type": "text/plain",
+                }
+            ],
+            "tools": [
+                {"name": "ask_user", "description": "Ask.", "parameters": {}},
+                {"name": "open_attachment", "description": "Open.", "parameters": {}},
+            ],
+            "params": {"temperature": 0.0},
+        },
+    )
+
+    handler = make_llm_call_handler(llm=_StubLLM(), artifact_store=store)
+    outcome = handler(run, effect, None)
+    assert outcome.status == "completed"
+
+    # Small active text attachment should be inlined into messages and removed from provider media.
+    assert captured.get("media") is None
+
+    msgs = captured.get("messages")
+    assert isinstance(msgs, list) and msgs
+    user_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "user"]
+    assert user_msgs and isinstance(user_msgs[-1].get("content"), str)
+    user_text = str(user_msgs[-1].get("content") or "")
+    assert "--- Content from notes.txt ---" in user_text
+    assert "hello" in user_text and "world" in user_text
+
+    sys_text = "\n".join([str(m.get("content") or "") for m in msgs if isinstance(m, dict) and m.get("role") == "system"])
+    assert "Active attachments" in sys_text
+    assert "notes.txt" in sys_text
+    assert "@notes.txt" not in sys_text
+    assert "/Users/" not in sys_text
+    assert "Stored session attachments" not in sys_text
+
+
+@pytest.mark.basic
+def test_llm_call_use_context_does_not_persist_inlined_attachment_blocks() -> None:
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+    content = b"hello\nworld\n"
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="text/plain",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "/Users/albou/Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+    )
+
+    class _StubLLM:
+        def generate(self, **kwargs):  # type: ignore[no-untyped-def]
+            return {"content": "ok", "metadata": {}}
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"context": {}})
+    effect = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "messages": [{"role": "user", "content": "Summarize attachments."}],
+            "media": [
+                {
+                    "$artifact": meta.artifact_id,
+                    "source_path": "/Users/albou/Downloads/notes.txt",
+                    "sha256": sha,
+                    "content_type": "text/plain",
+                }
+            ],
+            "include_context": True,
+            "params": {"temperature": 0.0},
+        },
+    )
+
+    handler = make_llm_call_handler(llm=_StubLLM(), artifact_store=store)
+    outcome = handler(run, effect, None)
+    assert outcome.status == "completed"
+
+    ctx = run.vars.get("context")
+    assert isinstance(ctx, dict)
+    msgs_any = ctx.get("messages")
+    assert isinstance(msgs_any, list) and msgs_any
+    assert msgs_any[0].get("role") == "user"
+    assert msgs_any[0].get("content") == "Summarize attachments."
+    assert "--- Content from" not in str(msgs_any[0].get("content") or "")
 
 
 @pytest.mark.basic
@@ -870,7 +1022,9 @@ def test_e2e_read_file_registers_attachment_then_open_attachment_lmstudio(tmp_pa
     captured = obs.get("llm_generate_kwargs") if isinstance(obs.get("llm_generate_kwargs"), dict) else {}
     msgs = captured.get("messages")
     assert isinstance(msgs, list) and msgs
-    assert "@notes.txt" in str(msgs[0].get("content") or "")
+    msg0 = str(msgs[0].get("content") or "")
+    assert "notes.txt" in msg0
+    assert "@notes.txt" not in msg0
 
     # Validate tool output contains the expected line.
     tools2 = state.output.get("tools2") if isinstance(state.output, dict) else None

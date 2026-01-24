@@ -116,6 +116,7 @@ def render_session_attachments_system_message(
     *,
     max_entries: int = 20,
     max_chars: int = 4000,
+    include_open_attachment_hint: bool = True,
 ) -> str:
     """Render a bounded system message suitable for injection into LLM messages."""
     max_e = max(0, int(max_entries))
@@ -126,13 +127,14 @@ def render_session_attachments_system_message(
     lines: list[str] = ["Stored session attachments (most recent first; not necessarily active in this call):"]
     used = len(lines[0]) + 1
 
-    hint = (
-        "Open text via: open_attachment(handle='@…', start_line=..., end_line=...). "
-        "Open media via: open_attachment(handle='@…')."
-    )
-    if used + len(hint) + 1 <= max_c:
-        lines.append(hint)
-        used += len(hint) + 1
+    if include_open_attachment_hint:
+        hint = (
+            "Open text via: open_attachment(artifact_id='…', start_line=..., end_line=...). "
+            "Open media via: open_attachment(artifact_id='…')."
+        )
+        if used + len(hint) + 1 <= max_c:
+            lines.append(hint)
+            used += len(hint) + 1
 
     for i, e in enumerate(list(entries)[:max_e]):
         if not isinstance(e, dict):
@@ -140,7 +142,12 @@ def render_session_attachments_system_message(
         handle = _normalize_handle(e.get("handle") or e.get("source_path") or e.get("filename") or "")
         if not handle:
             handle = str(e.get("filename") or "").strip() or "attachment"
-        handle_disp = f"@{handle}"
+        filename = str(e.get("filename") or "").strip()
+        display = filename or handle
+        # Avoid leaking absolute paths into the model-visible index; prefer filename.
+        if display and (display.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", display)):
+            display = display.replace("\\", "/").rsplit("/", 1)[-1]
+        handle_disp = display
         artifact_id = str(e.get("artifact_id") or "").strip()
         sha256 = str(e.get("sha256") or "").strip()
         ct = str(e.get("content_type") or "").strip()
@@ -197,7 +204,7 @@ def render_active_attachments_system_message(
         return ""
 
     lines: list[str] = [
-        "Active attachments (included in this call as media; do not call file tools for these):"
+        "Active attachments are already available in this call. Use their content directly; do not call tools to re-open them."
     ]
     used = len(lines[0]) + 1
 
@@ -207,11 +214,12 @@ def render_active_attachments_system_message(
             if not raw:
                 return None
             disp = _normalize_handle(raw) or raw
-            # Convention: show virtual handles with "@", and absolute paths as-is.
-            if disp.startswith("/"):
-                head = disp
+            # Display filename for absolute paths to avoid encouraging filesystem tool calls.
+            disp_norm = disp.replace("\\", "/")
+            if disp_norm.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", disp):
+                head = disp_norm.rsplit("/", 1)[-1]
             else:
-                head = f"@{disp}"
+                head = f"{disp}"
             return f"- {head}"
 
         if not isinstance(item, dict):
@@ -223,11 +231,13 @@ def render_active_attachments_system_message(
         handle = _normalize_handle(src)
         filename = str(item.get("filename") or "").strip()
 
+        display = filename or handle
+        if display and (display.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", display)):
+            display = display.replace("\\", "/").rsplit("/", 1)[-1]
+
         head = ""
-        if handle:
-            head = f"@{handle}"
-        elif filename:
-            head = f"@{filename}"
+        if display:
+            head = f"{display}"
         elif aid_s:
             head = f"id={aid_s}"
         else:
@@ -318,8 +328,8 @@ def _parse_read_file_identity(body: str) -> Optional[Tuple[str, str, int, int]]:
     return (path, sha, start_line, end_line)
 
 
-def _parse_open_attachment_identity(body: str) -> Optional[Tuple[str, Optional[str], int, int]]:
-    """Return (handle, sha256, start_line, end_line) when parseable."""
+def _parse_open_attachment_identity(body: str) -> Optional[Tuple[str, str, Optional[str], int, int]]:
+    """Return (handle, artifact_id, sha256, start_line, end_line) when parseable."""
     raw = str(body or "")
     if not raw.strip():
         return None
@@ -330,6 +340,9 @@ def _parse_open_attachment_identity(body: str) -> Optional[Tuple[str, Optional[s
     if not m:
         return None
     handle = _normalize_handle(m.group("handle"))
+    artifact_id = str(m.group("artifact_id") or "").strip()
+    if not artifact_id:
+        return None
     sha256 = m.group("sha256")
     sha = str(sha256 or "").strip().lower() or None
     if sha and not re.fullmatch(r"[0-9a-f]{8,64}", sha):
@@ -345,7 +358,7 @@ def _parse_open_attachment_identity(body: str) -> Optional[Tuple[str, Optional[s
         start_line = 1
         end_line = 1
 
-    return (handle, sha, start_line, end_line)
+    return (handle, artifact_id, sha, start_line, end_line)
 
 
 def dedup_messages_view(
@@ -405,11 +418,13 @@ def dedup_messages_view(
 
                 candidates = by_handle.get(path_key) or []
                 attachment_hint = ""
+                artifact_id_hint = ""
                 if len(candidates) == 1:
                     a = candidates[0]
                     aid = str(a.get("artifact_id") or "").strip()
                     sha_a = str(a.get("sha256") or "").strip()
                     if aid:
+                        artifact_id_hint = aid
                         attachment_hint = f" Attached artifact: id={aid}" + (f", sha={sha_a[:8]}…" if sha_a else "")
                 elif len(candidates) > 1:
                     bits: list[str] = []
@@ -421,20 +436,39 @@ def dedup_messages_view(
                     if bits:
                         attachment_hint = " Attached candidates: " + ", ".join(bits) + " (specify expected_sha256)"
 
-                stub = (
-                    f"[read_file]: (duplicate) File already shown above: {path} lines {start_line}-{end_line}.\n"
-                    f"Use open_attachment(handle='@{path_key}', start_line={start_line}, end_line={end_line}) to re-open.{attachment_hint}"
-                )
+                display_path = path
+                if display_path and (display_path.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", display_path)):
+                    display_path = display_path.replace("\\", "/").rsplit("/", 1)[-1]
+
+                reopen = ""
+                if artifact_id_hint:
+                    reopen = (
+                        f"Re-open with open_attachment(artifact_id='{artifact_id_hint}', "
+                        f"start_line={start_line}, end_line={end_line})."
+                    )
+                elif candidates:
+                    reopen = (
+                        f"Re-open with open_attachment(artifact_id='…', start_line={start_line}, end_line={end_line})."
+                    )
+
+                stub = f"[read_file]: (duplicate) File already shown above: {display_path} lines {start_line}-{end_line}."
+                if reopen:
+                    stub += "\n" + reopen
+                stub += attachment_hint
 
         elif tool == "open_attachment":
             ident2 = _parse_open_attachment_identity(body)
             if ident2 is not None:
-                handle, sha, start_line, end_line = ident2
+                handle, artifact_id, sha, start_line, end_line = ident2
                 key_sha = sha or "unknown"
-                identity = ("open_attachment", handle, key_sha, start_line, end_line)
+                identity = ("open_attachment", artifact_id, key_sha, start_line, end_line)
+                display_handle = handle
+                if display_handle and (display_handle.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", display_handle)):
+                    display_handle = display_handle.replace("\\", "/").rsplit("/", 1)[-1]
+                head = display_handle if display_handle else f"id={artifact_id}"
                 stub = (
-                    f"[open_attachment]: (duplicate) Attachment already shown above: {handle} lines {start_line}-{end_line}.\n"
-                    f"Re-open with open_attachment(handle='@{handle}', start_line={start_line}, end_line={end_line})."
+                    f"[open_attachment]: (duplicate) Attachment already shown above: {head} lines {start_line}-{end_line} (id={artifact_id}).\n"
+                    f"Re-open with open_attachment(artifact_id='{artifact_id}', start_line={start_line}, end_line={end_line})."
                 )
 
         if identity is None:
@@ -595,7 +629,7 @@ def execute_open_attachment(
             except Exception:
                 suggestions = []
 
-            rendered = f"Error: no attachment matches handle '@{handle_norm}' in this session."
+            rendered = f"Error: no attachment matches handle '{handle_norm}' in this session."
             if suggestions:
                 parts = []
                 for s in suggestions:
@@ -608,7 +642,7 @@ def execute_open_attachment(
                     if sha:
                         bits.append(f"sha={sha[:8]}…")
                     meta = f" ({', '.join(bits)})" if bits else ""
-                    parts.append(f"- @{h}{meta}")
+                    parts.append(f"- {h}{meta}")
                 rendered += "\nDid you mean:\n" + "\n".join(parts)
 
             return (
@@ -624,14 +658,14 @@ def execute_open_attachment(
                 tags = getattr(m, "tags", {}) or {}
                 sha = str(tags.get("sha256") or "").strip()
                 cand.append({"artifact_id": str(getattr(m, "artifact_id", "") or ""), "sha256": sha or None})
-            return (
-                False,
-                {
-                    "rendered": f"Error: multiple attachments match '@{handle_norm}'. Provide expected_sha256 or artifact_id.",
+                return (
+                    False,
+                    {
+                    "rendered": f"Error: multiple attachments match '{handle_norm}'. Provide expected_sha256 or artifact_id.",
                     "candidates": cand,
-                },
-                "multiple matches",
-            )
+                    },
+                    "multiple matches",
+                )
 
         selected_meta = matches[0]
 
@@ -643,6 +677,13 @@ def execute_open_attachment(
     handle_final = _normalize_handle(tags.get("path") or tags.get("source_path") or tags.get("filename") or handle_norm or "")
     if not handle_final:
         handle_final = aid
+    display_handle = handle_final
+    try:
+        disp_norm = display_handle.replace("\\", "/")
+        if disp_norm.startswith("/") or re.match(r"^[a-zA-Z]:[\\\\/]", disp_norm):
+            display_handle = disp_norm.rsplit("/", 1)[-1] or display_handle
+    except Exception:
+        display_handle = handle_final
 
     # v0: text-only, bounded excerpts.
     # v1: non-text attachments return a media ref and are intended to be attached as `payload.media`
@@ -676,7 +717,7 @@ def execute_open_attachment(
         if size_bytes > 0:
             header_bits.append(f"{size_bytes:,} bytes")
 
-        header = f"Attachment: @{handle_final} ({', '.join(header_bits)})"
+        header = f"Attachment: {display_handle} ({', '.join(header_bits)})"
         rendered = header + "\n\n(binary/media attachment; it will be attached as media for the next LLM call)"
         out_media: Dict[str, Any] = {
             "rendered": rendered,
@@ -700,8 +741,28 @@ def execute_open_attachment(
 
     lines = text.splitlines()
     if not lines:
-        header = f"Attachment: @{handle_final} (id={aid}" + (f", sha={sha_tag}" if sha_tag else "") + ", lines 0-0)"
+        header = f"Attachment: {display_handle} (id={aid}" + (f", sha={sha_tag}" if sha_tag else "") + ", lines 0-0)"
         return True, {"rendered": header, "artifact_id": aid, "handle": handle_final, "sha256": sha_tag, "content_type": ct}, None
+
+    # UX: some models "preview" attachments by opening only the first ~20 lines even when the file is small.
+    # If the attachment is small enough to fit under the tool's hard max_chars cap and the call looks like a
+    # default preview, expand to the full file (still bounded).
+    default_budget = mc == 8000
+    small_text = (size_bytes > 0 and size_bytes <= 50_000) or len(text) <= 30_000
+    preview_window = 20
+    preview_request = bool(
+        default_budget
+        and small_text
+        and start == 1
+        and end is not None
+        and end <= preview_window
+        and len(lines) > int(end)
+    )
+    if preview_request:
+        end = None
+        mc = 50_000
+    elif default_budget and small_text and end is None:
+        mc = 50_000
 
     start_idx = min(max(start - 1, 0), len(lines) - 1)
     end_idx = len(lines) - 1 if end is None else min(max(end - 1, start_idx), len(lines) - 1)
@@ -713,7 +774,7 @@ def execute_open_attachment(
 
     # Build bounded, line-numbered excerpt.
     header = (
-        f"Attachment: @{handle_final} (id={aid}"
+        f"Attachment: {display_handle} (id={aid}"
         + (f", sha={sha_tag}" if sha_tag else "")
         + f", lines {shown_start}-{shown_end})"
     )

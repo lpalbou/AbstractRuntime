@@ -42,6 +42,63 @@ logger = get_logger(__name__)
 
 _JSON_SCHEMA_PRIMITIVE_TYPES: Set[str] = {"string", "integer", "number", "boolean", "array", "object", "null"}
 
+_ABS_PATH_RE = re.compile(r"^[a-zA-Z]:[\\\\/]")
+
+
+def _is_abs_path_like(path: str) -> bool:
+    pth = str(path or "").strip()
+    if not pth:
+        return False
+    if pth.startswith("/"):
+        return True
+    return bool(_ABS_PATH_RE.match(pth))
+
+
+def _guess_ext_from_content_type(content_type: str) -> str:
+    ct = str(content_type or "").strip().lower()
+    if not ct:
+        return ""
+    ext = mimetypes.guess_extension(ct) or ""
+    if ext == ".jpe":
+        return ".jpg"
+    return ext
+
+
+def _safe_materialized_filename(*, desired: str, artifact_id: str, ext: str) -> str:
+    """Return a filesystem-safe filename for a materialized artifact.
+
+    Used for temp-file materialization only; avoids leaking absolute paths and keeps names
+    conservative for cross-platform filesystem limits.
+    """
+    label = str(desired or "").replace("\\", "/").strip()
+    if "/" in label or _is_abs_path_like(label):
+        label = label.rsplit("/", 1)[-1]
+    label = label.strip().strip("/")
+    if not label:
+        label = str(artifact_id or "").strip() or "attachment"
+    if ext and not Path(label).suffix:
+        label = f"{label}{ext}"
+
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", label).strip("._") or "attachment"
+    try:
+        stem = Path(safe).stem
+        suf = Path(safe).suffix
+    except Exception:
+        stem, suf = safe, ""
+    short = str(artifact_id or "").strip()[:8]
+    if short:
+        safe = f"{stem}__{short}{suf}"
+
+    max_len = 220
+    if len(safe) > max_len:
+        try:
+            suf = Path(safe).suffix
+        except Exception:
+            suf = ""
+        keep = max_len - len(suf)
+        safe = safe[: max(1, keep)] + suf
+    return safe
+
 
 def _jsonable(value: Any) -> Any:
     """Best-effort conversion to JSON-safe objects.
@@ -378,16 +435,6 @@ def _resolve_llm_call_media(
                 return raw.strip()
         return None
 
-    def _ext_from(content_type: str) -> str:
-        ct = str(content_type or "").strip().lower()
-        if not ct:
-            return ""
-        ext = mimetypes.guess_extension(ct) or ""
-        # Some platforms return ".jpe" for jpeg; prefer ".jpg" for UX.
-        if ext == ".jpe":
-            return ".jpg"
-        return ext
-
     out: list[Any] = []
     for item in media_items:
         if isinstance(item, str):
@@ -413,7 +460,7 @@ def _resolve_llm_call_media(
             return None, f"Artifact '{artifact_id}' content is not bytes"
 
         # Preserve best-effort filename extension for downstream media detection and label
-        # attachments with their original filename/path for better model grounding.
+        # attachments with a safe, non-absolute path identifier.
         filename = ""
         source_path = ""
         if isinstance(item, dict):
@@ -426,26 +473,11 @@ def _resolve_llm_call_media(
         ext = Path(filename).suffix if filename else ""
         if not ext:
             ct = str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
-            ext = _ext_from(ct)
+            ext = _guess_ext_from_content_type(ct)
 
-        desired = source_path or filename
-        safe_name = ""
-        if desired:
-            label = str(desired).replace("\\", "/").strip().strip("/")
-            # Encode the relative path into a single filename (so AbstractCore's media
-            # header includes enough context to disambiguate multiple attachments).
-            label = label.replace("/", "__")
-            if ext and not Path(label).suffix:
-                label = f"{label}{ext}"
-            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", label).strip("._")
-            # Keep filenames under common filesystem limits.
-            max_len = 220
-            if safe_name and len(safe_name) > max_len:
-                suf = Path(safe_name).suffix
-                keep = max_len - len(suf)
-                safe_name = safe_name[: max(1, keep)] + suf
-
-        p = temp_dir / (safe_name or f"{artifact_id}{ext}")
+        desired = source_path or filename or artifact_id
+        safe_name = _safe_materialized_filename(desired=desired, artifact_id=str(artifact_id), ext=str(ext))
+        p = temp_dir / safe_name
         try:
             p.write_bytes(bytes(content))
         except Exception as e:
@@ -453,6 +485,162 @@ def _resolve_llm_call_media(
         out.append(str(p))
 
     return (out or None), None
+
+
+def _inline_active_text_attachments(
+    *,
+    messages: Any,
+    media: Any,
+    artifact_store: Optional[ArtifactStore],
+    temp_dir: Optional[Path],
+    max_inline_text_bytes: int,
+) -> tuple[Any, Any]:
+    """Inline small text-like artifact media into the last user message.
+
+    Returns: (updated_messages, remaining_media)
+
+    This is a derived view: it does not mutate durable run context.
+    """
+    if not isinstance(messages, list) or not messages:
+        return messages, media
+    if media is None:
+        return messages, media
+    media_items = list(media) if isinstance(media, (list, tuple)) else None
+    if not media_items:
+        return messages, media
+    if artifact_store is None or temp_dir is None:
+        return messages, media
+
+    user_idx: Optional[int] = None
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "user":
+            continue
+        if isinstance(m.get("content"), str):
+            user_idx = i
+            break
+    if user_idx is None:
+        return messages, media
+
+    base_text = str(messages[user_idx].get("content") or "")
+
+    def _is_text_like_content_type(ct: str) -> bool:
+        ct_low = str(ct or "").lower().strip()
+        if not ct_low:
+            return False
+        if ct_low.startswith("text/"):
+            return True
+        return ct_low in {
+            "application/json",
+            "application/yaml",
+            "application/x-yaml",
+            "application/xml",
+            "application/javascript",
+            "application/typescript",
+        }
+
+    def _filename_for_item(item: Dict[str, Any], *, artifact_id: str) -> str:
+        name = str(item.get("filename") or "").strip()
+        if name:
+            return name
+        src = str(item.get("source_path") or item.get("path") or "").strip()
+        if src:
+            try:
+                return Path(src).name or src.rsplit("/", 1)[-1]
+            except Exception:
+                return src.rsplit("/", 1)[-1]
+        return artifact_id
+
+    inline_blocks: list[str] = []
+    remaining: list[Any] = []
+
+    # Import lazily to avoid making media processing a hard dependency of the runtime kernel.
+    try:
+        from abstractcore.media.auto_handler import AutoMediaHandler  # type: ignore
+    except Exception:
+        AutoMediaHandler = None  # type: ignore[assignment]
+
+    handler = None
+    if AutoMediaHandler is not None:
+        try:
+            handler = AutoMediaHandler(enable_events=False)
+        except Exception:
+            handler = None
+
+    for item in media_items:
+        if not isinstance(item, dict):
+            remaining.append(item)
+            continue
+        aid = item.get("$artifact") or item.get("artifact_id")
+        if not isinstance(aid, str) or not aid.strip():
+            remaining.append(item)
+            continue
+        artifact_id = aid.strip()
+
+        meta = artifact_store.get_metadata(artifact_id)
+        if meta is None:
+            remaining.append(item)
+            continue
+
+        ct = str(item.get("content_type") or getattr(meta, "content_type", "") or "")
+        if not _is_text_like_content_type(ct):
+            remaining.append(item)
+            continue
+        try:
+            size_bytes = int(getattr(meta, "size_bytes", 0) or 0)
+        except Exception:
+            remaining.append(item)
+            continue
+        if size_bytes > int(max_inline_text_bytes):
+            remaining.append(item)
+            continue
+
+        artifact = artifact_store.load(artifact_id)
+        if artifact is None:
+            remaining.append(item)
+            continue
+        content = getattr(artifact, "content", None)
+        if not isinstance(content, (bytes, bytearray)):
+            remaining.append(item)
+            continue
+
+        # Materialize into temp_dir (required by AbstractCore media processors).
+        name = _filename_for_item(item, artifact_id=artifact_id)
+        ext = Path(name).suffix or _guess_ext_from_content_type(ct)
+        p = temp_dir / _safe_materialized_filename(desired=name, artifact_id=artifact_id, ext=ext)
+        try:
+            p.write_bytes(bytes(content))
+        except Exception:
+            remaining.append(item)
+            continue
+
+        processed = ""
+        if handler is not None:
+            try:
+                res = handler.process_file(p, max_inline_tabular_bytes=int(max_inline_text_bytes), format_output="structured")
+                if getattr(res, "success", False) and getattr(res, "media_content", None) is not None:
+                    processed = str(getattr(res.media_content, "content", "") or "")
+            except Exception:
+                processed = ""
+
+        if not processed:
+            try:
+                processed = bytes(content).decode("utf-8")
+            except Exception:
+                remaining.append(item)
+                continue
+
+        label = _filename_for_item(item, artifact_id=artifact_id)
+        inline_blocks.append(f"\n\n--- Content from {label} ---\n{processed}\n--- End of {label} ---")
+
+    if not inline_blocks:
+        return messages, media
+
+    updated = list(messages)
+    updated[user_idx] = dict(updated[user_idx], content=base_text + "".join(inline_blocks))
+    return updated, (remaining or None)
 
 
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
@@ -631,10 +819,17 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 # Default heuristic:
                 # - Agents (tools present): include.
                 # - Raw LLM calls: include only when explicitly using context.
-                inc_ctx = payload.get("include_context")
-                if inc_ctx is None:
-                    inc_ctx = payload.get("use_context")
-                include_raw = True if tools is not None else _coerce_boolish(inc_ctx)
+                #
+                # Exception: when active attachments are present for this call, skip the stored
+                # session attachment index by default (it is redundant and encourages re-opening).
+                has_active_media = bool(list(media)) if isinstance(media, (list, tuple)) else bool(media)
+                if has_active_media:
+                    include_raw = False
+                else:
+                    inc_ctx = payload.get("include_context")
+                    if inc_ctx is None:
+                        inc_ctx = payload.get("use_context")
+                    include_raw = True if tools is not None else _coerce_boolish(inc_ctx)
 
             include_index = _coerce_boolish(include_raw)
             sid = getattr(run, "session_id", None)
@@ -651,7 +846,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 session_attachments = list_session_attachments(
                     artifact_store=artifact_store, session_id=sid_str, limit=20
                 )
-                session_msg = render_session_attachments_system_message(session_attachments, max_entries=20, max_chars=4000)
+                has_open_attachment_tool = any(
+                    isinstance(t, dict) and str(t.get("name") or "").strip() == "open_attachment" for t in (tools or [])
+                )
+                session_msg = render_session_attachments_system_message(
+                    session_attachments,
+                    max_entries=20,
+                    max_chars=4000,
+                    include_open_attachment_hint=has_open_attachment_tool,
+                )
 
             if active_msg or session_msg:
                 if not isinstance(messages, list):
@@ -687,6 +890,23 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             if isinstance(messages, list) and messages:
                 messages = dedup_messages_view(list(messages), session_attachments=session_attachments)
 
+            def _extract_user_text_for_context(*, prompt_value: Any, messages_value: Any) -> str:
+                if isinstance(prompt_value, str) and prompt_value.strip():
+                    return prompt_value.strip()
+                if isinstance(messages_value, list):
+                    for m in reversed(messages_value):
+                        if not isinstance(m, dict):
+                            continue
+                        if m.get("role") != "user":
+                            continue
+                        c = m.get("content")
+                        if isinstance(c, str) and c.strip():
+                            return c.strip()
+                return ""
+
+            # Preserve the "real" user text for `/use_context` without including inlined attachment blocks.
+            user_text_for_context = _extract_user_text_for_context(prompt_value=prompt, messages_value=messages)
+
             structured_requested = isinstance(response_schema, dict) and response_schema
             params_for_call = dict(params)
             if structured_requested:
@@ -697,37 +917,36 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 )
                 params_for_call["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
 
-            # Framework default: Glyph compression is experimental and opt-in.
-            #
-            # Avoid noisy warnings and unnecessary decision overhead for non-vision models unless
-            # the caller explicitly requests compression via `params.glyph_compression`.
-            if isinstance(media, list) and media and "glyph_compression" not in params_for_call:
-                params_for_call["glyph_compression"] = "never"
-
-            runtime_observability = {
-                "llm_generate_kwargs": _jsonable(
-                    {
-                        "prompt": str(prompt or ""),
-                        "messages": messages,
-                        "system_prompt": system_prompt,
-                        "media": media,
-                        "tools": tools,
-                        "params": params_for_call,
-                        "structured_output_fallback": fallback_enabled,
-                    }
-                ),
-            }
-
             structured_failed = False
             structured_error: Optional[str] = None
 
+            messages_for_call = messages
+            media_for_call = media
+
             resolved_media: Optional[list[Any]] = None
             tmpdir: Optional[tempfile.TemporaryDirectory] = None
-            if media is not None:
+            if media_for_call is not None:
                 tmpdir = tempfile.TemporaryDirectory(prefix="abstractruntime_media_")
                 try:
+                    max_inline_text_bytes = 120_000
+                    raw_max_inline = params.get("max_inline_attachment_bytes")
+                    if raw_max_inline is None:
+                        raw_max_inline = params.get("max_inline_text_attachment_bytes")
+                    if raw_max_inline is not None and not isinstance(raw_max_inline, bool):
+                        try:
+                            max_inline_text_bytes = max(0, int(raw_max_inline))
+                        except Exception:
+                            max_inline_text_bytes = 120_000
+
+                    messages_for_call, media_for_call = _inline_active_text_attachments(
+                        messages=messages_for_call,
+                        media=media_for_call,
+                        artifact_store=artifact_store,
+                        temp_dir=Path(tmpdir.name),
+                        max_inline_text_bytes=max_inline_text_bytes,
+                    )
                     resolved_media, err = _resolve_llm_call_media(
-                        media,
+                        media_for_call,
                         artifact_store=artifact_store,
                         temp_dir=Path(tmpdir.name),
                     )
@@ -737,10 +956,31 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 except Exception as e:
                     tmpdir.cleanup()
                     return EffectOutcome.failed(str(e))
+
+            # Framework default: Glyph compression is experimental and opt-in.
+            #
+            # Avoid noisy warnings and unnecessary decision overhead for non-vision models unless
+            # the caller explicitly requests compression via `params.glyph_compression`.
+            if isinstance(media_for_call, list) and media_for_call and "glyph_compression" not in params_for_call:
+                params_for_call["glyph_compression"] = "never"
+
+            runtime_observability = {
+                "llm_generate_kwargs": _jsonable(
+                    {
+                        "prompt": str(prompt or ""),
+                        "messages": messages_for_call,
+                        "system_prompt": system_prompt,
+                        "media": media_for_call,
+                        "tools": tools,
+                        "params": params_for_call,
+                        "structured_output_fallback": fallback_enabled,
+                    }
+                ),
+            }
             try:
                 result = llm.generate(
                     prompt=str(prompt or ""),
-                    messages=messages,
+                    messages=messages_for_call,
                     system_prompt=system_prompt,
                     media=resolved_media,
                     tools=tools,
@@ -771,7 +1011,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
                 result = llm.generate(
                     prompt=str(prompt or ""),
-                    messages=messages,
+                    messages=messages_for_call,
                     system_prompt=system_prompt,
                     media=resolved_media,
                     tools=tools,
@@ -849,20 +1089,6 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         msgs_any = []
                         ctx_ns["messages"] = msgs_any
 
-                    def _extract_last_user_text() -> str:
-                        if isinstance(prompt, str) and prompt.strip():
-                            return prompt.strip()
-                        if isinstance(messages, list):
-                            for m in reversed(messages):
-                                if not isinstance(m, dict):
-                                    continue
-                                if m.get("role") != "user":
-                                    continue
-                                c = m.get("content")
-                                if isinstance(c, str) and c.strip():
-                                    return c.strip()
-                        return ""
-
                     def _extract_assistant_text() -> str:
                         if isinstance(result, dict):
                             c = result.get("content")
@@ -875,7 +1101,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                                 return _json.dumps(d, ensure_ascii=False, indent=2)
                         return ""
 
-                    user_text = _extract_last_user_text()
+                    user_text = user_text_for_context
                     assistant_text = _extract_assistant_text()
                     node_id = str(getattr(run, "current_node", None) or "").strip() or "unknown"
 
@@ -954,6 +1180,9 @@ def make_tool_calls_handler(
             scope = WorkspaceScope.from_input_data(vars0) if isinstance(vars0, dict) else None
         except Exception as e:
             return EffectOutcome.failed(str(e))
+
+        sid_str = str(getattr(run, "session_id", "") or "").strip()
+        session_attachments_cache: Optional[list[Dict[str, Any]]] = None
 
         def _loads_dict_like(value: Any) -> Optional[Dict[str, Any]]:
             if value is None:
@@ -1159,6 +1388,442 @@ def make_tool_calls_handler(
                 "size_bytes": len(content),
             }
 
+        def _normalize_attachment_query(raw: Any) -> str:
+            text = str(raw or "").strip()
+            if not text:
+                return ""
+            if text.startswith("@"):
+                text = text[1:].strip()
+            text = text.replace("\\", "/")
+            if text.lower().startswith("file://"):
+                try:
+                    from urllib.parse import unquote, urlparse
+
+                    parsed = urlparse(text)
+                    if parsed.scheme == "file":
+                        text = unquote(parsed.path)
+                except Exception:
+                    # Best-effort fallback: strip the prefix.
+                    text = text[7:]
+                text = str(text or "").strip()
+            while text.startswith("./"):
+                text = text[2:]
+            return text
+
+        def _get_session_attachments() -> list[Dict[str, Any]]:
+            nonlocal session_attachments_cache
+            if session_attachments_cache is not None:
+                return list(session_attachments_cache)
+            if artifact_store is None or not sid_str:
+                session_attachments_cache = []
+                return []
+            try:
+                session_attachments_cache = list_session_attachments(
+                    artifact_store=artifact_store, session_id=sid_str, limit=5000
+                )
+            except Exception:
+                session_attachments_cache = []
+            return list(session_attachments_cache)
+
+        def _read_file_output_from_open_attachment(*, file_path: str, opened: Dict[str, Any]) -> Optional[str]:
+            rendered = opened.get("rendered")
+            if not isinstance(rendered, str) or not rendered.strip():
+                return None
+
+            start2 = opened.get("start_line")
+            end2 = opened.get("end_line")
+            count = 0
+            try:
+                if isinstance(start2, int) and isinstance(end2, int) and start2 >= 1 and end2 >= start2:
+                    count = end2 - start2 + 1
+            except Exception:
+                count = 0
+
+            if count <= 0:
+                try:
+                    count = len([ln for ln in rendered.splitlines() if re.match(r"^\\s*\\d+:\\s", ln)])
+                except Exception:
+                    count = 0
+
+            header = f"File: {str(file_path)} ({max(0, int(count))} lines)"
+            aid2 = str(opened.get("artifact_id") or "").strip()
+            sha2 = str(opened.get("sha256") or "").strip()
+            handle2 = str(opened.get("handle") or "").strip()
+            bits2: list[str] = []
+            if handle2:
+                bits2.append(f"@{handle2}")
+            if aid2:
+                bits2.append(f"id={aid2}")
+            if sha2:
+                bits2.append(f"sha={sha2[:8]}…")
+            info = f"(from attachment: {', '.join(bits2)})" if bits2 else "(from attachment)"
+
+            body = "\n".join(rendered.splitlines()[1:]).lstrip("\n")
+            return header + "\n" + info + ("\n" + body if body else "")
+
+        def _attachment_backed_result_for_scope_error(
+            *,
+            tool_name: str,
+            arguments: Dict[str, Any],
+            call_id: str,
+            runtime_call_id_out: Optional[str],
+        ) -> Optional[Dict[str, Any]]:
+            if artifact_store is None or not sid_str:
+                return None
+
+            def _as_result(*, success: bool, output: Any, error: Optional[str]) -> Dict[str, Any]:
+                return {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": str(tool_name or ""),
+                    "success": bool(success),
+                    "output": output,
+                    "error": error if not success else None,
+                }
+
+            if tool_name == "read_file":
+                fp = (
+                    arguments.get("file_path")
+                    or arguments.get("path")
+                    or arguments.get("filename")
+                    or arguments.get("file")
+                )
+                fp_norm = _normalize_attachment_query(fp)
+                if not fp_norm:
+                    return None
+
+                start_line = arguments.get("start_line") or arguments.get("startLine") or arguments.get("start_line_one_indexed") or 1
+                end_line = (
+                    arguments.get("end_line")
+                    or arguments.get("endLine")
+                    or arguments.get("end_line_one_indexed_inclusive")
+                    or arguments.get("end_line_one_indexed")
+                )
+                try:
+                    start_i = int(start_line) if start_line is not None and not isinstance(start_line, bool) else 1
+                except Exception:
+                    start_i = 1
+                end_i: Optional[int] = None
+                try:
+                    if end_line is not None and not isinstance(end_line, bool):
+                        end_i = int(end_line)
+                except Exception:
+                    end_i = None
+
+                ok, opened, err = execute_open_attachment(
+                    artifact_store=artifact_store,
+                    session_id=sid_str,
+                    artifact_id=None,
+                    handle=str(fp_norm),
+                    expected_sha256=None,
+                    start_line=int(start_i),
+                    end_line=int(end_i) if end_i is not None else None,
+                    max_chars=8000,
+                )
+                if err == "attachment not found":
+                    return None
+                if isinstance(opened, dict):
+                    _enqueue_pending_media(opened.get("media"))
+                    if ok:
+                        output_text = _read_file_output_from_open_attachment(file_path=str(fp), opened=opened)
+                        if output_text is not None:
+                            return _as_result(success=True, output=output_text, error=None)
+                    rendered = opened.get("rendered")
+                    if isinstance(rendered, str) and rendered.strip():
+                        return _as_result(success=False, output=rendered, error=str(err or "Failed to open attachment"))
+                return _as_result(success=False, output=None, error=str(err or "Failed to open attachment"))
+
+            if tool_name == "list_files":
+                dir_path = arguments.get("directory_path") or arguments.get("path") or arguments.get("folder")
+                prefix = _normalize_attachment_query(dir_path)
+                if not prefix:
+                    return None
+
+                entries = _get_session_attachments()
+                if not entries:
+                    return None
+
+                prefix_slash = prefix if prefix.endswith("/") else prefix + "/"
+                matches: list[Dict[str, Any]] = []
+                for e in entries:
+                    h = _normalize_attachment_query(e.get("handle"))
+                    if not h:
+                        continue
+                    if h == prefix or h.startswith(prefix_slash):
+                        matches.append(dict(e))
+
+                if not matches:
+                    return None
+
+                pattern = str(arguments.get("pattern") or "*").strip() or "*"
+                recursive = bool(arguments.get("recursive"))
+                include_hidden = bool(arguments.get("include_hidden") or arguments.get("includeHidden"))
+                head_limit = arguments.get("head_limit") or arguments.get("headLimit")
+                try:
+                    head_n = int(head_limit) if head_limit is not None and not isinstance(head_limit, bool) else 10
+                except Exception:
+                    head_n = 10
+                head_n = max(1, head_n)
+
+                import fnmatch
+
+                patterns = [p.strip() for p in str(pattern).split("|") if p.strip()] or ["*"]
+
+                def _matches(name: str) -> bool:
+                    low = str(name or "").lower()
+                    for pat in patterns:
+                        if fnmatch.fnmatch(low, pat.lower()):
+                            return True
+                    return False
+
+                def _is_hidden(rel: str) -> bool:
+                    parts = [p for p in str(rel or "").split("/") if p]
+                    return any(p.startswith(".") for p in parts)
+
+                rows: list[tuple[str, int]] = []
+                for e in matches:
+                    h = _normalize_attachment_query(e.get("handle"))
+                    if not h:
+                        continue
+                    rel = h[len(prefix_slash) :] if h.startswith(prefix_slash) else h
+                    rel = rel.lstrip("/")
+                    if not rel:
+                        continue
+                    if not recursive and "/" in rel:
+                        continue
+                    if not include_hidden and _is_hidden(rel):
+                        continue
+                    if not _matches(rel):
+                        continue
+                    try:
+                        size_b = int(e.get("size_bytes") or 0)
+                    except Exception:
+                        size_b = 0
+                    rows.append((rel, size_b))
+
+                rows.sort(key=lambda x: x[0].lower())
+                shown = rows[:head_n]
+
+                hidden_note = "hidden entries excluded" if not include_hidden else "hidden entries included"
+                lines: list[str] = [
+                    f"Entries in '{prefix}' matching '{pattern}' ({hidden_note}; attachments only; filesystem access blocked):"
+                ]
+                if not shown:
+                    lines.append("  (no attached entries)")
+                else:
+                    for rel, size_b in shown:
+                        size_disp = f" ({size_b:,} bytes)" if size_b > 0 else ""
+                        lines.append(f"  {rel}{size_disp}")
+                    if len(rows) > head_n:
+                        lines.append(f"  ... ({len(rows) - head_n} more)")
+
+                return _as_result(success=True, output="\n".join(lines).rstrip(), error=None)
+
+            if tool_name == "skim_folders":
+                raw_paths = arguments.get("paths") or arguments.get("path") or arguments.get("folder")
+                paths_list: list[str] = []
+                if isinstance(raw_paths, list):
+                    paths_list = [str(p).strip() for p in raw_paths if isinstance(p, str) and p.strip()]
+                elif isinstance(raw_paths, str) and raw_paths.strip():
+                    paths_list = [raw_paths.strip()]
+                if not paths_list:
+                    return None
+
+                entries = _get_session_attachments()
+                if not entries:
+                    return None
+
+                include_hidden = bool(arguments.get("include_hidden") or arguments.get("includeHidden"))
+                blocks: list[str] = []
+                matched_any = False
+
+                for folder in paths_list:
+                    prefix = _normalize_attachment_query(folder)
+                    if not prefix:
+                        continue
+                    prefix_slash = prefix if prefix.endswith("/") else prefix + "/"
+                    rows: list[tuple[str, int]] = []
+                    for e in entries:
+                        h = _normalize_attachment_query(e.get("handle"))
+                        if not h:
+                            continue
+                        if h == prefix or h.startswith(prefix_slash):
+                            rel = h[len(prefix_slash) :] if h.startswith(prefix_slash) else h
+                            rel = rel.lstrip("/")
+                            if not rel:
+                                continue
+                            if not include_hidden and any(seg.startswith(".") for seg in rel.split("/") if seg):
+                                continue
+                            try:
+                                size_b = int(e.get("size_bytes") or 0)
+                            except Exception:
+                                size_b = 0
+                            rows.append((rel, size_b))
+
+                    if not rows:
+                        continue
+                    matched_any = True
+                    rows.sort(key=lambda x: x[0].lower())
+                    hidden_note = "hidden entries excluded" if not include_hidden else "hidden entries included"
+                    lines: list[str] = [
+                        f"Folder map for '{prefix}' ({hidden_note}; attachments only; filesystem access blocked):"
+                    ]
+                    for rel, size_b in rows[:200]:
+                        size_disp = f" ({size_b:,} bytes)" if size_b > 0 else ""
+                        lines.append(f"  {rel}{size_disp}")
+                    if len(rows) > 200:
+                        lines.append(f"  ... ({len(rows) - 200} more)")
+                    blocks.append("\n".join(lines).rstrip())
+
+                if not matched_any:
+                    return None
+                return _as_result(success=True, output="\n\n".join(blocks).rstrip(), error=None)
+
+            if tool_name in {"skim_files", "search_files"}:
+                # Attachment-backed reads/searches: operate only on session attachments, never the filesystem.
+                entries = _get_session_attachments()
+                if not entries:
+                    return None
+
+                if tool_name == "skim_files":
+                    raw_paths = (
+                        arguments.get("paths")
+                        or arguments.get("path")
+                        or arguments.get("file_path")
+                        or arguments.get("filename")
+                        or arguments.get("file")
+                    )
+                    paths_list: list[str] = []
+                    if isinstance(raw_paths, list):
+                        paths_list = [str(p).strip() for p in raw_paths if isinstance(p, str) and p.strip()]
+                    elif isinstance(raw_paths, str) and raw_paths.strip():
+                        paths_list = [raw_paths.strip()]
+                    if not paths_list:
+                        return None
+
+                    head_lines = arguments.get("head_lines") or arguments.get("headLines") or 25
+                    try:
+                        head_n = int(head_lines) if head_lines is not None and not isinstance(head_lines, bool) else 25
+                    except Exception:
+                        head_n = 25
+                    head_n = min(max(1, head_n), 400)
+
+                    rendered_blocks: list[str] = []
+                    matched_any = False
+                    for p in paths_list:
+                        p_norm = _normalize_attachment_query(p)
+                        if not p_norm:
+                            continue
+                        ok, opened, err = execute_open_attachment(
+                            artifact_store=artifact_store,
+                            session_id=sid_str,
+                            artifact_id=None,
+                            handle=str(p_norm),
+                            expected_sha256=None,
+                            start_line=1,
+                            end_line=int(head_n),
+                            max_chars=12000,
+                        )
+                        if err == "attachment not found":
+                            continue
+                        matched_any = True
+                        if isinstance(opened, dict):
+                            _enqueue_pending_media(opened.get("media"))
+                            block = opened.get("rendered")
+                            if isinstance(block, str) and block.strip():
+                                rendered_blocks.append(block.strip())
+                            else:
+                                rendered_blocks.append(f"Error: failed to skim attachment '{p_norm}'.")
+                        else:
+                            rendered_blocks.append(f"Error: failed to skim attachment '{p_norm}': {err or 'unknown error'}")
+
+                    if not matched_any:
+                        return None
+
+                    out_text = "\n\n".join(rendered_blocks).strip()
+                    return _as_result(success=True, output=out_text, error=None)
+
+                # search_files
+                pattern = str(arguments.get("pattern") or "").strip()
+                if not pattern:
+                    return None
+                path_raw = arguments.get("path") or arguments.get("file_path") or arguments.get("directory_path") or ""
+                path_norm = _normalize_attachment_query(path_raw)
+                head_limit = arguments.get("head_limit") or arguments.get("headLimit")
+                max_hits = arguments.get("max_hits") or arguments.get("maxHits")
+                try:
+                    head_n = int(head_limit) if head_limit is not None and not isinstance(head_limit, bool) else 10
+                except Exception:
+                    head_n = 10
+                try:
+                    max_files = int(max_hits) if max_hits is not None and not isinstance(max_hits, bool) else 8
+                except Exception:
+                    max_files = 8
+                head_n = max(1, head_n)
+                max_files = max(1, max_files)
+
+                try:
+                    rx = re.compile(pattern, re.IGNORECASE)
+                except Exception as e:
+                    return _as_result(success=False, output=None, error=f"Invalid regex pattern '{pattern}': {e}")
+
+                prefix_slash = ""
+                candidates: list[Dict[str, Any]] = []
+                if path_norm:
+                    exact = [e for e in entries if _normalize_attachment_query(e.get("handle")) == path_norm]
+                    if exact:
+                        candidates = exact
+                    else:
+                        prefix_slash = path_norm if path_norm.endswith("/") else path_norm + "/"
+                        candidates = [
+                            e for e in entries if _normalize_attachment_query(e.get("handle")).startswith(prefix_slash)
+                        ]
+                else:
+                    candidates = list(entries)
+
+                if not candidates:
+                    return None
+
+                out_lines: list[str] = [
+                    f"Search results in session attachments for pattern '{pattern}' (attachments only; filesystem access blocked):"
+                ]
+                matched_files = 0
+                for e in candidates:
+                    if matched_files >= max_files:
+                        break
+                    aid = str(e.get("artifact_id") or "").strip()
+                    handle = _normalize_attachment_query(e.get("handle"))
+                    if not aid or not handle:
+                        continue
+                    art = artifact_store.load(aid)
+                    if art is None:
+                        continue
+                    try:
+                        text = art.content.decode("utf-8")
+                    except Exception:
+                        continue
+                    hits: list[str] = []
+                    for i, ln in enumerate(text.splitlines(), start=1):
+                        if rx.search(ln):
+                            hits.append(f"{i}: {ln}")
+                            if len(hits) >= head_n:
+                                break
+                    if not hits:
+                        continue
+                    matched_files += 1
+                    out_lines.append(f"\nFile: {handle}")
+                    out_lines.extend(["  " + h for h in hits])
+
+                if matched_files == 0:
+                    return _as_result(success=True, output="No matches found in session attachments.", error=None)
+
+                if matched_files >= max_files and len(candidates) > max_files:
+                    out_lines.append(f"\nNote: stopped after max_hits={max_files}; more attachments may match.")
+
+                return _as_result(success=True, output="\n".join(out_lines).rstrip(), error=None)
+
+            return None
+
         # Parse + plan tool calls (preserve order; runtime-owned tools must not run ahead of host tools).
         for idx, tc in enumerate(tool_calls):
             if not isinstance(tc, dict):
@@ -1240,6 +1905,23 @@ def make_tool_calls_handler(
                     rewritten_args = rewrite_tool_arguments(tool_name=name, args=arguments, scope=scope)
                     tc2["arguments"] = rewritten_args
                 except Exception as e:
+                    fixed = _attachment_backed_result_for_scope_error(
+                        tool_name=name,
+                        arguments=dict(arguments),
+                        call_id=call_id,
+                        runtime_call_id_out=runtime_call_id_out,
+                    )
+                    if fixed is not None:
+                        blocked_by_index[idx] = fixed
+                        tool_calls_for_evidence.append(
+                            {
+                                "call_id": call_id,
+                                "runtime_call_id": runtime_call_id_out,
+                                "name": name,
+                                "arguments": tc.get("arguments") or {},
+                            }
+                        )
+                        continue
                     blocked_by_index[idx] = {
                         "call_id": call_id,
                         "runtime_call_id": runtime_call_id_out,
@@ -1281,9 +1963,6 @@ def make_tool_calls_handler(
                     }
                 )
             return EffectOutcome.completed(result={"mode": "executed", "results": merged_results})
-
-        sid_any = getattr(run, "session_id", None)
-        sid_str = str(sid_any or "").strip() if isinstance(sid_any, str) or sid_any is not None else ""
 
         has_host_calls = any(item.get("kind") == "host" for item in planned)
         if not has_host_calls:
@@ -1628,45 +2307,14 @@ def make_tool_calls_handler(
                         end_line=int(end_i) if end_i is not None else None,
                         max_chars=8000,
                     )
+                    if isinstance(out2, dict):
+                        _enqueue_pending_media(out2.get("media"))
                     if success2 and isinstance(out2, dict):
-                        rendered = out2.get("rendered")
-                        if isinstance(rendered, str) and rendered.strip():
-                            start2 = out2.get("start_line")
-                            end2 = out2.get("end_line")
-                            count = 0
-                            try:
-                                if isinstance(start2, int) and isinstance(end2, int) and start2 >= 1 and end2 >= start2:
-                                    count = end2 - start2 + 1
-                            except Exception:
-                                count = 0
-                            if count <= 0:
-                                try:
-                                    import re as _re
-
-                                    count = len([ln for ln in rendered.splitlines() if _re.match(r"^\\s*\\d+:\\s", ln)])
-                                except Exception:
-                                    count = 0
-
-                            header = f"File: {str(fp)} ({max(0, int(count))} lines)"
-                            aid2 = str(out2.get("artifact_id") or "").strip()
-                            sha2 = str(out2.get("sha256") or "").strip()
-                            handle2 = str(out2.get("handle") or "").strip()
-                            bits2: list[str] = []
-                            if handle2:
-                                bits2.append(f"@{handle2}")
-                            if aid2:
-                                bits2.append(f"id={aid2}")
-                            if sha2:
-                                bits2.append(f"sha={sha2[:8]}…")
-                            info = f"(from attachment: {', '.join(bits2)})" if bits2 else "(from attachment)"
-
-                            body = "\n".join(rendered.splitlines()[1:]).lstrip("\n")
-                            output_text = header + "\n" + info + ("\n" + body if body else "")
-
-                            if isinstance(r_out, dict):
-                                r_out["success"] = True
-                                r_out["output"] = output_text
-                                r_out["error"] = None
+                        output_text = _read_file_output_from_open_attachment(file_path=str(fp), opened=out2)
+                        if output_text is not None and isinstance(r_out, dict):
+                            r_out["success"] = True
+                            r_out["output"] = output_text
+                            r_out["error"] = None
                             results_by_index[idx] = _jsonable(r_out)
                             continue
 
@@ -1690,10 +2338,13 @@ def make_tool_calls_handler(
                         handle = str(att.get("handle") or "").strip()
                         sha = str(att.get("sha256") or "").strip()
                         sha_disp = (sha[:8] + "…") if sha else ""
+                        display = handle.replace("\\", "/")
+                        if _is_abs_path_like(display):
+                            display = display.rsplit("/", 1)[-1] or display
                         hint = (
-                            f"[read_file]: (stored as attachment) @{handle} "
+                            f"[read_file]: (stored as attachment) @{display} "
                             f"(id={aid}{', sha=' + sha_disp if sha_disp else ''}).\n"
-                            f"Use open_attachment(handle='@{handle}', start_line=1, end_line=200) for bounded excerpts."
+                            f"Use open_attachment(artifact_id='{aid}', start_line=1, end_line=200) for bounded excerpts."
                         )
                         r_out["output"] = hint
 

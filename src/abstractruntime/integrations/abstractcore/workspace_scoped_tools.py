@@ -477,6 +477,30 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         resolved = resolve_user_path(scope=scope, user_path=raw)
         out[field] = str(resolved)
 
+    def _rewrite_path_list_field(field: str) -> None:
+        raw = out.get(field)
+        if raw is None:
+            return
+
+        items: list[Any]
+        if isinstance(raw, list):
+            items = list(raw)
+        elif isinstance(raw, tuple):
+            items = list(raw)
+        else:
+            # Accept a single string (or scalar) and let the underlying tool parse it.
+            items = [raw]
+
+        rewritten: list[str] = []
+        for it in items:
+            s = str(it or "").strip()
+            if not s:
+                continue
+            resolved = resolve_user_path(scope=scope, user_path=s)
+            rewritten.append(str(resolved))
+
+        out[field] = rewritten
+
     # Filesystem-ish tools (AbstractCore common tools)
     if tool_name == "list_files":
         _rewrite_path_field("directory_path", default_to_root=True)
@@ -510,6 +534,18 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         return out
     if tool_name == "execute_command":
         _rewrite_path_field("working_directory", default_to_root=True)
+        return out
+    if tool_name == "skim_files":
+        _alias_field("paths", ["path", "file_path", "filename", "file"])
+        _rewrite_path_list_field("paths")
+        if "paths" not in out:
+            raise ValueError("skim_files requires paths")
+        return out
+    if tool_name == "skim_folders":
+        _alias_field("paths", ["path", "directory_path", "folder"])
+        _rewrite_path_list_field("paths")
+        if "paths" not in out:
+            raise ValueError("skim_folders requires paths")
         return out
 
     return out

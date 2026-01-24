@@ -27,5 +27,5 @@ def test_llm_call_media_materializes_artifact_using_source_path_label(tmp_path: 
     out_path = Path(str(resolved[0]))
     assert out_path.is_file()
     assert out_path.read_bytes() == b"hello\n"
-    assert out_path.name == "mnemosyne__memory__Core__Values.md"
-
+    short = str(meta.artifact_id)[:8]
+    assert out_path.name == f"Values__{short}.md"

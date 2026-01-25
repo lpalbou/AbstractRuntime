@@ -1,9 +1,9 @@
-"""AbstractRuntime test bootstrap for monorepo layouts.
+"""AbstractRuntime test bootstrap for a multi-repo workspace checkout.
 
 Why this exists:
-- In this repo, sibling projects live at the monorepo root (e.g. `abstractcore/`,
-  `abstractruntime/`, ...).
-- When tests are invoked from the monorepo root, Python's default `sys.path`
+- In this workspace, sibling projects live under a shared parent directory
+  (e.g. `abstractcore/`, `abstractruntime/`, ...).
+- When tests are invoked from the workspace root, Python's default `sys.path`
   includes the CWD (""), which makes directories like `abstractcore/` appear as
   namespace packages (PEP 420) and *shadow* the actual installable package
   located at `abstractcore/abstractcore/`.
@@ -31,3 +31,4 @@ _prepend_sys_path(MONOREPO_ROOT / "abstractcore")# Ensure `abstractruntime` reso
 _prepend_sys_path(ABSTRACTRUNTIME_ROOT / "src")# Keep sibling src-layout packages stable as well.
 _prepend_sys_path(MONOREPO_ROOT / "abstractagent" / "src")
 _prepend_sys_path(MONOREPO_ROOT / "abstractmemory" / "src")
+_prepend_sys_path(MONOREPO_ROOT / "abstractsemantics" / "src")

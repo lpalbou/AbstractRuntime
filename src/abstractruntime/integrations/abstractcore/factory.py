@@ -60,7 +60,7 @@ def create_local_runtime(
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
-    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
+    tool_timeout_s: Optional[float] = None,
     context: Optional[Any] = None,
     effect_policy: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
@@ -93,20 +93,33 @@ def create_local_runtime(
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
 
-    # Runtime authority: default LLM timeout for orchestrated workflows.
+    # Runtime authority: choose default timeouts for orchestrated workflows.
     #
-    # We set this here (in the runtime layer) rather than relying on AbstractCore global config,
-    # so workflow behavior is consistent and controlled by the orchestrator.
+    # We honor AbstractCore's config defaults unless the caller explicitly overrides.
+    # This keeps orchestration behavior consistent and prevents long-running stalls in gateway mode.
+    default_llm_timeout_s: float = DEFAULT_LLM_TIMEOUT_S
+    default_tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S
+    try:
+        from abstractcore.config.manager import get_config_manager  # type: ignore
+
+        cfg_mgr = get_config_manager()
+        default_llm_timeout_s = float(cfg_mgr.get_default_timeout())
+        default_tool_timeout_s = float(cfg_mgr.get_tool_timeout())
+    except Exception:
+        pass
+
+    resolved_tool_timeout_s = float(tool_timeout_s) if tool_timeout_s is not None else float(default_tool_timeout_s)
+
     effective_llm_kwargs: Dict[str, Any] = dict(llm_kwargs or {})
-    effective_llm_kwargs.setdefault("timeout", DEFAULT_LLM_TIMEOUT_S)
+    effective_llm_kwargs.setdefault("timeout", float(default_llm_timeout_s))
 
     llm_client = MultiLocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=effective_llm_kwargs)
-    tools = tool_executor or AbstractCoreToolExecutor(timeout_s=tool_timeout_s)
+    tools = tool_executor or AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     # Orchestrator policy: enforce tool execution timeout at the runtime layer.
     try:
         setter = getattr(tools, "set_timeout_s", None)
         if callable(setter):
-            setter(tool_timeout_s)
+            setter(resolved_tool_timeout_s)
     except Exception:
         pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
@@ -150,7 +163,7 @@ def create_remote_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
+    timeout_s: Optional[float] = None,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
@@ -164,11 +177,20 @@ def create_remote_runtime(
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
 
+    resolved_timeout_s = float(timeout_s) if timeout_s is not None else float(DEFAULT_LLM_TIMEOUT_S)
+    if timeout_s is None:
+        try:
+            from abstractcore.config.manager import get_config_manager  # type: ignore
+
+            resolved_timeout_s = float(get_config_manager().get_default_timeout())
+        except Exception:
+            pass
+
     llm_client = RemoteAbstractCoreLLMClient(
         server_base_url=server_base_url,
         model=model,
         headers=headers,
-        timeout_s=timeout_s,
+        timeout_s=resolved_timeout_s,
     )
     tools = tool_executor or PassthroughToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
@@ -187,8 +209,8 @@ def create_hybrid_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
-    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
+    timeout_s: Optional[float] = None,
+    tool_timeout_s: Optional[float] = None,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     context: Optional[Any] = None,
@@ -203,17 +225,32 @@ def create_hybrid_runtime(
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
 
+    default_llm_timeout_s = float(DEFAULT_LLM_TIMEOUT_S)
+    default_tool_timeout_s = float(DEFAULT_TOOL_TIMEOUT_S)
+    if timeout_s is None or tool_timeout_s is None:
+        try:
+            from abstractcore.config.manager import get_config_manager  # type: ignore
+
+            cfg_mgr = get_config_manager()
+            default_llm_timeout_s = float(cfg_mgr.get_default_timeout())
+            default_tool_timeout_s = float(cfg_mgr.get_tool_timeout())
+        except Exception:
+            pass
+
+    resolved_timeout_s = float(timeout_s) if timeout_s is not None else float(default_llm_timeout_s)
+    resolved_tool_timeout_s = float(tool_timeout_s) if tool_timeout_s is not None else float(default_tool_timeout_s)
+
     llm_client = RemoteAbstractCoreLLMClient(
         server_base_url=server_base_url,
         model=model,
         headers=headers,
-        timeout_s=timeout_s,
+        timeout_s=resolved_timeout_s,
     )
-    tools = AbstractCoreToolExecutor(timeout_s=tool_timeout_s)
+    tools = AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     try:
         setter = getattr(tools, "set_timeout_s", None)
         if callable(setter):
-            setter(tool_timeout_s)
+            setter(resolved_tool_timeout_s)
     except Exception:
         pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
@@ -235,7 +272,7 @@ def create_local_file_runtime(
     llm_kwargs: Optional[Dict[str, Any]] = None,
     context: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
-    tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
+    tool_timeout_s: Optional[float] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
     artifact_store = FileArtifactStore(base_dir)
@@ -258,7 +295,7 @@ def create_remote_file_runtime(
     server_base_url: str,
     model: str,
     headers: Optional[Dict[str, str]] = None,
-    timeout_s: float = DEFAULT_LLM_TIMEOUT_S,
+    timeout_s: Optional[float] = None,
     context: Optional[Any] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)

@@ -5,7 +5,7 @@ from abstractruntime.visualflow_compiler.visual.models import load_visualflow_js
 
 
 def test_visual_llm_call_resolves_abstractsemantics_schema_ref() -> None:
-    from abstractsemantics import KG_ASSERTION_SCHEMA_REF_V0
+    from abstractsemantics import KG_ASSERTION_SCHEMA_REF_V0  # type: ignore
 
     vf = load_visualflow_json(
         {

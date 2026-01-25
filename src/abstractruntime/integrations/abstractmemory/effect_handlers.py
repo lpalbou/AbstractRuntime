@@ -293,6 +293,8 @@ def build_memory_kg_effect_handlers(
         owner_default = str(owner_default).strip() if isinstance(owner_default, str) and owner_default.strip() else None
         span_id_default = payload.get("span_id")
         span_id_default = str(span_id_default).strip() if isinstance(span_id_default, str) and span_id_default.strip() else None
+        attributes_defaults_raw = payload.get("attributes_defaults")
+        attributes_defaults = dict(attributes_defaults_raw) if isinstance(attributes_defaults_raw, dict) else {}
 
         observed_at = now_iso()
         out_rows: list[Any] = []
@@ -317,6 +319,13 @@ def build_memory_kg_effect_handlers(
                 prov2.setdefault("writer_run_id", str(getattr(run, "run_id", "") or ""))
                 prov2.setdefault("writer_workflow_id", str(getattr(run, "workflow_id", "") or ""))
                 merged["provenance"] = prov2
+                if attributes_defaults:
+                    attrs = merged.get("attributes")
+                    attrs2: dict[str, Any] = dict(attrs) if isinstance(attrs, dict) else {}
+                    for k, v in attributes_defaults.items():
+                        if k not in attrs2:
+                            attrs2[k] = v
+                    merged["attributes"] = attrs2
                 out_rows.append(TripleAssertion.from_dict(merged))
             except Exception as e:
                 parse_errors.append(str(e))

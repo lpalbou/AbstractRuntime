@@ -2312,6 +2312,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             span_id = payload.get("span_id")
             if isinstance(span_id, str) and span_id.strip():
                 pending["span_id"] = span_id.strip()
+            attributes_defaults = payload.get("attributes_defaults")
+            if isinstance(attributes_defaults, dict) and attributes_defaults:
+                pending["attributes_defaults"] = dict(attributes_defaults)
             allow_custom = payload.get("allow_custom_predicates")
             if isinstance(allow_custom, bool):
                 pending["allow_custom_predicates"] = bool(allow_custom)

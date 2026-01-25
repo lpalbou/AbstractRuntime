@@ -338,12 +338,54 @@ def build_memory_kg_effect_handlers(
         if not out_rows:
             return EffectOutcome.failed("MEMORY_KG_ASSERT contained no valid assertions")
 
-        try:
-            ids = store.add(out_rows)
-        except Exception as e:
-            return EffectOutcome.failed(f"MEMORY_KG_ASSERT store.add failed: {e}")
+        dedupe_raw = payload.get("dedupe")
+        if dedupe_raw is None:
+            dedupe_raw = payload.get("deduplicate")
+        dedupe = True
+        if isinstance(dedupe_raw, bool):
+            dedupe = dedupe_raw
+        elif isinstance(dedupe_raw, str) and dedupe_raw.strip():
+            dedupe = dedupe_raw.strip().lower() not in {"0", "false", "no", "off"}
 
-        result: dict[str, Any] = {"ok": True, "count": len(ids), "assertion_ids": ids}
+        skipped_duplicates = 0
+        to_insert = out_rows
+        if dedupe:
+            to_insert = []
+            for a in out_rows:
+                try:
+                    existing = store.query(
+                        TripleQuery(
+                            subject=a.subject,
+                            predicate=a.predicate,
+                            object=a.object,
+                            scope=a.scope,
+                            owner_id=a.owner_id,
+                            limit=1,
+                            order="desc",
+                        )
+                    )
+                except Exception:
+                    # Dedupe is best-effort; if the store can't query, fall back to insert.
+                    existing = []
+                if existing:
+                    skipped_duplicates += 1
+                    continue
+                to_insert.append(a)
+
+        ids: list[str] = []
+        if to_insert:
+            try:
+                ids = store.add(to_insert)
+            except Exception as e:
+                return EffectOutcome.failed(f"MEMORY_KG_ASSERT store.add failed: {e}")
+
+        result: dict[str, Any] = {
+            "ok": True,
+            "count": len(ids),
+            "assertion_ids": ids,
+            "count_attempted": len(out_rows),
+            "skipped_duplicates": skipped_duplicates,
+        }
         warn = _store_warning()
         if warn:
             result["warnings"] = [warn]

@@ -977,48 +977,188 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     }
                 ),
             }
-            try:
-                result = llm.generate(
-                    prompt=str(prompt or ""),
-                    messages=messages_for_call,
-                    system_prompt=system_prompt,
-                    media=resolved_media,
-                    tools=tools,
-                    params=params_for_call,
-                )
-            except Exception as e:
-                looks_like_validation = False
+            truncation_attempts: list[dict[str, Any]] = []
+            had_truncation = False
+
+            def _finish_reason_is_truncation(value: Any) -> bool:
+                if not isinstance(value, str):
+                    return False
+                return value.strip().lower() in {"length", "max_tokens", "max_output_tokens"}
+
+            def _bump_max_output_tokens(current: dict[str, Any]) -> dict[str, Any]:
+                updated = dict(current)
+                raw = updated.get("max_output_tokens")
+                if raw is None:
+                    raw = updated.get("max_tokens")
+                cur = 0
+                if raw is not None and not isinstance(raw, bool):
+                    try:
+                        cur = int(raw)
+                    except Exception:
+                        cur = 0
+                if cur <= 0:
+                    # If the caller didn't specify an output budget, assume we're at least at the
+                    # runtime/provider default (often ~2k). Use the run limits as a better hint.
+                    hinted = None
+                    try:
+                        limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                        hinted = limits.get("max_output_tokens") if isinstance(limits, dict) else None
+                    except Exception:
+                        hinted = None
+                    if hinted is not None and not isinstance(hinted, bool):
+                        try:
+                            hinted_i = int(hinted)
+                        except Exception:
+                            hinted_i = 0
+                        if hinted_i > 0:
+                            cur = hinted_i
+                        else:
+                            cur = 2048
+                    else:
+                        cur = 2048
+
+                bumped = max(cur * 2, cur + 500)
+                cap_raw = payload.get("max_output_tokens_cap")
+                if cap_raw is None:
+                    cap_raw = payload.get("max_truncation_max_output_tokens")
+                cap = 8192
+                if cap_raw is not None and not isinstance(cap_raw, bool):
+                    try:
+                        cap = max(256, int(cap_raw))
+                    except Exception:
+                        cap = 8192
+                updated["max_output_tokens"] = min(bumped, cap)
+                updated.pop("max_tokens", None)
+                return updated
+
+            retry_on_truncation_raw = payload.get("retry_on_truncation")
+            if retry_on_truncation_raw is None:
+                retry_on_truncation_raw = payload.get("no_truncation")
+            retry_on_truncation = True
+            if retry_on_truncation_raw is not None:
+                retry_on_truncation = _coerce_boolish(retry_on_truncation_raw)
+
+            allow_truncation_raw = payload.get("allow_truncation")
+            if allow_truncation_raw is None:
+                allow_truncation_raw = payload.get("allow_truncated")
+            allow_truncation = _coerce_boolish(allow_truncation_raw) if allow_truncation_raw is not None else False
+
+            max_truncation_attempts = 3
+            raw_attempts = payload.get("max_truncation_attempts")
+            if raw_attempts is None:
+                raw_attempts = payload.get("truncation_max_attempts")
+            if raw_attempts is not None and not isinstance(raw_attempts, bool):
                 try:
-                    from pydantic import ValidationError as PydanticValidationError  # type: ignore
-
-                    looks_like_validation = isinstance(e, PydanticValidationError)
+                    max_truncation_attempts = max(1, int(raw_attempts))
                 except Exception:
-                    looks_like_validation = False
+                    max_truncation_attempts = 3
 
-                msg = str(e)
-                if not looks_like_validation:
-                    lowered = msg.lower()
-                    if "validation errors for" in lowered or "structured output generation failed" in lowered:
-                        looks_like_validation = True
+            params_attempt = dict(params_for_call)
+            base_params_attempt = dict(base_params)
 
-                if not (fallback_enabled and structured_requested and looks_like_validation):
-                    raise
+            try:
+                last_finish_reason: Optional[str] = None
+                for attempt in range(1, max_truncation_attempts + 1):
+                    try:
+                        result = llm.generate(
+                            prompt=str(prompt or ""),
+                            messages=messages_for_call,
+                            system_prompt=system_prompt,
+                            media=resolved_media,
+                            tools=tools,
+                            params=params_attempt,
+                        )
+                    except Exception as e:
+                        looks_like_validation = False
+                        try:
+                            from pydantic import ValidationError as PydanticValidationError  # type: ignore
 
-                logger.warning(
-                    "LLM_CALL structured output failed; retrying without schema",
-                    error=msg,
-                )
+                            looks_like_validation = isinstance(e, PydanticValidationError)
+                        except Exception:
+                            looks_like_validation = False
 
-                result = llm.generate(
-                    prompt=str(prompt or ""),
-                    messages=messages_for_call,
-                    system_prompt=system_prompt,
-                    media=resolved_media,
-                    tools=tools,
-                    params=dict(base_params),
-                )
-                structured_failed = True
-                structured_error = msg
+                        msg = str(e)
+                        if not looks_like_validation:
+                            lowered = msg.lower()
+                            if "validation errors for" in lowered or "structured output generation failed" in lowered:
+                                looks_like_validation = True
+
+                        if not (fallback_enabled and structured_requested and looks_like_validation):
+                            raise
+
+                        logger.warning(
+                            "LLM_CALL structured output failed; retrying without schema",
+                            error=msg,
+                        )
+
+                        result = llm.generate(
+                            prompt=str(prompt or ""),
+                            messages=messages_for_call,
+                            system_prompt=system_prompt,
+                            media=resolved_media,
+                            tools=tools,
+                            params=base_params_attempt,
+                        )
+                        structured_failed = True
+                        structured_error = msg
+
+                    finish_reason = None
+                    if isinstance(result, dict):
+                        fr = result.get("finish_reason")
+                        finish_reason = fr if isinstance(fr, str) else None
+                    last_finish_reason = finish_reason
+
+                    truncation_attempts.append(
+                        {
+                            "attempt": attempt,
+                            "finish_reason": finish_reason,
+                            "max_output_tokens": params_attempt.get("max_output_tokens"),
+                            "structured_fallback": bool(structured_failed),
+                        }
+                    )
+
+                    if not _finish_reason_is_truncation(finish_reason):
+                        break
+                    had_truncation = True
+
+                    if allow_truncation:
+                        break
+
+                    if not retry_on_truncation or attempt >= max_truncation_attempts:
+                        break
+
+                    params_attempt = _bump_max_output_tokens(params_attempt)
+                    base_params_attempt = _bump_max_output_tokens(base_params_attempt)
+
+                if _finish_reason_is_truncation(last_finish_reason) and not allow_truncation:
+                    budgets = ", ".join(
+                        [
+                            str(a.get("max_output_tokens"))
+                            for a in truncation_attempts
+                            if a.get("max_output_tokens") is not None
+                        ][:6]
+                    )
+                    suffix = " …" if len(truncation_attempts) > 6 else ""
+                    raise RuntimeError(
+                        "LLM_CALL output was truncated (finish_reason=length). "
+                        f"Attempted max_output_tokens: {budgets}{suffix}. "
+                        "Increase max_output_tokens/max_out_tokens (or set allow_truncation=true)."
+                    )
+
+                # Keep observability aligned with the actual params used.
+                if had_truncation or len(truncation_attempts) > 1:
+                    runtime_observability["llm_generate_kwargs"] = _jsonable(
+                        {
+                            "prompt": str(prompt or ""),
+                            "messages": messages_for_call,
+                            "system_prompt": system_prompt,
+                            "media": media_for_call,
+                            "tools": tools,
+                            "params": params_attempt,
+                            "structured_output_fallback": fallback_enabled,
+                            "truncation_attempts": truncation_attempts,
+                        }
+                    )
             finally:
                 if tmpdir is not None:
                     tmpdir.cleanup()
@@ -1064,6 +1204,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     result["metadata"] = meta
                 if structured_failed:
                     meta["_structured_output_fallback"] = {"used": True, "error": structured_error or ""}
+                if had_truncation or len(truncation_attempts) > 1:
+                    meta["_truncation"] = {
+                        "attempts": truncation_attempts,
+                        "resolved": not _finish_reason_is_truncation(result.get("finish_reason") if isinstance(result.get("finish_reason"), str) else None),
+                    }
                 existing = meta.get("_runtime_observability")
                 if not isinstance(existing, dict):
                     existing = {}

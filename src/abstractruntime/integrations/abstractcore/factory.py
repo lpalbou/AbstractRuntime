@@ -146,7 +146,7 @@ def create_local_runtime(
         max_output_tokens=config.max_output_tokens if config.max_output_tokens is not None else -1,
     )
 
-    return Runtime(
+    rt = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         effect_handlers=handlers,
@@ -156,6 +156,13 @@ def create_local_runtime(
         artifact_store=artifact_store,
         chat_summarizer=summarizer,
     )
+    # Best-effort: expose the underlying LLM client for host-side control planes (e.g. gateway cache ops).
+    # This stays an internal attribute to avoid hard API commitments on Runtime itself.
+    try:  # pragma: no cover
+        setattr(rt, "_abstractcore_llm_client", llm_client)
+    except Exception:
+        pass
+    return rt
 
 
 def create_remote_runtime(

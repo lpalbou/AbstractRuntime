@@ -864,6 +864,15 @@ class MultiLocalAbstractCoreLLMClient:
             self._clients[key] = client
         return client
 
+    def get_provider_instance(self, *, provider: str, model: str) -> Any:
+        """Return the underlying AbstractCore provider instance for (provider, model)."""
+        client = self._get_client(str(provider or ""), str(model or ""))
+        return getattr(client, "_llm", None)
+
+    def list_loaded_clients(self) -> List[Tuple[str, str]]:
+        """Return (provider, model) pairs loaded in this process (best-effort)."""
+        return list(self._clients.keys())
+
     def generate(
         self,
         *,

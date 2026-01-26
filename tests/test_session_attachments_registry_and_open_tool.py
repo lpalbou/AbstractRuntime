@@ -217,6 +217,52 @@ def test_open_attachment_binary_returns_media_ref() -> None:
 
 
 @pytest.mark.basic
+def test_open_attachment_pdf_extracts_text_when_media_stack_available() -> None:
+    pytest.importorskip("pymupdf")
+    pytest.importorskip("pymupdf4llm")
+    pytest.importorskip("abstractcore.media.auto_handler")
+
+    import pymupdf as fitz  # type: ignore[import-not-found]
+
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Hello PDF")
+    content = doc.tobytes()
+    doc.close()
+
+    sha = hashlib.sha256(content).hexdigest()
+    meta = store.store(
+        content,
+        content_type="application/pdf",
+        run_id=rid,
+        tags={"kind": "attachment", "path": "doc.pdf", "filename": "doc.pdf", "session_id": sid, "sha256": sha},
+    )
+
+    ok, out, err = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id=meta.artifact_id,
+        handle=None,
+        expected_sha256=None,
+        start_line=1,
+        end_line=None,
+        max_chars=20_000,
+    )
+    assert ok is True
+    assert err is None
+    assert isinstance(out, dict)
+    assert out.get("derived_from_content_type") == "application/pdf"
+    rendered = str(out.get("rendered") or "")
+    assert "Hello PDF" in rendered
+    content_text = str(out.get("content_text") or "")
+    assert "Hello PDF" in content_text
+
+
+@pytest.mark.basic
 def test_tool_calls_read_file_registers_session_attachment_and_open_attachment_works_in_order(tmp_path: Path) -> None:
     store = InMemoryArtifactStore()
     run_store = InMemoryRunStore()

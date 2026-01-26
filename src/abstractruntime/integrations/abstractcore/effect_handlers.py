@@ -857,6 +857,16 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 raw_max_out = payload.get("max_output_tokens")
                 if raw_max_out is None:
                     raw_max_out = payload.get("max_out_tokens")
+            # Treat 0/negative as "unset" so we still fall back to run-level limits.
+            parsed_max_out: Optional[int] = None
+            if raw_max_out is not None and not isinstance(raw_max_out, bool):
+                try:
+                    parsed_max_out = int(raw_max_out)
+                except Exception:
+                    parsed_max_out = None
+            if parsed_max_out is None or parsed_max_out <= 0:
+                raw_max_out = None
+
             if raw_max_out is None:
                 limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
                 raw_max_out = limits.get("max_output_tokens") if isinstance(limits, dict) else None

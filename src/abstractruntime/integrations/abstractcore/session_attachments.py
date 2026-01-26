@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ...storage.artifacts import ArtifactStore
@@ -550,7 +551,8 @@ def execute_open_attachment(
         mc = 8000
     if mc <= 0:
         mc = 8000
-    mc = min(mc, 50_000)
+    #[WARNING:TRUNCATION] tool output is bounded (max_chars clamp for UX/safety)
+    mc = min(mc, 250_000)
 
     # Resolve artifact metadata.
     metas = artifact_store.list_by_run(rid)
@@ -706,8 +708,8 @@ def execute_open_attachment(
         display_handle = handle_final
 
     # v0: text-only, bounded excerpts.
-    # v1: non-text attachments return a media ref and are intended to be attached as `payload.media`
-    # for the next LLM call (runtime-owned behavior).
+    # v1: media attachments return a media ref (or derived text when possible) and are intended to be
+    # attached as `payload.media` for the next LLM call (runtime-owned behavior).
     ct_low = ct.lower().strip()
     text_like = ct_low.startswith("text/") or ct_low in {
         "application/json",
@@ -717,52 +719,117 @@ def execute_open_attachment(
         "application/javascript",
         "application/typescript",
     }
+    source_path = str(tags.get("source_path") or tags.get("path") or tags.get("filename") or handle_final or "").strip()
+    filename = str(tags.get("filename") or "").strip() or (source_path.rsplit("/", 1)[-1] if source_path else "")
+
+    text: Optional[str] = None
+    derived_from_content_type: Optional[str] = None
+    derived_text_content_type: Optional[str] = None
+    derived_error: Optional[str] = None
+
     if not text_like:
-        source_path = str(tags.get("source_path") or tags.get("path") or tags.get("filename") or handle_final or "").strip()
-        filename = str(tags.get("filename") or "").strip() or (source_path.rsplit("/", 1)[-1] if source_path else "")
-        media_item: Dict[str, Any] = {"$artifact": aid}
-        if filename:
-            media_item["filename"] = filename
-        if source_path:
-            media_item["source_path"] = source_path
-        if ct:
-            media_item["content_type"] = ct
+        # Best-effort: derive text from common document types (e.g. PDF) using AbstractCore's media stack.
+        #
+        # This keeps the tool usable for document attachments and enables KG ingestion to ground
+        # evidence quotes in a durable, readable text representation.
+        should_try_text_extract = ct_low in {"application/pdf"} or str(filename or "").lower().endswith(".pdf")
 
-        header_bits: list[str] = []
-        header_bits.append(f"id={aid}")
-        if sha_tag:
-            header_bits.append(f"sha={sha_tag[:8]}…")
-        if ct:
-            header_bits.append(ct)
-        if size_bytes > 0:
-            header_bits.append(f"{size_bytes:,} bytes")
+        if should_try_text_extract:
+            artifact = artifact_store.load(aid)
+            if artifact is None:
+                return False, {"rendered": f"Error: failed to load artifact '{aid}'."}, "artifact not found"
 
-        header = f"Attachment: {display_handle} ({', '.join(header_bits)})"
-        rendered = header + "\n\n(binary/media attachment; it will be attached as media for the next LLM call)"
-        out_media: Dict[str, Any] = {
-            "rendered": rendered,
-            "artifact_id": aid,
-            "handle": handle_final,
-            "sha256": sha_tag,
-            "content_type": ct,
-            "size_bytes": size_bytes,
-            "media": [media_item],
-        }
-        return True, out_media, None
+            content = getattr(artifact, "content", None)
+            if not isinstance(content, (bytes, bytearray)):
+                return False, {"rendered": "Error: failed to load attachment bytes."}, "artifact content missing"
 
-    artifact = artifact_store.load(aid)
-    if artifact is None:
-        return False, {"rendered": f"Error: failed to load artifact '{aid}'."}, "artifact not found"
+            try:
+                import tempfile
 
-    try:
-        text = artifact.content.decode("utf-8")
-    except Exception:
-        return False, {"rendered": "Error: attachment is not valid UTF-8 text (binary?)"}, "binary content"
+                # Import lazily to keep this tool usable when AbstractCore media extras are not installed.
+                from abstractcore.media.auto_handler import AutoMediaHandler  # type: ignore
 
-    lines = text.splitlines()
+                handler = AutoMediaHandler(enable_events=False)
+                with tempfile.TemporaryDirectory(prefix="open_attachment_") as td:
+                    ext = Path(filename).suffix if filename else ""
+                    if not ext:
+                        ext = ".pdf" if ct_low == "application/pdf" else ""
+                    p = Path(td) / f"attachment{ext or ''}"
+                    p.write_bytes(bytes(content))
+                    res = handler.process_file(p, format_output="structured")
+                    if getattr(res, "success", False) and getattr(res, "media_content", None) is not None:
+                        extracted = str(getattr(res.media_content, "content", "") or "")
+                        if extracted.strip():
+                            text_like = True
+                            derived_from_content_type = ct
+                            derived_text_content_type = str(getattr(res.media_content, "mime_type", "") or "").strip() or "text/markdown"
+                            text = extracted
+                        else:
+                            derived_error = "empty extracted text"
+                    else:
+                        derived_error = str(getattr(res, "error_message", None) or "document text extraction failed")
+            except Exception as e:
+                derived_error = str(e)
+
+        if not text_like:
+            media_item: Dict[str, Any] = {"$artifact": aid}
+            if filename:
+                media_item["filename"] = filename
+            if source_path:
+                media_item["source_path"] = source_path
+            if ct:
+                media_item["content_type"] = ct
+
+            header_bits: list[str] = []
+            header_bits.append(f"id={aid}")
+            if sha_tag:
+                header_bits.append(f"sha={sha_tag[:8]}…")
+            if ct:
+                header_bits.append(ct)
+            if size_bytes > 0:
+                header_bits.append(f"{size_bytes:,} bytes")
+
+            header = f"Attachment: {display_handle} ({', '.join(header_bits)})"
+            rendered = header + "\n\n(binary/media attachment; it will be attached as media for the next LLM call)"
+            out_media: Dict[str, Any] = {
+                "rendered": rendered,
+                "artifact_id": aid,
+                "handle": handle_final,
+                "sha256": sha_tag,
+                "content_type": ct,
+                "size_bytes": size_bytes,
+                "media": [media_item],
+                "derived_error": derived_error,
+            }
+            return True, out_media, None
+
+    if text_like and text is None:
+        artifact = artifact_store.load(aid)
+        if artifact is None:
+            return False, {"rendered": f"Error: failed to load artifact '{aid}'."}, "artifact not found"
+
+        try:
+            text = artifact.content.decode("utf-8")
+        except Exception:
+            return False, {"rendered": "Error: attachment is not valid UTF-8 text (binary?)"}, "binary content"
+
+    lines = (text or "").splitlines()
     if not lines:
         header = f"Attachment: {display_handle} (id={aid}" + (f", sha={sha_tag}" if sha_tag else "") + ", lines 0-0)"
-        return True, {"rendered": header, "artifact_id": aid, "handle": handle_final, "sha256": sha_tag, "content_type": ct}, None
+        return (
+            True,
+            {
+                "rendered": header,
+                "artifact_id": aid,
+                "handle": handle_final,
+                "sha256": sha_tag,
+                "content_type": ct,
+                "derived_from_content_type": derived_from_content_type,
+                "derived_text_content_type": derived_text_content_type,
+                "derived_error": derived_error,
+            },
+            None,
+        )
 
     # UX: some models "preview" attachments by opening only the first ~20 lines even when the file is small.
     # If the attachment is small enough to fit under the tool's hard max_chars cap and the call looks like a
@@ -802,34 +869,55 @@ def execute_open_attachment(
     # Allocate budget for excerpt lines.
     remaining = max(0, mc - len(header) - 2)
     rendered_lines: list[str] = []
+    content_lines: list[str] = []
     used = 0
     truncated = False
     for i, ln in enumerate(selected):
         line_no = shown_start + i
-        row = f"{line_no:>{num_width}}: {ln}"
+        prefix = f"{line_no:>{num_width}}: "
+        row = f"{prefix}{ln}"
         add_len = len(row) + (1 if rendered_lines else 0)
         if used + add_len > remaining and rendered_lines:
             truncated = True
             break
         if used + add_len > remaining and not rendered_lines:
             # Always show at least one line, even if it truncates.
-            row = row[: max(0, remaining - 1)] + "…" if remaining > 1 else "…"
+            if remaining <= 1:
+                row = "…"
+                content_line = "…"
+            else:
+                keep = max(0, int(remaining) - 1)
+                if keep <= len(prefix):
+                    row = prefix.rstrip()[:keep] + "…"
+                    content_line = "…"
+                else:
+                    body_keep = max(0, keep - len(prefix))
+                    body = str(ln)[:body_keep].rstrip()
+                    row = prefix + body + "…"
+                    content_line = body + "…"
             rendered_lines.append(row)
+            content_lines.append(content_line)
             truncated = True
             break
         rendered_lines.append(row)
+        content_lines.append(str(ln))
         used += add_len
 
     rendered = header + "\n\n" + "\n".join(rendered_lines)
     if truncated and len(rendered) + 18 <= mc:
+        #[WARNING:TRUNCATION] open_attachment returned a bounded excerpt
         rendered += "\n\n… (truncated)"
 
     out: Dict[str, Any] = {
         "rendered": rendered,
+        "content_text": "\n".join(content_lines),
         "artifact_id": aid,
         "handle": handle_final,
         "sha256": sha_tag,
         "content_type": ct,
+        "derived_from_content_type": derived_from_content_type,
+        "derived_text_content_type": derived_text_content_type,
+        "derived_error": derived_error,
         "size_bytes": size_bytes,
         "start_line": shown_start,
         "end_line": shown_end,

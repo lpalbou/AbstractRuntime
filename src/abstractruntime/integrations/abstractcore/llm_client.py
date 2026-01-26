@@ -169,17 +169,68 @@ def _system_context_header() -> str:
     stamp = datetime.now().astimezone().strftime("%Y/%m/%d|%H:%M")
     return f"Grounding: {stamp}|{_detect_country()}"
 
+def _strip_system_context_header(system_prompt: Optional[str]) -> Optional[str]:
+    """Remove a runtime-injected Grounding header from the system prompt (best-effort).
 
-def _inject_system_context(system_prompt: Optional[str]) -> str:
-    """Ensure every call has date/time/country context at the top of the system prompt."""
-    base = str(system_prompt or "").strip()
+    Why:
+    - Historically AbstractRuntime injected Grounding into the *system prompt*.
+    - Prompt/KV caching works best when stable prefixes (system/tools/history) do not contain per-turn entropy.
+    - We still want Grounding per turn, but we inject it into the *current user turn* instead.
+    """
+    if not isinstance(system_prompt, str):
+        return system_prompt
+    raw = system_prompt
+    lines = raw.splitlines()
+    if not lines:
+        return None
+    if not _SYSTEM_CONTEXT_HEADER_RE.match(lines[0].strip()):
+        return raw
+    rest = "\n".join(lines[1:]).lstrip()
+    return rest if rest else None
+
+
+def _inject_turn_grounding(
+    *,
+    prompt: str,
+    messages: Optional[List[Dict[str, Any]]],
+) -> tuple[str, Optional[List[Dict[str, Any]]]]:
+    """Inject Grounding into the *current user turn* (not the system prompt)."""
     header = _system_context_header()
-    if base:
-        first = base.splitlines()[0].strip()
-        if _SYSTEM_CONTEXT_HEADER_RE.match(first):
-            return base
-        return f"{header}\n\n{base}"
-    return header
+
+    def _already_has_header(text: str) -> bool:
+        if not isinstance(text, str) or not text.strip():
+            return False
+        first = text.strip().splitlines()[0].strip()
+        return bool(_SYSTEM_CONTEXT_HEADER_RE.match(first))
+
+    prompt_str = str(prompt or "")
+    if prompt_str.strip():
+        if _already_has_header(prompt_str):
+            return prompt_str, messages
+        return f"{header}\n\n{prompt_str}", messages
+
+    if isinstance(messages, list) and messages:
+        out: List[Dict[str, Any]] = []
+        for m in messages:
+            out.append(dict(m) if isinstance(m, dict) else {"role": "user", "content": str(m)})
+
+        for i in range(len(out) - 1, -1, -1):
+            role = str(out[i].get("role") or "").strip().lower()
+            if role != "user":
+                continue
+            content = out[i].get("content")
+            content_str = content if isinstance(content, str) else str(content or "")
+            if _already_has_header(content_str):
+                return prompt_str, out
+            out[i]["content"] = f"{header}\n\n{content_str}" if content_str.strip() else header
+            return prompt_str, out
+
+        # No user message found; append a synthetic user turn.
+        out.append({"role": "user", "content": header})
+        return prompt_str, out
+
+    # No place to inject; best-effort no-op.
+    return prompt_str, messages
 
 
 def _maybe_parse_tool_calls_from_text(
@@ -678,8 +729,8 @@ class LocalAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         params = dict(params or {})
 
-        # Always inject date/country context in the system prompt (even when callers omit it).
-        system_prompt = _inject_system_context(system_prompt)
+        system_prompt = _strip_system_context_header(system_prompt)
+        prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
 
         stream_raw = params.pop("stream", None)
         if stream_raw is None:
@@ -925,10 +976,10 @@ class RemoteAbstractCoreLLMClient:
             )
         req_headers = dict(self._headers)
 
-        # Always inject date/country context in the system prompt (even when callers omit it).
-        system_prompt = _inject_system_context(system_prompt)
-
         trace_metadata = params.pop("trace_metadata", None)
+        system_prompt = _strip_system_context_header(system_prompt)
+        prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+
         if isinstance(trace_metadata, dict) and trace_metadata:
             req_headers["X-AbstractCore-Trace-Metadata"] = json.dumps(
                 trace_metadata, ensure_ascii=False, separators=(",", ":")
@@ -967,6 +1018,10 @@ class RemoteAbstractCoreLLMClient:
         base_url = params.pop("base_url", None)
         if base_url:
             body["base_url"] = base_url
+
+        prompt_cache_key = params.get("prompt_cache_key")
+        if isinstance(prompt_cache_key, str) and prompt_cache_key.strip():
+            body["prompt_cache_key"] = prompt_cache_key.strip()
 
         # Pass through common OpenAI-compatible parameters.
         for key in (

@@ -35,7 +35,7 @@ def test_remote_llm_client_builds_chat_completions_request_and_forwards_base_url
         messages=None,
         system_prompt="sys",
         tools=None,
-        params={"temperature": 0, "max_tokens": 5, "base_url": "http://localhost:1234/v1"},
+        params={"temperature": 0, "max_tokens": 5, "base_url": "http://localhost:1234/v1", "prompt_cache_key": "sess:abc"},
     )
 
     assert result["content"] == "ok"
@@ -51,6 +51,7 @@ def test_remote_llm_client_builds_chat_completions_request_and_forwards_base_url
     body = call["json"]
     assert body["model"] == "openai-compatible/default"
     assert body["base_url"] == "http://localhost:1234/v1"
+    assert body["prompt_cache_key"] == "sess:abc"
     assert body["temperature"] == 0
     assert body["max_tokens"] == 5
     assert body["timeout_s"] == 12.0
@@ -70,4 +71,3 @@ def test_remote_llm_client_default_timeout_is_long_running() -> None:
 
     call = sender.calls[0]
     assert call["timeout"] == 7200.0
-

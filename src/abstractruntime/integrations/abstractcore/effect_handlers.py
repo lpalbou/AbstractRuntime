@@ -396,6 +396,89 @@ def _trace_context(run: RunState) -> Dict[str, str]:
     return ctx
 
 
+def _truthy_env(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    s = str(raw).strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
+
+
+def _derive_prompt_cache_key(
+    *,
+    namespace: str,
+    session_id: str,
+    provider: str,
+    model: str,
+    workflow_id: str,
+    node_id: str,
+    version: int = 1,
+) -> str:
+    ns = str(namespace or "").strip() or "session"
+    raw = f"v{int(version)}|{session_id}|{provider}|{model}|{workflow_id}|{node_id}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{ns}:{digest}"
+
+
+def _maybe_inject_prompt_cache_key(*, run: RunState, params: Dict[str, Any]) -> None:
+    # Explicit caller override wins (including None/empty for "disable").
+    if "prompt_cache_key" in params:
+        return
+
+    runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+    cfg = runtime_ns.get("prompt_cache") if isinstance(runtime_ns, dict) else None
+
+    enabled: bool
+    namespace: str = "session"
+    if isinstance(cfg, bool):
+        enabled = cfg
+    elif isinstance(cfg, dict):
+        enabled_raw = cfg.get("enabled")
+        enabled = bool(enabled_raw) if enabled_raw is not None else True
+        ns = cfg.get("namespace")
+        if isinstance(ns, str) and ns.strip():
+            namespace = ns.strip()
+        key_override = cfg.get("key")
+        if isinstance(key_override, str) and key_override.strip():
+            params["prompt_cache_key"] = key_override.strip()
+            return
+    else:
+        # Operator-wide opt-in (e.g. enable caching for AbstractGateway sessions).
+        enabled = _truthy_env("ABSTRACTRUNTIME_PROMPT_CACHE") or _truthy_env("ABSTRACTGATEWAY_PROMPT_CACHE")
+
+    if not enabled:
+        return
+
+    # Require a session_id to avoid cross-run accidental reuse.
+    session_id = str(getattr(run, "session_id", "") or "").strip()
+    if not session_id:
+        trace_md = params.get("trace_metadata")
+        if isinstance(trace_md, dict):
+            sid = trace_md.get("session_id")
+            if isinstance(sid, str) and sid.strip():
+                session_id = sid.strip()
+    if not session_id:
+        return
+
+    trace_md = params.get("trace_metadata") if isinstance(params.get("trace_metadata"), dict) else {}
+    workflow_id = str(trace_md.get("workflow_id") or run.workflow_id or "").strip()
+    node_id = str(trace_md.get("node_id") or run.current_node or "").strip()
+
+    provider = str(params.get("_provider") or "").strip().lower()
+    model = str(params.get("_model") or "").strip()
+    if not provider or not model:
+        return
+
+    params["prompt_cache_key"] = _derive_prompt_cache_key(
+        namespace=namespace,
+        session_id=session_id,
+        provider=provider,
+        model=model,
+        workflow_id=workflow_id,
+        node_id=node_id,
+    )
+
+
 def _resolve_llm_call_media(
     media: Any,
     *,
@@ -674,6 +757,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             params["_provider"] = provider.strip()
         if isinstance(model, str) and model.strip():
             params["_model"] = model.strip()
+
+        _maybe_inject_prompt_cache_key(run=run, params=params)
 
         def _nonempty_str(value: Any) -> Optional[str]:
             if not isinstance(value, str):
@@ -1021,12 +1106,47 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 cap_raw = payload.get("max_output_tokens_cap")
                 if cap_raw is None:
                     cap_raw = payload.get("max_truncation_max_output_tokens")
-                cap = 8192
+
+                cap: int | None = None
                 if cap_raw is not None and not isinstance(cap_raw, bool):
                     try:
                         cap = max(256, int(cap_raw))
                     except Exception:
-                        cap = 8192
+                        cap = None
+
+                if cap is None:
+                    hinted_cap = None
+                    try:
+                        limits = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                        hinted_cap = limits.get("max_output_tokens") if isinstance(limits, dict) else None
+                    except Exception:
+                        hinted_cap = None
+                    if hinted_cap is not None and not isinstance(hinted_cap, bool):
+                        try:
+                            hinted_i = int(hinted_cap)
+                        except Exception:
+                            hinted_i = 0
+                        if hinted_i > 0:
+                            cap = hinted_i
+
+                if cap is None:
+                    # Prefer model capabilities over arbitrary "unbounded" caps.
+                    try:
+                        caps = getattr(llm, "get_model_capabilities", None)
+                        model_caps = caps() if callable(caps) else None
+                        raw = model_caps.get("max_output_tokens") if isinstance(model_caps, dict) else None
+                        if raw is None and isinstance(model_caps, dict):
+                            raw = model_caps.get("max_tokens")
+                        cap_i = int(raw) if raw is not None and not isinstance(raw, bool) else 0
+                        if cap_i > 0:
+                            cap = cap_i
+                    except Exception:
+                        pass
+
+                # If the model capabilities are unknown, keep the cap effectively unbounded.
+                if cap is None:
+                    cap = 1_000_000
+
                 updated["max_output_tokens"] = min(bumped, cap)
                 updated.pop("max_tokens", None)
                 return updated
@@ -1127,7 +1247,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     if not retry_on_truncation or attempt >= max_truncation_attempts:
                         break
 
-                    params_attempt = _bump_max_output_tokens(params_attempt)
+                    bumped = _bump_max_output_tokens(params_attempt)
+                    logger.warning(
+                        "LLM_CALL output truncated; retrying with higher max_output_tokens",
+                        finish_reason=finish_reason,
+                        attempt=attempt,
+                        max_output_tokens=params_attempt.get("max_output_tokens"),
+                        next_max_output_tokens=bumped.get("max_output_tokens"),
+                    )
+                    params_attempt = bumped
                     base_params_attempt = _bump_max_output_tokens(base_params_attempt)
 
                 if _finish_reason_is_truncation(last_finish_reason) and not allow_truncation:
@@ -1143,6 +1271,13 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         "LLM_CALL output was truncated (finish_reason=length). "
                         f"Attempted max_output_tokens: {budgets}{suffix}. "
                         "Increase max_output_tokens/max_out_tokens (or set allow_truncation=true)."
+                    )
+
+                if had_truncation and not _finish_reason_is_truncation(last_finish_reason):
+                    logger.warning(
+                        "LLM_CALL output truncation resolved after retries",
+                        attempts=len(truncation_attempts),
+                        max_output_tokens=params_attempt.get("max_output_tokens"),
                     )
 
                 # Keep observability aligned with the actual params used.

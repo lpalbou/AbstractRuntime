@@ -178,7 +178,17 @@ def render_session_attachments_system_message(
         used += len(line) + 1
 
     rendered = "\n".join(lines)
-    return rendered[:max_c]
+    if len(rendered) <= max_c:
+        return rendered
+    #[WARNING:TRUNCATION] bounded attachment index rendering (model-visible)
+    marker = "\n- … (truncated)"
+    keep = max(0, max_c - len(marker))
+    if keep <= 0:
+        return rendered[:max_c]
+    trimmed = rendered[:keep].rstrip()
+    if trimmed.endswith("- … (truncated)"):
+        return trimmed
+    return trimmed + marker
 
 
 def render_active_attachments_system_message(
@@ -271,7 +281,17 @@ def render_active_attachments_system_message(
         used += len(line) + 1
 
     rendered = "\n".join(lines)
-    return rendered[:max_c]
+    if len(rendered) <= max_c:
+        return rendered
+    #[WARNING:TRUNCATION] bounded active-attachment list rendering (model-visible)
+    marker = "\n- … (truncated)"
+    keep = max(0, max_c - len(marker))
+    if keep <= 0:
+        return rendered[:max_c]
+    trimmed = rendered[:keep].rstrip()
+    if trimmed.endswith("- … (truncated)"):
+        return trimmed
+    return trimmed + marker
 
 
 @dataclass(frozen=True)

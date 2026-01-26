@@ -3472,7 +3472,13 @@ class Runtime:
 
         preview = note_text
         if len(preview) > 160:
-            preview = preview[:157] + "…"
+            #[WARNING:TRUNCATION] bounded memory_note preview for spans listing
+            marker = "… (truncated)"
+            keep = max(0, 160 - len(marker))
+            if keep <= 0:
+                preview = marker[:160].rstrip()
+            else:
+                preview = preview[:keep].rstrip() + marker
 
         span_record: Dict[str, Any] = {
             "kind": "memory_note",

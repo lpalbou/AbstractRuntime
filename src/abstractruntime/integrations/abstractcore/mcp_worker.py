@@ -23,6 +23,7 @@ def _truncate(text: str, *, limit: int) -> str:
     s = "" if text is None else str(text)
     if limit <= 0 or len(s) <= limit:
         return s
+    #[WARNING:TRUNCATION] bounded preview for stderr log lines (never used for durable data)
     return s[:limit] + "…"
 
 

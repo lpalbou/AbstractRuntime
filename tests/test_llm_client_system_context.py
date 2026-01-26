@@ -16,7 +16,7 @@ _HEADER_RE = re.compile(
 )
 
 
-def test_local_llm_client_injects_date_and_country_into_system_prompt(monkeypatch) -> None:
+def test_local_llm_client_injects_date_and_country_into_user_prompt(monkeypatch) -> None:
     from abstractcore.core.types import GenerateResponse
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -42,17 +42,17 @@ def test_local_llm_client_injects_date_and_country_into_system_prompt(monkeypatc
     result = client.generate(prompt="hello")
 
     assert client._llm.calls, "expected a provider call"
-    sys = str(client._llm.calls[0].get("system_prompt") or "")
-    first = sys.splitlines()[0].strip()
+    prompt_sent = str(client._llm.calls[0].get("prompt") or "")
+    first = prompt_sent.splitlines()[0].strip()
     assert _HEADER_RE.match(first)
     assert first.endswith("|FR")
     assert isinstance(result.get("metadata"), dict)
     payload = result["metadata"]["_provider_request"]["payload"]
-    assert payload["messages"][0]["role"] == "system"
+    assert payload["messages"][0]["role"] == "user"
     assert str(payload["messages"][0]["content"] or "").splitlines()[0].strip().endswith("|FR")
 
 
-def test_local_llm_client_does_not_double_inject_when_header_is_present(monkeypatch) -> None:
+def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch) -> None:
     from abstractcore.core.types import GenerateResponse
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -79,11 +79,15 @@ def test_local_llm_client_does_not_double_inject_when_header_is_present(monkeypa
     client.generate(prompt="hello", system_prompt=sys_in)
 
     sys = str(client._llm.calls[0].get("system_prompt") or "")
-    assert sys.startswith("Grounding: 1999/12/31|23:59|FR")
-    assert sys.count("Grounding:") == 1
+    assert not sys.startswith("Grounding:")
+    assert sys.strip() == "Base system prompt."
+    prompt_sent = str(client._llm.calls[0].get("prompt") or "")
+    first = prompt_sent.splitlines()[0].strip()
+    assert _HEADER_RE.match(first)
+    assert first.endswith("|FR")
 
 
-def test_remote_llm_client_injects_system_context_even_without_system_prompt(monkeypatch) -> None:
+def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) -> None:
     monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
 
     class StubSender:
@@ -109,10 +113,29 @@ def test_remote_llm_client_injects_system_context_even_without_system_prompt(mon
     client.generate(prompt="hello", params={"max_tokens": 5})
 
     body = sender.calls[0]["json"]
-    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][0]["role"] == "user"
     first = str(body["messages"][0]["content"] or "").splitlines()[0].strip()
     assert _HEADER_RE.match(first)
     assert first.endswith("|FR")
+
+
+def test_system_context_header_is_per_call(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    counter = {"n": 0}
+
+    def _fake_header() -> str:
+        counter["n"] += 1
+        # keep the same format so other consumers remain compatible
+        return f"Grounding: 2000/01/01|00:0{counter['n']}|FR"
+
+    monkeypatch.setattr(llm_client, "_system_context_header", _fake_header)
+
+    a, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
+    b, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
+
+    assert a.splitlines()[0].strip() != b.splitlines()[0].strip()
+    assert counter["n"] == 2
 
 
 def test_country_detection_ignores_encoding_only_locale_values(monkeypatch) -> None:

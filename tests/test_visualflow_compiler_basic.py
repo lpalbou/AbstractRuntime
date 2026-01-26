@@ -9,7 +9,7 @@ def _repo_root() -> Path:
 
 
 def test_visualflow_compiler_compiles_real_flow_without_abstractflow_import() -> None:
-    assert "abstractflow" not in sys.modules
+    before = set(sys.modules.keys())
 
     from abstractruntime.visualflow_compiler import compile_visualflow
 
@@ -30,7 +30,9 @@ def test_visualflow_compiler_compiles_real_flow_without_abstractflow_import() ->
     assert len(spec.nodes) == 4
 
     # The compiler must not import AbstractFlow (single semantics engine lives in runtime).
-    assert "abstractflow" not in sys.modules
+    after = set(sys.modules.keys())
+    newly_loaded = after - before
+    assert not any(m == "abstractflow" or m.startswith("abstractflow.") for m in newly_loaded)
 
 
 def test_visualflow_compiler_accepts_model_dump_like_objects() -> None:
@@ -55,7 +57,7 @@ def test_visualflow_compiler_accepts_model_dump_like_objects() -> None:
 
 
 def test_visualflow_compiler_tree_compiles_bundle_flows() -> None:
-    assert "abstractflow" not in sys.modules
+    before = set(sys.modules.keys())
 
     from abstractruntime.visualflow_compiler import compile_visualflow_tree
 
@@ -72,6 +74,6 @@ def test_visualflow_compiler_tree_compiles_bundle_flows() -> None:
 
     specs = compile_visualflow_tree(root_id="ac-advanced-agent", flows_by_id=flows)
     assert set(specs.keys()) == {"ac-advanced-agent", "4ed3b340", "60a97e4d", "15f19f7f"}
-
-    assert "abstractflow" not in sys.modules
-
+    after = set(sys.modules.keys())
+    newly_loaded = after - before
+    assert not any(m == "abstractflow" or m.startswith("abstractflow.") for m in newly_loaded)

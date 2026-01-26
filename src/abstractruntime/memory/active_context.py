@@ -357,7 +357,12 @@ class ActiveContextPolicy:
                     lines.append(f"{role}: {content}" if role else content)
             text = "\n".join([l for l in lines if l]).strip()
             if len(text) > 360:
-                return text[:357] + "…"
+                #[WARNING:TRUNCATION] bounded preview for UI/observability
+                marker = "… (truncated)"
+                keep = max(0, 360 - len(marker))
+                if keep <= 0:
+                    return marker[:360].rstrip()
+                return text[:keep].rstrip() + marker
             return text
 
         for artifact_id in resolved_artifacts:

@@ -169,6 +169,7 @@ class EvidenceRecorder:
             if tool_name == "fetch_url":
                 url = str(args_dict.get("url") or "")
                 if url:
+                    #[WARNING:TRUNCATION] bounded tag value (indexing)
                     tags["url"] = url[:200]
 
                 if isinstance(output_dict, dict):
@@ -321,5 +322,4 @@ class EvidenceRecorder:
             recorded += 1
 
         return EvidenceCaptureStats(recorded=recorded)
-
 

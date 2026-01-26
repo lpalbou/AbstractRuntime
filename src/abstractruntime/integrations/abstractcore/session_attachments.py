@@ -549,10 +549,14 @@ def execute_open_attachment(
         mc = int(max_chars)
     except Exception:
         mc = 8000
+    # Contract:
+    # - `max_chars > 0` means "return up to this many chars" (bounded excerpt).
+    # - `max_chars <= 0` means "no artificial cap" (return full selection).
+    mc_limit: Optional[int]
     if mc <= 0:
-        mc = 8000
-    #[WARNING:TRUNCATION] tool output is bounded (max_chars clamp for UX/safety)
-    mc = min(mc, 250_000)
+        mc_limit = None
+    else:
+        mc_limit = mc
 
     # Resolve artifact metadata.
     metas = artifact_store.list_by_run(rid)
@@ -834,7 +838,7 @@ def execute_open_attachment(
     # UX: some models "preview" attachments by opening only the first ~20 lines even when the file is small.
     # If the attachment is small enough to fit under the tool's hard max_chars cap and the call looks like a
     # default preview, expand to the full file (still bounded).
-    default_budget = mc == 8000
+    default_budget = mc_limit == 8000
     small_text = (size_bytes > 0 and size_bytes <= 50_000) or len(text) <= 30_000
     preview_window = 20
     preview_request = bool(
@@ -847,9 +851,9 @@ def execute_open_attachment(
     )
     if preview_request:
         end = None
-        mc = 50_000
+        mc_limit = 50_000
     elif default_budget and small_text and end is None:
-        mc = 50_000
+        mc_limit = 50_000
 
     start_idx = min(max(start - 1, 0), len(lines) - 1)
     end_idx = len(lines) - 1 if end is None else min(max(end - 1, start_idx), len(lines) - 1)
@@ -867,7 +871,11 @@ def execute_open_attachment(
     )
 
     # Allocate budget for excerpt lines.
-    remaining = max(0, mc - len(header) - 2)
+    remaining: Optional[int]
+    if mc_limit is None:
+        remaining = None
+    else:
+        remaining = max(0, int(mc_limit) - len(header) - 2)
     rendered_lines: list[str] = []
     content_lines: list[str] = []
     used = 0
@@ -877,12 +885,12 @@ def execute_open_attachment(
         prefix = f"{line_no:>{num_width}}: "
         row = f"{prefix}{ln}"
         add_len = len(row) + (1 if rendered_lines else 0)
-        if used + add_len > remaining and rendered_lines:
+        if remaining is not None and used + add_len > remaining and rendered_lines:
             truncated = True
             break
-        if used + add_len > remaining and not rendered_lines:
+        if remaining is not None and used + add_len > remaining and not rendered_lines:
             # Always show at least one line, even if it truncates.
-            if remaining <= 1:
+            if int(remaining) <= 1:
                 row = "…"
                 content_line = "…"
             else:
@@ -904,7 +912,7 @@ def execute_open_attachment(
         used += add_len
 
     rendered = header + "\n\n" + "\n".join(rendered_lines)
-    if truncated and len(rendered) + 18 <= mc:
+    if truncated and mc_limit is not None and len(rendered) + 18 <= int(mc_limit):
         #[WARNING:TRUNCATION] open_attachment returned a bounded excerpt
         rendered += "\n\n… (truncated)"
 

@@ -172,13 +172,10 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
     out.append(
         {
             "name": "open_attachment",
-            "description": (
-                "Open a session attachment. Text attachments return a bounded excerpt; media attachments "
-                "(image/audio/pdf/etc) are attached as `media` for the next LLM call."
-            ),
+            "description": "Open a session attachment; returns text (excerpt or full if max_chars<=0) and attaches media for the next LLM call.",
             "when_to_use": (
-                "Re-open a previously attached file; text returns a bounded excerpt, media is attached as `media` on "
-                "the next call. Do not call if it is already present in the current messages/media."
+                "Re-open a previously attached file; text returns an excerpt by default (or full when max_chars<=0), "
+                "media is attached as `media` on the next call. Do not call if it is already present in the current messages/media."
             ),
             "parameters": {
                 "artifact_id": {"type": "string", "default": None},
@@ -197,6 +194,10 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
                 {
                     "description": "Open by handle",
                     "arguments": {"handle": "@docs/architecture.md", "max_chars": 2000},
+                },
+                {
+                    "description": "Open full text (no cap)",
+                    "arguments": {"artifact_id": "abc123", "max_chars": 0},
                 },
             ],
             "toolset": "files",

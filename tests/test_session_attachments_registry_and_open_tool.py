@@ -114,6 +114,21 @@ def test_open_attachment_reads_bounded_ranges() -> None:
     assert isinstance(out2, dict)
     assert out2.get("truncated") is True
 
+    ok3, out3, _err3 = execute_open_attachment(
+        artifact_store=store,
+        session_id=sid,
+        artifact_id=meta.artifact_id,
+        handle=None,
+        expected_sha256=None,
+        start_line=1,
+        end_line=None,
+        max_chars=0,  # no cap
+    )
+    assert ok3 is True
+    assert isinstance(out3, dict)
+    assert out3.get("truncated") is False
+    assert "3: third" in str(out3.get("rendered") or "")
+
 
 @pytest.mark.basic
 def test_open_attachment_small_preview_expands_to_full_by_default() -> None:

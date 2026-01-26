@@ -24,25 +24,10 @@ def _allowed_predicate_ids() -> set[str]:
     try:
         from abstractsemantics import load_semantics_registry  # type: ignore
     except Exception as e:  # pragma: no cover
-        # Dev convenience (monorepo):
-        # `abstractsemantics` uses src-layout (abstractsemantics/src). When running from source
-        # without editable installs, add that path if present.
-        try:
-            import sys
-            from pathlib import Path
-
-            here = Path(__file__).resolve()
-            for parent in here.parents:
-                candidate = parent / "abstractsemantics" / "src"
-                if candidate.is_dir():
-                    sys.path.insert(0, str(candidate))
-                    break
-            from abstractsemantics import load_semantics_registry  # type: ignore
-        except Exception:
-            raise RuntimeError(
-                "Semantics registry is required for MEMORY_KG_ASSERT validation. "
-                "Install/enable `abstractsemantics` (or disable validation explicitly in a future mode)."
-            ) from e
+        raise RuntimeError(
+            "Semantics registry is required for MEMORY_KG_ASSERT validation. "
+            "Install `abstractsemantics` into the same environment as the runtime/gateway (e.g. `pip install -e ./abstractsemantics`)."
+        ) from e
     reg = load_semantics_registry()
     ids = getattr(reg, "predicate_ids", None)
     allowed = ids() if callable(ids) else set()

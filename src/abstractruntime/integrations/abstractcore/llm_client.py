@@ -18,6 +18,7 @@ import json
 import locale
 import os
 import re
+import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -26,8 +27,59 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
+_LOCAL_GENERATE_LOCKS: Dict[Tuple[str, str], threading.Lock] = {}
+_LOCAL_GENERATE_LOCKS_LOCK = threading.Lock()
+_LOCAL_GENERATE_LOCKS_WARNED: set[Tuple[str, str]] = set()
+_LOCAL_GENERATE_LOCKS_WARNED_LOCK = threading.Lock()
+
+
+def _local_generate_lock(*, provider: str, model: str) -> Optional[threading.Lock]:
+    """Return a process-wide generation lock for providers that are not thread-safe.
+
+    MLX/Metal can crash the process when concurrent generations occur from multiple threads
+    (e.g. gateway ticking multiple runs concurrently). We serialize MLX generation per model
+    as a safety contract.
+    """
+
+    prov = str(provider or "").strip().lower()
+    if prov != "mlx":
+        return None
+    key = (prov, str(model or "").strip())
+    with _LOCAL_GENERATE_LOCKS_LOCK:
+        lock = _LOCAL_GENERATE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _LOCAL_GENERATE_LOCKS[key] = lock
+        return lock
+
+
+def _warn_local_generate_lock_once(*, provider: str, model: str) -> None:
+    prov = str(provider or "").strip().lower()
+    key = (prov, str(model or "").strip())
+    with _LOCAL_GENERATE_LOCKS_WARNED_LOCK:
+        if key in _LOCAL_GENERATE_LOCKS_WARNED:
+            return
+        _LOCAL_GENERATE_LOCKS_WARNED.add(key)
+    logger.warning(
+        "Local provider generation is serialized for safety (prevents MLX/Metal crashes under concurrency).",
+        provider=prov,
+        model=key[1],
+    )
+
 _SYSTEM_CONTEXT_HEADER_RE = re.compile(
+    # ChatML-style user-turn grounding prefix, matching `chat-mlx.py` / `chat-hf.py`:
+    #   "[YYYY/MM/DD HH:MM CC]" (optionally followed by whitespace + user text).
+    r"^\[\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}\s+[A-Z]{2}\](?:\s|$)",
+    re.IGNORECASE,
+)
+
+_LEGACY_SYSTEM_CONTEXT_HEADER_RE = re.compile(
     r"^Grounding:\s*\d{4}/\d{2}/\d{2}\|\d{2}:\d{2}\|[A-Z]{2}$",
+    re.IGNORECASE,
+)
+
+_LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE = re.compile(
+    r"^Grounding:\s*(\d{4}/\d{2}/\d{2})\|(\d{2}:\d{2})\|([A-Z]{2})$",
     re.IGNORECASE,
 )
 
@@ -166,16 +218,17 @@ def _detect_country() -> str:
 
 def _system_context_header() -> str:
     # Use local datetime (timezone-aware) to match the user's environment.
-    stamp = datetime.now().astimezone().strftime("%Y/%m/%d|%H:%M")
-    return f"Grounding: {stamp}|{_detect_country()}"
+    # Format mirrors `chat-mlx.py`: "[YYYY/MM/DD HH:MM CC]"
+    stamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M")
+    return f"[{stamp} {_detect_country()}]"
 
 def _strip_system_context_header(system_prompt: Optional[str]) -> Optional[str]:
-    """Remove a runtime-injected Grounding header from the system prompt (best-effort).
+    """Remove a runtime-injected system-context header from the system prompt (best-effort).
 
     Why:
-    - Historically AbstractRuntime injected Grounding into the *system prompt*.
+    - Historically AbstractRuntime injected a "Grounding: ..." line into the *system prompt*.
     - Prompt/KV caching works best when stable prefixes (system/tools/history) do not contain per-turn entropy.
-    - We still want Grounding per turn, but we inject it into the *current user turn* instead.
+    - We still want date/time/country per turn, but we inject it into the *current user turn* instead.
     """
     if not isinstance(system_prompt, str):
         return system_prompt
@@ -183,7 +236,8 @@ def _strip_system_context_header(system_prompt: Optional[str]) -> Optional[str]:
     lines = raw.splitlines()
     if not lines:
         return None
-    if not _SYSTEM_CONTEXT_HEADER_RE.match(lines[0].strip()):
+    first = lines[0].strip()
+    if not (_LEGACY_SYSTEM_CONTEXT_HEADER_RE.match(first) or _SYSTEM_CONTEXT_HEADER_RE.match(first)):
         return raw
     rest = "\n".join(lines[1:]).lstrip()
     return rest if rest else None
@@ -194,20 +248,28 @@ def _inject_turn_grounding(
     prompt: str,
     messages: Optional[List[Dict[str, Any]]],
 ) -> tuple[str, Optional[List[Dict[str, Any]]]]:
-    """Inject Grounding into the *current user turn* (not the system prompt)."""
+    """Inject date/time/country into the *current user turn* (not the system prompt)."""
     header = _system_context_header()
 
-    def _already_has_header(text: str) -> bool:
+    def _prefix_with_header(text: str) -> str:
+        """Prefix with the current header, or rewrite a legacy `Grounding:` prefix into bracket form."""
         if not isinstance(text, str) or not text.strip():
-            return False
-        first = text.strip().splitlines()[0].strip()
-        return bool(_SYSTEM_CONTEXT_HEADER_RE.match(first))
+            return header
+        raw = str(text)
+        first = raw.lstrip().splitlines()[0].strip()
+        if _SYSTEM_CONTEXT_HEADER_RE.match(first):
+            return raw
+        legacy = _LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE.match(first)
+        if legacy:
+            date_part, time_part, cc = legacy.group(1), legacy.group(2), legacy.group(3).upper()
+            bracket = f"[{date_part} {time_part} {cc}]"
+            rest = "\n".join(raw.lstrip().splitlines()[1:]).lstrip()
+            return f"{bracket} {rest}" if rest else bracket
+        return f"{header} {raw}"
 
     prompt_str = str(prompt or "")
     if prompt_str.strip():
-        if _already_has_header(prompt_str):
-            return prompt_str, messages
-        return f"{header}\n\n{prompt_str}", messages
+        return _prefix_with_header(prompt_str), messages
 
     if isinstance(messages, list) and messages:
         out: List[Dict[str, Any]] = []
@@ -220,9 +282,7 @@ def _inject_turn_grounding(
                 continue
             content = out[i].get("content")
             content_str = content if isinstance(content, str) else str(content or "")
-            if _already_has_header(content_str):
-                return prompt_str, out
-            out[i]["content"] = f"{header}\n\n{content_str}" if content_str.strip() else header
+            out[i]["content"] = _prefix_with_header(content_str)
             return prompt_str, out
 
         # No user message found; append a synthetic user turn.
@@ -708,6 +768,9 @@ class LocalAbstractCoreLLMClient:
 
         self._provider = provider
         self._model = model
+        self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
+        if self._generate_lock is not None:
+            _warn_local_generate_lock_once(provider=self._provider, model=self._model)
         kwargs = dict(llm_kwargs or {})
         kwargs.setdefault("enable_tracing", True)
         if kwargs.get("enable_tracing"):
@@ -747,20 +810,39 @@ class LocalAbstractCoreLLMClient:
         params.pop("_provider", None)
         params.pop("_model", None)
 
-        resp = self._llm.generate(
-            prompt=str(prompt or ""),
-            messages=messages,
-            system_prompt=system_prompt,
-            tools=tools,
-            media=media,
-            stream=stream,
-            **params,
-        )
-        if stream and hasattr(resp, "__next__"):
-            result = _normalize_local_streaming_response(resp)
+        lock = getattr(self, "_generate_lock", None)
+        if lock is None:
+            resp = self._llm.generate(
+                prompt=str(prompt or ""),
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                media=media,
+                stream=stream,
+                **params,
+            )
+            if stream and hasattr(resp, "__next__"):
+                result = _normalize_local_streaming_response(resp)
+            else:
+                result = _normalize_local_response(resp)
+            result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
         else:
-            result = _normalize_local_response(resp)
-        result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+            # Serialize generation for non-thread-safe providers (e.g. MLX).
+            with lock:
+                resp = self._llm.generate(
+                    prompt=str(prompt or ""),
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    media=media,
+                    stream=stream,
+                    **params,
+                )
+                if stream and hasattr(resp, "__next__"):
+                    result = _normalize_local_streaming_response(resp)
+                else:
+                    result = _normalize_local_response(resp)
+                result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
         # Durable observability: ensure a provider request payload exists even when the
         # underlying provider does not attach `_provider_request` metadata.

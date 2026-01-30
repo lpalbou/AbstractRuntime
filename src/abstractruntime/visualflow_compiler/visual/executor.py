@@ -844,7 +844,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 try:
                     from abstractsemantics import resolve_schema_ref  # type: ignore
                 except Exception as e:
-                    raise RuntimeError(f"Structured-output schema ref requires abstractsemantics: {ref}") from e
+                    import sys
+
+                    raise RuntimeError(
+                        "Structured-output schema ref requires `abstractsemantics` to be installed in the same "
+                        f"Python environment as the runtime/gateway (cannot resolve $ref={ref!r}). "
+                        f"Current python: {sys.executable}. Install with: `pip install abstractsemantics`."
+                    ) from e
                 resolved = resolve_schema_ref(schema)
                 if isinstance(resolved, dict) and resolved:
                     return resolved
@@ -1668,7 +1674,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 try:
                     from abstractsemantics import resolve_schema_ref  # type: ignore
                 except Exception as e:
-                    raise RuntimeError(f"Structured-output schema ref requires abstractsemantics: {ref}") from e
+                    import sys
+
+                    raise RuntimeError(
+                        "Structured-output schema ref requires `abstractsemantics` to be installed in the same "
+                        f"Python environment as the runtime/gateway (cannot resolve $ref={ref!r}). "
+                        f"Current python: {sys.executable}. Install with: `pip install abstractsemantics`."
+                    ) from e
                 resolved = resolve_schema_ref(schema)
                 if isinstance(resolved, dict) and resolved:
                     return resolved

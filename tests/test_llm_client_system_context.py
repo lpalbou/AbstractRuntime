@@ -11,7 +11,7 @@ pytestmark = pytest.mark.basic
 
 
 _HEADER_RE = re.compile(
-    r"^Grounding:\s*\d{4}/\d{2}/\d{2}\|\d{2}:\d{2}\|[A-Z]{2}$",
+    r"^\[\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}\s+[A-Z]{2}\]",
     re.IGNORECASE,
 )
 
@@ -44,12 +44,15 @@ def test_local_llm_client_injects_date_and_country_into_user_prompt(monkeypatch)
     assert client._llm.calls, "expected a provider call"
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     first = prompt_sent.splitlines()[0].strip()
-    assert _HEADER_RE.match(first)
-    assert first.endswith("|FR")
+    m = _HEADER_RE.match(first)
+    assert m
+    assert m.group(0).endswith(" FR]")
     assert isinstance(result.get("metadata"), dict)
     payload = result["metadata"]["_provider_request"]["payload"]
     assert payload["messages"][0]["role"] == "user"
-    assert str(payload["messages"][0]["content"] or "").splitlines()[0].strip().endswith("|FR")
+    m2 = _HEADER_RE.match(str(payload["messages"][0]["content"] or ""))
+    assert m2
+    assert m2.group(0).endswith(" FR]")
 
 
 def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch) -> None:
@@ -83,8 +86,9 @@ def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch
     assert sys.strip() == "Base system prompt."
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     first = prompt_sent.splitlines()[0].strip()
-    assert _HEADER_RE.match(first)
-    assert first.endswith("|FR")
+    m = _HEADER_RE.match(first)
+    assert m
+    assert m.group(0).endswith(" FR]")
 
 
 def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) -> None:
@@ -115,8 +119,9 @@ def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) 
     body = sender.calls[0]["json"]
     assert body["messages"][0]["role"] == "user"
     first = str(body["messages"][0]["content"] or "").splitlines()[0].strip()
-    assert _HEADER_RE.match(first)
-    assert first.endswith("|FR")
+    m = _HEADER_RE.match(first)
+    assert m
+    assert m.group(0).endswith(" FR]")
 
 
 def test_system_context_header_is_per_call(monkeypatch) -> None:
@@ -127,14 +132,18 @@ def test_system_context_header_is_per_call(monkeypatch) -> None:
     def _fake_header() -> str:
         counter["n"] += 1
         # keep the same format so other consumers remain compatible
-        return f"Grounding: 2000/01/01|00:0{counter['n']}|FR"
+        return f"[2000/01/01 00:0{counter['n']} FR]"
 
     monkeypatch.setattr(llm_client, "_system_context_header", _fake_header)
 
     a, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
     b, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
 
-    assert a.splitlines()[0].strip() != b.splitlines()[0].strip()
+    header_re = re.compile(r"^\[[^\]]+\]")
+    ha = header_re.match(a)
+    hb = header_re.match(b)
+    assert ha and hb
+    assert ha.group(0) != hb.group(0)
     assert counter["n"] == 2
 
 

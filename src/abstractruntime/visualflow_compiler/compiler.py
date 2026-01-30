@@ -1069,6 +1069,26 @@ def _create_visual_agent_effect_handler(
             "model": model,
             "allowed_tools": list(allowed_tools),
         }
+
+        # Media input policy defaults (run-scoped):
+        # If the parent run configured an explicit audio policy (e.g. AbstractCode sets
+        # `_runtime.audio_policy="auto"` when audio attachments are present), inherit it
+        # into the Agent subworkflow so all nested LLM calls behave consistently.
+        try:
+            parent_runtime = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        except Exception:
+            parent_runtime = None
+        if isinstance(parent_runtime, dict):
+            ap = parent_runtime.get("audio_policy")
+            if isinstance(ap, str) and ap.strip():
+                runtime_ns.setdefault("audio_policy", ap.strip())
+
+            stt_lang = parent_runtime.get("stt_language")
+            if stt_lang is None:
+                stt_lang = parent_runtime.get("audio_language")
+            if isinstance(stt_lang, str) and stt_lang.strip():
+                runtime_ns.setdefault("stt_language", stt_lang.strip())
+
         # Sampling controls:
         # - Do NOT force default values into the child runtime vars.
         # - When unset, step-level agent defaults (e.g. lower temperature for tool-followthrough)

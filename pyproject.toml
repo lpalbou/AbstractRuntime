@@ -33,6 +33,12 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
+dependencies = [
+  # Required to resolve stable structured-output schema refs like:
+  # {"$ref":"abstractsemantics:kg_assertion_schema_v0"}
+  "abstractsemantics>=0.0.1",
+]
+
 [project.optional-dependencies]
 # Enables `abstractruntime.integrations.abstractcore.*` imports.
 abstractcore = [
@@ -53,5 +59,4 @@ abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_work
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abstractruntime"]
-
 

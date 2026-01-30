@@ -1004,6 +1004,26 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
             structured_requested = isinstance(response_schema, dict) and response_schema
             params_for_call = dict(params)
+
+            # Runtime-owned defaults (run-scoped): allow workflows/clients to set once at
+            # run start via `run.vars["_runtime"]` and have all LLM calls inherit them.
+            #
+            # This is intentionally narrow: only copy explicit policy keys we support.
+            try:
+                runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+            except Exception:
+                runtime_ns = None
+            if isinstance(runtime_ns, dict):
+                audio_policy = runtime_ns.get("audio_policy")
+                if "audio_policy" not in params_for_call and isinstance(audio_policy, str) and audio_policy.strip():
+                    params_for_call["audio_policy"] = audio_policy.strip()
+
+                stt_language = runtime_ns.get("stt_language")
+                if stt_language is None:
+                    stt_language = runtime_ns.get("audio_language")
+                if "stt_language" not in params_for_call and isinstance(stt_language, str) and stt_language.strip():
+                    params_for_call["stt_language"] = stt_language.strip()
+
             if structured_requested:
                 model_name = (
                     str(response_schema_name).strip()

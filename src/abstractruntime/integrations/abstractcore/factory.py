@@ -95,8 +95,9 @@ def create_local_runtime(
 
     # Runtime authority: choose default timeouts for orchestrated workflows.
     #
-    # We honor AbstractCore's config defaults unless the caller explicitly overrides.
-    # This keeps orchestration behavior consistent and prevents long-running stalls in gateway mode.
+    # Note: local providers may ignore timeouts (e.g. MLX) and should warn explicitly when doing so.
+    # We still pass a timeout through the runtime for future-proofing and consistent orchestration
+    # policy across providers.
     default_llm_timeout_s: float = DEFAULT_LLM_TIMEOUT_S
     default_tool_timeout_s: float = DEFAULT_TOOL_TIMEOUT_S
     try:

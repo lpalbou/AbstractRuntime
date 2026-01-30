@@ -123,3 +123,49 @@ def test_abstractcore_tool_executor_executes_registered_tool():
     assert result["results"][0]["success"] is True
     assert result["results"][0]["output"] == 5
 
+
+@pytest.mark.basic
+def test_llm_call_handler_inherits_audio_policy_from_runtime_namespace() -> None:
+    from abstractruntime.integrations.abstractcore.effect_handlers import build_effect_handlers
+
+    seen: dict = {}
+
+    class CapturingLLMClient:
+        def generate(self, **kwargs):
+            seen["params"] = kwargs.get("params")
+            return {"content": "ok"}
+
+    llm = CapturingLLMClient()
+    tools = StubToolExecutor({"mode": "executed", "results": []})
+
+    rt = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers=build_effect_handlers(llm=llm, tools=tools),
+    )
+
+    def n1(run, ctx):
+        return StepPlan(
+            node_id="n1",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={"prompt": "hello"},
+                result_key="llm",
+            ),
+            next_node="n2",
+        )
+
+    def n2(run, ctx):
+        return StepPlan(node_id="n2", complete_output={"llm": run.vars.get("llm")})
+
+    wf = WorkflowSpec(workflow_id="wf", entry_node="n1", nodes={"n1": n1, "n2": n2})
+    run_id = rt.start(workflow=wf, vars={"_runtime": {"audio_policy": "auto", "stt_language": "fr"}})
+    state = rt.tick(workflow=wf, run_id=run_id)
+
+    assert state.status.value == "completed"
+    assert state.vars["llm"]["content"] == "ok"
+
+    params = seen.get("params")
+    assert isinstance(params, dict)
+    assert params.get("audio_policy") == "auto"
+    assert params.get("stt_language") == "fr"

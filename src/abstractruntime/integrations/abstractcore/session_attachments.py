@@ -125,7 +125,9 @@ def render_session_attachments_system_message(
     if max_e <= 0 or max_c <= 0:
         return ""
 
-    lines: list[str] = ["Stored session attachments (most recent first; not necessarily active in this call):"]
+    lines: list[str] = [
+        "Stored session attachments (most recent first; not necessarily active in this call). Do not mention this list:"
+    ]
     used = len(lines[0]) + 1
 
     if include_open_attachment_hint:
@@ -215,7 +217,7 @@ def render_active_attachments_system_message(
         return ""
 
     lines: list[str] = [
-        "Active attachments are already available in this call. Use their content directly; do not call tools to re-open them."
+        "Active attachments are already available in this call. Use their content directly; do not call tools to re-open them. Do not mention this list."
     ]
     used = len(lines[0]) + 1
 

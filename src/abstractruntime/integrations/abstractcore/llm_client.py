@@ -243,6 +243,34 @@ def _strip_system_context_header(system_prompt: Optional[str]) -> Optional[str]:
     return rest if rest else None
 
 
+def _strip_internal_system_messages(messages: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    """Remove internal system messages that should never leak into model outputs.
+
+    Today this is intentionally narrow and only strips the synthetic tool-activity
+    summaries that can be injected by some agent hosts:
+      "Recent tool activity (auto): ..."
+
+    Why:
+    - Some local/open models will echo system-message content verbatim.
+    - These tool-trace summaries are *operator/debug* context, not user-facing content.
+    """
+    if not isinstance(messages, list) or not messages:
+        return messages
+
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "").strip().lower()
+        if role == "system":
+            c = m.get("content")
+            if isinstance(c, str) and c.lstrip().startswith("Recent tool activity"):
+                continue
+        out.append(dict(m))
+
+    return out or None
+
+
 def _inject_turn_grounding(
     *,
     prompt: str,
@@ -794,6 +822,7 @@ class LocalAbstractCoreLLMClient:
 
         system_prompt = _strip_system_context_header(system_prompt)
         prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+        messages = _strip_internal_system_messages(messages)
 
         stream_raw = params.pop("stream", None)
         if stream_raw is None:

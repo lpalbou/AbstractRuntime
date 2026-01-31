@@ -91,6 +91,44 @@ def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch
     assert m.group(0).endswith(" FR]")
 
 
+def test_local_llm_client_drops_recent_tool_activity_system_messages(monkeypatch) -> None:
+    from abstractcore.core.types import GenerateResponse
+    from abstractcore.tools.handler import UniversalToolHandler
+
+    class _DummyLLM:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def get_capabilities(self) -> list[str]:
+            return []
+
+        def generate(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return GenerateResponse(content="ok", finish_reason="stop", gen_time=1.0)
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "dummy"
+    client._model = "openai/gpt-oss-20b"
+    client._llm = _DummyLLM()
+    client._tool_handler = UniversalToolHandler(client._model)
+
+    messages = [
+        {"role": "system", "content": "Recent tool activity (auto):\n- turn 1: tools: —"},
+        {"role": "user", "content": "hello"},
+    ]
+
+    client.generate(prompt="", messages=messages)
+
+    assert client._llm.calls, "expected a provider call"
+    sent = client._llm.calls[0].get("messages")
+    assert isinstance(sent, list)
+    assert all(
+        not (m.get("role") == "system" and str(m.get("content") or "").lstrip().startswith("Recent tool activity"))
+        for m in sent
+        if isinstance(m, dict)
+    )
+
+
 def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) -> None:
     monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
 

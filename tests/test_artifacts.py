@@ -701,7 +701,7 @@ class TestArtifactIdValidation:
             store = FileArtifactStore(tmpdir)
 
             with pytest.raises(ValueError, match="Invalid artifact_id"):
-                store.store(b"evil", artifact_id="../../../etc/passwd")
+                store.store(b"evil", artifact_id="../../../SENSITIVE_FILE")
 
     def test_invalid_artifact_id_special_chars(self):
         """Special characters in artifact ID are rejected."""

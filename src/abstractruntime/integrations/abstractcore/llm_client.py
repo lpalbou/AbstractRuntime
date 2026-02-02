@@ -68,8 +68,9 @@ def _warn_local_generate_lock_once(*, provider: str, model: str) -> None:
 
 _SYSTEM_CONTEXT_HEADER_RE = re.compile(
     # ChatML-style user-turn grounding prefix, matching `chat-mlx.py` / `chat-hf.py`:
-    #   "[YYYY/MM/DD HH:MM CC]" (optionally followed by whitespace + user text).
-    r"^\[\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}\s+[A-Z]{2}\](?:\s|$)",
+    #   "[YYYY-MM-DD HH:MM:SS CC]" (optionally followed by whitespace + user text).
+    # Backward compatible with the historical "[YYYY/MM/DD HH:MM CC]" form.
+    r"^\[\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+[A-Z]{2}\](?:\s|$)",
     re.IGNORECASE,
 )
 
@@ -218,8 +219,8 @@ def _detect_country() -> str:
 
 def _system_context_header() -> str:
     # Use local datetime (timezone-aware) to match the user's environment.
-    # Format mirrors `chat-mlx.py`: "[YYYY/MM/DD HH:MM CC]"
-    stamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M")
+    # Format: "[YYYY-MM-DD HH:MM:SS CC]"
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     return f"[{stamp} {_detect_country()}]"
 
 def _strip_system_context_header(system_prompt: Optional[str]) -> Optional[str]:
@@ -290,6 +291,8 @@ def _inject_turn_grounding(
         legacy = _LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE.match(first)
         if legacy:
             date_part, time_part, cc = legacy.group(1), legacy.group(2), legacy.group(3).upper()
+            date_part = date_part.replace("/", "-")
+            time_part = f"{time_part}:00" if len(time_part) == 5 else time_part
             bracket = f"[{date_part} {time_part} {cc}]"
             rest = "\n".join(raw.lstrip().splitlines()[1:]).lstrip()
             return f"{bracket} {rest}" if rest else bracket

@@ -11,7 +11,7 @@ pytestmark = pytest.mark.basic
 
 
 _HEADER_RE = re.compile(
-    r"^\[\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}\s+[A-Z]{2}\]",
+    r"^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+[A-Z]{2}\]",
     re.IGNORECASE,
 )
 
@@ -170,7 +170,7 @@ def test_system_context_header_is_per_call(monkeypatch) -> None:
     def _fake_header() -> str:
         counter["n"] += 1
         # keep the same format so other consumers remain compatible
-        return f"[2000/01/01 00:0{counter['n']} FR]"
+        return f"[2000-01-01 00:00:0{counter['n']} FR]"
 
     monkeypatch.setattr(llm_client, "_system_context_header", _fake_header)
 

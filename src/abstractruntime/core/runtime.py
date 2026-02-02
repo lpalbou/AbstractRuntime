@@ -201,6 +201,51 @@ def _ensure_tool_calls_have_runtime_ids(
 
     return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
+def _maybe_inject_llm_call_grounding_for_ledger(*, effect: Effect) -> Effect:
+    """Inject per-call time/location grounding into LLM_CALL payloads for auditability.
+
+    Why:
+    - The ledger is the replay/source-of-truth for thin clients.
+    - Grounding is injected at the integration boundary (AbstractCore LLM client) so the
+      model always knows "when/where" it is.
+    - But that injection historically happened *after* the runtime recorded the LLM_CALL
+      payload, making it appear missing in ledger UIs.
+
+    Contract:
+    - Only mutates the effect payload (never the durable run context/messages).
+    - Must not influence idempotency keys; callers should compute idempotency before calling this.
+    """
+
+    if effect.type != EffectType.LLM_CALL:
+        return effect
+    if not isinstance(effect.payload, dict):
+        return effect
+
+    payload = dict(effect.payload)
+    prompt = payload.get("prompt")
+    messages = payload.get("messages")
+    prompt_str = str(prompt or "")
+    messages_list = messages if isinstance(messages, list) else None
+
+    try:
+        from abstractruntime.integrations.abstractcore.llm_client import _inject_turn_grounding
+    except Exception:
+        return effect
+
+    updated_prompt, updated_messages = _inject_turn_grounding(prompt=prompt_str, messages=messages_list)
+
+    changed = False
+    if updated_prompt != prompt_str:
+        payload["prompt"] = updated_prompt
+        changed = True
+
+    if messages_list is not None:
+        if updated_messages != messages_list:
+            payload["messages"] = updated_messages
+            changed = True
+
+    return Effect(type=effect.type, payload=payload, result_key=effect.result_key) if changed else effect
+
 
 def _ensure_runtime_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
     runtime_ns = vars.get("_runtime")
@@ -972,6 +1017,10 @@ class Runtime:
                 # Reuse prior result - skip re-execution
                 outcome = EffectOutcome.completed(prior_result)
             else:
+                # For LLM calls, inject runtime grounding into the effect payload so ledger consumers
+                # can see exactly what the model was sent (timestamp + country), without mutating the
+                # durable run context.
+                effect = _maybe_inject_llm_call_grounding_for_ledger(effect=effect)
                 # Execute with retry logic
                 outcome = self._execute_effect_with_retry(
                     run=run,

@@ -3,10 +3,34 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import multiprocessing
 from pathlib import Path
 
 from abstractruntime.core.models import StepRecord, StepStatus
 from abstractruntime.storage.sqlite import SqliteDatabase, SqliteLedgerStore
+
+
+def _mp_sqlite_ledger_store_append_worker(
+    *,
+    db_path: str,
+    run_id: str,
+    worker_id: int,
+    start_evt: multiprocessing.synchronize.Event,
+    errors_q: multiprocessing.queues.Queue[str],
+    count: int,
+) -> None:
+    try:
+        if not start_evt.wait(timeout=5.0):
+            raise RuntimeError("start timeout")
+        db = SqliteDatabase(Path(db_path))
+        store = SqliteLedgerStore(db)
+        for j in range(int(count)):
+            store.append(StepRecord(run_id=run_id, step_id=f"{worker_id}:{j}", node_id="n", status=StepStatus.COMPLETED))
+    except BaseException as e:
+        try:
+            errors_q.put_nowait(repr(e))
+        except Exception:
+            pass
 
 
 def test_sqlite_ledger_store_append_list_count_and_restart(tmp_path: Path) -> None:
@@ -108,6 +132,54 @@ def test_sqlite_ledger_store_append_is_concurrency_safe(tmp_path: Path) -> None:
 
     assert not errors
     assert store.count(run_id) == 400
+
+
+def test_sqlite_ledger_store_append_is_multiprocess_concurrency_safe(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.sqlite3"
+    run_id = "run_1"
+
+    # Use a multiprocess test to approximate real gateway deployments where
+    # API + runner may append concurrently from different processes.
+    ctx = multiprocessing.get_context("spawn")
+    start_evt = ctx.Event()
+    errors_q: multiprocessing.queues.Queue[str] = ctx.Queue()
+    procs = [
+        ctx.Process(
+            target=_mp_sqlite_ledger_store_append_worker,
+            kwargs={
+                "db_path": str(db_path),
+                "run_id": run_id,
+                "worker_id": i,
+                "start_evt": start_evt,
+                "errors_q": errors_q,
+                "count": 40,
+            },
+            daemon=True,
+        )
+        for i in range(4)
+    ]
+    for p in procs:
+        p.start()
+    start_evt.set()
+    for p in procs:
+        p.join(timeout=20.0)
+
+    errors: list[str] = []
+    try:
+        while True:
+            errors.append(errors_q.get_nowait())
+    except Exception:
+        pass
+
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+        assert p.exitcode == 0
+
+    assert not errors
+    db2 = SqliteDatabase(db_path)
+    store2 = SqliteLedgerStore(db2)
+    assert store2.count(run_id) == 160
 
 
 def test_sqlite_ledger_store_backfills_heads_from_existing_ledger(tmp_path: Path) -> None:

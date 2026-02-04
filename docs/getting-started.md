@@ -133,6 +133,8 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 
 ## Next reading
 
+- `faq.md` — common questions and gotchas
+- `api.md` — public API surface (imports + pointers)
 - `architecture.md` — component map + durability invariants (with diagrams)
 - `manual_testing.md` — smoke tests and how to run `pytest`
 - `../examples/README.md` — runnable scripts

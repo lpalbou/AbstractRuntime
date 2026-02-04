@@ -62,7 +62,7 @@ Returns a structured dict for UI/status display. (`src/abstractruntime/core/runt
 
 Returns a list of `LimitWarning` objects for limits approaching/exceeded. (`src/abstractruntime/core/models.py`, `src/abstractruntime/core/runtime.py`)
 
-As of v0.4.0, warnings are computed for:
+As of v0.4.1, warnings are computed for:
 - `iterations` (`current_iteration` vs `max_iterations`)
 - `tokens` (`estimated_tokens_used` vs `max_tokens`)
 
@@ -81,4 +81,3 @@ rt.update_limits(run_id, {"max_tokens": 131072, "warn_tokens_pct": 85})
 - `architecture.md` — where `_limits` fits in the runtime
 - `integrations/abstractcore.md` — where token usage metadata typically comes from (`LLM_CALL`)
 - `manual_testing.md` — quick manual checks + running tests
-

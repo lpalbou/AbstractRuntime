@@ -4,6 +4,10 @@
 
 This file is a higher-signal orientation guide for LLM-based code assistants working in this repo.
 
+Quick facts:
+- Python: 3.10+
+- Version: 0.4.1 (`pyproject.toml`)
+
 ## Quick orientation
 
 - Package root: `src/abstractruntime/`
@@ -63,11 +67,17 @@ python -m pytest -q
 ## Canonical docs
 
 - `README.md` (install + quick start)
+- `CHANGELOG.md` (release notes)
 - `docs/getting-started.md` (first steps)
+- `docs/api.md` (public API surface)
+- `docs/faq.md` (common questions)
 - `docs/README.md` (docs index)
 - `docs/architecture.md` (component map + diagrams)
 - `docs/integrations/abstractcore.md` (LLM/tool wiring)
 - `docs/limits.md` (the `_limits` namespace and APIs)
+- `CONTRIBUTING.md` (dev setup + guidelines)
+- `SECURITY.md` (responsible vulnerability reporting)
+- `ACKNOWLEDGMENTS.md` (credits)
 
 ## Optional
 

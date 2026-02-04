@@ -6,11 +6,13 @@ This folder contains **user-facing docs** (how to use AbstractRuntime) and **mai
 
 - `../README.md` — install + quick start
 - `getting-started.md` — first steps (recommended)
+- `api.md` — public API surface (imports + pointers)
 - `architecture.md` — how the runtime is structured (with diagrams)
 - `proposal.md` — design goals and scope boundaries
 
 ## Guides
 
+- `faq.md` — common questions (recommended)
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS` via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
@@ -26,5 +28,10 @@ This folder contains **user-facing docs** (how to use AbstractRuntime) and **mai
 
 ## Maintainers
 
+- `../CHANGELOG.md` — release notes
+- `../CONTRIBUTING.md` — how to build/test and submit changes
+- `../SECURITY.md` — responsible vulnerability reporting
+- `../ACKNOWLEDGMENTS.md` — credits
+- `../ROADMAP.md` — prioritized next steps
 - `adr/README.md` — architectural decisions (why)
 - `backlog/README.md` — implemented and planned work items (what/how)

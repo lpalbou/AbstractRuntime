@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.0 (`pyproject.toml`) • **Python:** 3.10+
+**Version:** 0.4.1 (`pyproject.toml`) • **Python:** 3.10+
 
 ## Install
 
@@ -65,7 +65,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.0)
+## What’s included (v0.4.1)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -119,7 +119,9 @@ sr = create_scheduled_runtime(
 | Document | Description |
 |----------|-------------|
 | [Getting Started](docs/getting-started.md) | Install + first durable workflow |
+| [API Reference](docs/api.md) | Public API surface (imports + pointers) |
 | [Docs Index](docs/README.md) | Full docs map (guides + reference) |
+| [FAQ](docs/faq.md) | Common questions and gotchas |
 | [Architecture](docs/architecture.md) | Component map + diagrams |
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
 | [Integrations](docs/integrations/) | Integration guides (AbstractCore) |
@@ -129,6 +131,10 @@ sr = create_scheduled_runtime(
 | [Limits](docs/limits.md) | `_limits` namespace and RuntimeConfig |
 | [WorkflowBundles](docs/workflow-bundles.md) | `.flow` bundle format (VisualFlow distribution) |
 | [MCP Worker](docs/mcp-worker.md) | `abstractruntime-mcp-worker` CLI |
+| [Changelog](CHANGELOG.md) | Release notes |
+| [Contributing](CONTRIBUTING.md) | How to build/test and submit changes |
+| [Security](SECURITY.md) | Responsible vulnerability reporting |
+| [Acknowledgments](ACKNOWLEDGMENTS.md) | Credits |
 | [ROADMAP](ROADMAP.md) | Prioritized next steps |
 
 ## Development
@@ -140,3 +146,5 @@ python -m pip install -U pip
 python -m pip install -e ".[abstractcore,mcp-worker]"
 python -m pytest -q
 ```
+
+See `CONTRIBUTING.md` for contribution guidelines and doc conventions.

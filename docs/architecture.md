@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
 > Updated: 2026-02-04  
-> Version: 0.4.0 (see `pyproject.toml`)  
+> Version: 0.4.1 (see `pyproject.toml`)  
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -185,6 +185,7 @@ AbstractRuntime includes a compiler and a portable bundle format:
 ## See also
 - `../README.md` — install + quick start
 - `getting-started.md` — first steps
+- `api.md` — public API surface (imports + pointers)
 - `limits.md` — `_limits` and RuntimeConfig
 - `snapshots.md` — snapshot/bookmark stores
 - `provenance.md` — hash chain and verification

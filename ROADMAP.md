@@ -1,6 +1,6 @@
 # AbstractRuntime Roadmap
 
-## Current status (v0.4.0)
+## Current status (v0.4.1)
 
 AbstractRuntime provides a durable workflow kernel plus optional integrations:
 - durable execution: `Runtime.start/tick/resume`, explicit `WaitState` (`src/abstractruntime/core/runtime.py`)
@@ -34,4 +34,3 @@ These are tracked in `docs/backlog/planned/`:
 - distributed scheduling primitives (beyond in-process polling)
 - workflow versioning/migration patterns for long-lived runs and snapshot restore
 - stronger reproducibility contracts for replays (workflow snapshotting + run history bundles)
-

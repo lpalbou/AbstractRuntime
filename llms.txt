@@ -3,18 +3,20 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+
-- Version: 0.4.0 (`pyproject.toml`)
+- Version: 0.4.1 (`pyproject.toml`)
 - Invariant: `RunState.vars` must be JSON-serializable (use `ArtifactStore`/offloading for large values)
 
 ## Start here
 
 - [README](README.md)
 - [Getting started](docs/getting-started.md)
+- [API reference](docs/api.md)
 - [Docs index](docs/README.md)
 - [Architecture](docs/architecture.md)
 
 ## Guides
 
+- [FAQ](docs/faq.md)
 - [Manual testing](docs/manual_testing.md)
 - [Limits](docs/limits.md)
 
@@ -38,6 +40,9 @@
 
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Acknowledgments](ACKNOWLEDGMENTS.md)
 - [ADRs](docs/adr/README.md)
 - [Backlog](docs/backlog/README.md)
 

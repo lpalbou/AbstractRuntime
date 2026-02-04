@@ -8,12 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+### Changed
+
+### Fixed
+
+## [0.4.1] - 2026-02-04
+
+### Added
 - **Durable prompt metadata for EVENT waits**:
   - `WAIT_EVENT` effects may include optional `prompt`, `choices`, and `allow_free_text` fields.
   - The runtime persists these fields onto `WaitState` so hosts (including remote/thin clients) can render a durable ask+wait UX without relying on in-process callbacks.
 - **Rendering utilities** (`abstractruntime.rendering`):
   - `stringify_json(...)` + `JsonStringifyMode` to render JSON/JSON-ish values into strings with `none|beautify|minified` modes.
-  - `render_agent_trace_markdown(...)` to render runtime-owned `node_traces` scratchpads into a complete, review-friendly Markdown timeline (tool args + results untruncated).
+  - `render_agent_trace_markdown(...)` to render runtime-owned `node_traces` scratchpads into a complete, review-friendly Markdown timeline.
+- **Documentation refresh**:
+  - clearer entrypoints: `README.md` → `docs/getting-started.md`
+  - new reference docs: `docs/api.md`, `docs/faq.md`, `docs/architecture.md`
+  - maintainer-facing orientation: `llms.txt`, `llms-full.txt`
+  - new repo policies: `CONTRIBUTING.md`, `SECURITY.md`, `ACKNOWLEDGMENTS.md`
+
+### Fixed
+- Normalize AbstractCore tool specs for skim tools so `paths` is always an array parameter (improves JSON schema consistency for tool callers).
 
 ## [0.4.0] - 2025-01-06
 
@@ -203,15 +218,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Graph-Based Execution**: All workflows represented as state machines/graphs for visualization and composition
 - **JSON-Serializable State**: All run state and vars must be JSON-serializable for persistence
 
-#### Test Coverage
-- **81% Overall Coverage**: Comprehensive test suite with 57+ tests
-- **Integration Tests**: Tests for AbstractCore integration, subworkflows, trace propagation
-- **Core Tests**: Scheduler, snapshots, artifacts, pause/resume, retry/idempotency, ledger chain
-- **Storage Tests**: Queryable run store, durable toolsets
+#### Testing
+- Run the test suite with `python -m pytest -q` (see `docs/manual_testing.md`).
 
 #### Compatibility
 - **Python 3.10+**: Supports Python 3.10, 3.11, 3.12, and 3.13
-- **Development Status**: Planning/Alpha (moving toward Beta with 0.2.0)
 
 ### Known Limitations
 
@@ -236,5 +247,7 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[0.2.0]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.2.0
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.1
+[0.4.0]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.0
 [0.0.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.0.1

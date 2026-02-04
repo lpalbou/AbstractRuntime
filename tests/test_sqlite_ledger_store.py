@@ -214,3 +214,26 @@ def test_sqlite_ledger_store_backfills_heads_from_existing_ledger(tmp_path: Path
     row = db.connection().execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", ("run_1",)).fetchone()
     assert row is not None
     assert int(row["last_seq"] or 0) == 3
+
+
+def test_sqlite_ledger_store_append_duplicate_seq_error_includes_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.sqlite3"
+    db = SqliteDatabase(db_path)
+    store = SqliteLedgerStore(db)
+
+    run_id = "run_1"
+    store.append(StepRecord(run_id=run_id, step_id="s1", node_id="n1", status=StepStatus.STARTED))
+
+    # Corrupt the head to simulate a broken/partial migration or a writer bug.
+    conn = db.connection()
+    with conn:
+        conn.execute("UPDATE ledger_heads SET last_seq = 0 WHERE run_id = ?;", (run_id,))
+
+    try:
+        store.append(StepRecord(run_id=run_id, step_id="s2", node_id="n2", status=StepStatus.COMPLETED))
+        raise AssertionError("expected append to fail due to duplicate seq allocation")
+    except sqlite3.IntegrityError as e:
+        msg = str(e)
+        assert "UNIQUE constraint failed: ledger.run_id, ledger.seq" in msg
+        assert "run_id='run_1'" in msg
+        assert "seq=1" in msg

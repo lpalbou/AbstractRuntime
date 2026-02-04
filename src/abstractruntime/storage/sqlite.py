@@ -18,6 +18,7 @@ Scope (backlog 446):
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -29,6 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason, WaitState
 from .base import LedgerStore, RunStore
 from .commands import CommandAppendResult, CommandCursorStore, CommandRecord, CommandStore
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
@@ -548,10 +551,23 @@ class SqliteLedgerStore(LedgerStore):
             if row is None:
                 raise RuntimeError("Failed to allocate ledger seq")
             seq = int(row["last_seq"] or 0)
-            conn.execute(
-                "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
-                (run_id, int(seq), payload),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
+                    (run_id, int(seq), payload),
+                )
+            except sqlite3.IntegrityError as e:
+                msg = str(e)
+                if "UNIQUE constraint failed: ledger.run_id, ledger.seq" in msg:
+                    logger.error(
+                        "SqliteLedgerStore.append failed due to duplicate seq allocation "
+                        "(run_id=%s seq=%s db=%s). This usually indicates concurrent writers running "
+                        "a non-atomic seq allocator or a corrupted ledger_heads table.",
+                        run_id,
+                        seq,
+                        self._db.path,
+                    )
+                raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id or "").strip()

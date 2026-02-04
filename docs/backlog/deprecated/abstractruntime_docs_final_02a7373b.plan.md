@@ -21,7 +21,7 @@ todos:
 
 # AbstractRuntime documentation finalization (source-of-truth)
 
-## What I will produce (in `/Users/albou/projects/abstractruntime/`)
+## What I will produce (in the repository root)
 
 - Update **top-level docs** to match reality + final design:
 - `README.md`
@@ -119,6 +119,6 @@ todos:
 - Backlog items reflect current file names and actual implemented capabilities.
 - New doc set matches the refined design in `acore-runtime.md` and the local `abstractcore/runtime/backlog/*`.
 
-## Contingency (if writes to `/Users/albou/projects/abstractruntime/` are blocked again)
+## Contingency (if repository writes are blocked)
 
 - I will still produce the exact final markdown content inside this workspace (e.g. under `runtime/backlog/final_for_abstractruntime/`) and provide a single `git apply`-style patch file so you can apply it from your shell in the abstractruntime repo.

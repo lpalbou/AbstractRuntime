@@ -1,42 +1,40 @@
-# AbstractRuntime Backlog
+# Backlog (maintainers)
 
-This directory contains the organized backlog for AbstractRuntime development.
+This folder contains a structured backlog used during development. Items are grouped as:
+- `completed/` — implemented work items (what shipped, with implementation pointers)
+- `planned/` — future work proposals
+- `deprecated/` — historical backlog notes (superseded)
 
-## Structure
+If you are new to the project, start with `../README.md` and `../architecture.md` instead.
 
-```
-backlog/
-├── completed/     # Implemented and shipped items
-├── planned/       # Items scheduled for future implementation
-├── deprecated/    # Legacy/superseded backlog items (historical reference)
-└── README.md      # This file
-```
+## Completed
 
-## Completed Items
+| ID | Item |
+|----|------|
+| 001 | `completed/001_runtime_kernel.md` |
+| 002 | `completed/002_persistence_and_ledger.md` |
+| 003 | `completed/003_wait_primitives.md` |
+| 004 | `completed/004_scheduler_driver.md` |
+| 005 | `completed/005_abstractcore_integration.md` |
+| 006 | `completed/006_snapshots_bookmarks.md` |
+| 007 | `completed/007_provenance_hash_chain.md` |
+| 009 | `completed/009_artifact_store.md` |
+| 010 | `completed/010_examples_and_composition.md` |
+| 011 | `completed/011_subworkflow_support.md` |
+| 012 | `completed/012_run_store_query_and_scheduler_support.md` |
+| 013 | `completed/013_effect_retries_and_idempotency.md` |
+| 016 | `completed/016_runtime_aware_parameters.md` |
 
-| ID | Title | Description |
-|----|-------|-------------|
-| 001 | Runtime Kernel | Core models, spec, runtime loop (start/tick/resume) |
-| 002 | Persistence and Ledger | RunStore, LedgerStore interfaces + in-memory + JSON backends |
-| 003 | Wait Primitives | wait_event, wait_until, ask_user effect handlers |
-| 004 | Scheduler Driver | Built-in scheduler with WorkflowRegistry, auto-resume, event ingestion |
-| 005 | AbstractCore Integration | LLM_CALL, TOOL_CALLS handlers + local/remote/hybrid modes |
-| 006 | Snapshots/Bookmarks | Named checkpoints with search |
-| 007 | Provenance Hash Chain | Tamper-evident ledger with HashChainedLedgerStore |
-| 012 | RunStore Query + Scheduler Support | QueryableRunStore protocol + list_runs + list_due_wait_until |
+## Planned
 
-## Planned Items
+| ID | Item |
+|----|------|
+| 008 | `planned/008_signatures_and_keys.md` |
+| 014 | `planned/014_remote_tool_worker_executor.md` |
+| 015 | `planned/015_agent_integration_improvements.md` |
+| 017 | `planned/017_limit_warnings_and_observability.md` |
 
-| ID | Title | Priority | Dependencies |
-|----|-------|----------|--------------|
-| 011 | Subworkflow Support | High | - |
-| 010 | Examples and Composition | High | - |
-| 009 | Artifact Store | Medium | - |
-| 013 | Effect Retries and Idempotency | Medium | - |
-| 008 | Signatures and Keys | Low | 007 |
-| 014 | Remote Tool Worker Executor | Low | - |
+## Deprecated
 
-## Plan Reference
-
-See `deprecated/abstractruntime_docs_final_02a7373b.plan.md` for the documentation finalization plan that guided the initial implementation.
+See `deprecated/DEPRECATED_README.md` for context on the deprecated backlog set.
 

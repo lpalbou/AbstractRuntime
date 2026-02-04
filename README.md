@@ -1,23 +1,32 @@
-## AbstractRuntime
+# AbstractRuntime
 
-**AbstractRuntime** is a low-level **durable workflow runtime**:
-- Execute workflow graphs (state machines)
-- **Interrupt → checkpoint → resume** (hours/days) without keeping Python stacks alive
-- Append-only **ledger** ("journal d’exécution") for audit/debug/provenance
+**AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
-**Status**: MVP kernel + file persistence + AbstractCore integration adapters are implemented.
+It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
----
+**Version:** 0.4.0 (`pyproject.toml`) • **Python:** 3.10+
 
-### Key concepts
-- **WorkflowSpec**: graph definition (node handlers keyed by id)
-- **RunState**: durable state (`current_node`, `vars`, `waiting`, etc.)
-- **Effect**: a side-effect request (`llm_call`, `tool_calls`, `ask_user`, `wait_event`, ...)
-- **Ledger**: append-only step records (`StepRecord`) describing what happened
+## Install
 
----
+Core runtime:
 
-### Quick start (pause + resume)
+```bash
+pip install abstractruntime
+```
+
+AbstractCore integration (LLM + tools):
+
+```bash
+pip install "abstractruntime[abstractcore]"
+```
+
+MCP worker entrypoint (default toolsets over stdio):
+
+```bash
+pip install "abstractruntime[mcp-worker]"
+```
+
+## Quick start (pause + resume)
 
 ```python
 from abstractruntime import Effect, EffectType, Runtime, StepPlan, WorkflowSpec
@@ -56,30 +65,45 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
----
+## What’s included (v0.4.0)
 
-### Built-in Scheduler
+Kernel (dependency-light):
+- workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
+- durable execution: `Runtime.start/tick/resume` (`src/abstractruntime/core/runtime.py`)
+- durable waits/events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
+- append-only ledger (`StepRecord`) + node traces (`vars["_runtime"]["node_traces"]`)
+- retries/idempotency hooks: `src/abstractruntime/core/policy.py`
 
-AbstractRuntime includes a zero-config scheduler for automatic run resumption:
+Durability + storage:
+- stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
+- artifacts + offloading (store large payloads by reference)
+- snapshots/bookmarks (`docs/snapshots.md`)
+- tamper-evident hash-chained ledger (`docs/provenance.md`)
+
+Drivers + distribution:
+- scheduler: `create_scheduled_runtime()` (`src/abstractruntime/scheduler/*`)
+- VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
+- run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
+
+Optional integrations:
+- AbstractCore (LLM + tools): `docs/integrations/abstractcore.md`
+- comms toolset gating (email/WhatsApp/Telegram): `docs/tools-comms.md`
+
+## Built-in scheduler (zero-config)
 
 ```python
 from abstractruntime import create_scheduled_runtime
 
-# Zero-config: defaults to in-memory storage, auto-starts scheduler
 sr = create_scheduled_runtime()
-
-# run() does start + tick in one call
 run_id, state = sr.run(my_workflow)
 
-# If waiting for user input, respond (auto-finds wait_key)
 if state.status.value == "waiting":
     state = sr.respond(run_id, {"answer": "yes"})
 
-# Stop scheduler when done
 sr.stop()
 ```
 
-For production with persistent storage:
+For persistent storage:
 
 ```python
 from abstractruntime import create_scheduled_runtime, JsonFileRunStore, JsonlLedgerStore
@@ -90,52 +114,29 @@ sr = create_scheduled_runtime(
 )
 ```
 
----
-
-### AbstractCore integration (LLM + tools)
-
-AbstractRuntime’s kernel stays dependency-light; AbstractCore integration lives in:
-- `src/abstractruntime/integrations/abstractcore/`
-
-Execution modes:
-- **Local**: in-process AbstractCore providers + local tool execution
-- **Remote**: HTTP to AbstractCore server (`/v1/chat/completions`) + tool passthrough (default)
-- **Hybrid**: remote LLM + local tool execution
-
-See: `docs/integrations/abstractcore.md`.
-
----
-
-### Snapshots / bookmarks
-
-Snapshots are named, searchable checkpoints of a run state:
-- `Snapshot(snapshot_id, run_id, name, description, tags, run_state)`
-
-See: `docs/snapshots.md`.
-
----
-
-### Provenance (tamper-evident ledger)
-
-You can wrap any `LedgerStore` with a hash chain:
-
-- `HashChainedLedgerStore(inner_store)`
-- `verify_ledger_chain(records)`
-
-This is **tamper-evident**, not non-forgeable (signatures are optional future work).
-
-See: `docs/provenance.md`.
-
----
-
-### Documentation index
+## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Proposal](docs/proposal.md) | Design goals, core concepts, and scope |
-| [ROADMAP](ROADMAP.md) | Prioritized next steps with rationale |
-| [ADRs](docs/adr/) | Architectural decisions and their rationale |
-| [Backlog](docs/backlog/) | Completed and planned work items |
-| [Integrations](docs/integrations/) | AbstractCore integration guide |
+| [Getting Started](docs/getting-started.md) | Install + first durable workflow |
+| [Docs Index](docs/README.md) | Full docs map (guides + reference) |
+| [Architecture](docs/architecture.md) | Component map + diagrams |
+| [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
+| [Integrations](docs/integrations/) | Integration guides (AbstractCore) |
 | [Snapshots](docs/snapshots.md) | Named checkpoints for run state |
 | [Provenance](docs/provenance.md) | Tamper-evident ledger documentation |
+| [Evidence](docs/evidence.md) | Artifact-backed evidence capture for web/command tools |
+| [Limits](docs/limits.md) | `_limits` namespace and RuntimeConfig |
+| [WorkflowBundles](docs/workflow-bundles.md) | `.flow` bundle format (VisualFlow distribution) |
+| [MCP Worker](docs/mcp-worker.md) | `abstractruntime-mcp-worker` CLI |
+| [ROADMAP](ROADMAP.md) | Prioritized next steps |
+
+## Development
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[abstractcore,mcp-worker]"
+python -m pytest -q
+```

@@ -18,6 +18,5 @@ Add durability primitives:
 - The ledger contains step records with timestamps + status + effect/result.
 
 ### Deferred / planned
-- ArtifactStore (large payloads by reference)
+- ArtifactStore (large payloads by reference) — implemented later in `009_artifact_store.md`
 - Advanced indexing/search for ledgers
-

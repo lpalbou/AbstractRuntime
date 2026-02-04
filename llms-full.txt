@@ -1,0 +1,75 @@
+# AbstractRuntime (llms-full)
+
+> Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
+
+This file is a higher-signal orientation guide for LLM-based code assistants working in this repo.
+
+## Quick orientation
+
+- Package root: `src/abstractruntime/`
+- Public exports: `src/abstractruntime/__init__.py`
+- Kernel (durable semantics): `src/abstractruntime/core/`
+  - models: `src/abstractruntime/core/models.py`
+  - runtime loop: `src/abstractruntime/core/runtime.py`
+  - workflow spec: `src/abstractruntime/core/spec.py`
+  - vars conventions: `src/abstractruntime/core/vars.py`
+  - limits/config: `src/abstractruntime/core/config.py`
+  - retries/idempotency policy: `src/abstractruntime/core/policy.py`
+- Durability backends: `src/abstractruntime/storage/`
+- Driver loop (in-process): `src/abstractruntime/scheduler/`
+- Visual authoring/distribution:
+  - compiler: `src/abstractruntime/visualflow_compiler/`
+  - bundles: `src/abstractruntime/workflow_bundle/`
+- Observability:
+  - evidence recorder: `src/abstractruntime/evidence/recorder.py`
+  - rendering helpers: `src/abstractruntime/rendering/`
+  - run history export: `src/abstractruntime/history_bundle.py`
+- Optional integrations:
+  - AbstractCore: `src/abstractruntime/integrations/abstractcore/`
+  - AbstractMemory bridge: `src/abstractruntime/integrations/abstractmemory/`
+
+## Important invariants (durability)
+
+- `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`). For large payloads:
+  - store by reference in `ArtifactStore` (`src/abstractruntime/storage/artifacts.py`)
+  - or wrap stores with `OffloadingRunStore` / `OffloadingLedgerStore` (`src/abstractruntime/storage/offloading.py`)
+- When a run blocks, it persists a `WaitState` and resumes later via `Runtime.resume(...)`:
+  - resume continues from `WaitState.resume_to_node` (waiting node is not re-run)
+- The ledger is append-only (`StepRecord` in `src/abstractruntime/core/models.py`).
+  - for tamper-evidence, wrap with `HashChainedLedgerStore` (`src/abstractruntime/storage/ledger_chain.py`)
+- Side effects should be idempotent (or guarded):
+  - effect retry/idempotency is centralized via `EffectPolicy` (`src/abstractruntime/core/policy.py`)
+  - `Runtime.tick(...)` can reuse prior results based on idempotency keys (`src/abstractruntime/core/runtime.py`)
+
+## How to verify behavior quickly
+
+- Manual smoke tests: `docs/manual_testing.md`
+- Run unit tests:
+
+```bash
+python -m pytest -q
+```
+
+## Where to look (common questions)
+
+- “Why is it designed like this?” → ADRs: `docs/adr/README.md`
+- “What happens on tick/resume?” → `src/abstractruntime/core/runtime.py`
+- “What is persisted?” → `RunState`/`StepRecord`: `src/abstractruntime/core/models.py`
+- “How are tool calls handled?” → `EffectType.TOOL_CALLS` + ToolExecutor: `src/abstractruntime/integrations/abstractcore/tool_executor.py`
+- “How do I run scheduled workflows?” → scheduler: `src/abstractruntime/scheduler/`
+- “How do I distribute VisualFlows?” → bundles/compiler: `docs/workflow-bundles.md`
+- “How do I audit what happened?” → ledger/provenance/evidence: `docs/provenance.md`, `docs/evidence.md`
+
+## Canonical docs
+
+- `README.md` (install + quick start)
+- `docs/getting-started.md` (first steps)
+- `docs/README.md` (docs index)
+- `docs/architecture.md` (component map + diagrams)
+- `docs/integrations/abstractcore.md` (LLM/tool wiring)
+- `docs/limits.md` (the `_limits` namespace and APIs)
+
+## Optional
+
+- Examples: `examples/README.md`
+- Roadmap/backlog: `ROADMAP.md`, `docs/backlog/README.md`

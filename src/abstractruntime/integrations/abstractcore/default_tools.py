@@ -68,6 +68,33 @@ def _tool_spec(func: ToolCallable) -> Dict[str, Any]:
 
     return dict(ToolDefinition.from_function(func).to_dict())
 
+def _normalize_tool_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize ToolSpec quirks for better UI/LLM ergonomics.
+
+    This is a presentation layer: it must not change tool execution semantics.
+    """
+    name = str(spec.get("name") or "").strip()
+    if not name:
+        return spec
+
+    # AbstractCore's `skim_*` tools accept multiple paths and can parse strings for
+    # backward compatibility, but the preferred shape is an array-of-strings.
+    if name in {"skim_files", "skim_folders"}:
+        params = spec.get("parameters")
+        if isinstance(params, dict):
+            paths_schema = params.get("paths")
+            if isinstance(paths_schema, dict):
+                desc = paths_schema.get("description")
+                normalized = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                }
+                if isinstance(desc, str) and desc.strip():
+                    normalized["description"] = desc.strip()
+                params["paths"] = normalized
+
+    return spec
+
 
 def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
     """Return default toolsets {id -> {label, tools:[callables]}}."""
@@ -158,7 +185,7 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
 
     out: list[Dict[str, Any]] = []
     for tool in get_default_tools():
-        spec = _tool_spec(tool)
+        spec = _normalize_tool_spec(_tool_spec(tool))
         name = str(spec.get("name") or "").strip()
         if not name:
             continue

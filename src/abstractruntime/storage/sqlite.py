@@ -193,6 +193,26 @@ class SqliteDatabase:
                     );
                     """
                 )
+                # Backfill ledger_heads for upgraded DBs.
+                #
+                # When `ledger_heads` is introduced after `ledger` already has rows, future appends must
+                # continue from the existing MAX(seq) for each run_id (otherwise we would re-allocate
+                # seq starting at 1 and hit `UNIQUE constraint failed: ledger.run_id, ledger.seq`).
+                #
+                # This is idempotent and safe to run on every startup.
+                conn.execute(
+                    """
+                    INSERT INTO ledger_heads (run_id, last_seq)
+                    SELECT run_id, MAX(seq) AS last_seq
+                    FROM ledger
+                    GROUP BY run_id
+                    ON CONFLICT(run_id) DO UPDATE SET last_seq =
+                      CASE
+                        WHEN excluded.last_seq > ledger_heads.last_seq THEN excluded.last_seq
+                        ELSE ledger_heads.last_seq
+                      END;
+                    """
+                )
 
                 # --- Commands (durable inbox) ---
                 conn.execute(

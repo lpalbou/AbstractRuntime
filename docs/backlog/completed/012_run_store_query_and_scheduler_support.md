@@ -56,7 +56,7 @@ def list_due_wait_until(
 4. **File scanning for JsonFileRunStore**: The file-based implementation scans all `run_*.json` files. This is acceptable for MVP but may need indexing for large deployments.
 
 ### Tests
-`tests/test_queryable_run_store.py` — 20 tests covering:
+`tests/test_queryable_run_store.py` covers:
 - Protocol implementation verification
 - Empty store handling
 - Filter by status, wait_reason, workflow_id
@@ -65,14 +65,8 @@ def list_due_wait_until(
 - Ordering (updated_at desc, until asc)
 - Persistence across store instances (JsonFileRunStore)
 
-### Test results
-```
-30 passed, 1 skipped in 0.14s
-```
-
-### Next steps
-This enables implementation of:
-- [004_scheduler_driver.md](../planned/004_scheduler_driver.md) — Built-in scheduler
-
 ### Related
+- [004_scheduler_driver.md](004_scheduler_driver.md) — Built-in scheduler (uses QueryableRunStore)
+
+### See also
 - [ADR 0001: Layered Coupling](../../adr/0001_layered_coupling_with_abstractcore.md) — Query support stays in storage layer

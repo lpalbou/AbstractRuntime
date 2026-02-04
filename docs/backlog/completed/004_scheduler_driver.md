@@ -86,16 +86,10 @@ Added to `abstractruntime`:
 - ✅ Works with both in-memory and file-based stores
 
 ### Tests
-`tests/test_scheduler.py` — 24 tests covering:
-- WorkflowRegistry (6 tests)
-- Scheduler (11 tests)
-- ScheduledRuntime (7 tests)
-
-### Test results
-```
-54 passed, 1 skipped in 0.35s
-81% overall coverage
-```
+`tests/test_scheduler.py` covers:
+- `WorkflowRegistry`
+- `Scheduler`
+- `ScheduledRuntime`
 
 ### Files created
 
@@ -107,7 +101,7 @@ Added to `abstractruntime`:
 | `src/abstractruntime/scheduler/convenience.py` | ScheduledRuntime + factory |
 | `tests/test_scheduler.py` | 24 tests |
 
-### Future enhancements (not in scope for v0.1)
+### Future enhancements (not in scope for current release)
 - Redis ZSET scheduler (distributed, persistent timers)
 - Postgres-based scheduling (transactional guarantees)
 - Webhook ingestion endpoint for external events

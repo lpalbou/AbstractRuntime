@@ -16,7 +16,7 @@ The content below consolidates **all prior architecture discussions, decisions, 
 - **Tools**: AbstractCore *can* execute tools (tool registry + execution), even if the server often runs in pass-through mode.
 
 #### **AbstractAgent** (control plane)
-- **Must be a separate repo** at `/Users/albou/projects/abstractagent/`.
+- **Must be a separate repo** (not part of this repository).
 - Hosts agentic orchestration patterns (ReAct/CodeAct/state-machine/Markov-style multi-agent), sandboxing policy, HITL UX.
 - Needs **thin vs full client modes**:
   - **Thin**: HTTP client only (calls AbstractCore server)
@@ -108,5 +108,4 @@ This backlog focuses on adding:
 3. **Provenance (hash chain)**
 4. **Tests**
 5. **Docs**
-
 

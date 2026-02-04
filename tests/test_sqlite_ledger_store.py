@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -106,3 +108,37 @@ def test_sqlite_ledger_store_append_is_concurrency_safe(tmp_path: Path) -> None:
 
     assert not errors
     assert store.count(run_id) == 400
+
+
+def test_sqlite_ledger_store_backfills_heads_from_existing_ledger(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.sqlite3"
+
+    # Simulate an older DB: ledger exists and contains records, but ledger_heads does not.
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE ledger (
+              run_id TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              record_json TEXT NOT NULL,
+              PRIMARY KEY (run_id, seq)
+            );
+            """
+        )
+        conn.execute("INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);", ("run_1", 1, json.dumps({"step_id": "s1"})))
+        conn.execute("INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);", ("run_1", 2, json.dumps({"step_id": "s2"})))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # New store must continue from seq=2 (so next append is seq=3).
+    db = SqliteDatabase(db_path)
+    store = SqliteLedgerStore(db)
+    store.append(StepRecord(run_id="run_1", step_id="s3", node_id="n3", status=StepStatus.COMPLETED))
+
+    assert store.count("run_1") == 3
+
+    row = db.connection().execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", ("run_1",)).fetchone()
+    assert row is not None
+    assert int(row["last_seq"] or 0) == 3

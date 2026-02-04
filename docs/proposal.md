@@ -1,166 +1,91 @@
-# AbstractRuntime — Proposal (v0.1)
+# AbstractRuntime — Overview (v0.4.x)
 
-## Executive summary
+**AbstractRuntime** is a low-level *durable workflow runtime*:
+- execute workflow graphs (state machines)
+- support **interrupt → checkpoint → resume** without keeping Python stacks alive
+- record an append-only **execution journal** (“ledger”) for observability/audit/debug
 
-**AbstractRuntime** is a low-level *durable workflow runtime*.
+**Scope boundary:** AbstractRuntime is not a UI builder and not an agent framework. It is the execution substrate that higher-level orchestration (e.g., visual authoring hosts) and agent loops can build on.
 
-- It executes **workflow graphs** (state machines) where nodes can produce **effects** (LLM calls, tool calls, waits, ask-user, etc.).
-- It supports **interrupt → checkpoint → resume** so a workflow can pause for hours/days without keeping Python stacks/coroutines alive.
-- It records an append-only **execution journal** ("ledger" / *journal d’exécution*) so runs are observable, auditable, and debuggable.
+## What problem this solves
 
-**Scope boundary:** AbstractRuntime is not a UI builder and not an agent framework. It is the execution substrate that higher-level orchestration (e.g., AbstractFlow) and agents/memory pipelines can build on.
+Once a workflow can:
+- ask a user and wait hours/days
+- wait until a scheduled time
+- wait for an external job/event
 
----
+…you need durable semantics: persisted checkpoints + a journal. Keeping a Python stack alive is not reliable across restarts.
 
-## Glossary (English ↔ Français)
+## Core concepts (durable model)
 
-- **Workflow**: a declared graph/state machine (nodes + transitions + a typed state).
-  - FR: **workflow / flux** = un graphe d’exécution (machine à états).
-- **Run**: one execution instance of a workflow (identified by `run_id`).
-  - FR: **exécution**.
-- **Interrupt**: a controlled pause point (waiting for user / timer / external event).
-  - FR: **interruption / mise en attente**.
-- **Resume**: continuing a paused run after receiving an external event.
-  - FR: **reprise**.
-- **Ledger**: execution journal / logbook. Append-only list of step records.
-  - FR: **journal d’exécution**.
-- **LedgerStore**: storage backend for the ledger.
-  - FR: **stockage du journal d’exécution**.
-- **RunStore**: storage backend for the current run state / checkpoints.
-  - FR: **stockage des checkpoints / état de run**.
-- **Snapshot**: named bookmark of run state (name/description/tags).
-  - FR: **snapshot / marque-page**.
-- **Effect**: a side-effect request produced by a node (LLM call, tool calls, wait, ask user, ...).
-  - FR: **effet (action externe)**.
+All core durable types are stdlib-only and live in `src/abstractruntime/core/models.py`:
 
----
+- `WorkflowSpec`: in-memory workflow graph (node handlers keyed by id) (`src/abstractruntime/core/spec.py`)
+- `RunState`: durable run checkpoint (`run_id`, `status`, `current_node`, `vars`, `waiting`, `output`, `error`, provenance fields)
+- `StepPlan`: what a node returns (`effect?`, `next_node?`, `complete_output?`)
+- `Effect` + `EffectType`: request for side effects (LLM, tools, waits, memory ops, etc.)
+- `WaitState`: durable blocking state (`reason`, `wait_key`/`until`, `resume_to_node`, `result_key`)
+- `StepRecord`: append-only ledger entry
 
-## Problem this solves
-
-Once you allow **human-in-the-loop**, **timers**, and **external events**, you need durable semantics:
-
-- a run can pause for days and survive restarts
-- you can resume reliably on “user answered”, “job finished”, “time reached”, “webhook arrived”
-- you can debug/audit: what step produced that tool call? what was the tool result? what did the LLM answer?
-
-This cannot be done safely by keeping a Python stack/coroutine alive. You need persisted checkpoints + a journal.
-
----
-
-## Design goals (v0.1)
-
-- **Minimal kernel**: small API surface, few dependencies.
-- **Durable by design**: pause/resume are explicit (`RunState.status=waiting` + `WaitState`).
-- **Backend-agnostic stores**: in-memory + JSON/JSONL now; other stores later.
-- **Layered coupling**: the kernel stays dependency-light; integrations (e.g. AbstractCore) live in a dedicated module.
-- **Composable workflows**: workflow-as-node composition is supported by design (effect types exist).
-
-## Non-goals (v0.1)
-
-Avoid “Temporal-in-Python” (distributed orchestration backend) for now:
-- worker leasing/heartbeats
-- cluster-wide exactly-once progression
-- global matching service / task queue protocols
-- large-scale workflow versioning/migrations
-
-We keep interfaces open so backends can evolve later.
-
----
-
-## Core concepts (data model)
-
-A workflow node returns a `StepPlan` which may:
-- transition to another node (`next_node`)
-- produce an `Effect` (side-effect to execute)
-- complete the run (`complete_output`)
-
-Key durable types:
-- `RunState`: `run_id`, `workflow_id`, `status`, `current_node`, `vars`, `waiting`, `output`, `error`, `actor_id`
-- `WaitState`: durable pause descriptor (`reason`, `wait_key`, `until`, `resume_to_node`, `result_key`, optional `details`)
-- `StepRecord`: append-only ledger entry (`effect`, `result`, timestamps, status, actor_id)
-- `EffectType`: `llm_call`, `tool_calls`, `wait_event`, `wait_until`, `ask_user`, ...
-
----
+**Non-negotiable constraint:** values stored in `RunState.vars` must be JSON-serializable. For large payloads, use `ArtifactStore` references (`src/abstractruntime/storage/artifacts.py`) or offloading wrappers (`src/abstractruntime/storage/offloading.py`).
 
 ## Minimal runtime API
 
-- `start(workflow, vars, actor_id) -> run_id`
-- `tick(workflow, run_id) -> RunState` (progresses until waiting/completed/failed)
+Implemented in `src/abstractruntime/core/runtime.py`:
+- `start(workflow, vars, actor_id, session_id) -> run_id`
+- `tick(workflow, run_id) -> RunState` (progress until waiting/completed/failed)
 - `resume(workflow, run_id, wait_key, payload) -> RunState`
 - `get_state(run_id) -> RunState`
 - `get_ledger(run_id) -> list[dict]`
 
-### Resume semantics (important)
-When an effect yields a waiting outcome, the runtime stores `WaitState.resume_to_node`.
-On resume, the runtime will continue execution **from that node**.
-
-This avoids re-running the waiting node and is required for correctness.
-
----
+Resume semantics (important):
+- when a run blocks, the runtime stores `WaitState.resume_to_node`
+- on resume, execution continues **from that node** (it does not re-run the waiting node)
 
 ## Persistence
 
-The kernel persists context via:
-- `RunStore`: latest checkpoint (`RunState`) — JSON file backend included
-- `LedgerStore`: append-only step records — JSONL backend included
-- `SnapshotStore`: named bookmarks of run state — JSON backend included
+Interfaces live in `src/abstractruntime/storage/base.py`.
 
-**ArtifactStore** (planned): store large payloads by reference instead of embedding in `RunState.vars`.
+Included backends:
+- `InMemory*` (tests/dev): `src/abstractruntime/storage/in_memory.py`
+- file-based JSON/JSONL: `src/abstractruntime/storage/json_files.py`
+- SQLite: `src/abstractruntime/storage/sqlite.py`
 
-**Constraint (non-negotiable):** values stored in `RunState.vars` must be JSON-serializable (or referenced via artifacts).
+Related features:
+- snapshots/bookmarks: `src/abstractruntime/storage/snapshots.py` (`docs/snapshots.md`)
+- tamper-evident ledger: `src/abstractruntime/storage/ledger_chain.py` (`docs/provenance.md`)
+- in-process ledger subscriptions: `src/abstractruntime/storage/observable.py`
 
----
+## Scheduling (driver loop)
 
-## Integration with AbstractCore (LLM + tools)
+AbstractRuntime ships a simple in-process scheduler:
+- `Scheduler`, `ScheduledRuntime`, `create_scheduled_runtime()` (`src/abstractruntime/scheduler/*`)
 
-AbstractCore already provides:
-- provider-agnostic `create_llm(...).generate(...)`
-- tool registry + execution
-- an OpenAI-compatible server (`/v1/chat/completions`)
+This is a driver loop (polls due waits, resumes runs). It is not a distributed orchestrator.
 
-AbstractRuntime integrates via an explicit module:
-- `abstractruntime.integrations.abstractcore`
+## Integrations (optional)
 
-Execution modes:
-- **Local**: in-process AbstractCore provider + local tool execution
-- **Remote**: HTTP to AbstractCore server + tool passthrough (default)
-- **Hybrid**: remote LLM + local tools
-
-Remote mode supports AbstractCore’s per-request dynamic routing (`base_url` in `/v1/chat/completions`).
-
----
-
-## Provenance / AI fingerprint (v0.1)
-
-The runtime supports attribution via `actor_id` on `RunState` and `StepRecord`.
-
-For tamper-evidence:
-- wrap a `LedgerStore` with `HashChainedLedgerStore`
-- each record gets `prev_hash` + `record_hash`
-- `verify_ledger_chain(records)` reports mismatches
-
-Signatures (non-forgeability) are intentionally deferred to an optional extra.
-
----
-
-## Relationship to AbstractAgent / AbstractMemory / AbstractFlow
-
-- **AbstractCore**: inference plane (LLM + tools + server boundary)
-- **AbstractRuntime**: durable execution substrate (pause/resume/ledger)
-- **AbstractAgent**: agent logic (ReAct/CodeAct/state machines) built *on top* of runtime + core
-- **AbstractMemory**: memory services and maintenance pipelines built *on top* of runtime + core
-- **AbstractFlow**: high-level authoring/orchestration that composes workflows/agents
-
-This avoids coupling the stateless router (AbstractCore server) with stateful long-running control loops.
-
----
+AbstractRuntime stays dependency-light at the kernel level; concrete integrations are opt-in:
+- AbstractCore (LLM + tools): `src/abstractruntime/integrations/abstractcore/*` (`integrations/abstractcore.md`)
+- AbstractMemory bridge (KG assertions/queries): `src/abstractruntime/integrations/abstractmemory/*`
 
 ## Status (implemented in this repository)
 
-- Durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
-- Built-in waits: `wait_event`, `wait_until`, `ask_user`
-- Persistence: in-memory + JSON checkpoints + JSONL ledger
-- Snapshots: `SnapshotStore` (in-memory + JSON)
-- Provenance: `HashChainedLedgerStore` + `verify_ledger_chain`
-- AbstractCore integration module: local/remote/hybrid adapters
-- Unit tests covering pause/resume, integration wiring, snapshots, and provenance
+As of v0.4.0 (`pyproject.toml`):
+- durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
+- built-in waits + events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
+- persistence backends: in-memory, JSON/JSONL, SQLite
+- artifacts/offloading: store large payloads by reference
+- retries/idempotency policy hooks: `src/abstractruntime/core/policy.py`
+- snapshots, tamper-evident ledger chain, ledger subscriptions
+- VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
+- evidence capture helpers (`src/abstractruntime/evidence/recorder.py`, `Runtime.list_evidence/load_evidence`)
+- run history bundle export (`src/abstractruntime/history_bundle.py`)
+
+## See also
+
+- `../README.md` — install + quick start
+- `getting-started.md` — first steps
+- `architecture.md` — full component map and diagrams
+- `integrations/abstractcore.md` — AbstractCore wiring
+- `limits.md` — `_limits` / RuntimeConfig

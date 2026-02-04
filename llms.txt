@@ -1,0 +1,46 @@
+# AbstractRuntime
+
+> Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
+
+- Python: 3.10+
+- Version: 0.4.0 (`pyproject.toml`)
+- Invariant: `RunState.vars` must be JSON-serializable (use `ArtifactStore`/offloading for large values)
+
+## Start here
+
+- [README](README.md)
+- [Getting started](docs/getting-started.md)
+- [Docs index](docs/README.md)
+- [Architecture](docs/architecture.md)
+
+## Guides
+
+- [Manual testing](docs/manual_testing.md)
+- [Limits](docs/limits.md)
+
+## Integrations
+
+- [AbstractCore integration](docs/integrations/abstractcore.md)
+- [Comms toolset](docs/tools-comms.md)
+- [MCP worker](docs/mcp-worker.md)
+
+## Durability & observability
+
+- [Snapshots](docs/snapshots.md)
+- [Provenance](docs/provenance.md)
+- [Evidence capture](docs/evidence.md)
+
+## Distribution
+
+- [WorkflowBundles](docs/workflow-bundles.md)
+
+## Maintainers
+
+- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [ADRs](docs/adr/README.md)
+- [Backlog](docs/backlog/README.md)
+
+## Optional
+
+- [Examples](examples/README.md)

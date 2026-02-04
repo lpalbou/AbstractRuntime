@@ -1,0 +1,44 @@
+# Example email accounts configuration for AbstractCore comms tools.
+#
+# Usage:
+#   export ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/absolute/path/to/emails.yaml
+#   export ABSTRACT_EMAIL_DEFAULT_ACCOUNT=work
+#   export EMAIL_PASSWORD='...'
+#
+# Notes:
+# - Do NOT store secrets in this file. Passwords are resolved from env vars
+#   via `password_env_var`.
+# - Schema is implemented in AbstractCore: `abstractcore.tools.comms_tools`.
+
+default_account: work
+
+accounts:
+  work:
+    # allow_read/allow_send default based on whether IMAP/SMTP blocks exist.
+    allow_read: true
+    allow_send: true
+    imap:
+      host: imap.gmail.com
+      port: 993
+      username: you@example.com
+      password_env_var: EMAIL_PASSWORD
+      mailbox: INBOX
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      username: you@example.com
+      password_env_var: EMAIL_PASSWORD
+      use_starttls: true
+      from_email: you@example.com
+      reply_to: team@example.com
+
+  read_only:
+    allow_read: true
+    allow_send: false
+    imap:
+      host: imap.example.com
+      port: 993
+      username: bot@example.com
+      password_env_var: EMAIL_PASSWORD
+      mailbox: INBOX
+

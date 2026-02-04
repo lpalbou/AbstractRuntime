@@ -55,8 +55,7 @@ abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_work
 
 [project.urls]
 "AbstractCore (website)" = "https://www.abstractcore.ai/"
-"AbstractCore (GitHub)" = "https://github.com/lpalbou/abstractruntime"
+"AbstractRuntime (GitHub)" = "https://github.com/lpalbou/abstractruntime"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abstractruntime"]
-

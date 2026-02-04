@@ -26,32 +26,20 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
                 "data": {
                     "toolParametersConfig": {"tool": "send_email"},
                     "inputs": [
-                        {"id": "smtp_host", "label": "smtp_host", "type": "string"},
-                        {"id": "smtp_port", "label": "smtp_port", "type": "number"},
-                        {"id": "use_starttls", "label": "use_starttls", "type": "boolean"},
-                        {"id": "username", "label": "username", "type": "string"},
-                        {"id": "password_env_var", "label": "password_env_var", "type": "string"},
+                        {"id": "account", "label": "account", "type": "string"},
                         {"id": "to", "label": "to", "type": "string"},
                         {"id": "subject", "label": "subject", "type": "string"},
                         {"id": "body_text", "label": "body_text", "type": "string"},
                     ],
                     "outputs": [
                         {"id": "tool_call", "label": "tool_call", "type": "object"},
-                        {"id": "smtp_host", "label": "smtp_host", "type": "string"},
-                        {"id": "smtp_port", "label": "smtp_port", "type": "number"},
-                        {"id": "use_starttls", "label": "use_starttls", "type": "boolean"},
-                        {"id": "username", "label": "username", "type": "string"},
-                        {"id": "password_env_var", "label": "password_env_var", "type": "string"},
+                        {"id": "account", "label": "account", "type": "string"},
                         {"id": "to", "label": "to", "type": "string"},
                         {"id": "subject", "label": "subject", "type": "string"},
                         {"id": "body_text", "label": "body_text", "type": "string"},
                     ],
                     "pinDefaults": {
-                        "smtp_host": "smtp.gmail.com",
-                        "smtp_port": 587,
-                        "use_starttls": True,
-                        "username": "xxx@gmail.com",
-                        "password_env_var": "EMAIL_PASSWORD",
+                        "account": "work",
                         "to": "you@example.com",
                         "subject": "Daily report",
                         "body_text": "Hello! Here is the report...",
@@ -65,9 +53,7 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
                     "inputs": [
                         {"id": "exec-in", "label": "", "type": "execution"},
                         {"id": "tool_call", "label": "tool_call", "type": "object"},
-                        {"id": "smtp_host", "label": "smtp_host", "type": "string"},
-                        {"id": "smtp_port", "label": "smtp_port", "type": "number"},
-                        {"id": "use_starttls", "label": "use_starttls", "type": "boolean"},
+                        {"id": "account", "label": "account", "type": "string"},
                     ],
                     "outputs": [],
                 },
@@ -92,22 +78,8 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
                 "id": "e-smtp_host",
                 "source": "node-2",
                 "target": "node-3",
-                "sourceHandle": "smtp_host",
-                "targetHandle": "smtp_host",
-            },
-            {
-                "id": "e-smtp_port",
-                "source": "node-2",
-                "target": "node-3",
-                "sourceHandle": "smtp_port",
-                "targetHandle": "smtp_port",
-            },
-            {
-                "id": "e-use_starttls",
-                "source": "node-2",
-                "target": "node-3",
-                "sourceHandle": "use_starttls",
-                "targetHandle": "use_starttls",
+                "sourceHandle": "account",
+                "targetHandle": "account",
             },
         ],
     }
@@ -129,17 +101,11 @@ def test_tool_parameters_node_builds_single_tool_call_object() -> None:
     assert tool_call == {
         "name": "send_email",
         "arguments": {
-            "smtp_host": "smtp.gmail.com",
-            "smtp_port": 587,
-            "use_starttls": True,
-            "username": "xxx@gmail.com",
-            "password_env_var": "EMAIL_PASSWORD",
+            "account": "work",
             "to": "you@example.com",
             "subject": "Daily report",
             "body_text": "Hello! Here is the report...",
         },
     }
 
-    assert state.output.get("smtp_host") == "smtp.gmail.com"
-    assert state.output.get("smtp_port") == 587
-    assert state.output.get("use_starttls") is True
+    assert state.output.get("account") == "work"

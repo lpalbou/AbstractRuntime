@@ -515,20 +515,22 @@ class SqliteLedgerStore(LedgerStore):
         payload = json.dumps(asdict(record), ensure_ascii=False)
         conn = self._db.connection()
         with conn:
-            row = conn.execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", (run_id,)).fetchone()
-            last = int(row["last_seq"]) if row is not None else 0
-            seq = last + 1
-            conn.execute(
-                "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
-                (run_id, int(seq), payload),
-            )
             conn.execute(
                 """
                 INSERT INTO ledger_heads (run_id, last_seq)
-                VALUES (?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET last_seq=excluded.last_seq;
+                VALUES (?, 0)
+                ON CONFLICT(run_id) DO NOTHING;
                 """,
-                (run_id, int(seq)),
+                (run_id,),
+            )
+            conn.execute("UPDATE ledger_heads SET last_seq = last_seq + 1 WHERE run_id = ?;", (run_id,))
+            row = conn.execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", (run_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("Failed to allocate ledger seq")
+            seq = int(row["last_seq"] or 0)
+            conn.execute(
+                "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
+                (run_id, int(seq), payload),
             )
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:

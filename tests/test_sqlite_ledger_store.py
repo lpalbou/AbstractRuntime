@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from abstractruntime.core.models import StepRecord, StepStatus
@@ -77,3 +78,31 @@ def test_sqlite_ledger_store_count_many_and_metrics_many(tmp_path: Path) -> None
 
     metrics = store.metrics_many([run_id, "missing"])
     assert metrics.get(run_id) == {"steps": 2, "llm_calls": 1, "tool_calls": 2, "tokens_total": 12}
+
+
+def test_sqlite_ledger_store_append_is_concurrency_safe(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.sqlite3"
+    db = SqliteDatabase(db_path)
+    store = SqliteLedgerStore(db)
+
+    run_id = "run_1"
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def _worker(worker_id: int) -> None:
+        try:
+            barrier.wait(timeout=5.0)
+            for j in range(50):
+                store.append(StepRecord(run_id=run_id, step_id=f"{worker_id}:{j}", node_id="n", status=StepStatus.COMPLETED))
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_worker, args=(i,), daemon=True) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    assert not errors
+    assert store.count(run_id) == 400

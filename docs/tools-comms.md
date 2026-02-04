@@ -11,6 +11,7 @@ These capabilities are implemented as **durable tools** executed via `EffectType
 When enabled, the `comms` toolset adds these tools:
 
 **Email (SMTP/IMAP; stdlib)**
+- `list_email_accounts` (discover configured accounts + capabilities)
 - `send_email` (SMTP)
 - `list_emails` (IMAP digest: since + all/unread/read)
 - `read_email` (IMAP UID → headers + body)
@@ -47,9 +48,88 @@ PY
 
 These tools intentionally avoid passing secrets in tool-call arguments. Instead, they resolve credentials from **environment variables** in the process that executes the tool.
 
-### Email
-- Default env var: `EMAIL_PASSWORD`
-- Override per call via `password_env_var` (e.g. `"password_env_var": "GMAIL_APP_PASSWORD"`)
+### Email (account-scoped)
+Email tools are **account-scoped**:
+- Tool-call arguments do **not** include IMAP/SMTP host/user or password env-var names.
+- The agent can only read/send using operator-configured account(s).
+
+Passwords are still resolved from env vars at execution time:
+- Each configured account references an env var name via `password_env_var` (default: `EMAIL_PASSWORD`).
+- You must set those env vars (the actual secrets) in the same process that executes tool calls.
+
+## Email account configuration (env or YAML)
+
+Email tools load account configuration from one of these sources:
+
+Precedence:
+1. **Multi-account YAML config**: `ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml`
+2. **Single-account env vars** (fallback): `ABSTRACT_EMAIL_SMTP_*` and/or `ABSTRACT_EMAIL_IMAP_*` (exposed as one account)
+
+Optional defaults:
+- `ABSTRACT_EMAIL_DEFAULT_ACCOUNT=<name>` (choose which configured account is used when tool calls omit `account`)
+- `ABSTRACT_EMAIL_ACCOUNT_NAME=<name>` (name for the single-account env-var fallback; default: `default`)
+
+### Multi-account YAML
+Use the repo template:
+- `emails.config.example.yaml`
+
+Set:
+- `ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml`
+- secret env vars referenced by `password_env_var` (e.g., `EMAIL_PASSWORD=...`, `GMAIL_APP_PASSWORD=...`)
+
+### Single-account env vars (fallback)
+These env vars define one account (reading and/or sending depending on what you set):
+
+SMTP (send):
+- `ABSTRACT_EMAIL_SMTP_HOST=smtp.gmail.com`
+- `ABSTRACT_EMAIL_SMTP_USERNAME=xxx@gmail.com`
+- `ABSTRACT_EMAIL_SMTP_PASSWORD_ENV_VAR=EMAIL_PASSWORD`
+- (optional) `ABSTRACT_EMAIL_SMTP_PORT=587`
+- (optional) `ABSTRACT_EMAIL_SMTP_STARTTLS=1`
+- (optional) `ABSTRACT_EMAIL_FROM=bot@example.com`
+- (optional) `ABSTRACT_EMAIL_REPLY_TO=team@example.com`
+
+IMAP (read):
+- `ABSTRACT_EMAIL_IMAP_HOST=imap.gmail.com`
+- `ABSTRACT_EMAIL_IMAP_USERNAME=xxx@gmail.com`
+- `ABSTRACT_EMAIL_IMAP_PASSWORD_ENV_VAR=EMAIL_PASSWORD`
+- (optional) `ABSTRACT_EMAIL_IMAP_PORT=993`
+- (optional) `ABSTRACT_EMAIL_IMAP_FOLDER=INBOX`
+
+And the secret itself:
+- `EMAIL_PASSWORD=...` (or whatever env var name you configured via `*_PASSWORD_ENV_VAR`)
+
+## Tool call examples (email)
+
+Discover accounts:
+
+```json
+[
+  {
+    "name": "list_email_accounts",
+    "arguments": {}
+  }
+]
+```
+
+List + read:
+
+```json
+[
+  {
+    "name": "list_emails",
+    "arguments": { "account": "work", "since": "7d", "status": "unread", "limit": 10 }
+  },
+  {
+    "name": "read_email",
+    "arguments": { "account": "work", "uid": "12345" }
+  },
+  {
+    "name": "send_email",
+    "arguments": { "account": "work", "to": "you@example.com", "subject": "Hello", "body_text": "Hi!" }
+  }
+]
+```
 
 ### WhatsApp (Twilio v1)
 - `TWILIO_ACCOUNT_SID`
@@ -85,9 +165,7 @@ Tool call shape (same as any other tool):
   {
     "name": "send_email",
     "arguments": {
-      "smtp_host": "smtp.gmail.com",
-      "username": "xxx@gmail.com",
-      "password_env_var": "EMAIL_PASSWORD",
+      "account": "work",
       "to": "you@example.com",
       "subject": "Hello",
       "body_text": "Hi!"
@@ -112,7 +190,7 @@ To allow comms tool execution in bundle mode:
 1. Enable comms tools in the gateway process:
    - `ABSTRACT_ENABLE_COMMS_TOOLS=1`
 2. Ensure credentials exist in that same environment:
-   - email: `EMAIL_PASSWORD` (or call-specific `password_env_var`)
+   - email: set the password env vars referenced by your configured account(s) (e.g., `EMAIL_PASSWORD`, `GMAIL_APP_PASSWORD`)
    - whatsapp: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
 3. Choose execution mode:
    - passthrough (default) if you want an approval/worker boundary

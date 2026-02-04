@@ -106,9 +106,9 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
     if comms_tools_enabled():
         comms: list[ToolCallable] = []
         if email_tools_enabled():
-            from abstractcore.tools.comms_tools import list_emails, read_email, send_email
+            from abstractcore.tools.comms_tools import list_email_accounts, list_emails, read_email, send_email
 
-            comms.extend([send_email, list_emails, read_email])
+            comms.extend([list_email_accounts, send_email, list_emails, read_email])
         if whatsapp_tools_enabled():
             from abstractcore.tools.comms_tools import list_whatsapp_messages, read_whatsapp_message, send_whatsapp_message
 

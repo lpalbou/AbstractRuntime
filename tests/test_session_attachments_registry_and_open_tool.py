@@ -512,7 +512,7 @@ def test_llm_call_handler_inlines_active_text_attachments_into_messages_and_remo
         content,
         content_type="text/plain",
         run_id=rid,
-        tags={"kind": "attachment", "path": "/Users/albou/Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+        tags={"kind": "attachment", "path": "Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
     )
 
     captured: dict = {}
@@ -530,7 +530,7 @@ def test_llm_call_handler_inlines_active_text_attachments_into_messages_and_remo
             "media": [
                 {
                     "$artifact": meta.artifact_id,
-                    "source_path": "/Users/albou/Downloads/notes.txt",
+                    "source_path": "Downloads/notes.txt",
                     "sha256": sha,
                     "content_type": "text/plain",
                 }
@@ -577,7 +577,7 @@ def test_llm_call_use_context_does_not_persist_inlined_attachment_blocks() -> No
         content,
         content_type="text/plain",
         run_id=rid,
-        tags={"kind": "attachment", "path": "/Users/albou/Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
+        tags={"kind": "attachment", "path": "Downloads/notes.txt", "filename": "notes.txt", "session_id": sid, "sha256": sha},
     )
 
     class _StubLLM:
@@ -592,7 +592,7 @@ def test_llm_call_use_context_does_not_persist_inlined_attachment_blocks() -> No
             "media": [
                 {
                     "$artifact": meta.artifact_id,
-                    "source_path": "/Users/albou/Downloads/notes.txt",
+                    "source_path": "Downloads/notes.txt",
                     "sha256": sha,
                     "content_type": "text/plain",
                 }

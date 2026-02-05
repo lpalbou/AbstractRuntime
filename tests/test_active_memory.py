@@ -68,7 +68,7 @@ def test_apply_memact_envelope_add_remove_and_history_append_only() -> None:
             "content": "ignored by runtime memory apply",
             "relationships": {"added": ["Alice prefers concise summaries"], "removed": []},
             "current_tasks": {"added": ["Fix MemAct memory persistence"], "removed": []},
-            "current_context": {"added": ["Repo: /Users/albou/abstractframework"], "removed": []},
+            "current_context": {"added": ["Repo: /path/to/workspace"], "removed": []},
             "critical_insights": {"added": ["Avoid duplicating user turns in provider payloads"], "removed": []},
             "references": {"added": ["docs/architecture.md (macro architecture overview)"], "removed": []},
             "history": {"added": ["Implemented MemAct agent scaffolding"], "removed": ["should be ignored"]},

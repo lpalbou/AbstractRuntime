@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.1"
+version = "0.4.2"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,18 +36,18 @@ classifiers = [
 dependencies = [
   # Required to resolve stable structured-output schema refs like:
   # {"$ref":"abstractsemantics:kg_assertion_schema_v0"}
-  "abstractsemantics>=0.0.1",
+  "abstractsemantics>=0.0.2",
 ]
 
 [project.optional-dependencies]
 # Enables `abstractruntime.integrations.abstractcore.*` imports.
 abstractcore = [
-  "abstractcore>=2.6.8",
+  "abstractcore>=2.11.8",
 ]
 
 # Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
 mcp-worker = [
-  "abstractcore[tools]>=2.6.8",
+  "abstractcore[tools]>=2.11.8",
 ]
 
 [project.scripts]

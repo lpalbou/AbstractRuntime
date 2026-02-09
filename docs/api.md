@@ -4,6 +4,10 @@ This document summarizes the **public Python API** of AbstractRuntime and points
 
 Public exports live in `src/abstractruntime/__init__.py`. If you are unsure what is supported for external use, start there.
 
+Stability guideline:
+- Prefer imports from `abstractruntime` (package root) and `abstractruntime.storage`.
+- Deep imports from `abstractruntime.core.*` / `abstractruntime.storage.*` are fine for advanced use, but treat them as lower-stability unless they are explicitly documented/re-exported.
+
 ## Recommended imports
 
 Core kernel:
@@ -57,8 +61,10 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - creates and persists a new `RunState`
 - `Runtime.tick(workflow, run_id, max_steps=...) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
-- `Runtime.resume(workflow, run_id, wait_key, payload, override_node=...) -> RunState`
+- `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
+- `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
+  - host-facing read APIs for checkpoints and the append-only ledger
 
 For the execution model (ledger records, effect outcomes, waits), see `architecture.md`.
 
@@ -85,10 +91,23 @@ Included backends:
 - SQLite:
   - `SqliteRunStore`, `SqliteLedgerStore` (`src/abstractruntime/storage/sqlite.py`)
 
+Notes:
+- `abstractruntime.storage` intentionally exports only the most common store types. SQLite types are available via:
+  - `from abstractruntime import SqliteRunStore, SqliteLedgerStore`, or
+  - `from abstractruntime.storage.sqlite import SqliteRunStore, SqliteLedgerStore`
+
 Common decorators:
 - `ObservableLedgerStore` for subscriptions (`src/abstractruntime/storage/observable.py`)
 - `HashChainedLedgerStore` + `verify_ledger_chain(...)` for tamper-evidence (`src/abstractruntime/storage/ledger_chain.py`)
 - `OffloadingRunStore` / `OffloadingLedgerStore` to store large values by artifact reference (`src/abstractruntime/storage/offloading.py`)
+
+## Commands (durable control-plane inbox)
+
+AbstractRuntime ships append-only, idempotent **command inbox** primitives designed for gateways/workers that must accept retries safely:
+- models + interfaces: `CommandRecord`, `CommandStore`, `CommandCursorStore` (`src/abstractruntime/storage/commands.py`)
+- backends: in-memory + JSONL (`src/abstractruntime/storage/commands.py`), SQLite (`src/abstractruntime/storage/sqlite.py`)
+
+These APIs are exported at the package root (see `src/abstractruntime/__init__.py`).
 
 ## Artifacts (store by reference)
 
@@ -162,6 +181,11 @@ Implementation: `src/abstractruntime/integrations/abstractmemory/effect_handlers
 
 This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 
+## Utilities (host UX)
+
+- Rendering helpers: `abstractruntime.rendering.stringify_json(...)` and `abstractruntime.rendering.render_agent_trace_markdown(...)` (`src/abstractruntime/rendering/*`)
+- Active-context helpers (what is sent to the LLM): `ActiveContextPolicy`, `TimeRange` (`src/abstractruntime/memory/active_context.py`, exports in `src/abstractruntime/memory/__init__.py`)
+
 ## See also
 
 - `../README.md` — install + quick start
@@ -169,4 +193,3 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 - `architecture.md` — component map + durability invariants
 - `faq.md` — common questions and gotchas
 - `integrations/abstractcore.md` — `LLM_CALL` / `TOOL_CALLS` wiring
-

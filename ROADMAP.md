@@ -1,6 +1,6 @@
 # AbstractRuntime Roadmap
 
-## Current status (v0.4.1)
+## Current status (v0.4.2)
 
 AbstractRuntime provides a durable workflow kernel plus optional integrations:
 - durable execution: `Runtime.start/tick/resume`, explicit `WaitState` (`src/abstractruntime/core/runtime.py`)

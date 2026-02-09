@@ -8,7 +8,7 @@ Implementation pointers:
 - model fields: `src/abstractruntime/core/models.py` (`StepRecord.prev_hash`, `StepRecord.record_hash`, `StepRecord.signature`)
 - hash-chain decorator + verifier: `src/abstractruntime/storage/ledger_chain.py`
 
-## What is implemented (v0.4.1)
+## What is implemented (v0.4.2)
 
 - `HashChainedLedgerStore(inner_store)` — wraps any `LedgerStore` to compute hashes on append
 - `verify_ledger_chain(records)` — validates the chain and returns a verification report

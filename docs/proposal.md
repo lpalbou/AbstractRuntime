@@ -7,6 +7,14 @@
 
 **Scope boundary:** AbstractRuntime is not a UI builder and not an agent framework. It is the execution substrate that higher-level orchestration (e.g., visual authoring hosts) and agent loops can build on.
 
+## Ecosystem
+
+AbstractRuntime is part of the wider AbstractFramework ecosystem:
+- AbstractFramework umbrella: [lpalbou/AbstractFramework](https://github.com/lpalbou/AbstractFramework)
+- AbstractCore (LLM + tools): [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+In this repo, AbstractCore wiring lives under `src/abstractruntime/integrations/abstractcore/*` and is described in `integrations/abstractcore.md`.
+
 ## What problem this solves
 
 Once a workflow can:
@@ -71,7 +79,7 @@ AbstractRuntime stays dependency-light at the kernel level; concrete integration
 
 ## Status (implemented in this repository)
 
-As of v0.4.1 (`pyproject.toml`):
+As of v0.4.2 (`pyproject.toml`):
 - durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
 - built-in waits + events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - persistence backends: in-memory, JSON/JSONL, SQLite

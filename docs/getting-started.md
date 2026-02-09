@@ -45,7 +45,9 @@ def ask(run, ctx):
 
 
 def done(run, ctx):
-    return StepPlan(node_id="done", complete_output={"answer": run.vars.get("answer")})
+    answer = run.vars.get("answer") or {}
+    text = answer.get("text") if isinstance(answer, dict) else None
+    return StepPlan(node_id="done", complete_output={"answer": text})
 
 
 wf = WorkflowSpec(workflow_id="demo", entry_node="ask", nodes={"ask": ask, "done": done})

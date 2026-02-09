@@ -2,50 +2,59 @@
 
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
-- Python: 3.10+
-- Version: 0.4.1 (`pyproject.toml`)
-- Invariant: `RunState.vars` must be JSON-serializable (use `ArtifactStore`/offloading for large values)
+- Python: 3.10+ (see `pyproject.toml`)
+- Version: 0.4.2 (see `pyproject.toml`)
+- Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
+- Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
 
 ## Start here
 
-- [README](README.md)
-- [Getting started](docs/getting-started.md)
-- [API reference](docs/api.md)
-- [Docs index](docs/README.md)
-- [Architecture](docs/architecture.md)
+- [README](README.md): install + minimal pause/resume example + docs map
+- [Getting started](docs/getting-started.md): first durable workflow + scheduler + persistence
+- [API reference](docs/api.md): public imports + pointers to source-of-truth modules
+- [Architecture](docs/architecture.md): component map + durability invariants (includes diagrams)
+- [Docs index](docs/README.md): full documentation map
+
+## Key code (source of truth)
+
+- [Public exports](src/abstractruntime/__init__.py): supported external API surface
+- [Runtime loop](src/abstractruntime/core/runtime.py): `start`/`tick`/`resume` semantics and built-in effect handlers
+- [Core models](src/abstractruntime/core/models.py): `RunState`, `WaitState`, `StepPlan`, `Effect`, `StepRecord`
+- [Scheduler wrapper](src/abstractruntime/scheduler/convenience.py): `create_scheduled_runtime()` / `ScheduledRuntime`
+- [Storage interfaces](src/abstractruntime/storage/base.py): `RunStore`, `LedgerStore`, `QueryableRunStore`
 
 ## Guides
 
-- [FAQ](docs/faq.md)
-- [Manual testing](docs/manual_testing.md)
-- [Limits](docs/limits.md)
+- [FAQ](docs/faq.md): common questions and gotchas
+- [Manual testing](docs/manual_testing.md): smoke tests + how to run `pytest`
+- [Limits](docs/limits.md): `_limits` namespace and RuntimeConfig
 
 ## Integrations
 
-- [AbstractCore integration](docs/integrations/abstractcore.md)
-- [Comms toolset](docs/tools-comms.md)
-- [MCP worker](docs/mcp-worker.md)
+- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid
+- [MCP worker](docs/mcp-worker.md): `abstractruntime-mcp-worker` CLI (stdio/HTTP)
+- [Comms toolset](docs/tools-comms.md): opt-in email/WhatsApp/Telegram gating
 
 ## Durability & observability
 
-- [Snapshots](docs/snapshots.md)
-- [Provenance](docs/provenance.md)
-- [Evidence capture](docs/evidence.md)
+- [Evidence capture](docs/evidence.md): artifact-backed evidence for boundary tools
+- [Snapshots](docs/snapshots.md): named bookmarks of run state
+- [Provenance](docs/provenance.md): tamper-evident hash-chained ledger
 
 ## Distribution
 
-- [WorkflowBundles](docs/workflow-bundles.md)
+- [WorkflowBundles](docs/workflow-bundles.md): `.flow` bundle format + VisualFlow compilation
 
 ## Maintainers
 
-- [Roadmap](ROADMAP.md)
-- [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Acknowledgments](ACKNOWLEDGMENTS.md)
-- [ADRs](docs/adr/README.md)
-- [Backlog](docs/backlog/README.md)
+- [Contributing](CONTRIBUTING.md): dev setup + guidelines
+- [Security policy](SECURITY.md): responsible vulnerability reporting
+- [Acknowledgments](ACKNOWLEDGMENTS.md): dependency credits (from `pyproject.toml`)
+- [Changelog](CHANGELOG.md): release notes
+- [Roadmap](ROADMAP.md): near-term priorities
+- [ADRs](docs/adr/README.md): design rationale
 
 ## Optional
 
-- [Examples](examples/README.md)
+- [Backlog](docs/backlog/README.md): detailed work items (implemented + planned)
+- [Examples](examples/README.md): runnable scripts

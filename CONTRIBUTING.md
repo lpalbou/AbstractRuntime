@@ -8,6 +8,9 @@ AbstractRuntime is a **durable workflow runtime** (interrupt → checkpoint → 
 
 Prereqs: **Python 3.10+**.
 
+Recommended (workspace checkout): develop inside the [AbstractFramework](https://github.com/lpalbou/AbstractFramework) workspace.  
+The test bootstrap (`tests/conftest.py`) will auto-wire sibling projects on `sys.path` (e.g., `abstractcore/`, `abstractmemory/`, `abstractsemantics/`, `abstractflow/`).
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -18,6 +21,8 @@ python -m pip install -e ".[abstractcore,mcp-worker]"
 
 python -m pytest -q
 ```
+
+If you cloned **only** this repo (without the AbstractFramework workspace), make sure the sibling packages above are importable (install them or clone them next to this repo) before running the full test suite.
 
 ## Repo map (source of truth)
 
@@ -55,4 +60,3 @@ When behavior changes, update:
 
 - Bump `version` in `pyproject.toml`
 - Add a dated section to `CHANGELOG.md` (Keep a Changelog format)
-

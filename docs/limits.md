@@ -62,7 +62,7 @@ Returns a structured dict for UI/status display. (`src/abstractruntime/core/runt
 
 Returns a list of `LimitWarning` objects for limits approaching/exceeded. (`src/abstractruntime/core/models.py`, `src/abstractruntime/core/runtime.py`)
 
-As of v0.4.1, warnings are computed for:
+As of v0.4.2, warnings are computed for:
 - `iterations` (`current_iteration` vs `max_iterations`)
 - `tokens` (`estimated_tokens_used` vs `max_tokens`)
 

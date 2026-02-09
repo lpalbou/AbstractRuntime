@@ -10,6 +10,14 @@ Code: `src/abstractruntime/core/runtime.py`, `src/abstractruntime/core/models.py
 No. AbstractRuntime is the **execution substrate**. Agent logic (ReAct/CodeAct loops, prompt policies, etc.) is built *on top* of it.  
 Docs: `proposal.md`. Code: `src/abstractruntime/core/*`.
 
+## How does AbstractRuntime relate to AbstractCore / AbstractFramework?
+
+AbstractRuntime is the **durable execution kernel**. In the AbstractFramework ecosystem, it is commonly paired with:
+- **AbstractCore** for LLM + tool execution (`EffectType.LLM_CALL`, `EffectType.TOOL_CALLS`)  
+  Code: `src/abstractruntime/integrations/abstractcore/*`. Repo: [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+AbstractFramework umbrella: [lpalbou/AbstractFramework](https://github.com/lpalbou/AbstractFramework)
+
 ## Where is the public API documented?
 
 - API guide: `api.md`
@@ -37,6 +45,15 @@ Docs: `getting-started.md`, `architecture.md`. Code: `src/abstractruntime/core/r
 - If you use `create_scheduled_runtime()`: call `sr.respond(run_id, payload)` (it uses `state.waiting.wait_key`).
 
 Docs: `getting-started.md`. Code: `src/abstractruntime/core/runtime.py`, `src/abstractruntime/scheduler/convenience.py`.
+
+## Why is my `ASK_USER` answer a dict?
+
+`Runtime.resume(..., payload=...)` always takes a **dict** payload. If the wait has a `result_key`, the runtime stores that dict into `RunState.vars` at `result_key`.  
+Code: `src/abstractruntime/core/runtime.py` (`Runtime.resume`) and `src/abstractruntime/core/models.py` (`WaitState.result_key`).
+
+Common pattern:
+- resume with `{"text": "..."}` (host-side)
+- read `run.vars["my_result_key"]["text"]` (node-side)
 
 ## What storage backends are included?
 

@@ -2,84 +2,280 @@
 
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
-This file is a higher-signal orientation guide for LLM-based code assistants working in this repo.
+This file is an **agent-oriented build guide** for the AbstractRuntime *library*. It is designed to be directly actionable:
+- how to model workflows (`WorkflowSpec` + `StepPlan`)
+- how durability works (checkpoint + ledger + waits)
+- how to wire LLM/tool execution (via AbstractCore)
+- where the exact semantics live in code (`src/...`)
 
 Quick facts:
-- Python: 3.10+
-- Version: 0.4.1 (`pyproject.toml`)
+- Python: 3.10+ (`pyproject.toml`)
+- Version: 0.4.2 (`pyproject.toml`)
+- Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
+- Public export surface (source of truth): `src/abstractruntime/__init__.py`
 
-## Quick orientation
+```mermaid
+flowchart LR
+  Host["Host app / service"] -->|"WorkflowSpec"| RT["AbstractRuntime"]
+  RT -->|"checkpoints"| RS["RunStore"]
+  RT -->|"append-only"| LS["LedgerStore"]
+  RT -->|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore (optional)"]
+```
 
-- Package root: `src/abstractruntime/`
-- Public exports: `src/abstractruntime/__init__.py`
-- Kernel (durable semantics): `src/abstractruntime/core/`
-  - models: `src/abstractruntime/core/models.py`
-  - runtime loop: `src/abstractruntime/core/runtime.py`
-  - workflow spec: `src/abstractruntime/core/spec.py`
-  - vars conventions: `src/abstractruntime/core/vars.py`
-  - limits/config: `src/abstractruntime/core/config.py`
-  - retries/idempotency policy: `src/abstractruntime/core/policy.py`
-- Durability backends: `src/abstractruntime/storage/`
-- Driver loop (in-process): `src/abstractruntime/scheduler/`
-- Visual authoring/distribution:
-  - compiler: `src/abstractruntime/visualflow_compiler/`
-  - bundles: `src/abstractruntime/workflow_bundle/`
-- Observability:
-  - evidence recorder: `src/abstractruntime/evidence/recorder.py`
-  - rendering helpers: `src/abstractruntime/rendering/`
-  - run history export: `src/abstractruntime/history_bundle.py`
-- Optional integrations:
-  - AbstractCore: `src/abstractruntime/integrations/abstractcore/`
-  - AbstractMemory bridge: `src/abstractruntime/integrations/abstractmemory/`
+## What AbstractRuntime is (and is not)
 
-## Important invariants (durability)
+- **Is**: a durable state-machine runner for workflow graphs (`WorkflowSpec`), with explicit blocking via `WaitState`.
+- **Is not**: an agent framework, a prompt policy engine, or a UI builder. Those belong in higher layers.
 
-- `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`). For large payloads:
-  - store by reference in `ArtifactStore` (`src/abstractruntime/storage/artifacts.py`)
-  - or wrap stores with `OffloadingRunStore` / `OffloadingLedgerStore` (`src/abstractruntime/storage/offloading.py`)
-- When a run blocks, it persists a `WaitState` and resumes later via `Runtime.resume(...)`:
-  - resume continues from `WaitState.resume_to_node` (waiting node is not re-run)
-- The ledger is append-only (`StepRecord` in `src/abstractruntime/core/models.py`).
-  - for tamper-evidence, wrap with `HashChainedLedgerStore` (`src/abstractruntime/storage/ledger_chain.py`)
-- Side effects should be idempotent (or guarded):
-  - effect retry/idempotency is centralized via `EffectPolicy` (`src/abstractruntime/core/policy.py`)
-  - `Runtime.tick(...)` can reuse prior results based on idempotency keys (`src/abstractruntime/core/runtime.py`)
+Docs: `docs/proposal.md`. Code: `src/abstractruntime/core/*`.
+
+## Public API quickstart (recommended imports)
+
+Source of truth: `src/abstractruntime/__init__.py`.
+
+Core kernel:
+
+```python
+from abstractruntime import Effect, EffectType, Runtime, StepPlan, WorkflowSpec
+```
+
+Most common stores:
+
+```python
+from abstractruntime.storage import InMemoryRunStore, InMemoryLedgerStore, JsonFileRunStore, JsonlLedgerStore
+```
+
+Zero-config driver wrapper:
+
+```python
+from abstractruntime import create_scheduled_runtime
+```
+
+If you need SQLite stores, they are exported at the package root:
+
+```python
+from abstractruntime import SqliteRunStore, SqliteLedgerStore
+```
+
+## Build with it: minimal pause → resume
+
+This is the smallest durable workflow you can run: one node asks a user, the run blocks, then you resume it.
+
+Implementation pointers:
+- runtime loop: `src/abstractruntime/core/runtime.py` (`Runtime.start/tick/resume`)
+- durable models: `src/abstractruntime/core/models.py` (`RunState`, `WaitState`, `StepPlan`, `Effect`)
+
+```python
+from abstractruntime import Effect, EffectType, Runtime, StepPlan, WorkflowSpec
+from abstractruntime.storage import InMemoryLedgerStore, InMemoryRunStore
+
+
+def ask(run, ctx):
+    return StepPlan(
+        node_id="ask",
+        effect=Effect(
+            type=EffectType.ASK_USER,
+            payload={"prompt": "Continue?"},
+            result_key="answer",
+        ),
+        next_node="done",
+    )
+
+
+def done(run, ctx):
+    answer = run.vars.get("answer") or {}
+    text = answer.get("text") if isinstance(answer, dict) else None
+    return StepPlan(node_id="done", complete_output={"answer": text})
+
+
+wf = WorkflowSpec(workflow_id="demo", entry_node="ask", nodes={"ask": ask, "done": done})
+rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+
+run_id = rt.start(workflow=wf)
+state = rt.tick(workflow=wf, run_id=run_id)
+assert state.status.value == "waiting"
+
+state = rt.resume(workflow=wf, run_id=run_id, wait_key=state.waiting.wait_key, payload={"text": "yes"})
+assert state.status.value == "completed"
+```
+
+Semantics to remember (code-enforced in `src/abstractruntime/core/runtime.py`):
+- Nodes do **not** execute side effects directly; they return a `StepPlan`.
+- Side effects are requested via `Effect(type=..., payload=...)` and executed by effect handlers.
+- When a run blocks, the runtime persists a `WaitState` under `RunState.waiting`.
+- `resume(...)` continues from `WaitState.resume_to_node` (the waiting node is not re-run).
+
+## Recommended host API: `create_scheduled_runtime()` (driver loop)
+
+If you want time-based waits (`WAIT_UNTIL`) to progress automatically, you need a driver. The built-in driver is:
+- `Scheduler` + `ScheduledRuntime` (`src/abstractruntime/scheduler/*`)
+- convenience factory: `create_scheduled_runtime()` (`src/abstractruntime/scheduler/convenience.py`)
+
+Docs: `docs/getting-started.md`. Code: `src/abstractruntime/scheduler/scheduler.py`.
+
+## Durability model (checkpoint + ledger)
+
+Core durability primitives:
+- **Checkpoint**: `RunState` persisted via a `RunStore` (`src/abstractruntime/storage/base.py`)
+- **Append-only journal**: `StepRecord` appended to a `LedgerStore` (`src/abstractruntime/storage/base.py`)
+
+Hard invariant:
+- `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`).
+- For large payloads, store by reference via `ArtifactStore` (`src/abstractruntime/storage/artifacts.py`) and/or wrap stores with:
+  - `OffloadingRunStore`, `OffloadingLedgerStore` (`src/abstractruntime/storage/offloading.py`)
+
+## Effects cheat-sheet (what nodes can request)
+
+The effect protocol is defined by:
+- `Effect`, `EffectType`: `src/abstractruntime/core/models.py`
+- execution: `Runtime._register_builtin_handlers()` + handlers in `src/abstractruntime/core/runtime.py`
+
+Built-in waits:
+- `ASK_USER`: blocks with `WaitReason.USER` and durable prompt metadata (`prompt`, optional `choices`)  
+  Handler: `Runtime._handle_ask_user` (`src/abstractruntime/core/runtime.py`)
+- `WAIT_UNTIL`: blocks with `WaitReason.UNTIL` until ISO timestamp `payload.until`  
+  Handler: `Runtime._handle_wait_until`
+- `WAIT_EVENT`: blocks with `WaitReason.EVENT` waiting for `payload.wait_key` (or `{scope,name}` which is converted into a stable key)  
+  Handler: `Runtime._handle_wait_event`
+- `ANSWER_USER`: non-blocking “send a message” effect (host UI can render it)  
+  Handler: `Runtime._handle_answer_user`
+
+Eventing:
+- `EMIT_EVENT`: emits a durable event and resumes matching `WAIT_EVENT` runs when possible  
+  Handler: `Runtime._handle_emit_event`  
+  Notes (as implemented): requires a `QueryableRunStore` to discover waiting runs; and requires a workflow registry when listeners exist.
+
+Composition:
+- `START_SUBWORKFLOW`: starts a child run (sync mode blocks parent with `WaitReason.SUBWORKFLOW`)  
+  Handler: `Runtime._handle_start_subworkflow`  
+  Requires: a workflow registry (see scheduler registry: `src/abstractruntime/scheduler/registry.py`)
+
+Inspection:
+- `VARS_QUERY`: read-only query into `RunState.vars` paths  
+  Handler: `Runtime._handle_vars_query`, helpers in `src/abstractruntime/core/vars.py`
+
+Runtime-owned memory helpers (JSON-safe):
+- `MEMORY_NOTE`, `MEMORY_QUERY`, `MEMORY_TAG`, `MEMORY_REHYDRATE`: span/index operations under `vars["_runtime"]["memory_spans"]`  
+- `MEMORY_COMPACT`: archives older messages into `ArtifactStore` and replaces them with a system summary message  
+  Handler: `Runtime._handle_memory_compact` (requires `artifact_store`)
+
+Host-wired effects (protocol defined here; handlers provided by integrations):
+- `LLM_CALL`, `TOOL_CALLS`: typically wired via AbstractCore (`src/abstractruntime/integrations/abstractcore/*`)
+- `MEMORY_KG_*`: wired via the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
+
+## Storage backends and common patterns
+
+Interfaces (source of truth): `src/abstractruntime/storage/base.py`.
+
+Included backends:
+- in-memory (tests/dev): `src/abstractruntime/storage/in_memory.py`
+- filesystem JSON/JSONL: `src/abstractruntime/storage/json_files.py`
+- SQLite: `src/abstractruntime/storage/sqlite.py`
+
+Durability helpers:
+- artifacts: `ArtifactStore`, `FileArtifactStore` (`src/abstractruntime/storage/artifacts.py`)
+- offloading decorators: `OffloadingRunStore`, `OffloadingLedgerStore` (`src/abstractruntime/storage/offloading.py`)
+- tamper-evidence: `HashChainedLedgerStore` + `verify_ledger_chain(...)` (`src/abstractruntime/storage/ledger_chain.py`)
+- subscriptions: `ObservableLedgerStore` (`src/abstractruntime/storage/observable.py`)
+- snapshots: `SnapshotStore` (`src/abstractruntime/storage/snapshots.py`)
+
+Docs: `docs/architecture.md`, `docs/provenance.md`, `docs/snapshots.md`.
+
+## Commands (durable control-plane inbox)
+
+AbstractRuntime includes append-only, idempotent **command inbox** primitives for gateways/workers:
+- interfaces/models: `src/abstractruntime/storage/commands.py` (`CommandRecord`, `CommandStore`, `CommandCursorStore`)
+- SQLite backend: `src/abstractruntime/storage/sqlite.py`
+
+These are exported at the package root (`src/abstractruntime/__init__.py`).
+
+## AbstractCore integration (LLM + tools)
+
+Docs: `docs/integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/*`.
+
+What you get:
+- effect handlers for `LLM_CALL` and `TOOL_CALLS`
+- three execution modes (ADR-0002): local / remote / hybrid
+- tool execution modes: executed (trusted local) vs passthrough (external worker boundary)
+- optional MCP worker entrypoint (`abstractruntime-mcp-worker`)
+
+Quick start (local mode, requires `pip install "abstractruntime[abstractcore]"`):
+
+```python
+from abstractruntime.integrations.abstractcore import create_local_runtime
+
+rt = create_local_runtime(provider="ollama", model="qwen3:4b")
+```
+
+Notes:
+- Tool calls and results are durable (ledger + checkpoints). Keep secrets out of tool arguments.
+- Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
+
+## MCP worker (`abstractruntime-mcp-worker`)
+
+Docs: `docs/mcp-worker.md`. Code: `src/abstractruntime/integrations/abstractcore/mcp_worker.py`.
+
+This is an optional CLI that exposes AbstractCore toolsets over MCP via stdio (default) or HTTP (optional). Treat it as privileged when exposing `system` tools.
+
+## Rendering and node traces (host UX)
+
+Node traces are stored durably at `RunState.vars["_runtime"]["node_traces"]` (`src/abstractruntime/core/runtime.py`).
+
+Rendering helpers (useful for review UIs and debugging):
+- `render_agent_trace_markdown(...)` (`src/abstractruntime/rendering/agent_trace_report.py`)
+- `stringify_json(...)` (`src/abstractruntime/rendering/json_stringify.py`)
 
 ## How to verify behavior quickly
 
 - Manual smoke tests: `docs/manual_testing.md`
-- Run unit tests:
+- Run tests:
 
 ```bash
 python -m pytest -q
 ```
 
-## Where to look (common questions)
+## Maintaining `llms*.txt` (for maintainers)
 
-- “Why is it designed like this?” → ADRs: `docs/adr/README.md`
-- “What happens on tick/resume?” → `src/abstractruntime/core/runtime.py`
-- “What is persisted?” → `RunState`/`StepRecord`: `src/abstractruntime/core/models.py`
-- “How are tool calls handled?” → `EffectType.TOOL_CALLS` + ToolExecutor: `src/abstractruntime/integrations/abstractcore/tool_executor.py`
-- “How do I run scheduled workflows?” → scheduler: `src/abstractruntime/scheduler/`
-- “How do I distribute VisualFlows?” → bundles/compiler: `docs/workflow-bundles.md`
-- “How do I audit what happened?” → ledger/provenance/evidence: `docs/provenance.md`, `docs/evidence.md`
+Keep these two files tight and trustworthy:
+- `llms.txt`: a concise index of the most relevant docs and source-of-truth files (with 1-line descriptions).
+- `llms-full.txt`: an expanded, agent-oriented guide (this file) that should stay aligned with the public exports in `src/abstractruntime/__init__.py`.
 
-## Canonical docs
+When the public API or semantics change, update:
+- `docs/api.md` (API surface)
+- `docs/getting-started.md` (onboarding example(s))
+- `docs/architecture.md` (semantics/invariants)
+- `llms.txt` and `llms-full.txt` (agent entrypoints)
 
-- `README.md` (install + quick start)
-- `CHANGELOG.md` (release notes)
-- `docs/getting-started.md` (first steps)
-- `docs/api.md` (public API surface)
-- `docs/faq.md` (common questions)
-- `docs/README.md` (docs index)
-- `docs/architecture.md` (component map + diagrams)
-- `docs/integrations/abstractcore.md` (LLM/tool wiring)
-- `docs/limits.md` (the `_limits` namespace and APIs)
-- `CONTRIBUTING.md` (dev setup + guidelines)
-- `SECURITY.md` (responsible vulnerability reporting)
-- `ACKNOWLEDGMENTS.md` (credits)
+## Docs map (links)
 
-## Optional
+Start here:
+- `README.md`: install + minimal durable example + doc index
+- `docs/getting-started.md`: first workflow + scheduler + persistence
+- `docs/api.md`: public API surface (imports + pointers)
+- `docs/architecture.md`: component map + invariants (diagrams)
+- `docs/faq.md`: common questions and gotchas
 
-- Examples: `examples/README.md`
-- Roadmap/backlog: `ROADMAP.md`, `docs/backlog/README.md`
+Integration and operations:
+- `docs/integrations/abstractcore.md`: `LLM_CALL` / `TOOL_CALLS` wiring
+- `docs/mcp-worker.md`: MCP worker CLI
+- `docs/tools-comms.md`: opt-in comms toolset gating
+
+Durability and distribution:
+- `docs/limits.md`: `_limits` namespace + RuntimeConfig
+- `docs/provenance.md`: tamper-evident hash chain
+- `docs/evidence.md`: artifact-backed evidence capture for boundary tools
+- `docs/snapshots.md`: snapshot/bookmark model
+- `docs/workflow-bundles.md`: `.flow` bundle format and VisualFlow distribution
+
+Maintainers:
+- `CONTRIBUTING.md`: dev setup + guidelines
+- `SECURITY.md`: responsible disclosure
+- `ACKNOWLEDGMENTS.md`: dependency credits
+- `CHANGELOG.md`: release notes
+- `ROADMAP.md`: near-term priorities
+- `docs/adr/README.md`: design rationale (why)
+
+## Optional (deep context)
+
+- `docs/backlog/README.md`: detailed planned/completed work items
+- `examples/README.md`: runnable examples

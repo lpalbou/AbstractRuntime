@@ -55,16 +55,11 @@ The actual comms tools live in AbstractCore:
 
 AbstractRuntime does **not** store secrets in run state. Secrets should be supplied as environment variables in the **process that executes the tool calls**.
 
-Practical starting points (as implemented in AbstractCore v2.11.0):
+Practical starting points (provided by AbstractCore; see `pyproject.toml` for the minimum supported version):
 - Email:
   - `ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml` (YAML/JSON config), or `ABSTRACT_EMAIL_{IMAP,SMTP}_*` env vars
   - Passwords are resolved indirectly via `*_PASSWORD_ENV_VAR` (default: `EMAIL_PASSWORD`)
-  - Repo templates:
-    - `emails.config.example.yaml` (static examples: OVH + Gmail)
-    - `configs/emails.yaml` (default config that inherits from `ABSTRACT_EMAIL_*` env vars via `${ENV_VAR}` interpolation)
-  - YAML/JSON value interpolation:
-    - `${ENV_VAR}` (required)
-    - `${ENV_VAR:-default}` (optional default; can be empty)
+  - Repo template (this repo): `emails.config.example.yaml` (static examples: OVH + Gmail)
 - WhatsApp (Twilio):
   - defaults use `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
 - Telegram:

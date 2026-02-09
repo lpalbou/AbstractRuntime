@@ -9,8 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 ### Changed
+- Documentation: align version references with `pyproject.toml` (0.4.2) and fix minor API-doc drift (`docs/api.md`).
 
 ### Fixed
+
+## [0.4.2] - 2026-02-08
+
+### Changed
+- **Dependencies**:
+  - bump minimum `abstractcore` / `abstractcore[tools]` to `>=2.11.8` (`pyproject.toml`)
+  - bump minimum `abstractsemantics` to `>=0.0.2` (`pyproject.toml`)
 
 ## [0.4.1] - 2026-02-04
 
@@ -247,7 +255,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.2
 [0.4.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.1
 [0.4.0]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.0
 [0.0.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.0.1

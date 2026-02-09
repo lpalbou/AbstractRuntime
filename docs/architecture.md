@@ -1,10 +1,25 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-02-04  
-> Version: 0.4.1 (see `pyproject.toml`)  
+> Updated: 2026-02-09  
+> Version: 0.4.2 (see `pyproject.toml`)  
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
+
+## Ecosystem (AbstractFramework)
+
+AbstractRuntime is the durable execution kernel inside the wider AbstractFramework ecosystem:
+- AbstractFramework umbrella: [lpalbou/AbstractFramework](https://github.com/lpalbou/AbstractFramework)
+- AbstractCore (LLM + tools): [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+The runtime stays dependency-light and delegates LLM/tool execution to integrations (notably AbstractCore): `src/abstractruntime/integrations/abstractcore/*`.
+
+```mermaid
+flowchart LR
+  Host["Host app / AbstractFlow / service"] -->|"WorkflowSpec"| RT["AbstractRuntime"]
+  RT -->|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore"]
+  AC -->|"results / waits"| RT
+```
 
 Key invariants (enforced by code, not convention):
 - **Durable state is JSON-safe**: `RunState.vars` must remain JSON-serializable (`src/abstractruntime/core/models.py`). Large payloads should be stored as artifacts and referenced (`src/abstractruntime/storage/artifacts.py`, `src/abstractruntime/storage/offloading.py`).
@@ -27,6 +42,7 @@ flowchart TB
   subgraph Storage["storage/ (durability)"]
     RunStore["RunStore\nin_memory / json_files / sqlite"]
     LedgerStore["LedgerStore\n(+observable + hash_chain)"]
+    Commands["commands.py\nCommandStore / CommandCursorStore"]
     Artifacts["ArtifactStore\nin_memory / file"]
     Offload["Offloading* wrappers\nstore large values by ref"]
     Snapshots["SnapshotStore\nin_memory / json"]
@@ -128,7 +144,7 @@ sequenceDiagram
 ### Built-in (kernel-owned) effects
 Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/runtime.py`):
 - waits: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `ANSWER_USER`
-- durable events: `EMIT_EVENT` (resumes matching `WAIT_EVENT` runs; requires `QueryableRunStore` + a workflow registry)
+- durable events: `EMIT_EVENT` (resumes matching `WAIT_EVENT` runs; requires `QueryableRunStore` and a workflow registry when listeners exist)
 - subworkflows: `START_SUBWORKFLOW` (requires `runtime.workflow_registry`; see `src/abstractruntime/scheduler/registry.py`)
 - memory primitives (JSON-safe): `MEMORY_NOTE`, `MEMORY_QUERY`, `MEMORY_TAG`, `MEMORY_COMPACT`, `MEMORY_REHYDRATE`
   - `MEMORY_COMPACT` requires an `ArtifactStore`. It uses an injected `chat_summarizer` when available; otherwise it runs an internal `LLM_CALL` subworkflow and therefore requires an `LLM_CALL` handler to be wired.

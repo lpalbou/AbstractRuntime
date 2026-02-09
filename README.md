@@ -4,7 +4,25 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.1 (`pyproject.toml`) • **Python:** 3.10+
+**Version:** 0.4.2 (see `pyproject.toml`) • **Python:** 3.10+
+
+**Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## AbstractFramework ecosystem
+
+AbstractRuntime is one component of the wider [AbstractFramework](https://github.com/lpalbou/AbstractFramework) ecosystem:
+- **AbstractRuntime** (this repo) — durable workflow kernel (`src/abstractruntime/core/*`)
+- **AbstractCore** — LLM + tools integration (wired via `src/abstractruntime/integrations/abstractcore/*`)  
+  Repo: [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+At a high level, hosts define workflow graphs (`WorkflowSpec`) and AbstractRuntime executes them durably. When nodes request LLM/tool work (`EffectType.LLM_CALL`, `EffectType.TOOL_CALLS`), those effects are typically handled via AbstractCore.
+
+```mermaid
+flowchart LR
+  Host["Host app / orchestrator"] -->|"WorkflowSpec"| RT["AbstractRuntime"]
+  RT -->|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore"]
+  AC -->|"results / waits"| RT
+```
 
 ## Install
 
@@ -46,7 +64,9 @@ def ask(run, ctx):
 
 
 def done(run, ctx):
-    return StepPlan(node_id="done", complete_output={"answer": run.vars.get("user_answer")})
+    answer = run.vars.get("user_answer") or {}
+    text = answer.get("text") if isinstance(answer, dict) else None
+    return StepPlan(node_id="done", complete_output={"answer": text})
 
 
 wf = WorkflowSpec(workflow_id="demo", entry_node="ask", nodes={"ask": ask, "done": done})
@@ -65,7 +85,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.1)
+## What’s included (v0.4.2)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -76,6 +96,7 @@ Kernel (dependency-light):
 
 Durability + storage:
 - stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
+- durable command inbox primitives (idempotent, append-only): `CommandStore`, `CommandCursorStore` (`src/abstractruntime/storage/commands.py`, `src/abstractruntime/storage/sqlite.py`)
 - artifacts + offloading (store large payloads by reference)
 - snapshots/bookmarks (`docs/snapshots.md`)
 - tamper-evident hash-chained ledger (`docs/provenance.md`)
@@ -98,7 +119,7 @@ sr = create_scheduled_runtime()
 run_id, state = sr.run(my_workflow)
 
 if state.status.value == "waiting":
-    state = sr.respond(run_id, {"answer": "yes"})
+    state = sr.respond(run_id, {"text": "yes"})
 
 sr.stop()
 ```

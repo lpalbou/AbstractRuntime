@@ -2,6 +2,16 @@
 
 This folder contains **user-facing docs** (how to use AbstractRuntime) and **maintainer docs** (ADRs/backlog).
 
+If you are new: read `getting-started.md` → `api.md` → `architecture.md`.
+
+## Ecosystem
+
+AbstractRuntime is part of the wider AbstractFramework ecosystem:
+- AbstractFramework umbrella: [lpalbou/AbstractFramework](https://github.com/lpalbou/AbstractFramework)
+- AbstractCore (LLM + tools): [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrations/abstractcore/*` and is documented in `integrations/abstractcore.md`.
+
 ## Start here
 
 - `../README.md` — install + quick start

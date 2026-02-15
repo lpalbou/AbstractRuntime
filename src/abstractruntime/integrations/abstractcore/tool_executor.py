@@ -18,7 +18,7 @@ import json
 import re
 import threading
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set
 
 from .logging import get_logger
 
@@ -643,4 +643,124 @@ class DelegatingMcpToolExecutor:
                 "server_id": self._server_id,
                 "tool_name_prefix": f"mcp::{self._server_id}::",
             },
+        }
+
+
+_DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
+    # Read-only filesystem
+    "list_files",
+    "skim_folders",
+    "analyze_code",
+    "read_file",
+    "skim_files",
+    "search_files",
+    # Network read-only
+    "web_search",
+    "skim_websearch",
+    "skim_url",
+    "fetch_url",
+    # Comms (required for bridge-owned delivery flows like Telegram)
+    "send_telegram_message",
+    "send_telegram_artifact",
+}
+
+
+_DEFAULT_REQUIRE_APPROVAL: Set[str] = {
+    # Side effects
+    "write_file",
+    "edit_file",
+    "execute_command",
+    # Comms with higher exfil/spam risk (explicit allow needed; unknown tools also require approval)
+    "send_email",
+    "send_whatsapp_message",
+}
+
+
+class ToolApprovalPolicy:
+    """Decide whether a batch of tool calls should require user approval.
+
+    Contract:
+    - Any tool name not in `auto_approve_tools` requires approval.
+    - Any tool name in `require_approval_tools` requires approval (even if also in auto list).
+    """
+
+    def __init__(
+        self,
+        *,
+        auto_approve_tools: Optional[Set[str]] = None,
+        require_approval_tools: Optional[Set[str]] = None,
+    ) -> None:
+        self.auto_approve_tools: Set[str] = set(auto_approve_tools or _DEFAULT_SAFE_AUTO_APPROVE)
+        self.require_approval_tools: Set[str] = set(require_approval_tools or _DEFAULT_REQUIRE_APPROVAL)
+
+    def requires_approval(self, tool_calls: Sequence[Dict[str, object]]) -> bool:
+        for tc in tool_calls or []:
+            name = str((tc or {}).get("name") or "").strip()
+            if not name:
+                return True
+            if name in self.require_approval_tools:
+                return True
+            if name not in self.auto_approve_tools:
+                return True
+        return False
+
+    def describe(self) -> Dict[str, List[str]]:
+        return {
+            "auto_approve_tools": sorted(self.auto_approve_tools),
+            "require_approval_tools": sorted(self.require_approval_tools),
+        }
+
+
+class ApprovalToolExecutor:
+    """Execute tool calls with a safe auto-approve policy + durable approval waits.
+
+    This executor wraps another executor (typically `MappingToolExecutor`) and:
+    - executes safe tool batches immediately
+    - returns `mode="approval_required"` for any batch that requires approval
+
+    Note: `make_tool_calls_handler` detects "delegating" executors by probing `execute([])`.
+    To ensure tool waits are handled via a durable wait/resume path, we return a non-executed
+    mode for empty batches.
+    """
+
+    def __init__(
+        self,
+        *,
+        delegate: ToolExecutor,
+        policy: Optional[ToolApprovalPolicy] = None,
+        wait_key_factory: Optional[Callable[[], str]] = None,
+    ) -> None:
+        self._delegate = delegate
+        self._policy = policy or ToolApprovalPolicy()
+        self._wait_key_factory = wait_key_factory or (lambda: f"tool_approval:{uuid.uuid4().hex}")
+
+    @property
+    def policy(self) -> ToolApprovalPolicy:
+        return self._policy
+
+    def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        calls = list(tool_calls or [])
+        if not calls:
+            return {
+                "mode": "approval_required",
+                "wait_reason": "user",
+                "wait_key": self._wait_key_factory(),
+                "tool_calls": _jsonable(calls),
+                "details": {"kind": "tool_approval"},
+            }
+
+        try:
+            requires = self._policy.requires_approval(calls)
+        except Exception:
+            requires = True
+
+        if not requires:
+            return self._delegate.execute(tool_calls=calls)
+
+        return {
+            "mode": "approval_required",
+            "wait_reason": "user",
+            "wait_key": self._wait_key_factory(),
+            "tool_calls": _jsonable(calls),
+            "details": {"kind": "tool_approval", "policy": self._policy.describe()},
         }

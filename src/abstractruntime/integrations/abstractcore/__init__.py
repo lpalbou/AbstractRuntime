@@ -19,7 +19,14 @@ from .llm_client import (
     RemoteAbstractCoreLLMClient,
 )
 from .embeddings_client import AbstractCoreEmbeddingsClient, EmbeddingsResult
-from .tool_executor import AbstractCoreToolExecutor, MappingToolExecutor, PassthroughToolExecutor, ToolExecutor
+from .tool_executor import (
+    AbstractCoreToolExecutor,
+    ApprovalToolExecutor,
+    MappingToolExecutor,
+    PassthroughToolExecutor,
+    ToolApprovalPolicy,
+    ToolExecutor,
+)
 from .effect_handlers import build_effect_handlers
 from .factory import (
     create_hybrid_runtime,
@@ -41,6 +48,8 @@ __all__ = [
     "MappingToolExecutor",
     "AbstractCoreToolExecutor",
     "PassthroughToolExecutor",
+    "ToolApprovalPolicy",
+    "ApprovalToolExecutor",
 
     "build_effect_handlers",
     "create_local_runtime",

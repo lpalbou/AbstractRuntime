@@ -16,8 +16,10 @@ from __future__ import annotations
 import ast
 import json
 import locale
+import mimetypes
 import os
 import re
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
@@ -439,6 +441,110 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _resolve_media_artifacts(
+    media: Optional[List[Any]],
+    *,
+    artifact_store: Optional[Any],
+    temp_dir: Optional[str] = None,
+) -> Optional[List[Any]]:
+    if not media or artifact_store is None:
+        return media
+
+    load_fn = getattr(artifact_store, "load", None)
+    meta_fn = getattr(artifact_store, "get_metadata", None)
+    content_path_fn = getattr(artifact_store, "_content_path", None)
+    out: List[Any] = []
+
+    for item in list(media):
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+
+        aid = item.get("$artifact")
+        if not (isinstance(aid, str) and aid.strip()):
+            aid = item.get("artifact_id")
+        if not (isinstance(aid, str) and aid.strip()):
+            out.append(item)
+            continue
+
+        # If caller already provided a path/content, keep it.
+        if isinstance(item.get("file_path"), str) and str(item.get("file_path") or "").strip():
+            out.append(item)
+            continue
+        if item.get("content") is not None:
+            out.append(item)
+            continue
+
+        meta = None
+        if callable(meta_fn):
+            try:
+                meta = meta_fn(str(aid))
+            except Exception:
+                meta = None
+
+        content_type = ""
+        if isinstance(item.get("content_type"), str):
+            content_type = str(item.get("content_type") or "")
+        elif isinstance(item.get("mime_type"), str):
+            content_type = str(item.get("mime_type") or "")
+        if not content_type and meta is not None:
+            content_type = str(getattr(meta, "content_type", "") or "")
+
+        filename = ""
+        if isinstance(item.get("filename"), str):
+            filename = str(item.get("filename") or "")
+        elif meta is not None:
+            tags = getattr(meta, "tags", None)
+            if isinstance(tags, dict):
+                filename = str(tags.get("filename") or tags.get("path") or "")
+
+        file_path = ""
+        if callable(content_path_fn):
+            try:
+                p = content_path_fn(str(aid))
+                if hasattr(p, "exists") and p.exists():
+                    file_path = str(p)
+            except Exception:
+                file_path = ""
+
+        if not file_path and callable(load_fn):
+            try:
+                art = load_fn(str(aid))
+            except Exception:
+                art = None
+            if art is not None and getattr(art, "content", None) is not None:
+                raw = bytes(getattr(art, "content") or b"")
+                ext = os.path.splitext(filename)[1] if filename else ""
+                if not ext:
+                    ext = mimetypes.guess_extension(content_type or "") or ""
+                if not ext:
+                    ext = ".bin"
+                try:
+                    if isinstance(temp_dir, str) and temp_dir.strip():
+                        p = os.path.join(temp_dir, f"{str(aid).strip()}{ext}")
+                        with open(p, "wb") as f:
+                            f.write(raw)
+                        file_path = p
+                    else:
+                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, prefix="artifact_")
+                        tmp.write(raw)
+                        tmp.flush()
+                        tmp.close()
+                        file_path = tmp.name
+                except Exception:
+                    file_path = ""
+
+        if file_path:
+            # Return a raw file path to trigger AutoMediaHandler processing.
+            out.append(str(file_path))
+            continue
+
+        logger.warning("#FALLBACK: unable to resolve artifact %s to media content", str(aid))
+        out.append(item)
+
+    return out or media
+
+
 def _loads_dict_like(raw: Any) -> Optional[Dict[str, Any]]:
     """Parse a JSON-ish or Python-literal dict safely."""
     if raw is None:
@@ -783,6 +889,7 @@ class LocalAbstractCoreLLMClient:
         provider: str,
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
+        artifact_store: Optional[Any] = None,
     ):
         # In this monorepo layout, `import abstractcore` can resolve to a namespace package
         # (the outer project directory) when running from the repo root. In that case, the
@@ -799,6 +906,7 @@ class LocalAbstractCoreLLMClient:
 
         self._provider = provider
         self._model = model
+        self._artifact_store = artifact_store
         self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
         if self._generate_lock is not None:
             _warn_local_generate_lock_once(provider=self._provider, model=self._model)
@@ -821,46 +929,50 @@ class LocalAbstractCoreLLMClient:
         media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        params = dict(params or {})
-
-        system_prompt = _strip_system_context_header(system_prompt)
-        prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
-        messages = _strip_internal_system_messages(messages)
-
-        stream_raw = params.pop("stream", None)
-        if stream_raw is None:
-            stream_raw = params.pop("streaming", None)
-        if isinstance(stream_raw, str):
-            stream = stream_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-        else:
-            stream = bool(stream_raw) if stream_raw is not None else False
-
-        # `base_url` is a provider construction concern in local mode. We intentionally
-        # do not create new providers per call unless the host explicitly chooses to.
-        params.pop("base_url", None)
-        # Reserved routing keys (used by MultiLocalAbstractCoreLLMClient).
-        params.pop("_provider", None)
-        params.pop("_model", None)
-
-        lock = getattr(self, "_generate_lock", None)
-        if lock is None:
-            resp = self._llm.generate(
-                prompt=str(prompt or ""),
-                messages=messages,
-                system_prompt=system_prompt,
-                tools=tools,
-                media=media,
-                stream=stream,
-                **params,
+        tmpdir: Optional[tempfile.TemporaryDirectory] = None
+        if isinstance(media, list) and media and self._artifact_store is not None:
+            has_artifacts = any(
+                isinstance(item, dict)
+                and (
+                    (isinstance(item.get("$artifact"), str) and str(item.get("$artifact") or "").strip())
+                    or (isinstance(item.get("artifact_id"), str) and str(item.get("artifact_id") or "").strip())
+                )
+                and not (isinstance(item.get("file_path"), str) and str(item.get("file_path") or "").strip())
+                and item.get("content") is None
+                for item in media
             )
-            if stream and hasattr(resp, "__next__"):
-                result = _normalize_local_streaming_response(resp)
+            if has_artifacts:
+                tmpdir = tempfile.TemporaryDirectory(prefix="abstractruntime_llm_media_")
+                media = _resolve_media_artifacts(media, artifact_store=self._artifact_store, temp_dir=tmpdir.name)
             else:
-                result = _normalize_local_response(resp)
-            result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+                media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
         else:
-            # Serialize generation for non-thread-safe providers (e.g. MLX).
-            with lock:
+            media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
+
+        try:
+            params = dict(params or {})
+
+            system_prompt = _strip_system_context_header(system_prompt)
+            prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+            messages = _strip_internal_system_messages(messages)
+
+            stream_raw = params.pop("stream", None)
+            if stream_raw is None:
+                stream_raw = params.pop("streaming", None)
+            if isinstance(stream_raw, str):
+                stream = stream_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+            else:
+                stream = bool(stream_raw) if stream_raw is not None else False
+
+            # `base_url` is a provider construction concern in local mode. We intentionally
+            # do not create new providers per call unless the host explicitly chooses to.
+            params.pop("base_url", None)
+            # Reserved routing keys (used by MultiLocalAbstractCoreLLMClient).
+            params.pop("_provider", None)
+            params.pop("_model", None)
+
+            lock = getattr(self, "_generate_lock", None)
+            if lock is None:
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
                     messages=messages,
@@ -875,55 +987,80 @@ class LocalAbstractCoreLLMClient:
                 else:
                     result = _normalize_local_response(resp)
                 result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
+            else:
+                # Serialize generation for non-thread-safe providers (e.g. MLX).
+                with lock:
+                    resp = self._llm.generate(
+                        prompt=str(prompt or ""),
+                        messages=messages,
+                        system_prompt=system_prompt,
+                        tools=tools,
+                        media=media,
+                        stream=stream,
+                        **params,
+                    )
+                    if stream and hasattr(resp, "__next__"):
+                        result = _normalize_local_streaming_response(resp)
+                    else:
+                        result = _normalize_local_response(resp)
+                    result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
-        # Durable observability: ensure a provider request payload exists even when the
-        # underlying provider does not attach `_provider_request` metadata.
-        #
-        # AbstractCode's `/llm --verbatim` expects `metadata._provider_request.payload.messages`
-        # to be present to display the exact system/user content that was sent.
-        try:
-            meta = result.get("metadata")
-            if not isinstance(meta, dict):
-                meta = {}
-                result["metadata"] = meta
+            # Durable observability: ensure a provider request payload exists even when the
+            # underlying provider does not attach `_provider_request` metadata.
+            #
+            # AbstractCode's `/llm --verbatim` expects `metadata._provider_request.payload.messages`
+            # to be present to display the exact system/user content that was sent.
+            try:
+                meta = result.get("metadata")
+                if not isinstance(meta, dict):
+                    meta = {}
+                    result["metadata"] = meta
 
-            if "_provider_request" not in meta:
-                out_messages: List[Dict[str, str]] = []
-                if isinstance(system_prompt, str) and system_prompt:
-                    out_messages.append({"role": "system", "content": system_prompt})
-                if isinstance(messages, list) and messages:
-                    # Copy dict entries defensively (caller-owned objects).
-                    out_messages.extend([dict(m) for m in messages if isinstance(m, dict)])
+                if "_provider_request" not in meta:
+                    out_messages: List[Dict[str, str]] = []
+                    if isinstance(system_prompt, str) and system_prompt:
+                        out_messages.append({"role": "system", "content": system_prompt})
+                    if isinstance(messages, list) and messages:
+                        # Copy dict entries defensively (caller-owned objects).
+                        out_messages.extend([dict(m) for m in messages if isinstance(m, dict)])
 
-                # Append the current prompt as the final user message unless it's already present.
-                prompt_str = str(prompt or "")
-                if prompt_str:
-                    last = out_messages[-1] if out_messages else None
-                    if not (isinstance(last, dict) and last.get("role") == "user" and last.get("content") == prompt_str):
-                        out_messages.append({"role": "user", "content": prompt_str})
+                    # Append the current prompt as the final user message unless it's already present.
+                    prompt_str = str(prompt or "")
+                    if prompt_str:
+                        last = out_messages[-1] if out_messages else None
+                        if not (
+                            isinstance(last, dict) and last.get("role") == "user" and last.get("content") == prompt_str
+                        ):
+                            out_messages.append({"role": "user", "content": prompt_str})
 
-                payload: Dict[str, Any] = {
-                    "model": str(self._model),
-                    "messages": out_messages,
-                    "stream": bool(stream),
-                }
-                if tools is not None:
-                    payload["tools"] = tools
+                    payload: Dict[str, Any] = {
+                        "model": str(self._model),
+                        "messages": out_messages,
+                        "stream": bool(stream),
+                    }
+                    if tools is not None:
+                        payload["tools"] = tools
 
-                # Include generation params for debugging; keep JSON-safe (e.g. response_model).
-                payload["params"] = _jsonable(params) if params else {}
+                    # Include generation params for debugging; keep JSON-safe (e.g. response_model).
+                    payload["params"] = _jsonable(params) if params else {}
 
-                meta["_provider_request"] = {
-                    "transport": "local",
-                    "provider": str(self._provider),
-                    "model": str(self._model),
-                    "payload": payload,
-                }
-        except Exception:
-            # Never fail an LLM call due to observability.
-            pass
+                    meta["_provider_request"] = {
+                        "transport": "local",
+                        "provider": str(self._provider),
+                        "model": str(self._model),
+                        "payload": payload,
+                    }
+            except Exception:
+                # Never fail an LLM call due to observability.
+                pass
 
-        return result
+            return result
+        finally:
+            if tmpdir is not None:
+                try:
+                    tmpdir.cleanup()
+                except Exception:
+                    pass
 
     def get_model_capabilities(self) -> Dict[str, Any]:
         """Get model capabilities including max_tokens, vision_support, etc.
@@ -960,10 +1097,12 @@ class MultiLocalAbstractCoreLLMClient:
         provider: str,
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
+        artifact_store: Optional[Any] = None,
     ):
         self._llm_kwargs = dict(llm_kwargs or {})
         self._default_provider = provider.strip().lower()
         self._default_model = model.strip()
+        self._artifact_store = artifact_store
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
         self._default_client = self._get_client(self._default_provider, self._default_model)
 
@@ -974,7 +1113,12 @@ class MultiLocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
         client = self._clients.get(key)
         if client is None:
-            client = LocalAbstractCoreLLMClient(provider=key[0], model=key[1], llm_kwargs=self._llm_kwargs)
+            client = LocalAbstractCoreLLMClient(
+                provider=key[0],
+                model=key[1],
+                llm_kwargs=self._llm_kwargs,
+                artifact_store=self._artifact_store,
+            )
             self._clients[key] = client
         return client
 

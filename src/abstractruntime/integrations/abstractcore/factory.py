@@ -114,7 +114,12 @@ def create_local_runtime(
     effective_llm_kwargs: Dict[str, Any] = dict(llm_kwargs or {})
     effective_llm_kwargs.setdefault("timeout", float(default_llm_timeout_s))
 
-    llm_client = MultiLocalAbstractCoreLLMClient(provider=provider, model=model, llm_kwargs=effective_llm_kwargs)
+    llm_client = MultiLocalAbstractCoreLLMClient(
+        provider=provider,
+        model=model,
+        llm_kwargs=effective_llm_kwargs,
+        artifact_store=artifact_store,
+    )
     tools = tool_executor or AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     # Orchestrator policy: enforce tool execution timeout at the runtime layer.
     try:

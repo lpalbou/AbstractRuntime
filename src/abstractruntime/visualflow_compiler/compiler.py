@@ -1238,24 +1238,100 @@ def _create_visual_agent_effect_handler(
         if not isinstance(model_raw, str) or not model_raw.strip():
             model_raw = agent_config.get("model")
 
+        def _is_default_marker(value: Any) -> bool:
+            if not isinstance(value, str):
+                return False
+            marker = value.strip().lower()
+            return marker in {"default", "__default__", "__abstractcore_default__", "abstractcore.default"}
+
+        explicit_default = False
+        if _is_default_marker(provider_raw):
+            provider_raw = ""
+            explicit_default = True
+        if _is_default_marker(model_raw):
+            model_raw = ""
+            explicit_default = True
+
         provider = str(provider_raw or "").strip().lower() if isinstance(provider_raw, str) else ""
         model = str(model_raw or "").strip() if isinstance(model_raw, str) else ""
 
-        task = str(resolved_inputs.get("task") or "")
+        def _append_flow_warning(msg: str) -> None:
+            if not isinstance(msg, str) or not msg.strip():
+                return
+            try:
+                warnings = run.vars.get("_flow_warnings")
+                if not isinstance(warnings, list):
+                    warnings = []
+                    run.vars["_flow_warnings"] = warnings
+                if msg not in warnings:
+                    warnings.append(msg)
+            except Exception:
+                return
+
+        # Best-effort defaults:
+        # - Prefer the run-scoped runtime defaults injected by hosts (e.g. AbstractGateway).
+        # - Fall back to AbstractCore global defaults (`abstractcore --config`).
+        if not provider or not model:
+            try:
+                runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+            except Exception:
+                runtime_ns = None
+            if isinstance(runtime_ns, dict):
+                rt_provider = runtime_ns.get("provider")
+                rt_model = runtime_ns.get("model")
+                rt_provider_s = str(rt_provider or "").strip().lower() if isinstance(rt_provider, str) else ""
+                rt_model_s = str(rt_model or "").strip() if isinstance(rt_model, str) else ""
+                used_fallback = False
+                if not provider and rt_provider_s:
+                    provider = rt_provider_s
+                    used_fallback = True
+                if not model and rt_model_s and (not provider or provider == rt_provider_s):
+                    model = rt_model_s
+                    used_fallback = True
+                if used_fallback and not explicit_default:
+                    _append_flow_warning("#FALLBACK: missing provider/model; using runtime defaults")
+
+            try:
+                from abstractcore.config import get_config_manager  # type: ignore
+
+                cfg = get_config_manager().config
+                cfg_provider = str(getattr(cfg.default_models, "global_provider", "") or "").strip().lower()
+                cfg_model = str(getattr(cfg.default_models, "global_model", "") or "").strip()
+                used_fallback = False
+                if not provider and cfg_provider:
+                    provider = cfg_provider
+                    used_fallback = True
+                if not model and cfg_model and (not provider or provider == cfg_provider):
+                    model = cfg_model
+                    used_fallback = True
+                if used_fallback and not explicit_default:
+                    _append_flow_warning("#FALLBACK: missing provider/model; using AbstractCore defaults")
+            except Exception:
+                pass
+
+        # Backward compatibility:
+        # - Visual Agent nodes commonly use the input pin id "prompt" for the task string.
+        task = str(resolved_inputs.get("task") or resolved_inputs.get("prompt") or "")
         context_raw = resolved_inputs.get("context")
         context = context_raw if isinstance(context_raw, dict) else {}
         system_raw = resolved_inputs.get("system") if isinstance(resolved_inputs, dict) else None
         system_prompt = system_raw if isinstance(system_raw, str) else str(system_raw or "")
 
         # Include parent run context (as agent history):
-        # - Pin override wins when connected (resolved_inputs contains include_context)
+        # - Pin override wins when connected (resolved_inputs contains include_context/use_context)
         # - Otherwise fall back to node config (checkbox)
         # - Default: false
         include_context: bool
-        if isinstance(resolved_inputs, dict) and "include_context" in resolved_inputs:
-            include_context = bool(resolved_inputs.get("include_context"))
+        if isinstance(resolved_inputs, dict) and ("include_context" in resolved_inputs or "use_context" in resolved_inputs):
+            include_context = bool(
+                resolved_inputs.get("include_context")
+                if "include_context" in resolved_inputs
+                else resolved_inputs.get("use_context")
+            )
         else:
             include_context_cfg = agent_config.get("include_context")
+            if include_context_cfg is None:
+                include_context_cfg = agent_config.get("use_context")
             include_context = bool(include_context_cfg) if include_context_cfg is not None else False
 
         # Agent loop budget (max_iterations) can come from a data-edge pin or from config.

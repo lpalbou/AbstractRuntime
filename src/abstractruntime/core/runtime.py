@@ -450,6 +450,7 @@ class Runtime:
         self._ctx = context or DefaultRunContext()
         self._workflow_registry = workflow_registry
         self._artifact_store = artifact_store
+        self._tool_executor_for_resume: Any = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
@@ -490,6 +491,15 @@ class Runtime:
     def set_artifact_store(self, store: Any) -> None:
         """Set the artifact store for large payload support."""
         self._artifact_store = store
+
+    def set_tool_executor_for_resume(self, tool_executor: Any) -> None:
+        """Set a ToolExecutor used for host-owned TOOL_CALLS approvals on resume.
+
+        When TOOL_CALLS enter a durable approval wait (e.g. ApprovalToolExecutor returns
+        mode=approval_required), thin clients resume with {"approved": true|false}.
+        The runtime uses this executor to execute the pending tool calls after approval.
+        """
+        self._tool_executor_for_resume = tool_executor
 
     @property
     def effect_policy(self) -> EffectPolicy:
@@ -1269,11 +1279,60 @@ class Runtime:
                 # resumed payload deterministically.
                 merged_payload = payload
                 try:
+                    # Thin-client tool approvals: resume with {"approved": true|false} and execute the
+                    # pending tool calls in-process (runtime-owned), producing tool-results payload.
+                    if isinstance(details, dict) and isinstance(payload, dict):
+                        mode = str(details.get("mode") or "").strip().lower()
+                        tool_calls_any = details.get("tool_calls")
+                        is_tool_approval_wait = mode == "approval_required" and isinstance(tool_calls_any, list)
+                        is_approval_choice = "approved" in payload and not ("mode" in payload and "results" in payload)
+
+                        if is_tool_approval_wait and is_approval_choice:
+                            calls = [dict(x) for x in tool_calls_any if isinstance(x, dict)]
+
+                            def _err(tc: Dict[str, Any], message: str) -> Dict[str, Any]:
+                                return {
+                                    "call_id": str(tc.get("call_id") or ""),
+                                    "runtime_call_id": tc.get("runtime_call_id"),
+                                    "name": str(tc.get("name") or ""),
+                                    "success": False,
+                                    "output": None,
+                                    "error": str(message or "Tool call failed"),
+                                }
+
+                            approved = bool(payload.get("approved"))
+                            deny_reason = str(payload.get("reason") or "Denied by user").strip() or "Denied by user"
+                            if not approved:
+                                merged_payload = {"mode": "executed", "results": [_err(tc, deny_reason) for tc in calls]}
+                            else:
+                                tools = getattr(self, "_tool_executor_for_resume", None)
+                                if tools is None:
+                                    merged_payload = {
+                                        "mode": "executed",
+                                        "results": [_err(tc, "ToolExecutor is not configured for approval resumes") for tc in calls],
+                                    }
+                                else:
+                                    try:
+                                        exec_approved = getattr(tools, "execute_approved", None)
+                                        out = (
+                                            exec_approved(tool_calls=calls)
+                                            if callable(exec_approved)
+                                            else tools.execute(tool_calls=calls)
+                                        )
+                                        if not isinstance(out, dict):
+                                            raise TypeError("ToolExecutor returned non-dict")
+                                        out_mode = str(out.get("mode") or "").strip().lower()
+                                        if out_mode and out_mode != "executed":
+                                            raise ValueError(f"ToolExecutor returned non-executed mode '{out_mode}'")
+                                        merged_payload = dict(out)
+                                    except Exception as e:
+                                        merged_payload = {"mode": "executed", "results": [_err(tc, f"Tool execution failed: {e}") for tc in calls]}
+
                     if isinstance(details, dict):
                         blocked = details.get("blocked_by_index")
                         pre_results = details.get("pre_results_by_index")
                         original_count = details.get("original_call_count")
-                        results = payload.get("results") if isinstance(payload, dict) else None
+                        results = merged_payload.get("results") if isinstance(merged_payload, dict) else None
                         fixed_by_index: Dict[str, Any] = {}
                         if isinstance(blocked, dict):
                             fixed_by_index.update(blocked)
@@ -1308,7 +1367,7 @@ class Runtime:
                                         }
                                     )
 
-                            merged_payload = dict(payload)
+                            merged_payload = dict(merged_payload)
                             merged_payload["results"] = merged_results
                             merged_payload.setdefault("mode", "executed")
                 except Exception:

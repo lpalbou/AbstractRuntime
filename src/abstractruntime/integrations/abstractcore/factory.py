@@ -162,6 +162,13 @@ def create_local_runtime(
         artifact_store=artifact_store,
         chat_summarizer=summarizer,
     )
+    # Best-effort: expose the tool executor for approval-style TOOL_CALLS resumes.
+    try:  # pragma: no cover
+        setter = getattr(rt, "set_tool_executor_for_resume", None)
+        if callable(setter):
+            setter(tools)
+    except Exception:
+        pass
     # Best-effort: expose the underlying LLM client for host-side control planes (e.g. gateway cache ops).
     # This stays an internal attribute to avoid hard API commitments on Runtime itself.
     try:  # pragma: no cover
@@ -207,14 +214,20 @@ def create_remote_runtime(
     )
     tools = tool_executor or PassthroughToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
-
-    return Runtime(
+    rt = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         effect_handlers=handlers,
         context=context,
         artifact_store=artifact_store,
     )
+    try:  # pragma: no cover
+        setter = getattr(rt, "set_tool_executor_for_resume", None)
+        if callable(setter):
+            setter(tools)
+    except Exception:
+        pass
+    return rt
 
 
 def create_hybrid_runtime(
@@ -268,13 +281,20 @@ def create_hybrid_runtime(
         pass
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
 
-    return Runtime(
+    rt = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         effect_handlers=handlers,
         context=context,
         artifact_store=artifact_store,
     )
+    try:  # pragma: no cover
+        setter = getattr(rt, "set_tool_executor_for_resume", None)
+        if callable(setter):
+            setter(tools)
+    except Exception:
+        pass
+    return rt
 
 
 def create_local_file_runtime(

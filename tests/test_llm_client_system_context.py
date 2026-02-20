@@ -36,6 +36,7 @@ def test_local_llm_client_injects_date_and_country_into_user_prompt(monkeypatch)
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
     client._llm = _DummyLLM()
     client._tool_handler = UniversalToolHandler(client._model)
 
@@ -75,6 +76,7 @@ def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
     client._llm = _DummyLLM()
     client._tool_handler = UniversalToolHandler(client._model)
 
@@ -109,6 +111,7 @@ def test_local_llm_client_drops_recent_tool_activity_system_messages(monkeypatch
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
     client._llm = _DummyLLM()
     client._tool_handler = UniversalToolHandler(client._model)
 

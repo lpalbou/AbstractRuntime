@@ -690,8 +690,12 @@ class ToolApprovalPolicy:
         auto_approve_tools: Optional[Set[str]] = None,
         require_approval_tools: Optional[Set[str]] = None,
     ) -> None:
-        self.auto_approve_tools: Set[str] = set(auto_approve_tools or _DEFAULT_SAFE_AUTO_APPROVE)
-        self.require_approval_tools: Set[str] = set(require_approval_tools or _DEFAULT_REQUIRE_APPROVAL)
+        # Important: callers may intentionally pass an empty set to disable auto-approval
+        # (e.g., "approval required for all tools"). Treat None as "use defaults".
+        auto = _DEFAULT_SAFE_AUTO_APPROVE if auto_approve_tools is None else set(auto_approve_tools)
+        req = _DEFAULT_REQUIRE_APPROVAL if require_approval_tools is None else set(require_approval_tools)
+        self.auto_approve_tools = set(auto)
+        self.require_approval_tools = set(req)
 
     def requires_approval(self, tool_calls: Sequence[Dict[str, object]]) -> bool:
         for tc in tool_calls or []:
@@ -764,3 +768,7 @@ class ApprovalToolExecutor:
             "tool_calls": _jsonable(calls),
             "details": {"kind": "tool_approval", "policy": self._policy.describe()},
         }
+
+    def execute_approved(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Execute a previously-approved tool batch, bypassing the approval policy."""
+        return self._delegate.execute(tool_calls=list(tool_calls or []))

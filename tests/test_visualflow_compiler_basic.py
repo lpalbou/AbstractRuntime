@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _repo_root() -> Path:
     # .../abstractruntime/tests/<file> -> .../abstractframework
@@ -21,6 +23,8 @@ def test_visualflow_compiler_compiles_real_flow_without_abstractflow_import() ->
         / "workflowartifact-abstraction"
         / "ac-advanced-agent.visualflow.json"
     )
+    if not path.exists():
+        pytest.skip("VisualFlow fixture not present under docs/assessments (optional in some workspaces)")
     raw = json.loads(path.read_text(encoding="utf-8"))
 
     spec = compile_visualflow(raw)
@@ -46,6 +50,8 @@ def test_visualflow_compiler_accepts_model_dump_like_objects() -> None:
         / "workflowartifact-abstraction"
         / "ac-advanced-agent.visualflow.json"
     )
+    if not path.exists():
+        pytest.skip("VisualFlow fixture not present under docs/assessments (optional in some workspaces)")
     raw = json.loads(path.read_text(encoding="utf-8"))
 
     class Dummy:
@@ -70,6 +76,8 @@ def test_visualflow_compiler_tree_compiles_bundle_flows() -> None:
         / "ac-advanced-agent.bundle"
         / "flows"
     )
+    if not flows_dir.exists():
+        pytest.skip("VisualFlow bundle fixtures not present under docs/assessments (optional in some workspaces)")
     flows = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in flows_dir.glob("*.json")}
 
     specs = compile_visualflow_tree(root_id="ac-advanced-agent", flows_by_id=flows)

@@ -8,7 +8,8 @@ def test_create_local_runtime_injects_timeout_kwarg_by_default(monkeypatch) -> N
     captured: dict[str, object] = {}
 
     class DummyLLMClient:
-        def __init__(self, *, provider: str, model: str, llm_kwargs: dict):  # type: ignore[no-untyped-def]
+        def __init__(self, *, provider: str, model: str, llm_kwargs: dict, artifact_store=None):  # type: ignore[no-untyped-def]
+            _ = artifact_store
             captured["provider"] = provider
             captured["model"] = model
             captured["llm_kwargs"] = dict(llm_kwargs or {})

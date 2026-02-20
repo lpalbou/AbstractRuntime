@@ -18,6 +18,7 @@ def test_local_llm_client_surfaces_reasoning_from_provider_metadata() -> None:
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
     client._llm = _DummyReasoningLLM()
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -54,6 +55,7 @@ def test_local_llm_client_streaming_aggregates_and_surfaces_ttft() -> None:
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
     client._llm = _DummyStreamingLLM()
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -178,6 +180,7 @@ def _client_with_dummy_llm(*, model: str, capabilities: list[str]) -> LocalAbstr
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = model
+    client._artifact_store = None
     client._llm = _DummyLLM(capabilities=capabilities)
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -239,6 +242,7 @@ def test_local_llm_client_cleans_echoed_tool_markup_when_native_tool_calls_prese
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "dummy"
     client._model = "google/gemma-3n-e2b"
+    client._artifact_store = None
     client._llm = _DummyNativeToolCallLLM()
     from abstractcore.tools.handler import UniversalToolHandler
 

@@ -19,7 +19,8 @@ def test_create_local_runtime_defaults_timeouts_from_abstractcore_config(monkeyp
     monkeypatch.setattr(cfg_manager, "get_config_manager", fake_get_config_manager)
 
     class FakeLLMClient:
-        def __init__(self, *, provider: str, model: str, llm_kwargs=None):
+        def __init__(self, *, provider: str, model: str, llm_kwargs=None, artifact_store=None):
+            _ = artifact_store
             captured["provider"] = provider
             captured["model"] = model
             captured["llm_kwargs"] = dict(llm_kwargs or {})
@@ -62,7 +63,8 @@ def test_create_local_runtime_respects_explicit_overrides(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class FakeLLMClient:
-        def __init__(self, *, provider: str, model: str, llm_kwargs=None):
+        def __init__(self, *, provider: str, model: str, llm_kwargs=None, artifact_store=None):
+            _ = artifact_store
             captured["llm_kwargs"] = dict(llm_kwargs or {})
             self._llm = object()
 

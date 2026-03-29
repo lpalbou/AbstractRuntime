@@ -952,7 +952,7 @@ def _create_visual_agent_effect_handler(
     ) -> Dict[str, Any]:
         parent_limits = run.vars.get("_limits")
         limits = dict(parent_limits) if isinstance(parent_limits, dict) else {}
-        limits.setdefault("max_iterations", 25)
+        limits.setdefault("max_iterations", 50)
         limits.setdefault("current_iteration", 0)
         from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
 

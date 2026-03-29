@@ -85,6 +85,32 @@ Tool execution is controlled by the configured `ToolExecutor` (`src/abstractrunt
   - The `TOOL_CALLS` handler returns a durable `WAITING` run state.
   - The host executes the tool calls externally and resumes the run with results (`Runtime.resume(...)` / `Scheduler.resume_event(...)`).
 
+## Prompt-cache control plane
+
+AbstractRuntime's AbstractCore LLM clients now expose a unified prompt-cache control-plane surface for host code:
+
+- `get_prompt_cache_capabilities(...)`
+- `get_prompt_cache_stats(...)`
+- `prompt_cache_set(...)`
+- `prompt_cache_update(...)`
+- `prompt_cache_fork(...)`
+- `prompt_cache_clear(...)`
+- `prompt_cache_prepare_modules(...)`
+
+Behavior by execution mode:
+
+- **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.
+- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` on the configured AbstractCore server.
+  - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can also forward upstream `base_url` / `api_key` through these prompt-cache methods.
+
+Contract notes:
+
+- Capability discovery is explicit: callers can branch on `capabilities.mode` (`none`, `keyed`, `local_control_plane`) and `supports_*` flags.
+- Unsupported operations return structured payloads with `supported=false`, `operation`, `code`, and `capabilities`.
+- When a provider reports `mode=local_control_plane` (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized `system | tools | history` cache path automatically.
+- When a provider reports `mode=keyed`, the runtime still forwards stable `prompt_cache_key`s but skips module preparation/fork/update orchestration.
+- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches without reaching through to provider internals.
+
 ## Default toolsets (incl. comms)
 
 `default_tools.get_default_toolsets()` provides a host-side convenience catalog of common tools:
@@ -98,4 +124,3 @@ This is useful when building a `MappingToolExecutor` quickly.
 - `../architecture.md` — effect handler boundaries and durability invariants
 - `../tools-comms.md` — enabling email/WhatsApp/Telegram tools
 - `../adr/0002_execution_modes_local_remote_hybrid.md` — rationale for local/remote/hybrid
-

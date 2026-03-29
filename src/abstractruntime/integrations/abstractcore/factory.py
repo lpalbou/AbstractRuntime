@@ -227,6 +227,10 @@ def create_remote_runtime(
             setter(tools)
     except Exception:
         pass
+    try:  # pragma: no cover
+        setattr(rt, "_abstractcore_llm_client", llm_client)
+    except Exception:
+        pass
     return rt
 
 
@@ -292,6 +296,10 @@ def create_hybrid_runtime(
         setter = getattr(rt, "set_tool_executor_for_resume", None)
         if callable(setter):
             setter(tools)
+    except Exception:
+        pass
+    try:  # pragma: no cover
+        setattr(rt, "_abstractcore_llm_client", llm_client)
     except Exception:
         pass
     return rt

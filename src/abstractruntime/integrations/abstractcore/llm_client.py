@@ -14,6 +14,7 @@ Remote mode is the preferred way to support per-request dynamic routing (e.g. `b
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import locale
 import mimetypes
@@ -24,6 +25,7 @@ import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+from urllib.parse import urlencode
 
 from .logging import get_logger
 
@@ -33,6 +35,35 @@ _LOCAL_GENERATE_LOCKS: Dict[Tuple[str, str], threading.Lock] = {}
 _LOCAL_GENERATE_LOCKS_LOCK = threading.Lock()
 _LOCAL_GENERATE_LOCKS_WARNED: set[Tuple[str, str]] = set()
 _LOCAL_GENERATE_LOCKS_WARNED_LOCK = threading.Lock()
+
+
+@dataclass
+class _PromptCacheSessionState:
+    system_module_hash: str
+    tools_module_hash: str
+    prefix_cache_key: str
+    message_hashes: List[str]
+
+
+def _prompt_cache_message_fingerprint(message: Any) -> str:
+    if not isinstance(message, dict):
+        payload = {"role": "", "content": str(message)}
+    else:
+        role = str(message.get("role") or "")
+        content = message.get("content")
+        if isinstance(content, (dict, list)):
+            try:
+                content_norm = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                content_norm = str(content)
+        elif content is None:
+            content_norm = ""
+        else:
+            content_norm = str(content)
+        payload = {"role": role, "content": content_norm}
+
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _local_generate_lock(*, provider: str, model: str) -> Optional[threading.Lock]:
@@ -274,6 +305,46 @@ def _strip_internal_system_messages(messages: Optional[List[Dict[str, Any]]]) ->
     return out or None
 
 
+def _coalesce_leading_system_messages(
+    *,
+    system_prompt: Optional[str],
+    messages: Optional[List[Dict[str, Any]]],
+) -> tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+    """Merge consecutive leading system messages into a single system prompt.
+
+    Many local/chat-template based servers only accept a single leading system
+    message. AbstractRuntime may synthesize extra leading system messages
+    (attachments, memory notes, host hints), so normalize them before dispatch.
+    """
+    if not isinstance(messages, list) or not messages:
+        return system_prompt, messages
+
+    leading_parts: List[str] = []
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        leading_parts.append(system_prompt)
+
+    remaining: List[Dict[str, Any]] = []
+    collecting = True
+    for item in messages:
+        if not isinstance(item, dict):
+            collecting = False
+            remaining.append({"role": "user", "content": str(item or "")})
+            continue
+        msg = dict(item)
+        role = str(msg.get("role") or "").strip().lower()
+        if collecting and role == "system":
+            content = msg.get("content")
+            content_str = content if isinstance(content, str) else str(content or "")
+            if content_str.strip():
+                leading_parts.append(content_str)
+            continue
+        collecting = False
+        remaining.append(msg)
+
+    merged_system = "\n\n".join(part.rstrip() for part in leading_parts if isinstance(part, str) and part.strip())
+    return (merged_system or None), (remaining or None)
+
+
 def _inject_turn_grounding(
     *,
     prompt: str,
@@ -386,6 +457,14 @@ class HttpResponse:
 
 
 class RequestSender(Protocol):
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        timeout: float,
+    ) -> Any: ...
+
     def post(
         self,
         url: str,
@@ -408,6 +487,67 @@ class AbstractCoreLLMClient(Protocol):
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
+
+    def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        """Return a JSON-safe prompt-cache capability payload."""
+
+    def get_prompt_cache_stats(self, **kwargs: Any) -> Dict[str, Any]:
+        """Return a JSON-safe prompt-cache stats payload."""
+
+    def prompt_cache_set(
+        self,
+        *,
+        key: str,
+        make_default: bool = True,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Set or select a prompt cache key."""
+
+    def prompt_cache_update(
+        self,
+        *,
+        key: str,
+        prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        add_generation_prompt: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Append content into a prompt cache key."""
+
+    def prompt_cache_fork(
+        self,
+        *,
+        from_key: str,
+        to_key: str,
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Fork one prompt cache key into another."""
+
+    def prompt_cache_clear(
+        self,
+        *,
+        key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Clear one prompt cache key or the whole in-process cache."""
+
+    def prompt_cache_prepare_modules(
+        self,
+        *,
+        namespace: str,
+        modules: List[Dict[str, Any]],
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        version: int = 1,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Prepare hierarchical prompt-cache modules."""
 
 
 def _jsonable(value: Any) -> Any:
@@ -439,6 +579,104 @@ def _jsonable(value: Any) -> Any:
         return _jsonable(to_dict())
 
     return str(value)
+
+
+def _prompt_cache_capabilities_payload(provider: Any) -> Dict[str, Any]:
+    if provider is None:
+        return {"supported": False, "capabilities": {"supported": False, "mode": "none"}}
+
+    getter = getattr(provider, "get_prompt_cache_capabilities", None)
+    if callable(getter):
+        try:
+            caps = getter()
+            to_dict = getattr(caps, "to_dict", None)
+            if callable(to_dict):
+                return {"supported": bool(getattr(caps, "supported", False)), "capabilities": to_dict()}
+            if isinstance(caps, dict):
+                return {"supported": bool(caps.get("supported")), "capabilities": dict(caps)}
+        except Exception as e:
+            return {"supported": False, "error": str(e), "capabilities": {"supported": False, "mode": "none"}}
+
+    try:
+        supported = bool(getattr(provider, "supports_prompt_cache", lambda: False)())
+    except Exception:
+        supported = False
+    mode = "keyed" if supported else "none"
+    return {
+        "supported": supported,
+        "capabilities": {
+            "supported": supported,
+            "mode": mode,
+        },
+    }
+
+
+def _prompt_cache_capabilities_dict(provider: Any) -> Dict[str, Any]:
+    info = _prompt_cache_capabilities_payload(provider)
+    caps = info.get("capabilities") if isinstance(info, dict) else None
+    if isinstance(caps, dict):
+        return dict(caps)
+    return {"supported": False, "mode": "none"}
+
+
+def _prompt_cache_supports(provider: Any, operation: str) -> bool:
+    try:
+        fn = getattr(provider, "prompt_cache_supports_operation", None)
+        if callable(fn):
+            return bool(fn(operation))
+    except Exception:
+        return False
+
+    caps = _prompt_cache_capabilities_dict(provider)
+    op = str(operation or "").strip().lower()
+    if op == "stats":
+        return bool(caps.get("supports_stats"))
+    if op == "set":
+        return bool(caps.get("supports_set"))
+    if op == "clear":
+        return bool(caps.get("supports_clear"))
+    if op == "update":
+        return bool(caps.get("supports_update"))
+    if op == "fork":
+        return bool(caps.get("supports_fork"))
+    if op in {"prepare", "prepare_modules", "modules"}:
+        return bool(caps.get("supports_prepare_modules"))
+    return False
+
+
+def _prompt_cache_error_payload(provider: Any, *, operation: str, error: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "supported": False,
+        "operation": str(operation or "").strip(),
+        "capabilities": _prompt_cache_capabilities_dict(provider),
+    }
+
+    to_dict = getattr(error, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            payload["code"] = str(data.get("code") or "prompt_cache_error")
+            payload["error"] = str(data.get("message") or error)
+            if isinstance(data.get("capabilities"), dict):
+                payload["capabilities"] = dict(data["capabilities"])
+            return payload
+
+    payload["code"] = "prompt_cache_error"
+    payload["error"] = str(error)
+    return payload
+
+
+def _prompt_cache_unsupported_payload(provider: Any, *, operation: str, error: str) -> Dict[str, Any]:
+    return {
+        "supported": False,
+        "operation": str(operation or "").strip(),
+        "code": "prompt_cache_unsupported",
+        "error": str(error),
+        "capabilities": _prompt_cache_capabilities_dict(provider),
+    }
 
 
 def _resolve_media_artifacts(
@@ -918,6 +1156,166 @@ class LocalAbstractCoreLLMClient:
             kwargs.setdefault("max_traces", 50)
         self._llm = create_llm(provider, model=model, **kwargs)
         self._tool_handler = UniversalToolHandler(model)
+        self._prompt_cache_state_lock = threading.Lock()
+        self._prompt_cache_state: Dict[str, _PromptCacheSessionState] = {}
+
+    def _maybe_prepare_prompt_cache(
+        self,
+        *,
+        prompt_cache_key: Optional[str],
+        system_prompt: Optional[str],
+        tools: Optional[List[Dict[str, Any]]],
+        messages: Optional[List[Dict[str, Any]]],
+    ) -> None:
+        key = str(prompt_cache_key or "").strip()
+        if not key:
+            return
+
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return
+
+        try:
+            supports = getattr(provider, "supports_prompt_cache", None)
+            if callable(supports) and not bool(supports()):
+                return
+        except Exception:
+            return
+
+        try:
+            supports_op = getattr(provider, "prompt_cache_supports_operation", None)
+            if callable(supports_op) and not bool(supports_op("prepare_modules")):
+                return
+        except Exception:
+            return
+
+        # Build immutable prefix caches for (system, tools), then maintain a mutable per-session
+        # cache (history) under `prompt_cache_key`.
+        try:
+            prep_fn = getattr(provider, "prompt_cache_prepare_modules", None)
+            if not callable(prep_fn):
+                return
+            modules: List[Dict[str, Any]] = [
+                {"module_id": "system", "system_prompt": system_prompt, "add_generation_prompt": False}
+            ]
+            if tools:
+                modules.append({"module_id": "tools", "tools": tools, "add_generation_prompt": False})
+            prep = prep_fn(
+                namespace="abstractcode",
+                modules=modules,
+                make_default=False,
+            )
+        except Exception:
+            return
+
+        # Providers that don't implement in-process prefix caching return supported=False.
+        if not isinstance(prep, dict) or prep.get("supported") is not True:
+            return
+
+        final_prefix_key = prep.get("final_cache_key")
+        if not isinstance(final_prefix_key, str) or not final_prefix_key.strip():
+            return
+        final_prefix_key = final_prefix_key.strip()
+
+        system_hash = ""
+        tools_hash = ""
+        for item in prep.get("modules") or []:
+            if not isinstance(item, dict):
+                continue
+            module_id = str(item.get("module_id") or "").strip()
+            module_hash = str(item.get("module_hash") or "").strip()
+            if module_id == "system" and module_hash:
+                system_hash = module_hash
+            elif module_id == "tools" and module_hash:
+                tools_hash = module_hash
+
+        system_hash = system_hash or "none"
+        tools_hash = tools_hash or "none"
+
+        msg_list: List[Dict[str, Any]] = list(messages) if isinstance(messages, list) and messages else []
+        msg_hashes: List[str] = [_prompt_cache_message_fingerprint(m) for m in msg_list]
+
+        with self._prompt_cache_state_lock:
+            state = self._prompt_cache_state.get(key)
+            needs_rebuild = (
+                state is None
+                or state.system_module_hash != system_hash
+                or state.tools_module_hash != tools_hash
+                or state.prefix_cache_key != final_prefix_key
+            )
+
+            if needs_rebuild:
+                try:
+                    clearer = getattr(provider, "prompt_cache_clear", None)
+                    if callable(clearer):
+                        clearer(key)
+                except Exception:
+                    pass
+
+                forked = False
+                try:
+                    forker = getattr(provider, "prompt_cache_fork", None)
+                    if callable(forker):
+                        forked = bool(forker(final_prefix_key, key, make_default=False))
+                except Exception:
+                    forked = False
+
+                if not forked:
+                    try:
+                        setter = getattr(provider, "prompt_cache_set", None)
+                        updater = getattr(provider, "prompt_cache_update", None)
+                        if callable(setter) and callable(updater) and bool(setter(key, make_default=False)):
+                            updater(key, system_prompt=system_prompt, tools=tools, add_generation_prompt=False)
+                            forked = True
+                    except Exception:
+                        forked = False
+
+                if not forked:
+                    return
+
+                state = _PromptCacheSessionState(
+                    system_module_hash=system_hash,
+                    tools_module_hash=tools_hash,
+                    prefix_cache_key=final_prefix_key,
+                    message_hashes=[],
+                )
+                self._prompt_cache_state[key] = state
+
+            if not msg_list:
+                state.message_hashes = []
+                return
+
+            if msg_hashes[: len(state.message_hashes)] == state.message_hashes:
+                new_msgs = msg_list[len(state.message_hashes) :]
+                if not new_msgs:
+                    return
+                try:
+                    updater = getattr(provider, "prompt_cache_update", None)
+                    if callable(updater) and bool(updater(key, messages=new_msgs, add_generation_prompt=False)):
+                        state.message_hashes.extend(msg_hashes[len(state.message_hashes) :])
+                except Exception:
+                    pass
+                return
+
+            # History diverged (edits/truncation): rebuild per-session history cache from the prefix.
+            try:
+                clearer = getattr(provider, "prompt_cache_clear", None)
+                if callable(clearer):
+                    clearer(key)
+            except Exception:
+                pass
+            try:
+                forker = getattr(provider, "prompt_cache_fork", None)
+                if not callable(forker) or not bool(forker(final_prefix_key, key, make_default=False)):
+                    return
+            except Exception:
+                return
+            try:
+                updater = getattr(provider, "prompt_cache_update", None)
+                if callable(updater) and bool(updater(key, messages=msg_list, add_generation_prompt=False)):
+                    state.message_hashes = list(msg_hashes)
+            except Exception:
+                pass
 
     def generate(
         self,
@@ -955,6 +1353,10 @@ class LocalAbstractCoreLLMClient:
             system_prompt = _strip_system_context_header(system_prompt)
             prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
             messages = _strip_internal_system_messages(messages)
+            system_prompt, messages = _coalesce_leading_system_messages(
+                system_prompt=system_prompt,
+                messages=messages,
+            )
 
             stream_raw = params.pop("stream", None)
             if stream_raw is None:
@@ -973,6 +1375,12 @@ class LocalAbstractCoreLLMClient:
 
             lock = getattr(self, "_generate_lock", None)
             if lock is None:
+                self._maybe_prepare_prompt_cache(
+                    prompt_cache_key=params.get("prompt_cache_key"),
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    messages=messages,
+                )
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
                     messages=messages,
@@ -990,6 +1398,12 @@ class LocalAbstractCoreLLMClient:
             else:
                 # Serialize generation for non-thread-safe providers (e.g. MLX).
                 with lock:
+                    self._maybe_prepare_prompt_cache(
+                        prompt_cache_key=params.get("prompt_cache_key"),
+                        system_prompt=system_prompt,
+                        tools=tools,
+                        messages=messages,
+                    )
                     resp = self._llm.generate(
                         prompt=str(prompt or ""),
                         messages=messages,
@@ -1081,6 +1495,228 @@ class LocalAbstractCoreLLMClient:
 
             return {"max_tokens": DEFAULT_MAX_TOKENS}
 
+    def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _prompt_cache_capabilities_payload(getattr(self, "_llm", None))
+
+    def get_prompt_cache_stats(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="stats",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "stats") or not hasattr(provider, "get_prompt_cache_stats"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="stats",
+                error="Provider does not support prompt cache stats",
+            )
+        try:
+            return {
+                "supported": True,
+                "operation": "stats",
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+                "stats": provider.get_prompt_cache_stats(),
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="stats", error=e)
+
+    def prompt_cache_set(
+        self,
+        *,
+        key: str,
+        make_default: bool = True,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="set",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "set") or not hasattr(provider, "prompt_cache_set"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="set",
+                error="Provider does not support prompt cache control plane",
+            )
+        try:
+            ok = provider.prompt_cache_set(key, make_default=bool(make_default), ttl_s=ttl_s)
+            return {
+                "supported": True,
+                "operation": "set",
+                "ok": bool(ok),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="set", error=e)
+
+    def prompt_cache_update(
+        self,
+        *,
+        key: str,
+        prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        add_generation_prompt: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="update",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "update") or not hasattr(provider, "prompt_cache_update"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="update",
+                error="Provider does not support prompt cache control plane",
+            )
+        try:
+            ok = provider.prompt_cache_update(
+                key,
+                prompt=str(prompt or ""),
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                add_generation_prompt=bool(add_generation_prompt),
+                ttl_s=ttl_s,
+            )
+            return {
+                "supported": True,
+                "operation": "update",
+                "ok": bool(ok),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="update", error=e)
+
+    def prompt_cache_fork(
+        self,
+        *,
+        from_key: str,
+        to_key: str,
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="fork",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "fork") or not hasattr(provider, "prompt_cache_fork"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="fork",
+                error="Provider does not support prompt cache control plane",
+            )
+        try:
+            ok = provider.prompt_cache_fork(
+                from_key,
+                to_key,
+                make_default=bool(make_default),
+                ttl_s=ttl_s,
+            )
+            return {
+                "supported": True,
+                "operation": "fork",
+                "ok": bool(ok),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="fork", error=e)
+
+    def prompt_cache_clear(
+        self,
+        *,
+        key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="clear",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "clear") or not hasattr(provider, "prompt_cache_clear"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="clear",
+                error="Provider does not support prompt cache control plane",
+            )
+        try:
+            ok = provider.prompt_cache_clear(key)
+            return {
+                "supported": True,
+                "operation": "clear",
+                "ok": bool(ok),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="clear", error=e)
+
+    def prompt_cache_prepare_modules(
+        self,
+        *,
+        namespace: str,
+        modules: List[Dict[str, Any]],
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        version: int = 1,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider = getattr(self, "_llm", None)
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="prepare_modules",
+                error="Runtime LLM client has no provider instance",
+            )
+        if not _prompt_cache_supports(provider, "prepare_modules") or not hasattr(provider, "prompt_cache_prepare_modules"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="prepare_modules",
+                error="Provider does not support prompt cache module preparation",
+            )
+        try:
+            result = provider.prompt_cache_prepare_modules(
+                namespace=namespace,
+                modules=modules,
+                make_default=bool(make_default),
+                ttl_s=ttl_s,
+                version=int(version),
+            )
+            if isinstance(result, dict):
+                result.setdefault("operation", "prepare_modules")
+                result.setdefault("capabilities", _prompt_cache_capabilities_dict(provider))
+                return result
+            return {
+                "supported": True,
+                "operation": "prepare_modules",
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+                "result": result,
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="prepare_modules", error=e)
+
 
 class MultiLocalAbstractCoreLLMClient:
     """Local AbstractCore client with per-request provider/model routing.
@@ -1164,6 +1800,147 @@ class MultiLocalAbstractCoreLLMClient:
         # Best-effort: use default model capabilities. Per-model limits can be added later.
         return self._default_client.get_model_capabilities()
 
+    def get_prompt_cache_capabilities(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.get_prompt_cache_capabilities()
+
+    def get_prompt_cache_stats(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.get_prompt_cache_stats(**kwargs)
+
+    def prompt_cache_set(
+        self,
+        *,
+        key: str,
+        make_default: bool = True,
+        ttl_s: Optional[float] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_set(key=key, make_default=make_default, ttl_s=ttl_s, **kwargs)
+
+    def prompt_cache_update(
+        self,
+        *,
+        key: str,
+        prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        add_generation_prompt: bool = False,
+        ttl_s: Optional[float] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_update(
+            key=key,
+            prompt=prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+            add_generation_prompt=add_generation_prompt,
+            ttl_s=ttl_s,
+            **kwargs,
+        )
+
+    def prompt_cache_fork(
+        self,
+        *,
+        from_key: str,
+        to_key: str,
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_fork(
+            from_key=from_key,
+            to_key=to_key,
+            make_default=make_default,
+            ttl_s=ttl_s,
+            **kwargs,
+        )
+
+    def prompt_cache_clear(
+        self,
+        *,
+        key: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_clear(key=key, **kwargs)
+
+    def prompt_cache_prepare_modules(
+        self,
+        *,
+        namespace: str,
+        modules: List[Dict[str, Any]],
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        version: int = 1,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_prepare_modules(
+            namespace=namespace,
+            modules=modules,
+            make_default=make_default,
+            ttl_s=ttl_s,
+            version=version,
+            **kwargs,
+        )
+
 
 class HttpxRequestSender:
     """Default request sender based on httpx (sync)."""
@@ -1172,6 +1949,17 @@ class HttpxRequestSender:
         import httpx
 
         self._httpx = httpx
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        timeout: float,
+    ) -> HttpResponse:
+        resp = self._httpx.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return HttpResponse(body=resp.json(), headers=dict(resp.headers))
 
     def post(
         self,
@@ -1226,6 +2014,174 @@ class RemoteAbstractCoreLLMClient:
         self._headers = dict(headers or {})
         self._sender = request_sender or HttpxRequestSender()
 
+    def _prompt_cache_proxy_fields(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        base_url = kwargs.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            out["base_url"] = base_url.strip()
+        api_key = kwargs.get("api_key")
+        if isinstance(api_key, str) and api_key.strip():
+            out["api_key"] = api_key.strip()
+        return out
+
+    def _prompt_cache_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        proxy_fields = self._prompt_cache_proxy_fields(dict(kwargs or {}))
+        url = f"{self._server_base_url}{path}"
+        if proxy_fields:
+            url = f"{url}?{urlencode(proxy_fields)}"
+        try:
+            raw = self._sender.get(url, headers=dict(self._headers), timeout=self._timeout_s)
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as e:
+            return {
+                "supported": False,
+                "operation": operation,
+                "error": str(e),
+                "capabilities": {"supported": False, "mode": "none"},
+            }
+
+        if isinstance(resp, dict):
+            return resp
+        return {
+            "supported": False,
+            "operation": operation,
+            "error": f"invalid prompt cache {operation} response",
+            "capabilities": {"supported": False, "mode": "none"},
+        }
+
+    def _prompt_cache_post(
+        self,
+        path: str,
+        *,
+        operation: str,
+        body: Dict[str, Any],
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self._server_base_url}{path}"
+        payload = dict(body)
+        payload.update(self._prompt_cache_proxy_fields(dict(kwargs or {})))
+        try:
+            raw = self._sender.post(url, headers=dict(self._headers), json=payload, timeout=self._timeout_s)
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as e:
+            return {
+                "supported": False,
+                "operation": operation,
+                "error": str(e),
+                "capabilities": {"supported": False, "mode": "none"},
+            }
+
+        if isinstance(resp, dict):
+            return resp
+        return {
+            "supported": False,
+            "operation": operation,
+            "error": f"invalid prompt cache {operation} response",
+            "capabilities": {"supported": False, "mode": "none"},
+        }
+
+    def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._prompt_cache_get("/acore/prompt_cache/capabilities", operation="capabilities", kwargs=kwargs)
+
+    def get_prompt_cache_stats(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._prompt_cache_get("/acore/prompt_cache/stats", operation="stats", kwargs=kwargs)
+
+    def prompt_cache_set(
+        self,
+        *,
+        key: str,
+        make_default: bool = True,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"key": key, "make_default": bool(make_default)}
+        if ttl_s is not None:
+            body["ttl_s"] = ttl_s
+        return self._prompt_cache_post("/acore/prompt_cache/set", operation="set", body=body, kwargs=kwargs)
+
+    def prompt_cache_update(
+        self,
+        *,
+        key: str,
+        prompt: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        add_generation_prompt: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "key": key,
+            "prompt": prompt,
+            "messages": messages,
+            "system_prompt": system_prompt,
+            "tools": tools,
+            "add_generation_prompt": bool(add_generation_prompt),
+        }
+        if ttl_s is not None:
+            body["ttl_s"] = ttl_s
+        return self._prompt_cache_post(
+            "/acore/prompt_cache/update",
+            operation="update",
+            body={k: v for k, v in body.items() if v is not None},
+            kwargs=kwargs,
+        )
+
+    def prompt_cache_fork(
+        self,
+        *,
+        from_key: str,
+        to_key: str,
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "from_key": from_key,
+            "to_key": to_key,
+            "make_default": bool(make_default),
+        }
+        if ttl_s is not None:
+            body["ttl_s"] = ttl_s
+        return self._prompt_cache_post("/acore/prompt_cache/fork", operation="fork", body=body, kwargs=kwargs)
+
+    def prompt_cache_clear(
+        self,
+        *,
+        key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if key is not None:
+            body["key"] = key
+        return self._prompt_cache_post("/acore/prompt_cache/clear", operation="clear", body=body, kwargs=kwargs)
+
+    def prompt_cache_prepare_modules(
+        self,
+        *,
+        namespace: str,
+        modules: List[Dict[str, Any]],
+        make_default: bool = False,
+        ttl_s: Optional[float] = None,
+        version: int = 1,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "namespace": namespace,
+            "modules": modules,
+            "make_default": bool(make_default),
+            "version": int(version),
+        }
+        if ttl_s is not None:
+            body["ttl_s"] = ttl_s
+        return self._prompt_cache_post(
+            "/acore/prompt_cache/prepare_modules",
+            operation="prepare_modules",
+            body=body,
+            kwargs=kwargs,
+        )
+
     def generate(
         self,
         *,
@@ -1246,6 +2202,11 @@ class RemoteAbstractCoreLLMClient:
         trace_metadata = params.pop("trace_metadata", None)
         system_prompt = _strip_system_context_header(system_prompt)
         prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+        messages = _strip_internal_system_messages(messages)
+        system_prompt, messages = _coalesce_leading_system_messages(
+            system_prompt=system_prompt,
+            messages=messages,
+        )
 
         if isinstance(trace_metadata, dict) and trace_metadata:
             req_headers["X-AbstractCore-Trace-Metadata"] = json.dumps(

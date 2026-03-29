@@ -5,8 +5,23 @@ class StubSender:
     def __init__(self):
         self.calls = []
 
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        return {
+            "supported": True,
+            "operation": "capabilities",
+            "capabilities": {"supported": True, "mode": "keyed"},
+        }
+
     def post(self, url, *, headers, json, timeout):
-        self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
+        if "/acore/prompt_cache/" in url:
+            return {
+                "supported": True,
+                "operation": url.rsplit("/", 1)[-1],
+                "ok": True,
+                "capabilities": {"supported": True, "mode": "keyed"},
+            }
         return {
             "model": json["model"],
             "choices": [
@@ -71,3 +86,38 @@ def test_remote_llm_client_default_timeout_is_long_running() -> None:
 
     call = sender.calls[0]
     assert call["timeout"] == 7200.0
+
+
+def test_remote_prompt_cache_control_plane_forwards_proxy_context() -> None:
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+        timeout_s=12.0,
+        headers={"X-Test": "1"},
+    )
+
+    caps = client.get_prompt_cache_capabilities(
+        base_url="http://localhost:8001/v1",
+        api_key="secret",
+    )
+    assert caps["supported"] is True
+
+    set_resp = client.prompt_cache_set(
+        key="sess:abc",
+        base_url="http://localhost:8001/v1",
+        api_key="secret",
+    )
+    assert set_resp["supported"] is True
+    assert set_resp["ok"] is True
+
+    get_call = sender.calls[0]
+    assert get_call["method"] == "GET"
+    assert get_call["url"] == "http://localhost:8080/acore/prompt_cache/capabilities?base_url=http%3A%2F%2Flocalhost%3A8001%2Fv1&api_key=secret"
+    post_call = sender.calls[1]
+    assert post_call["method"] == "POST"
+    assert post_call["url"] == "http://localhost:8080/acore/prompt_cache/set"
+    assert post_call["json"]["key"] == "sess:abc"
+    assert post_call["json"]["base_url"] == "http://localhost:8001/v1"
+    assert post_call["json"]["api_key"] == "secret"

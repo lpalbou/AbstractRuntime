@@ -25,6 +25,7 @@ import copy
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 
@@ -45,6 +46,8 @@ from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
 from ..storage.base import LedgerStore, RunStore, QueryableRunStore
 from .event_keys import build_event_wait_key
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now_iso() -> str:
@@ -200,6 +203,67 @@ def _ensure_tool_calls_have_runtime_ids(
         payload["allowed_tools"] = sorted(uniq)
 
     return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
+
+def _append_flow_warning(run: RunState, message: str) -> bool:
+    if not isinstance(message, str) or not message.strip():
+        return False
+    try:
+        warnings = run.vars.get("_flow_warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            run.vars["_flow_warnings"] = warnings
+        if message in warnings:
+            return False
+        warnings.append(message)
+        return True
+    except Exception:
+        return False
+
+
+def _warn_if_tool_calls_missing_call_id(*, run: RunState, node_id: str, effect: Effect) -> None:
+    if effect.type != EffectType.TOOL_CALLS:
+        return
+    if not isinstance(effect.payload, dict):
+        return
+    raw_tool_calls = effect.payload.get("tool_calls")
+    if not isinstance(raw_tool_calls, list) or not raw_tool_calls:
+        return
+
+    missing: list[int] = []
+    call_ids: list[str] = []
+    for idx, tc in enumerate(raw_tool_calls):
+        if not isinstance(tc, dict):
+            continue
+        call_id = tc.get("call_id")
+        if call_id is None:
+            call_id = tc.get("id")
+        call_id_str = str(call_id).strip() if call_id is not None else ""
+        if not call_id_str:
+            missing.append(idx)
+            continue
+        call_ids.append(call_id_str)
+
+    duplicates: list[str] = []
+    if call_ids:
+        seen: set[str] = set()
+        for cid in call_ids:
+            if cid in seen and cid not in duplicates:
+                duplicates.append(cid)
+            seen.add(cid)
+
+    node = str(node_id or "").strip() or "unknown"
+
+    if missing:
+        msg = f"#WARN: TOOL_CALLS missing call_id at node '{node}' (count={len(missing)})"
+        if _append_flow_warning(run, msg):
+            logger.warning(msg)
+
+    if duplicates:
+        preview = ", ".join(duplicates[:5])
+        msg = f"#WARN: TOOL_CALLS duplicate call_id at node '{node}' ({preview})"
+        if _append_flow_warning(run, msg):
+            logger.warning(msg)
+
 
 def _maybe_inject_llm_call_grounding_for_ledger(*, effect: Effect) -> Effect:
     """Inject per-call time/location grounding into LLM_CALL payloads for auditability.
@@ -802,7 +866,7 @@ class Runtime:
         from .vars import DEFAULT_MAX_TOKENS
 
         current_iter = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 25) or 25)
+        max_iter = int(limits.get("max_iterations", 50) or 50)
         tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
         max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         max_input_tokens = limits.get("max_input_tokens")
@@ -845,7 +909,7 @@ class Runtime:
 
         # Check iterations
         current = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 25) or 25)
+        max_iter = int(limits.get("max_iterations", 50) or 50)
         warn_pct = int(limits.get("warn_iterations_pct", 80) or 80)
 
         if max_iter > 0:
@@ -1010,6 +1074,10 @@ class Runtime:
 
             # Effectful step - check for prior completed result (idempotency)
             effect = plan.effect
+            try:
+                _warn_if_tool_calls_missing_call_id(run=run, node_id=plan.node_id, effect=effect)
+            except Exception:
+                pass
             idempotency_key = self._effect_policy.idempotency_key(
                 run=run, node_id=plan.node_id, effect=effect
             )
@@ -1210,13 +1278,14 @@ class Runtime:
 
         resume_to = run.waiting.resume_to_node
         result_key = run.waiting.result_key
+        wait_before = run.waiting
 
         # Keep track of what we actually persisted for this resume (tool resumes may
         # merge blocked-by-allowlist entries back into the payload).
         stored_payload: Dict[str, Any] = payload
 
         if result_key:
-            details = run.waiting.details if run.waiting is not None else None
+            details = wait_before.details if wait_before is not None else None
 
             # Special case: subworkflow completion resumed as a tool-style observation.
             if (
@@ -1375,6 +1444,67 @@ class Runtime:
 
             _set_nested(run.vars, result_key, merged_payload)
             stored_payload = merged_payload
+
+            # Ledger-only UIs can get stuck showing a TOOL_CALLS step as "waiting" because the
+            # original WAITING record has no corresponding COMPLETED record when execution is
+            # delegated to a host and resumed via payload. Best-effort: append a synthetic
+            # completion record that reuses the original idempotency_key.
+            try:
+                if isinstance(wait_before, WaitState):
+                    wait_key0 = getattr(wait_before, "wait_key", None)
+                    wait_key_str = str(wait_key0).strip() if isinstance(wait_key0, str) else ""
+                    if wait_key_str:
+                        records = self._ledger_store.list(run.run_id)
+                        waiting_rec: Optional[Dict[str, Any]] = None
+                        for r in reversed(records):
+                            if not isinstance(r, dict):
+                                continue
+                            if r.get("status") != StepStatus.WAITING.value:
+                                continue
+                            rr = r.get("result")
+                            wait = rr.get("wait") if isinstance(rr, dict) else None
+                            if not isinstance(wait, dict):
+                                continue
+                            if str(wait.get("wait_key") or "") != wait_key_str:
+                                continue
+                            eff = r.get("effect")
+                            if not isinstance(eff, dict):
+                                continue
+                            if str(eff.get("type") or "") != EffectType.TOOL_CALLS.value:
+                                continue
+                            waiting_rec = r
+                            break
+
+                        if waiting_rec is not None:
+                            idem = waiting_rec.get("idempotency_key")
+                            idem_str = str(idem).strip() if isinstance(idem, str) else ""
+                            if idem_str:
+                                # If we already have a COMPLETED record for this idempotency key,
+                                # avoid appending duplicates.
+                                already_completed = any(
+                                    isinstance(r, dict)
+                                    and r.get("status") == StepStatus.COMPLETED.value
+                                    and str(r.get("idempotency_key") or "") == idem_str
+                                    for r in records
+                                )
+                                if not already_completed:
+                                    node_id0 = str(waiting_rec.get("node_id") or run.current_node or "unknown")
+                                    attempt0 = waiting_rec.get("attempt")
+                                    attempt_int = int(attempt0) if isinstance(attempt0, int) and attempt0 > 0 else 1
+                                    completion = StepRecord.start(
+                                        run=run,
+                                        node_id=node_id0,
+                                        effect=None,
+                                        attempt=attempt_int,
+                                        idempotency_key=idem_str,
+                                    )
+                                    eff = waiting_rec.get("effect")
+                                    completion.effect = eff if isinstance(eff, dict) else None
+                                    result_dict = stored_payload if isinstance(stored_payload, dict) else {"result": _jsonable(stored_payload)}
+                                    completion.finish_success(result_dict)
+                                    self._ledger_store.append(completion)
+            except Exception:
+                pass
             # Passthrough tool execution: the host resumes with tool results. We still want
             # evidence capture and payload-bounding (store large parts as artifacts) before
             # the run continues.

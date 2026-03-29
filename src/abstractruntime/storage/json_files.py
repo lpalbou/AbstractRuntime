@@ -9,6 +9,7 @@ This is meant as a straightforward MVP backend.
 
 from __future__ import annotations
 
+import logging
 import json
 import threading
 import uuid
@@ -18,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, StepRecord, RunStatus, WaitState, WaitReason
+
+logger = logging.getLogger(__name__)
 
 
 class JsonFileRunStore(RunStore):
@@ -372,20 +375,55 @@ class JsonlLedgerStore(LedgerStore):
     def append(self, record: StepRecord) -> None:
         p = self._path(record.run_id)
         with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(record), ensure_ascii=False))
-            f.write("\n")
+            # Write as a single append operation to reduce the chance of
+            # concurrent writers producing concatenated JSON objects on one line.
+            f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         p = self._path(run_id)
         if not p.exists():
             return []
         out: List[Dict[str, Any]] = []
+        decoder = json.JSONDecoder()
         with p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                out.append(json.loads(line))
+                try:
+                    record = json.loads(line)
+                    if isinstance(record, dict):
+                        out.append(record)
+                    continue
+                except json.JSONDecodeError:
+                    pass
+
+                # Recover from concatenated JSON objects on one line.
+                # This can happen if a process crashes mid-write or if a file was
+                # manually edited/concatenated. We do a best-effort recovery by
+                # repeatedly using raw_decode and advancing the index.
+                recovered: List[Dict[str, Any]] = []
+                i = 0
+                while i < len(line):
+                    while i < len(line) and line[i].isspace():
+                        i += 1
+                    if i >= len(line):
+                        break
+                    try:
+                        obj, end = decoder.raw_decode(line, idx=i)
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(obj, dict):
+                        recovered.append(obj)
+                    i = end
+
+                if recovered:
+                    logger.warning(
+                        "JsonlLedgerStore.list #FALLBACK recovered %s JSON objects from one line in %s",
+                        len(recovered),
+                        str(p),
+                    )
+                    out.extend(recovered)
         return out
 
     def count(self, run_id: str) -> int:

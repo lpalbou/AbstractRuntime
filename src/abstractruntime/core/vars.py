@@ -111,7 +111,7 @@ def get_node_trace(vars: Dict[str, Any], node_id: str) -> Dict[str, Any]:
 def _default_limits() -> Dict[str, Any]:
     """Return default limits dict."""
     return {
-        "max_iterations": 25,
+        "max_iterations": 50,
         "current_iteration": 0,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "max_output_tokens": None,

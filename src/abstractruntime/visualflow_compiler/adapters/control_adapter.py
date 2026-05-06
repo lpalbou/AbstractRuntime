@@ -58,6 +58,23 @@ def get_active_control_node_id(run_vars: Dict[str, Any]) -> Optional[str]:
     return top if isinstance(top, str) and top else None
 
 
+def _set_prev_exec_handle(run_vars: Dict[str, Any], handle: str) -> None:
+    """Persist the outgoing execution handle taken for the last transition.
+
+    This is used by internal junction nodes (Join Exec) to disambiguate which
+    incoming execution path was taken when multiple edges originate from the
+    same predecessor node id (e.g. If true/false joining).
+    """
+    try:
+        temp = run_vars.get("_temp")
+        if not isinstance(temp, dict):
+            temp = {}
+            run_vars["_temp"] = temp
+        temp["prev_exec_handle"] = str(handle or "")
+    except Exception:
+        pass
+
+
 def create_sequence_node_handler(
     *,
     node_id: str,
@@ -104,6 +121,7 @@ def create_sequence_node_handler(
             target = targets_by_handle.get(handle)
             if isinstance(target, str) and target:
                 frame["idx"] = idx
+                _set_prev_exec_handle(run.vars, handle)
                 return StepPlan(node_id=node_id, next_node=target)
 
         # Done: pop frame and return to parent control node if any, else complete.
@@ -177,6 +195,7 @@ def create_parallel_node_handler(
                 target = targets_by_handle.get(handle)
                 if isinstance(target, str) and target:
                     frame["idx"] = idx
+                    _set_prev_exec_handle(run.vars, handle)
                     return StepPlan(node_id=node_id, next_node=target)
 
             frame["phase"] = "completed"
@@ -195,6 +214,7 @@ def create_parallel_node_handler(
                 completed_target2 = ct
 
         if completed_target2:
+            _set_prev_exec_handle(run.vars, "completed")
             return StepPlan(node_id=node_id, next_node=completed_target2)
 
         parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
@@ -204,6 +224,128 @@ def create_parallel_node_handler(
             node_id=node_id,
             complete_output={"success": True, "result": run.vars.get("_last_output")},
         )
+
+    return handler
+
+
+def create_join_exec_node_handler(
+    *,
+    node_id: str,
+    next_node: Optional[str],
+    routes: List[Dict[str, str]],
+) -> Callable:
+    """Create an internal Join Exec node handler (execution fan-in).
+
+    This node merges multiple incoming execution edges into a single outgoing edge
+    and emits metadata that downstream Path Mux nodes use to select the correct
+    data inputs for the current execution trajectory.
+
+    The editor auto-inserts this node; it is not intended to be user-authored.
+    """
+
+    from abstractruntime.core.models import StepPlan
+
+    def _persist_node_output(run_vars: Dict[str, Any], value: Dict[str, Any]) -> None:
+        temp = run_vars.get("_temp")
+        if not isinstance(temp, dict):
+            temp = {}
+            run_vars["_temp"] = temp
+        persisted = temp.get("node_outputs")
+        if not isinstance(persisted, dict):
+            persisted = {}
+            temp["node_outputs"] = persisted
+        persisted[node_id] = value
+
+    def _warn(run_vars: Dict[str, Any], message: str) -> None:
+        bucket = run_vars.get("_flow_warnings")
+        if not isinstance(bucket, list):
+            bucket = []
+            run_vars["_flow_warnings"] = bucket
+        msg = str(message or "").strip()
+        if not msg:
+            return
+        if msg in bucket:
+            return
+        bucket.append(msg)
+
+    def handler(run: Any, ctx: Any) -> "StepPlan":
+        del ctx
+
+        prev_node_id: Optional[str] = None
+        prev_handle: Optional[str] = None
+        temp = run.vars.get("_temp")
+        if isinstance(temp, dict):
+            raw_prev = temp.get("prev_node_id")
+            if isinstance(raw_prev, str) and raw_prev.strip():
+                prev_node_id = raw_prev.strip()
+            raw_h = temp.get("prev_exec_handle")
+            if isinstance(raw_h, str) and raw_h.strip():
+                prev_handle = raw_h.strip()
+
+        which = 0
+        from_id: Optional[str] = None
+
+        if prev_node_id:
+            # 1) Strict match on (node_id, handle) when available.
+            if prev_handle:
+                for i, r in enumerate(routes):
+                    if r.get("source") == prev_node_id and r.get("handle") == prev_handle:
+                        which = i
+                        from_id = prev_node_id
+                        break
+            # 2) Fallback match on node_id only (may be ambiguous).
+            if from_id is None:
+                matches = [i for i, r in enumerate(routes) if r.get("source") == prev_node_id]
+                if len(matches) == 1:
+                    which = matches[0]
+                    from_id = prev_node_id
+                elif len(matches) > 1:
+                    which = matches[0]
+                    from_id = prev_node_id
+                    _warn(
+                        run.vars,
+                        f"#FALLBACK join_exec '{node_id}': multiple incoming routes from '{prev_node_id}' "
+                        f"but prev_exec_handle was missing; defaulting which={which}.",
+                    )
+        else:
+            if routes:
+                _warn(
+                    run.vars,
+                    f"#FALLBACK join_exec '{node_id}': prev_node_id missing; defaulting which=0.",
+                )
+
+        # Clamp for safety (routes can be edited while a run is waiting).
+        try:
+            which = int(which)
+        except Exception:
+            which = 0
+        if routes:
+            if which < 0:
+                which = 0
+            if which >= len(routes):
+                which = len(routes) - 1
+
+        # IMPORTANT: Join Exec must not mutate `_last_output`.
+        #
+        # VisualFlow uses `_last_output` as an implicit "data bus" for unconnected pins.
+        # Lowering inserts Join Exec purely to provide `{which,from}` metadata for
+        # downstream Path Mux selection. Mutating `_last_output` here would:
+        # - change the shape of primitive outputs (string/number/bool -> dict),
+        # - risk key collisions (user data may already contain "which"/"from"),
+        # - and introduce surprising behavior unrelated to the user's authoring graph.
+        #
+        # Instead, persist join metadata only as this node's output.
+        out: Dict[str, Any] = {"which": which, "from": from_id}
+        if prev_handle:
+            out["from_handle"] = prev_handle
+        _persist_node_output(run.vars, out)
+
+        if next_node:
+            # Join Exec has a single outgoing exec path in v0 (exec-out).
+            _set_prev_exec_handle(run.vars, "exec-out")
+            return StepPlan(node_id=node_id, next_node=next_node)
+
+        return StepPlan(node_id=node_id, complete_output={"success": True, "result": out})
 
     return handler
 
@@ -275,6 +417,7 @@ def create_loop_node_handler(
                 stack[:] = [x for x in stack if x != node_id]
 
             if done_next:
+                _set_prev_exec_handle(run.vars, "done")
                 return StepPlan(node_id=node_id, next_node=done_next)
 
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
@@ -301,6 +444,7 @@ def create_loop_node_handler(
 
         # Advance idx *before* scheduling the body so pause/resume can't repeat an item.
         frame["idx"] = idx + 1
+        _set_prev_exec_handle(run.vars, "loop")
         return StepPlan(node_id=node_id, next_node=loop_next)
 
     return handler
@@ -428,6 +572,7 @@ def create_for_node_handler(
                 stack[:] = [x for x in stack if x != node_id]
 
             if done_next:
+                _set_prev_exec_handle(run.vars, "done")
                 return StepPlan(node_id=node_id, next_node=done_next)
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
@@ -472,6 +617,7 @@ def create_for_node_handler(
                 stack[:] = [x for x in stack if x != node_id]
 
             if done_next:
+                _set_prev_exec_handle(run.vars, "done")
                 return StepPlan(node_id=node_id, next_node=done_next)
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
@@ -497,6 +643,7 @@ def create_for_node_handler(
         # Advance state before scheduling the body (pause/resume safety).
         frame["i"] = cur + step
         frame["index"] = idx + 1
+        _set_prev_exec_handle(run.vars, "loop")
         return StepPlan(node_id=node_id, next_node=loop_next)
 
     return handler
@@ -576,6 +723,7 @@ def create_while_node_handler(
                 stack[:] = [x for x in stack if x != node_id]
 
             if done_next:
+                _set_prev_exec_handle(run.vars, "done")
                 return StepPlan(node_id=node_id, next_node=done_next)
 
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
@@ -609,7 +757,7 @@ def create_while_node_handler(
         _persist_node_output(run.vars, out)
 
         frame["iters"] = iters + 1
+        _set_prev_exec_handle(run.vars, "loop")
         return StepPlan(node_id=node_id, next_node=loop_next)
 
     return handler
-

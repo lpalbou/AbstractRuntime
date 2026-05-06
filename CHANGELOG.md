@@ -9,9 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 ### Changed
-- Documentation: align version references with `pyproject.toml` (0.4.2) and fix minor API-doc drift (`docs/api.md`).
+### Fixed
+
+## [0.4.3] - 2026-05-06
+
+### Added
+- **AbstractCore prompt-cache control plane**:
+  - local, multi-local, and remote LLM clients expose `get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, and `prompt_cache_prepare_modules`
+  - local clients can maintain compartmentalized `system | tools | history` prompt-cache modules when providers support `local_control_plane`
+  - remote clients proxy `/acore/prompt_cache/*` endpoints for gateway/CLI hosts
+- **Artifact-backed media for AbstractCore LLM calls**:
+  - local/hybrid AbstractCore clients can resolve runtime artifact refs into provider-ready media inputs
+  - AbstractCore runtime factories now pass the runtime artifact store into LLM clients
+- **Durable tool approval execution**:
+  - `ToolApprovalPolicy` and `ApprovalToolExecutor` support safe auto-approval, durable approval waits, and approved re-execution
+  - runtime factories expose the configured tool executor for approval-style `TOOL_CALLS` resumes
+- **VisualFlow multi-entry lowering**:
+  - authoring graphs with multiple incoming `exec-in` routes can be lowered into internal `join_exec` and `path_mux` nodes
+  - per-entry input overrides survive pause/resume and file-store restart scenarios
+
+### Changed
+- AbstractCore remote provider-key overrides now use `X-AbstractCore-Provider-API-Key` headers instead of body/query `api_key` fields rejected by current AbstractCore servers.
+- AbstractCore LLM clients keep per-turn grounding out of stable system prompts, coalesce leading system messages, strip internal tool-activity system messages, and propagate trace metadata headers.
+- AbstractCore runtime factories expose the underlying LLM client for host-side control-plane operations and continue to honor AbstractCore timeout/config defaults.
+- Default runtime iteration budget increased from 25 to 50.
+- Documentation: align version references with `pyproject.toml` (0.4.2), document AbstractCore prompt-cache operations, and update remote provider-key guidance.
 
 ### Fixed
+- VisualFlow While nodes again route `condition=true` to Loop and `condition=false` to Done/parent/complete after the execution-handle tracking refactor.
+- Tool approval resumes now execute approved calls in-runtime when configured, return structured tool errors when denied or unavailable, and append completion ledger records for ledger-only replay clients.
+- JSONL ledger listing now recovers concatenated JSON records defensively.
+- `TOOL_CALLS` now emits durable warnings for missing or duplicate tool call ids.
+- Optional VisualFlow fixture tests now skip cleanly when assessment fixtures are absent.
+
+### Testing
+- Added focused coverage for prompt-cache module preparation/rebuilds, remote prompt-cache proxying, artifact-backed media, tool approval waits/resumes, JSONL ledger recovery, remote provider-key headers, VisualFlow multi-entry prompt overrides, and While routing regressions.
 
 ## [0.4.2] - 2026-02-08
 

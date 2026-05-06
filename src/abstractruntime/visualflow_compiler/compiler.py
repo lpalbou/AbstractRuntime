@@ -2116,6 +2116,7 @@ def _create_visual_function_handler(
     3. Updates _last_output for downstream nodes
     """
     from abstractruntime.core.models import StepPlan
+    from .adapters.control_adapter import _set_prev_exec_handle
 
     def handler(run: Any, ctx: Any) -> "StepPlan":
         """Execute the function and transition to next node."""
@@ -2205,10 +2206,12 @@ def _create_visual_function_handler(
                         "node": node_id,
                     },
                 )
+            _set_prev_exec_handle(run.vars, branch)
             return StepPlan(node_id=node_id, next_node=chosen)
 
         # Continue to next node or complete
         if next_node:
+            _set_prev_exec_handle(run.vars, "exec-out")
             return StepPlan(node_id=node_id, next_node=next_node)
         return StepPlan(
             node_id=node_id,
@@ -3038,8 +3041,10 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
         raise ValueError(f"Invalid flow: {'; '.join(errors)}")
 
     outgoing: Dict[str, list] = {}
+    incoming: Dict[str, list] = {}
     for edge in flow.edges:
         outgoing.setdefault(edge.source, []).append(edge)
+        incoming.setdefault(edge.target, []).append(edge)
 
     # Build next-node map (linear) and branch maps (If/Else).
     next_node_map: Dict[str, Optional[str]] = {}
@@ -3338,6 +3343,53 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 targets_by_handle=dict(spec.get("targets_by_handle") or {}),
                 completed_target=spec.get("completed_target"),
             )
+        elif effect_type == "join_exec":
+            from .adapters.control_adapter import create_join_exec_node_handler
+
+            if not next_node:
+                raise ValueError(f"Join Exec node '{node_id}' must have an outgoing exec edge.")
+
+            ins = incoming.get(node_id, []) if isinstance(incoming, dict) else []
+            routes: list[dict[str, str]] = []
+            for e in ins:
+                try:
+                    src = getattr(e, "source", None)
+                    if not isinstance(src, str) or not src:
+                        continue
+                    h = getattr(e, "source_handle", None)
+                    handle = h if isinstance(h, str) and h else "exec-out"
+                    routes.append({"source": src, "handle": handle})
+                except Exception:
+                    continue
+
+            base_join = create_join_exec_node_handler(node_id=node_id, next_node=next_node, routes=routes)
+
+            pure_ids = getattr(flow, "_pure_node_ids", None) if flow is not None else None
+            pure_ids = set(pure_ids) if isinstance(pure_ids, (set, list, tuple)) else set()
+
+            def _wrapped_join(
+                run: Any,
+                ctx: Any,
+                *,
+                _base: Any = base_join,
+                _pure_ids: set[str] = pure_ids,
+            ) -> StepPlan:
+                # Join Exec is the canonical re-entry boundary for wiring-based loops.
+                # Invalidate cached pure node outputs so trajectory-dependent pins recompute.
+                if flow is not None and _pure_ids and hasattr(flow, "_node_outputs") and hasattr(flow, "_data_edge_map"):
+                    _sync_effect_results_to_node_outputs(run, flow)
+                    node_outputs = getattr(flow, "_node_outputs", None)
+                    if isinstance(node_outputs, dict):
+                        for nid in _pure_ids:
+                            node_outputs.pop(nid, None)
+
+                plan = _base(run, ctx)
+
+                if flow is not None and hasattr(flow, "_node_outputs") and hasattr(flow, "_data_edge_map"):
+                    _sync_effect_results_to_node_outputs(run, flow)
+                return plan
+
+            handlers[node_id] = _wrapped_join
         elif effect_type == "loop":
             from .adapters.control_adapter import create_loop_node_handler
 

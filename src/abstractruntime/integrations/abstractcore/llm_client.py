@@ -31,6 +31,7 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
+_ABSTRACTCORE_PROVIDER_API_KEY_HEADER = "X-AbstractCore-Provider-API-Key"
 _LOCAL_GENERATE_LOCKS: Dict[Tuple[str, str], threading.Lock] = {}
 _LOCAL_GENERATE_LOCKS_LOCK = threading.Lock()
 _LOCAL_GENERATE_LOCKS_WARNED: set[Tuple[str, str]] = set()
@@ -64,6 +65,24 @@ def _prompt_cache_message_fingerprint(message: Any) -> str:
 
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _pop_provider_api_key(values: Dict[str, Any]) -> Optional[str]:
+    """Return and remove a per-request provider key from common compatibility names."""
+
+    for key in ("provider_api_key", "api_key"):
+        raw = values.pop(key, None)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def _set_header_case_insensitive(headers: Dict[str, str], name: str, value: str) -> None:
+    for existing in list(headers.keys()):
+        if str(existing).lower() == name.lower():
+            headers[existing] = value
+            return
+    headers[name] = value
 
 
 def _local_generate_lock(*, provider: str, model: str) -> Optional[threading.Lock]:
@@ -2019,18 +2038,31 @@ class RemoteAbstractCoreLLMClient:
         base_url = kwargs.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             out["base_url"] = base_url.strip()
-        api_key = kwargs.get("api_key")
-        if isinstance(api_key, str) and api_key.strip():
-            out["api_key"] = api_key.strip()
         return out
 
+    def _headers_with_provider_api_key(self, api_key: Optional[str]) -> Dict[str, str]:
+        headers = dict(self._headers)
+        if isinstance(api_key, str) and api_key.strip():
+            _set_header_case_insensitive(
+                headers,
+                _ABSTRACTCORE_PROVIDER_API_KEY_HEADER,
+                api_key.strip(),
+            )
+        return headers
+
     def _prompt_cache_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        proxy_fields = self._prompt_cache_proxy_fields(dict(kwargs or {}))
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        proxy_fields = self._prompt_cache_proxy_fields(call_kwargs)
         url = f"{self._server_base_url}{path}"
         if proxy_fields:
             url = f"{url}?{urlencode(proxy_fields)}"
         try:
-            raw = self._sender.get(url, headers=dict(self._headers), timeout=self._timeout_s)
+            raw = self._sender.get(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                timeout=self._timeout_s,
+            )
             resp, _resp_headers = _unwrap_http_response(raw)
         except Exception as e:
             return {
@@ -2057,11 +2089,18 @@ class RemoteAbstractCoreLLMClient:
         body: Dict[str, Any],
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
         url = f"{self._server_base_url}{path}"
         payload = dict(body)
-        payload.update(self._prompt_cache_proxy_fields(dict(kwargs or {})))
+        payload.update(self._prompt_cache_proxy_fields(call_kwargs))
         try:
-            raw = self._sender.post(url, headers=dict(self._headers), json=payload, timeout=self._timeout_s)
+            raw = self._sender.post(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                json=payload,
+                timeout=self._timeout_s,
+            )
             resp, _resp_headers = _unwrap_http_response(raw)
         except Exception as e:
             return {
@@ -2197,7 +2236,8 @@ class RemoteAbstractCoreLLMClient:
             raise ValueError(
                 "RemoteAbstractCoreLLMClient does not support media yet (artifact-backed attachments require local/hybrid execution)."
             )
-        req_headers = dict(self._headers)
+        provider_api_key = _pop_provider_api_key(params)
+        req_headers = self._headers_with_provider_api_key(provider_api_key)
 
         trace_metadata = params.pop("trace_metadata", None)
         system_prompt = _strip_system_context_header(system_prompt)

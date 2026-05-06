@@ -50,7 +50,13 @@ def test_remote_llm_client_builds_chat_completions_request_and_forwards_base_url
         messages=None,
         system_prompt="sys",
         tools=None,
-        params={"temperature": 0, "max_tokens": 5, "base_url": "http://localhost:1234/v1", "prompt_cache_key": "sess:abc"},
+        params={
+            "temperature": 0,
+            "max_tokens": 5,
+            "base_url": "http://localhost:1234/v1",
+            "prompt_cache_key": "sess:abc",
+            "api_key": "provider-secret",
+        },
     )
 
     assert result["content"] == "ok"
@@ -62,15 +68,18 @@ def test_remote_llm_client_builds_chat_completions_request_and_forwards_base_url
     call = sender.calls[0]
     assert call["url"] == "http://localhost:8080/v1/chat/completions"
     assert call["headers"]["X-Test"] == "1"
+    assert call["headers"]["X-AbstractCore-Provider-API-Key"] == "provider-secret"
 
     body = call["json"]
     assert body["model"] == "openai-compatible/default"
     assert body["base_url"] == "http://localhost:1234/v1"
     assert body["prompt_cache_key"] == "sess:abc"
+    assert "api_key" not in body
     assert body["temperature"] == 0
     assert body["max_tokens"] == 5
     assert body["timeout_s"] == 12.0
     assert body["messages"][0]["role"] == "system"
+    assert "api_key" not in result["metadata"]["_provider_request"]["payload"]
 
 
 def test_remote_llm_client_default_timeout_is_long_running() -> None:
@@ -114,10 +123,12 @@ def test_remote_prompt_cache_control_plane_forwards_proxy_context() -> None:
 
     get_call = sender.calls[0]
     assert get_call["method"] == "GET"
-    assert get_call["url"] == "http://localhost:8080/acore/prompt_cache/capabilities?base_url=http%3A%2F%2Flocalhost%3A8001%2Fv1&api_key=secret"
+    assert get_call["url"] == "http://localhost:8080/acore/prompt_cache/capabilities?base_url=http%3A%2F%2Flocalhost%3A8001%2Fv1"
+    assert get_call["headers"]["X-AbstractCore-Provider-API-Key"] == "secret"
     post_call = sender.calls[1]
     assert post_call["method"] == "POST"
     assert post_call["url"] == "http://localhost:8080/acore/prompt_cache/set"
+    assert post_call["headers"]["X-AbstractCore-Provider-API-Key"] == "secret"
     assert post_call["json"]["key"] == "sess:abc"
     assert post_call["json"]["base_url"] == "http://localhost:8001/v1"
-    assert post_call["json"]["api_key"] == "secret"
+    assert "api_key" not in post_call["json"]

@@ -44,6 +44,16 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     """Convert a visual flow definition to an AbstractFlow `Flow`."""
     import datetime
 
+    # Authoring-time lowering:
+    # - Multi-entry exec fan-in + per-entry input overrides are lowered into
+    #   internal join_exec/path_mux junction nodes.
+    #
+    # This keeps the persisted authoring graph clean while keeping runtime
+    # semantics centralized in AbstractRuntime (framework ADR-0012).
+    from .multi_entry_lowering import lower_authoring_multi_entry
+
+    visual = lower_authoring_multi_entry(visual)
+
     flow = Flow(visual.id)
 
     data_edge_map = _build_data_edge_map(visual.edges)
@@ -103,6 +113,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     pure_node_ids: set[str] = set()
 
     def _has_execution_pins(type_str: str, node_data: Dict[str, Any]) -> bool:
+        # Internal junction nodes always have execution semantics, even if a host
+        # built the VisualFlow programmatically without template pin metadata.
+        if type_str == "join_exec":
+            return True
         pins: list[Any] = []
         inputs = node_data.get("inputs")
         outputs = node_data.get("outputs")
@@ -2561,6 +2575,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if type_str == "subflow":
             return _create_subflow_effect_builder(data)
 
+        if type_str == "join_exec":
+            # Internal control node; runtime semantics are implemented in the compiler adapters.
+            return lambda x: x
+
         if type_str == "break_object":
             return _create_break_object_handler(data)
 
@@ -2607,7 +2625,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if not _has_execution_pins(type_str, node.data):
             pure_base_handlers[node.id] = base_handler
             pure_node_ids.add(node.id)
-            if type_str in {"get_var", "get_context", "bool_var", "var_decl"}:
+            if type_str in {"get_var", "get_context", "bool_var", "var_decl", "path_mux"}:
                 volatile_pure_node_ids.add(node.id)
             continue
 
@@ -2681,6 +2699,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if type_str == "parallel":
                 cfg["completed_handle"] = "completed"
             effect_config = cfg
+        elif type_str == "join_exec":
+            # Internal execution fan-in node.
+            effect_type = "join_exec"
+            internal = False
+            try:
+                internal = bool(node.data.get("_internal")) if isinstance(node.data, dict) else False
+            except Exception:
+                internal = False
+            effect_config = {"_internal": True} if internal else {}
         elif type_str == "loop":
             # Control-flow scheduler node (Blueprint-style foreach).
             # Runtime semantics are handled in `abstractflow.adapters.control_adapter`.

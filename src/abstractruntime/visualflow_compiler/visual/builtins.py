@@ -1312,6 +1312,45 @@ def tools_allowlist(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return {"tools": uniq}
 
 
+def path_mux(inputs: Dict[str, Any]) -> Any:
+    """Select an input arm based on a numeric index.
+
+    Inputs:
+    - select: index (0-based)
+    - in0, in1, ...: candidate values
+    - fallback: optional fallback when the selected arm is missing
+
+    Notes:
+    - We intentionally treat "missing key" differently from "key present with value None".
+    - This node is internal-only in the editor (auto-inserted), but the runtime
+      implementation is portable and deterministic.
+    """
+    raw_sel = inputs.get("select", 0)
+    idx: int = 0
+    try:
+        if raw_sel is None:
+            idx = 0
+        elif isinstance(raw_sel, bool):
+            idx = int(raw_sel)
+        elif isinstance(raw_sel, int):
+            idx = int(raw_sel)
+        elif isinstance(raw_sel, float):
+            idx = int(raw_sel)
+        elif isinstance(raw_sel, str) and raw_sel.strip():
+            idx = int(float(raw_sel.strip()))
+        else:
+            idx = int(raw_sel)  # best-effort
+    except Exception:
+        idx = 0
+
+    key = f"in{idx}"
+    if key in inputs:
+        return {"out": inputs.get(key)}
+    if "fallback" in inputs:
+        return {"out": inputs.get("fallback")}
+    return {"out": None}
+
+
 # Handler registry
 BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     # Math
@@ -1361,6 +1400,7 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "has_tools": data_has_tools,
     "array_append": data_array_append,
     "array_dedup": data_array_dedup,
+    "path_mux": path_mux,
     "parse_json": data_parse_json,
     "stringify_json": data_stringify_json,
     "format_tool_results": data_format_tool_results,

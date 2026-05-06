@@ -365,6 +365,20 @@ def _is_pause_wait(waiting: Any, *, run_id: str) -> bool:
     return False
 
 
+def _record_transition_predecessor(run: RunState, *, node_id: str, next_node: Optional[str]) -> None:
+    """Persist the last transition boundary for VisualFlow fan-in nodes."""
+
+    try:
+        temp = run.vars.get("_temp")
+        if not isinstance(temp, dict):
+            temp = {}
+            run.vars["_temp"] = temp
+        temp["prev_node_id"] = node_id
+        temp["prev_next_node"] = next_node
+    except Exception:
+        pass
+
+
 def _record_node_trace(
     *,
     run: RunState,
@@ -1067,6 +1081,7 @@ class Runtime:
                 controlled = _abort_if_externally_controlled()
                 if controlled is not None:
                     return controlled
+                _record_transition_predecessor(run, node_id=plan.node_id, next_node=plan.next_node)
                 run.current_node = plan.next_node
                 run.updated_at = utc_now_iso()
                 self._run_store.save(run)
@@ -1179,6 +1194,7 @@ class Runtime:
                 controlled = _abort_if_externally_controlled()
                 if controlled is not None:
                     return controlled
+                _record_transition_predecessor(run, node_id=plan.node_id, next_node=plan.next_node)
                 run.status = RunStatus.WAITING
                 run.waiting = outcome.wait
                 run.updated_at = utc_now_iso()
@@ -1208,6 +1224,7 @@ class Runtime:
             controlled = _abort_if_externally_controlled()
             if controlled is not None:
                 return controlled
+            _record_transition_predecessor(run, node_id=plan.node_id, next_node=plan.next_node)
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
             self._run_store.save(run)

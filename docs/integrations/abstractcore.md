@@ -54,6 +54,7 @@ Factory functions (exported from `abstractruntime.integrations.abstractcore`):
 
 Notes:
 - Remote mode supports per-request dynamic routing by forwarding `params.base_url` to the AbstractCore server request body (`src/abstractruntime/integrations/abstractcore/llm_client.py`).
+- Remote mode sends per-request provider key overrides from `params.api_key` / `params.provider_api_key` as `X-AbstractCore-Provider-API-Key` headers. Server/master auth should be supplied separately through the client's configured headers, usually `Authorization: Bearer <ABSTRACTCORE_SERVER_API_KEY>`.
 - Local mode treats `base_url` as a provider construction concern; the local client intentionally strips `params.base_url`.
 
 ## `TOOL_CALLS` payload
@@ -101,7 +102,7 @@ Behavior by execution mode:
 
 - **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.
 - **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` on the configured AbstractCore server.
-  - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can also forward upstream `base_url` / `api_key` through these prompt-cache methods.
+  - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream `base_url` through these prompt-cache methods. Per-request provider key overrides supplied as `api_key` / `provider_api_key` are converted to `X-AbstractCore-Provider-API-Key` headers, not request bodies or query strings.
 
 Contract notes:
 

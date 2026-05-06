@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AbstractCore LLM clients keep per-turn grounding out of stable system prompts, coalesce leading system messages, strip internal tool-activity system messages, and propagate trace metadata headers.
 - AbstractCore runtime factories expose the underlying LLM client for host-side control-plane operations and continue to honor AbstractCore timeout/config defaults.
 - Default runtime iteration budget increased from 25 to 50.
-- Documentation: align version references with `pyproject.toml` (0.4.2), document AbstractCore prompt-cache operations, and update remote provider-key guidance.
+- Minimum AbstractCore optional dependency increased to `>=2.13.4` so the documented prompt-cache control plane, hardened server auth, provider-key header routing, Telegram tools, and current model/provider behavior are available by default.
+- Documentation: align version references with `pyproject.toml` (0.4.3), document AbstractCore prompt-cache operations, update remote provider-key guidance, and add concrete VisualFlow multi-entry authoring metadata.
 
 ### Fixed
 - VisualFlow While nodes again route `condition=true` to Loop and `condition=false` to Done/parent/complete after the execution-handle tracking refactor.
@@ -43,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional VisualFlow fixture tests now skip cleanly when assessment fixtures are absent.
 
 ### Testing
-- Added focused coverage for prompt-cache module preparation/rebuilds, remote prompt-cache proxying, artifact-backed media, tool approval waits/resumes, JSONL ledger recovery, remote provider-key headers, VisualFlow multi-entry prompt overrides, and While routing regressions.
+- Added focused coverage for prompt-cache module preparation/rebuilds, remote prompt-cache proxying, artifact-backed media, tool approval waits/resumes, JSONL ledger recovery, remote provider-key headers, VisualFlow multi-entry prompt overrides, direct effect re-entry, same-predecessor route handles, stale route metadata, join-only fan-in, and While routing regressions.
 
 ## [0.4.2] - 2026-02-08
 
@@ -287,7 +288,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.3
 [0.4.2]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.2
 [0.4.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.1
 [0.4.0]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.0

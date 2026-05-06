@@ -3,9 +3,10 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.2 (see `pyproject.toml`)
+- Version: 0.4.3 (see `pyproject.toml`)
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
+- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.4`
 
 ## Start here
 
@@ -31,7 +32,7 @@
 
 ## Integrations
 
-- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid
+- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid, prompt cache, provider-key headers, tool approval waits
 - [MCP worker](docs/mcp-worker.md): `abstractruntime-mcp-worker` CLI (stdio/HTTP)
 - [Comms toolset](docs/tools-comms.md): opt-in email/WhatsApp/Telegram gating
 
@@ -43,7 +44,8 @@
 
 ## Distribution
 
-- [WorkflowBundles](docs/workflow-bundles.md): `.flow` bundle format + VisualFlow compilation
+- [WorkflowBundles](docs/workflow-bundles.md): `.flow` bundle format, VisualFlow compilation, and concrete multi-entry fan-in metadata
+- [VisualFlow compiler](docs/architecture.md): lowers multi-entry `entryRoutes` / `inputRouteOverrides` into internal `join_exec` / `path_mux` nodes
 
 ## Maintainers
 

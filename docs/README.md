@@ -24,7 +24,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 - `faq.md` — common questions (recommended)
 - `manual_testing.md` — manual smoke tests and how to run the test suite
-- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS` via AbstractCore
+- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, prompt-cache control, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 
 ## Features (reference)
@@ -34,7 +34,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `snapshots.md` — snapshot/bookmark model and stores
 - `provenance.md` — tamper-evident hash-chained ledger
 - `limits.md` — runtime-aware `_limits` namespace and APIs
-- `workflow-bundles.md` — `.flow` bundle format (VisualFlow distribution)
+- `workflow-bundles.md` — `.flow` bundle format, VisualFlow distribution, and multi-entry fan-in metadata
 
 ## Maintainers
 

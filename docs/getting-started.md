@@ -18,6 +18,8 @@ Optional (LLM + tools via AbstractCore):
 pip install "abstractruntime[abstractcore]"
 ```
 
+This installs AbstractCore 2.13.4 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, and current tool behavior.
+
 ## Mental model (source of truth)
 
 - Workflows are in-memory graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)

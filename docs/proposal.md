@@ -79,7 +79,7 @@ AbstractRuntime stays dependency-light at the kernel level; concrete integration
 
 ## Status (implemented in this repository)
 
-As of v0.4.2 (`pyproject.toml`):
+As of v0.4.3 (`pyproject.toml`):
 - durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
 - built-in waits + events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - persistence backends: in-memory, JSON/JSONL, SQLite
@@ -87,6 +87,8 @@ As of v0.4.2 (`pyproject.toml`):
 - retries/idempotency policy hooks: `src/abstractruntime/core/policy.py`
 - snapshots, tamper-evident ledger chain, ledger subscriptions
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
+- VisualFlow multi-entry lowering for fan-in execution routes (`join_exec` / `path_mux`)
+- AbstractCore integration with local/remote/hybrid LLM execution, prompt-cache control, tool approval waits, and provider-key header routing (`integrations/abstractcore.md`)
 - evidence capture helpers (`src/abstractruntime/evidence/recorder.py`, `Runtime.list_evidence/load_evidence`)
 - run history bundle export (`src/abstractruntime/history_bundle.py`)
 

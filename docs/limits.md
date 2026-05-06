@@ -15,7 +15,7 @@ Shape (keys are stable; values may be `None` when unknown):
 
 ```python
 run.vars["_limits"] = {
-    "max_iterations": 25,
+    "max_iterations": 50,
     "current_iteration": 0,
     "max_tokens": 32768,          # context window (fallback when unknown)
     "max_output_tokens": None,    # provider/model dependent
@@ -62,7 +62,7 @@ Returns a structured dict for UI/status display. (`src/abstractruntime/core/runt
 
 Returns a list of `LimitWarning` objects for limits approaching/exceeded. (`src/abstractruntime/core/models.py`, `src/abstractruntime/core/runtime.py`)
 
-As of v0.4.2, warnings are computed for:
+As of v0.4.3, warnings are computed for:
 - `iterations` (`current_iteration` vs `max_iterations`)
 - `tokens` (`estimated_tokens_used` vs `max_tokens`)
 

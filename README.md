@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.2 (see `pyproject.toml`) • **Python:** 3.10+
+**Version:** 0.4.3 (see `pyproject.toml`) • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -37,6 +37,8 @@ AbstractCore integration (LLM + tools):
 ```bash
 pip install "abstractruntime[abstractcore]"
 ```
+
+The `abstractcore` extra installs AbstractCore 2.13.4 or newer so the hardened server auth model, provider-key header routing, prompt-cache control plane, and current tool catalog are available.
 
 MCP worker entrypoint (default toolsets over stdio):
 
@@ -85,7 +87,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.2)
+## What’s included (v0.4.3)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -93,6 +95,7 @@ Kernel (dependency-light):
 - durable waits/events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - append-only ledger (`StepRecord`) + node traces (`vars["_runtime"]["node_traces"]`)
 - retries/idempotency hooks: `src/abstractruntime/core/policy.py`
+- runtime-aware limits (`_limits`) with a default iteration budget of 50 (`docs/limits.md`)
 
 Durability + storage:
 - stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
@@ -104,10 +107,11 @@ Durability + storage:
 Drivers + distribution:
 - scheduler: `create_scheduled_runtime()` (`src/abstractruntime/scheduler/*`)
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
+- VisualFlow multi-entry execution lowering for fan-in routes and per-entry input overrides (`docs/workflow-bundles.md`)
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Optional integrations:
-- AbstractCore (LLM + tools): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, prompt cache, tool approval waits): `docs/integrations/abstractcore.md`
 - comms toolset gating (email/WhatsApp/Telegram): `docs/tools-comms.md`
 
 ## Built-in scheduler (zero-config)

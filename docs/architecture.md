@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-02-09  
-> Version: 0.4.2 (see `pyproject.toml`)  
+> Updated: 2026-05-06
+> Version: 0.4.3 (see `pyproject.toml`)
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -152,7 +152,7 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
-- `LLM_CALL`, `TOOL_CALLS`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
+- `LLM_CALL`, `TOOL_CALLS`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, prompt-cache control, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
 ### Reliability: retries + idempotency
@@ -195,6 +195,7 @@ The scheduler is an in-process driver loop that resumes due waits and can delive
 
 AbstractRuntime includes a compiler and a portable bundle format:
 - VisualFlow compiler: `src/abstractruntime/visualflow_compiler/*` (VisualFlow JSON -> `WorkflowSpec`)
+- Multi-entry VisualFlow authoring routes are lowered into internal `join_exec` and `path_mux` nodes when a target has multiple incoming `exec-in` edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See `workflow-bundles.md` for the concrete metadata shape.
 - WorkflowBundles (`.flow`): `src/abstractruntime/workflow_bundle/*` (manifest + flows + assets)
   - pack/unpack helpers: `pack_workflow_bundle(...)`, `open_workflow_bundle(...)`
 

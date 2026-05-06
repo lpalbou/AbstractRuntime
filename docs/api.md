@@ -36,7 +36,12 @@ from abstractruntime import create_scheduled_runtime
 Optional integration (requires `abstractruntime[abstractcore]`):
 
 ```python
-from abstractruntime.integrations.abstractcore import create_local_runtime
+from abstractruntime.integrations.abstractcore import (
+    ApprovalToolExecutor,
+    MappingToolExecutor,
+    ToolApprovalPolicy,
+    create_local_runtime,
+)
 ```
 
 See also: `getting-started.md` (end-to-end runnable examples).
@@ -145,6 +150,11 @@ Implementation:
 - bundles: `src/abstractruntime/workflow_bundle/*`
 - compiler: `src/abstractruntime/visualflow_compiler/*`
 
+VisualFlow compiler helpers are available from `abstractruntime.visualflow_compiler`:
+- `load_visualflow_json(...)` normalizes VisualFlow JSON into the stdlib model.
+- `visual_to_flow(...)` lowers VisualFlow into the internal Flow IR.
+- `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
+
 Public bundle APIs are exported from `src/abstractruntime/workflow_bundle/__init__.py` and re-exported in `src/abstractruntime/__init__.py`:
 - open: `open_workflow_bundle(...)`
 - registry: `WorkflowBundleRegistry`
@@ -165,13 +175,15 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"`.
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.4 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
 Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
+- tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
+- prompt-cache control methods on the configured LLM client: `get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules` (`src/abstractruntime/integrations/abstractcore/llm_client.py`)
 
 Docs: `integrations/abstractcore.md`.
 

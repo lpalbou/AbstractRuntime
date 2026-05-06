@@ -238,6 +238,8 @@ python -m pytest -q
 
 Expected: the test suite passes.
 
+Some integration tests depend on optional local services or packages (for example a configured Ollama model or `lancedb`). In lean development environments, run the focused unit tests for your change first, then run the full suite in a fully provisioned integration environment before release.
+
 ## See also
 
 - `getting-started.md` — first steps

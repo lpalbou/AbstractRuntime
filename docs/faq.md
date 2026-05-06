@@ -101,6 +101,18 @@ In passthrough mode, tool calls are **not executed** in-process:
 
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/tool_executor.py` (`PassthroughToolExecutor`).
 
+## How do I require approval before tools run?
+
+Use `ApprovalToolExecutor` around a trusted local executor. Safe read-only/default bridge tools can execute immediately; write, command, email/WhatsApp, and unknown tools produce a durable approval wait. Resume with `{"approved": true}` to run the pending calls or `{"approved": false, "reason": "..."}` to return structured tool errors.
+
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/tool_executor.py`.
+
+## How should provider API keys be passed to a remote AbstractCore server?
+
+Use `Authorization: Bearer <server-key>` for AbstractCore server authentication. If a request needs a per-request upstream provider key, pass `params.provider_api_key` (or legacy `params.api_key`) in the runtime payload; Runtime converts it to the `X-AbstractCore-Provider-API-Key` header. Current AbstractCore servers reject provider keys in query strings or JSON bodies for security.
+
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+
 ## Does AbstractRuntime retry effects (LLM/tools)? Is it idempotent?
 
 Retry and idempotency are controlled via `EffectPolicy`:

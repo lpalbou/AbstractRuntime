@@ -20,7 +20,7 @@ This module must remain stdlib-only.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import VisualEdge, VisualFlow, VisualNode
 
@@ -98,7 +98,7 @@ def _parse_entry_routes(
         raise ValueError(f"Node '{node.id}' has duplicate entryRoutes keys: {dups}")
 
     # Validate alignment with incoming exec edges.
-    # We validate using (sourceNodeId, sourceHandle) pairs (not keys), because keys can be customized.
+    # Validate pairs rather than keys, because route keys can be customized.
     edge_pairs: List[Tuple[str, str]] = []
     for e in incoming_exec:
         src = _as_str(getattr(e, "source", None))
@@ -262,12 +262,14 @@ def lower_authoring_multi_entry(visual: VisualFlow) -> VisualFlow:
             for rk, (src, _h) in per_route.items():
                 if rk not in route_index_by_key:
                     raise ValueError(
-                        f"Node '{target_id}' override for pin '{pin_id}' references unknown route '{rk}'. "
+                        f"Node '{target_id}' override for pin '{pin_id}' "
+                        f"references unknown route '{rk}'. "
                         "Ensure entryRoutes is up to date."
                     )
                 if src not in nodes_by_id:
                     raise ValueError(
-                        f"Node '{target_id}' override for pin '{pin_id}' references missing node '{src}'."
+                        f"Node '{target_id}' override for pin '{pin_id}' "
+                        f"references missing node '{src}'."
                     )
 
         # For each overridden pin, insert a path_mux.
@@ -293,7 +295,8 @@ def lower_authoring_multi_entry(visual: VisualFlow) -> VisualFlow:
                 if e.target == target_id and e.targetHandle == pin_id:
                     if base_edge is not None:
                         raise ValueError(
-                            f"Node '{target_id}' has multiple incoming data edges to pin '{pin_id}'. "
+                            f"Node '{target_id}' has multiple incoming data edges "
+                            f"to pin '{pin_id}'. "
                             "Use inputRouteOverrides (per-entry overrides) instead of multi-wiring."
                         )
                     base_edge = e

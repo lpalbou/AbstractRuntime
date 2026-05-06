@@ -10,9 +10,10 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.2 (`pyproject.toml`)
+- Version: 0.4.3 (`pyproject.toml`)
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
+- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.4`
 
 ```mermaid
 flowchart LR
@@ -196,7 +197,9 @@ Docs: `docs/integrations/abstractcore.md`. Code: `src/abstractruntime/integratio
 What you get:
 - effect handlers for `LLM_CALL` and `TOOL_CALLS`
 - three execution modes (ADR-0002): local / remote / hybrid
-- tool execution modes: executed (trusted local) vs passthrough (external worker boundary)
+- tool execution modes: executed (trusted local), approval-gated local execution, or passthrough (external worker boundary)
+- prompt-cache control methods on local/multi-local/remote LLM clients
+- hardened remote provider-key routing: server auth uses `Authorization`, provider overrides use `X-AbstractCore-Provider-API-Key`
 - optional MCP worker entrypoint (`abstractruntime-mcp-worker`)
 
 Quick start (local mode, requires `pip install "abstractruntime[abstractcore]"`):
@@ -209,7 +212,30 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 
 Notes:
 - Tool calls and results are durable (ledger + checkpoints). Keep secrets out of tool arguments.
+- Use `ApprovalToolExecutor(delegate=..., policy=ToolApprovalPolicy())` when a local host should auto-run safe tools but pause for user approval before write/command/unknown tools.
+- Remote `params.api_key` and `params.provider_api_key` are compatibility inputs; runtime converts them to `X-AbstractCore-Provider-API-Key` headers for current AbstractCore servers.
+- Hosts can access the configured LLM client via the factory-set `_abstractcore_llm_client` attribute for prompt-cache operations such as `get_prompt_cache_capabilities()` and `prompt_cache_prepare_modules(...)`.
 - Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
+
+Minimal approval executor wiring:
+
+```python
+from abstractruntime.integrations.abstractcore import ApprovalToolExecutor, MappingToolExecutor, ToolApprovalPolicy
+
+tools = ApprovalToolExecutor(
+    delegate=MappingToolExecutor({"write_file": write_file}),
+    policy=ToolApprovalPolicy(),
+)
+```
+
+Prompt-cache control-plane sketch:
+
+```python
+client = getattr(rt, "_abstractcore_llm_client", None)
+caps = client.get_prompt_cache_capabilities() if client is not None else {}
+if caps.get("capabilities", {}).get("supports_prepare_modules"):
+    client.prompt_cache_prepare_modules(namespace="assistant", modules=[{"module_id": "system", "system_prompt": "..."}])
+```
 
 ## MCP worker (`abstractruntime-mcp-worker`)
 
@@ -265,9 +291,36 @@ Durability and distribution:
 - `docs/provenance.md`: tamper-evident hash chain
 - `docs/evidence.md`: artifact-backed evidence capture for boundary tools
 - `docs/snapshots.md`: snapshot/bookmark model
-- `docs/workflow-bundles.md`: `.flow` bundle format and VisualFlow distribution
+- `docs/workflow-bundles.md`: `.flow` bundle format, VisualFlow distribution, and concrete multi-entry fan-in metadata
+- VisualFlow multi-entry fan-in is lowered into internal `join_exec` and `path_mux` nodes when authoring JSON uses `entryRoutes` and `inputRouteOverrides`.
 
-Maintainers:
+## VisualFlow multi-entry fan-in (LLM authoring note)
+
+Use this when one visual node can be entered by more than one execution route and one or more data pins should vary by route. Store metadata on the target node, not by adding multiple data edges to the same pin:
+
+```json
+{
+  "entryRoutes": [
+    {"key": "start::exec-out", "sourceNodeId": "start", "sourceHandle": "exec-out"},
+    {"key": "ask::exec-out", "sourceNodeId": "ask", "sourceHandle": "exec-out"}
+  ],
+  "inputRouteOverrides": {
+    "prompt": {
+      "ask::exec-out": {"sourceNodeId": "ask", "sourceHandle": "response"}
+    }
+  }
+}
+```
+
+Compiler semantics:
+- `entryRoutes` order defines route indices.
+- `inputRouteOverrides` maps `pinId -> routeKey -> source`.
+- The compiler inserts internal `join_exec` and `path_mux` nodes.
+- The runtime persists the previous node and exec handle, so route choice survives waits/restarts.
+- Stale `entryRoutes` are rejected if they no longer match the incoming `exec-in` edges.
+
+## Maintainers
+
 - `CONTRIBUTING.md`: dev setup + guidelines
 - `SECURITY.md`: responsible disclosure
 - `ACKNOWLEDGMENTS.md`: dependency credits

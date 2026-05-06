@@ -18,7 +18,7 @@ Optional (LLM + tools via AbstractCore):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This installs AbstractCore 2.13.4 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, and current tool behavior.
+This installs AbstractCore 2.13.5 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, and current tool behavior.
 
 ## Mental model (source of truth)
 

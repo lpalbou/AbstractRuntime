@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("abstractflow")
+pytest.importorskip("abstractmemory")
+pytest.importorskip("lancedb")
+
 from abstractmemory import LanceDBTripleStore
 from abstractruntime.core.runtime import Runtime
 from abstractruntime.integrations.abstractmemory.effect_handlers import build_memory_kg_effect_handlers
@@ -169,4 +175,3 @@ def test_visual_memory_kg_query_propagates_active_memory_outputs(tmp_path) -> No
     assert result["active_memory_text"].startswith("## KG ACTIVE MEMORY")
     assert int(result.get("estimated_tokens") or 0) > 0
     assert int(result.get("count") or 0) == 1
-

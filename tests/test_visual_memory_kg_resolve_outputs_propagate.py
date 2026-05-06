@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("abstractflow")
+pytest.importorskip("abstractmemory")
+
 from abstractmemory import InMemoryTripleStore
 from abstractruntime.core.runtime import Runtime
 from abstractruntime.integrations.abstractmemory.effect_handlers import build_memory_kg_effect_handlers
@@ -158,4 +163,3 @@ def test_visual_memory_kg_resolve_propagates_candidates() -> None:
     assert isinstance(candidates, list)
     assert candidates and isinstance(candidates[0], dict)
     assert candidates[0].get("id") == "ex:person-noonien-soong"
-

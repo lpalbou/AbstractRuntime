@@ -1,0 +1,55 @@
+site_name: AbstractRuntime
+site_description: Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.
+site_url: https://www.lpalbou.info/AbstractRuntime/
+repo_url: https://github.com/lpalbou/abstractruntime
+repo_name: lpalbou/abstractruntime
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    not_found: ignore
+    unrecognized_links: ignore
+
+nav:
+  - Home: README.md
+  - Getting Started: getting-started.md
+  - API Reference: api.md
+  - Architecture: architecture.md
+  - AbstractCore Integration: integrations/abstractcore.md
+  - Tools and Comms: tools-comms.md
+  - MCP Worker: mcp-worker.md
+  - Workflow Bundles: workflow-bundles.md
+  - Snapshots: snapshots.md
+  - Provenance: provenance.md
+  - Evidence: evidence.md
+  - Limits: limits.md
+  - FAQ: faq.md
+  - Manual Testing: manual_testing.md
+  - Design:
+      - Overview: proposal.md
+      - ADR Index: adr/README.md
+      - Layered Coupling: adr/0001_layered_coupling_with_abstractcore.md
+      - Execution Modes: adr/0002_execution_modes_local_remote_hybrid.md
+      - Hash-Chained Ledger: adr/0003_provenance_tamper_evident_hash_chain.md

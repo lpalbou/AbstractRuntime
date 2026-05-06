@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("abstractflow")
+pytest.importorskip("abstractmemory")
+pytest.importorskip("lancedb")
+
 from abstractmemory import LanceDBTripleStore
 from abstractruntime.core.runtime import Runtime
 from abstractruntime.integrations.abstractmemory.effect_handlers import build_memory_kg_effect_handlers

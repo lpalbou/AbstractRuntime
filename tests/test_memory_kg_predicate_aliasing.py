@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("abstractmemory")
+
 from abstractmemory import InMemoryTripleStore
 from abstractruntime.core.models import Effect, EffectType, RunState
 from abstractruntime.integrations.abstractmemory.effect_handlers import build_memory_kg_effect_handlers

@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.4 or newer so the hardened server auth model, provider-key header routing, prompt-cache control plane, and current tool catalog are available.
+The `abstractcore` extra installs AbstractCore 2.13.5 or newer so the hardened server auth model, provider-key header routing, prompt-cache control plane, and current tool catalog are available.
 
 MCP worker entrypoint (default toolsets over stdio):
 
@@ -168,7 +168,7 @@ sr = create_scheduled_runtime(
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e ".[abstractcore,mcp-worker]"
+python -m pip install -e ".[abstractcore,mcp-worker,test,docs]"
 python -m pytest -q
 ```
 

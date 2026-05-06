@@ -112,4 +112,3 @@ def test_tool_approval_resume_denied_returns_tool_errors() -> None:
     assert isinstance(results, list)
     assert results and results[0].get("success") is False
     assert "Denied by user" in str(results[0].get("error") or "")
-

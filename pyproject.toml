@@ -42,12 +42,25 @@ dependencies = [
 [project.optional-dependencies]
 # Enables `abstractruntime.integrations.abstractcore.*` imports.
 abstractcore = [
-  "abstractcore>=2.13.4",
+  "abstractcore>=2.13.5",
 ]
 
 # Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
 mcp-worker = [
-  "abstractcore[tools]>=2.13.4",
+  "abstractcore[tools]>=2.13.5",
+]
+
+# CI/test dependencies. The workflow runs the basic contract suite plus focused
+# runtime/AbstractCore integration tests that do not require real model servers.
+test = [
+  "pytest>=7.0.0",
+]
+
+# Documentation site dependencies.
+docs = [
+  "mkdocs>=1.6.0",
+  "mkdocs-material>=9.0.0",
+  "pymdown-extensions>=10.0",
 ]
 
 [project.scripts]
@@ -56,6 +69,8 @@ abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_work
 [project.urls]
 "AbstractCore (website)" = "https://www.abstractcore.ai/"
 "AbstractRuntime (GitHub)" = "https://github.com/lpalbou/abstractruntime"
+"Documentation" = "https://www.lpalbou.info/AbstractRuntime/"
+"Changelog" = "https://github.com/lpalbou/abstractruntime/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abstractruntime"]

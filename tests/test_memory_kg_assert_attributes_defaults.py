@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("abstractmemory")
+
 from abstractmemory import InMemoryTripleStore
 from abstractruntime.core.models import Effect, EffectType, RunState
 from abstractruntime.integrations.abstractmemory.effect_handlers import build_memory_kg_effect_handlers
@@ -72,4 +76,3 @@ def test_memory_kg_assert_applies_attributes_defaults_without_overriding() -> No
     assert attrs_picard.get("persona_id") == "default"
     assert attrs_picard.get("extractor_policy_version") == "v1"
     assert attrs_picard.get("evidence_quote") == "should_not_override"
-

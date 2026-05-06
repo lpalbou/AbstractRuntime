@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.4 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, and current tool catalog.
+This extra installs AbstractCore 2.13.5 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, and current tool catalog.
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 

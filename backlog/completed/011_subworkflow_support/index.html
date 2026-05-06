@@ -1,0 +1,1903 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/011_subworkflow_support/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>011 subworkflow support - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#011_subworkflow_support-completed" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              011 subworkflow support
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#011_subworkflow_support-completed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        011_subworkflow_support (completed)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Final Report
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Final Report">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-was-implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Was Implemented
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architecture-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture Decision
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-modified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files Modified
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendations-for-next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations for Next Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation Summary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implementation Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parent-child-tracking-added-in-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parent-Child Tracking (Added in Review)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-modified_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files Modified
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#test-coverage-13-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Coverage (13 tests)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-analysis-for-multi-agent-systems" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture Analysis for Multi-Agent Systems
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture Analysis for Multi-Agent Systems">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#current-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current Capabilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execution-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#distributed-execution-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distributed Execution Considerations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cancellation-support-added-in-final-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancellation Support (Added in Final Review)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cancellation Support (Added in Final Review)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#runstatuscancelled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RunStatus.CANCELLED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cancel_run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cancel_run()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cancel_with_children" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cancel_with_children()
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patterns-for-advanced-use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Patterns for Advanced Use Cases
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Patterns for Advanced Use Cases">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pattern-1-timeout-with-deadline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 1: Timeout with Deadline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-2-parallel-fan-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 2: Parallel Fan-Out
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-3-distributed-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 3: Distributed Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations-for-next-steps_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations for Next Steps
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommendations for Next Steps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#immediate-high-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Immediate (High Priority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#medium-term" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Medium Term
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#future-abstractflow-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future (AbstractFlow Integration)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicitly-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicitly Deferred
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#effect-payload-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Effect Payload Schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Effect Payload Schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-sync-completed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response (Sync, Completed)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-async" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response (Async)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#waitstate-sync-child-waiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WaitState (Sync, Child Waiting)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#original-proposal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Original Proposal
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Original Proposal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Goal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#context-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context / problem
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#proposed-design-minimal-durable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed design (minimal + durable)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed design (minimal + durable)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-subworkflow-registry-interface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A) Subworkflow registry interface
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-effect-payload-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B) Effect payload schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-execution-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C) Execution semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#d-resume-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        D) Resume propagation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-to-add-modify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files to add / modify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acceptance criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#test-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test plan
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+  <h1>011 subworkflow support</h1>
+
+<h2 id="011_subworkflow_support-completed">011_subworkflow_support (completed)<a class="headerlink" href="#011_subworkflow_support-completed" title="Permanent link">&para;</a></h2>
+<p><strong>Status</strong>: Completed<br />
+<strong>Completed</strong>: 2025-12-13<br />
+<strong>Final Review</strong>: 2025-12-13</p>
+<hr />
+<h2 id="final-report">Final Report<a class="headerlink" href="#final-report" title="Permanent link">&para;</a></h2>
+<h3 id="what-was-implemented">What Was Implemented<a class="headerlink" href="#what-was-implemented" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Description</th>
+<th>Tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>START_SUBWORKFLOW</code> effect</td>
+<td>Sync and async modes for workflow composition</td>
+<td>5</td>
+</tr>
+<tr>
+<td><code>parent_run_id</code> tracking</td>
+<td>Parent-child relationship in RunState</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>list_children()</code></td>
+<td>Query child runs by parent</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>resume_subworkflow_parent()</code></td>
+<td>Auto-resume parent when child completes</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>RunStatus.CANCELLED</code></td>
+<td>Explicit cancellation status</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>cancel_run()</code></td>
+<td>Cancel a single run</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>cancel_with_children()</code></td>
+<td>Cascading cancellation</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total: 18 subworkflow tests, 75 tests overall (all passing)</strong></p>
+<h3 id="architecture-decision">Architecture Decision<a class="headerlink" href="#architecture-decision" title="Permanent link">&para;</a></h3>
+<p>After thorough analysis, we determined that the subworkflow implementation should remain <strong>minimal and focused</strong>. The following were explicitly <strong>not added</strong> to the kernel:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Reason Not Added</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Timeout as effect parameter</td>
+<td>Achievable with WAIT_UNTIL pattern (documented)</td>
+</tr>
+<tr>
+<td>PARALLEL_SUBWORKFLOWS effect</td>
+<td>Achievable with async + polling pattern (documented)</td>
+</tr>
+<tr>
+<td>Remote execution primitives</td>
+<td>Belongs in AbstractFlow, not the kernel</td>
+</tr>
+</tbody>
+</table>
+<p>The kernel provides <strong>primitives</strong>; AbstractFlow will provide <strong>patterns</strong>.</p>
+<h3 id="files-modified">Files Modified<a class="headerlink" href="#files-modified" title="Permanent link">&para;</a></h3>
+<p><strong>Core:</strong>
+- <code>src/abstractruntime/core/models.py</code> - Added <code>parent_run_id</code>, <code>RunStatus.CANCELLED</code>
+- <code>src/abstractruntime/core/runtime.py</code> - Subworkflow handler, <code>cancel_run()</code></p>
+<p><strong>Storage:</strong>
+- <code>src/abstractruntime/storage/base.py</code> - Added <code>list_children()</code> protocol
+- <code>src/abstractruntime/storage/in_memory.py</code> - Implemented <code>list_children()</code>
+- <code>src/abstractruntime/storage/json_files.py</code> - Implemented <code>list_children()</code>, <code>parent_run_id</code> persistence</p>
+<p><strong>Scheduler:</strong>
+- <code>src/abstractruntime/scheduler/scheduler.py</code> - <code>resume_subworkflow_parent()</code>, <code>cancel_with_children()</code>
+- <code>src/abstractruntime/scheduler/convenience.py</code> - Exposed methods on ScheduledRuntime</p>
+<p><strong>Tests:</strong>
+- <code>tests/test_subworkflow.py</code> - 18 comprehensive tests</p>
+<h3 id="recommendations-for-next-steps">Recommendations for Next Steps<a class="headerlink" href="#recommendations-for-next-steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Artifact Store (009)</strong> - High priority for multi-agent systems</li>
+<li><strong>Effect Retries/Idempotency (013)</strong> - Required for production reliability</li>
+<li><strong>AbstractFlow Integration</strong> - Build higher-level patterns on these primitives</li>
+</ol>
+<hr />
+<h2 id="implementation-summary">Implementation Summary<a class="headerlink" href="#implementation-summary" title="Permanent link">&para;</a></h2>
+<h3 id="core-features">Core Features<a class="headerlink" href="#core-features" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>START_SUBWORKFLOW</code> effect handler in <code>runtime.py</code></li>
+<li><strong>Sync mode</strong>: Blocks parent until child completes, waits, or fails</li>
+<li><strong>Async mode</strong>: Returns immediately with <code>sub_run_id</code> for fire-and-forget patterns</li>
+<li>Uses existing <code>WorkflowRegistry</code> for workflow lookup</li>
+<li>Child runs have independent state and ledger entries</li>
+</ul>
+<h3 id="parent-child-tracking-added-in-review">Parent-Child Tracking (Added in Review)<a class="headerlink" href="#parent-child-tracking-added-in-review" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>RunState.parent_run_id</code> field tracks workflow hierarchy</li>
+<li><code>list_children()</code> method on run stores to query child runs</li>
+<li><code>resume_subworkflow_parent()</code> on Scheduler for auto-resuming parents when children complete</li>
+</ul>
+<h3 id="files-modified_1">Files Modified<a class="headerlink" href="#files-modified_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/abstractruntime/core/models.py</code> - Added <code>parent_run_id</code> field</li>
+<li><code>src/abstractruntime/core/runtime.py</code> - Subworkflow effect handler</li>
+<li><code>src/abstractruntime/storage/base.py</code> - Added <code>list_children()</code> to QueryableRunStore</li>
+<li><code>src/abstractruntime/storage/in_memory.py</code> - Implemented <code>list_children()</code></li>
+<li><code>src/abstractruntime/storage/json_files.py</code> - Implemented <code>list_children()</code>, added <code>parent_run_id</code> persistence</li>
+<li><code>src/abstractruntime/scheduler/scheduler.py</code> - Added <code>resume_subworkflow_parent()</code></li>
+<li><code>src/abstractruntime/scheduler/convenience.py</code> - Exposed <code>resume_subworkflow_parent()</code> on ScheduledRuntime</li>
+</ul>
+<h3 id="test-coverage-13-tests">Test Coverage (13 tests)<a class="headerlink" href="#test-coverage-13-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Sync mode: child completes, child waits, child fails</li>
+<li>Async mode: parent continues immediately</li>
+<li>Nested workflows (3 levels deep)</li>
+<li>Error cases: missing registry, unknown workflow, missing workflow_id</li>
+<li>Integration with ScheduledRuntime</li>
+<li>Parent-child tracking and auto-resume</li>
+</ul>
+<hr />
+<h2 id="architecture-analysis-for-multi-agent-systems">Architecture Analysis for Multi-Agent Systems<a class="headerlink" href="#architecture-analysis-for-multi-agent-systems" title="Permanent link">&para;</a></h2>
+<h3 id="current-capabilities">Current Capabilities<a class="headerlink" href="#current-capabilities" title="Permanent link">&para;</a></h3>
+<p>The subworkflow implementation provides the foundation for:</p>
+<ol>
+<li>
+<p><strong>Agent Composition</strong>: An agent is a workflow. A supervisor agent can spawn specialist agents as subworkflows.</p>
+</li>
+<li>
+<p><strong>Memory Pipelines</strong>: Background memory maintenance jobs can run as subworkflows.</p>
+</li>
+<li>
+<p><strong>Reusable Building Blocks</strong>: Common patterns (search, summarize, validate) can be packaged as workflows and composed.</p>
+</li>
+</ol>
+<h3 id="execution-semantics">Execution Semantics<a class="headerlink" href="#execution-semantics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Parent Behavior</th>
+<th>Child Behavior</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sync</td>
+<td>Blocks until child done</td>
+<td>Runs in-process</td>
+<td>Sequential agent handoff</td>
+</tr>
+<tr>
+<td>Async</td>
+<td>Continues immediately</td>
+<td>Started but not ticked</td>
+<td>Fire-and-forget tasks</td>
+</tr>
+</tbody>
+</table>
+<h3 id="distributed-execution-considerations">Distributed Execution Considerations<a class="headerlink" href="#distributed-execution-considerations" title="Permanent link">&para;</a></h3>
+<p>The current implementation runs subworkflows <strong>in-process</strong>. For distributed scenarios:</p>
+<ol>
+<li>
+<p><strong>Shared Storage</strong>: Parent and child share the same <code>RunStore</code> and <code>LedgerStore</code>. For distributed execution, use a shared backend (e.g., PostgreSQL, Redis).</p>
+</li>
+<li>
+<p><strong>Remote Subworkflow Pattern</strong>: For cross-server execution:</p>
+</li>
+<li>Use async mode to start the subworkflow</li>
+<li>Return <code>WAITING</code> with <code>WaitReason.SUBWORKFLOW</code></li>
+<li>A remote worker picks up the child run and executes it</li>
+<li>
+<p>When child completes, call <code>resume_subworkflow_parent()</code> to continue parent</p>
+</li>
+<li>
+<p><strong>Artifact Passing</strong>: For workflows that need artifacts from previous steps:</p>
+</li>
+<li>Store artifacts by reference (see backlog 009_artifact_store)</li>
+<li>Pass artifact IDs in <code>vars</code> between workflows</li>
+</ol>
+<hr />
+<h2 id="cancellation-support-added-in-final-review">Cancellation Support (Added in Final Review)<a class="headerlink" href="#cancellation-support-added-in-final-review" title="Permanent link">&para;</a></h2>
+<h3 id="runstatuscancelled">RunStatus.CANCELLED<a class="headerlink" href="#runstatuscancelled" title="Permanent link">&para;</a></h3>
+<p>Added <code>CANCELLED</code> status for explicit run cancellation (distinct from <code>FAILED</code>).</p>
+<h3 id="cancel_run">cancel_run()<a class="headerlink" href="#cancel_run" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;User requested&quot;</span><span class="p">)</span>
+</code></pre></div>
+Cancels a single run. Only RUNNING or WAITING runs can be cancelled.</p>
+<h3 id="cancel_with_children">cancel_with_children()<a class="headerlink" href="#cancel_with_children" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><span class="n">scheduler</span><span class="o">.</span><span class="n">cancel_with_children</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Parent cancelled&quot;</span><span class="p">)</span>
+<span class="c1"># Returns list of all cancelled runs</span>
+</code></pre></div>
+Cascading cancellation that traverses the parent-child tree.</p>
+<hr />
+<h2 id="patterns-for-advanced-use-cases">Patterns for Advanced Use Cases<a class="headerlink" href="#patterns-for-advanced-use-cases" title="Permanent link">&para;</a></h2>
+<p>The subworkflow primitives support advanced patterns without adding kernel complexity.</p>
+<h3 id="pattern-1-timeout-with-deadline">Pattern 1: Timeout with Deadline<a class="headerlink" href="#pattern-1-timeout-with-deadline" title="Permanent link">&para;</a></h3>
+<p>Use <code>WAIT_UNTIL</code> combined with async subworkflow:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">start_with_timeout</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="n">deadline</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
+    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;deadline&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">deadline</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
+            <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">START_SUBWORKFLOW</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;workflow_id&quot;</span><span class="p">:</span> <span class="s2">&quot;slow_task&quot;</span><span class="p">,</span> <span class="s2">&quot;async&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;task_info&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;wait_for_deadline&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">wait_for_deadline</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
+            <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;deadline&quot;</span><span class="p">]},</span>
+        <span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;check_result&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">check_result</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;task_info&quot;</span><span class="p">][</span><span class="s2">&quot;sub_run_id&quot;</span><span class="p">]</span>
+    <span class="n">child_state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">sub_run_id</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">child_state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;check&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="n">child_state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># Timeout - cancel child and return error</span>
+        <span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">sub_run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timeout&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;check&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;timeout&quot;</span><span class="p">})</span>
+</code></pre></div>
+<h3 id="pattern-2-parallel-fan-out">Pattern 2: Parallel Fan-Out<a class="headerlink" href="#pattern-2-parallel-fan-out" title="Permanent link">&para;</a></h3>
+<p>Start multiple async subworkflows, then poll for completion:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">fan_out</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="c1"># Start multiple children async</span>
+    <span class="n">sub_ids</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;web&quot;</span><span class="p">,</span> <span class="s2">&quot;docs&quot;</span><span class="p">,</span> <span class="s2">&quot;knowledge_graph&quot;</span><span class="p">]:</span>
+        <span class="n">sub_id</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">(</span>
+            <span class="n">workflow</span><span class="o">=</span><span class="n">search_workflow</span><span class="p">,</span>
+            <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="n">source</span><span class="p">,</span> <span class="s2">&quot;query&quot;</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;query&quot;</span><span class="p">]},</span>
+            <span class="n">parent_run_id</span><span class="o">=</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">sub_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">sub_id</span><span class="p">)</span>
+    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;sub_ids&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sub_ids</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;fan_out&quot;</span><span class="p">,</span> <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;poll_children&quot;</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">poll_children</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="c1"># Check if all children completed</span>
+    <span class="n">all_done</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">sub_id</span> <span class="ow">in</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;sub_ids&quot;</span><span class="p">]:</span>
+        <span class="n">state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">sub_id</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
+            <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="ow">in</span> <span class="p">(</span><span class="n">RunStatus</span><span class="o">.</span><span class="n">RUNNING</span><span class="p">,</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">WAITING</span><span class="p">):</span>
+            <span class="n">all_done</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="k">if</span> <span class="n">all_done</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;poll&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;results&quot;</span><span class="p">:</span> <span class="n">results</span><span class="p">})</span>
+
+    <span class="c1"># Wait briefly then poll again</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;poll&quot;</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="o">...</span><span class="p">}),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;poll_children&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+</code></pre></div>
+<h3 id="pattern-3-distributed-execution">Pattern 3: Distributed Execution<a class="headerlink" href="#pattern-3-distributed-execution" title="Permanent link">&para;</a></h3>
+<p>For cross-server execution with shared storage:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Server A: Start subworkflow async</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">start_remote_task</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
+            <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">START_SUBWORKFLOW</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;workflow_id&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu_task&quot;</span><span class="p">,</span> <span class="s2">&quot;async&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;task_info&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;wait_for_completion&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">wait_for_completion</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
+    <span class="c1"># Return WAITING - external system will resume when child completes</span>
+    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;task_info&quot;</span><span class="p">][</span><span class="s2">&quot;sub_run_id&quot;</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
+            <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_EVENT</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;wait_key&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;subworkflow:</span><span class="si">{</span><span class="n">sub_run_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;child_output&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+<span class="c1"># Server B (GPU worker): Poll for pending child runs and execute</span>
+<span class="n">pending</span> <span class="o">=</span> <span class="n">run_store</span><span class="o">.</span><span class="n">list_runs</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="n">RunStatus</span><span class="o">.</span><span class="n">RUNNING</span><span class="p">,</span> <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;gpu_task&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">run</span> <span class="ow">in</span> <span class="n">pending</span><span class="p">:</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">gpu_workflow</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
+        <span class="c1"># Resume parent on Server A</span>
+        <span class="n">scheduler</span><span class="o">.</span><span class="n">resume_subworkflow_parent</span><span class="p">(</span>
+            <span class="n">child_run_id</span><span class="o">=</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span>
+            <span class="n">child_output</span><span class="o">=</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">,</span>
+        <span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="recommendations-for-next-steps_1">Recommendations for Next Steps<a class="headerlink" href="#recommendations-for-next-steps_1" title="Permanent link">&para;</a></h2>
+<h3 id="immediate-high-priority">Immediate (High Priority)<a class="headerlink" href="#immediate-high-priority" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Implement Artifact Store (009)</strong>: Required for passing large payloads between workflows without bloating <code>RunState.vars</code>.</p>
+</li>
+<li>
+<p><strong>Implement Effect Retries/Idempotency (013)</strong>: Required for production reliability when LLM calls or tools fail mid-execution.</p>
+</li>
+</ol>
+<h3 id="medium-term">Medium Term<a class="headerlink" href="#medium-term" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Subworkflow Observability</strong>: Add helper functions for:</li>
+<li>Tree visualization of parent-child relationships</li>
+<li>Aggregate status of workflow trees</li>
+</ol>
+<h3 id="future-abstractflow-integration">Future (AbstractFlow Integration)<a class="headerlink" href="#future-abstractflow-integration" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Declarative Subworkflow Nodes</strong>: In AbstractFlow, provide a high-level DSL for subworkflow composition.</p>
+</li>
+<li>
+<p><strong>Built-in Parallel/Fan-Out</strong>: AbstractFlow can provide higher-level patterns that compile down to the primitives shown above.</p>
+</li>
+</ol>
+<h3 id="explicitly-deferred">Explicitly Deferred<a class="headerlink" href="#explicitly-deferred" title="Permanent link">&para;</a></h3>
+<p>The following were considered but intentionally not added to the kernel:</p>
+<ul>
+<li><strong>Timeout as effect parameter</strong>: Can be achieved with WAIT_UNTIL pattern</li>
+<li><strong>PARALLEL_SUBWORKFLOWS effect</strong>: Can be achieved with async + polling pattern</li>
+<li><strong>Remote execution primitives</strong>: Belongs in AbstractFlow, not the kernel</li>
+</ul>
+<hr />
+<h2 id="effect-payload-schema">Effect Payload Schema<a class="headerlink" href="#effect-payload-schema" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_workflow_id&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;vars&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;value&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;async&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="response-sync-completed">Response (Sync, Completed)<a class="headerlink" href="#response-sync-completed" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;child_output&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="response-async">Response (Async)<a class="headerlink" href="#response-async" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;async&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="waitstate-sync-child-waiting">WaitState (Sync, Child Waiting)<a class="headerlink" href="#waitstate-sync-child-waiting" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subworkflow&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;wait_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subworkflow:{sub_run_id}&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;sub_workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_workflow_id&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;sub_waiting&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;wait_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_prompt&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="original-proposal">Original Proposal<a class="headerlink" href="#original-proposal" title="Permanent link">&para;</a></h2>
+<h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
+<p>Implement <code>EffectType.START_SUBWORKFLOW</code> so a workflow can compose other workflows ("workflow-as-node").</p>
+<p>This is the kernel primitive that enables:
+- multi-agent orchestration (an agent is a workflow)
+- memory maintenance pipelines (memory jobs as workflows)
+- reusable building blocks in AbstractFlow</p>
+<h3 id="context-problem">Context / problem<a class="headerlink" href="#context-problem" title="Permanent link">&para;</a></h3>
+<p>We already model composition in <code>EffectType.START_SUBWORKFLOW</code>, but the runtime currently has <strong>no handler</strong> for it.</p>
+<p>Without a first-class subworkflow primitive, higher-level systems will re-implement composition inconsistently (and break durability/resume semantics).</p>
+<h3 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No Temporal-like distributed orchestration semantics.</li>
+<li>No cross-process worker leasing.</li>
+<li>No full workflow registry product/UX (that belongs to AbstractFlow).</li>
+</ul>
+<hr />
+<h3 id="proposed-design-minimal-durable">Proposed design (minimal + durable)<a class="headerlink" href="#proposed-design-minimal-durable" title="Permanent link">&para;</a></h3>
+<h4 id="a-subworkflow-registry-interface">A) Subworkflow registry interface<a class="headerlink" href="#a-subworkflow-registry-interface" title="Permanent link">&para;</a></h4>
+<p>A subworkflow must be referenced by a stable id (string), since effects must be JSON.</p>
+<p><strong>Already implemented</strong>: <code>WorkflowRegistry</code> exists in <code>abstractruntime.scheduler.registry</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime</span><span class="w"> </span><span class="kn">import</span> <span class="n">WorkflowRegistry</span>
+
+<span class="n">registry</span> <span class="o">=</span> <span class="n">WorkflowRegistry</span><span class="p">()</span>
+<span class="n">registry</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">my_workflow</span><span class="p">)</span>
+<span class="n">registry</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">workflow_id</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkflowSpec</span>
+<span class="n">registry</span><span class="o">.</span><span class="n">get_or_raise</span><span class="p">(</span><span class="n">workflow_id</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkflowSpec</span>
+</code></pre></div>
+<p>The scheduler already uses this. For subworkflows, we can reuse the same registry.</p>
+<h4 id="b-effect-payload-schema">B) Effect payload schema<a class="headerlink" href="#b-effect-payload-schema" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;deepsearch_v1&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;vars&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sync&quot;</span><span class="w"> </span><span class="err">|</span><span class="w"> </span><span class="s2">&quot;async&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;result_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional.override&quot;</span><span class="w"> </span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Notes:
+- <code>vars</code> are the input variables for the child run.
+- <code>mode=sync</code> runs the subworkflow in-process until it blocks or completes.
+- <code>mode=async</code> starts it and returns a WAIT state immediately.</p>
+<h4 id="c-execution-semantics">C) Execution semantics<a class="headerlink" href="#c-execution-semantics" title="Permanent link">&para;</a></h4>
+<p><strong>Mode: sync</strong>
+- Start a child run (<code>child_run_id = runtime.start(child_workflow, vars, actor_id=parent.actor_id)</code>)
+- Tick it until:
+  - completed → return <code>completed({child_run_id, output})</code>
+  - failed → return <code>failed("child failed: ...")</code>
+  - waiting → return <code>waiting(wait=WaitState(...))</code> where:
+    - <code>reason=JOB</code> or <code>EVENT</code>
+    - <code>details</code> includes <code>child_run_id</code> and child wait state</p>
+<p><strong>Mode: async</strong>
+- Start child run
+- Return <code>waiting(wait=WaitState(reason=JOB, wait_key=f"sub:{child_run_id}", details={child_run_id}))</code>
+- The host (scheduler/worker) drives the child run and resumes the parent when done.</p>
+<h4 id="d-resume-propagation">D) Resume propagation<a class="headerlink" href="#d-resume-propagation" title="Permanent link">&para;</a></h4>
+<p>Two acceptable designs:</p>
+<p>1) <strong>Host-driven</strong> (simplest): parent is waiting on <code>sub:{child_run_id}</code>; the host resumes parent with the child output.
+2) <strong>Runtime-driven</strong> (more complex): parent resume handler detects <code>details.child_run_id</code> and forwards resume payload to the child, then continues.</p>
+<p>For v0.1/v0.2, prefer <strong>host-driven</strong> to avoid cross-run coupling inside the kernel.</p>
+<hr />
+<h3 id="files-to-add-modify">Files to add / modify<a class="headerlink" href="#files-to-add-modify" title="Permanent link">&para;</a></h3>
+<ul>
+<li>✅ <code>WorkflowRegistry</code> already exists in <code>src/abstractruntime/scheduler/registry.py</code></li>
+<li>Add effect handler for <code>EffectType.START_SUBWORKFLOW</code> in <code>src/abstractruntime/core/runtime.py</code></li>
+<li>Add tests:</li>
+<li>sync subworkflow completes</li>
+<li>sync subworkflow waits and parent becomes waiting</li>
+<li>async subworkflow starts and returns wait</li>
+</ul>
+<hr />
+<h3 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A workflow can start a subworkflow by id and receive its output deterministically.</li>
+<li>Subworkflow runs are durable: child run state + ledger are persisted independently.</li>
+<li>Waiting subworkflow does not deadlock the parent; parent WAIT state is durable and resumable.</li>
+</ul>
+<h3 id="test-plan">Test plan<a class="headerlink" href="#test-plan" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Unit tests using in-memory stores (no external services).</li>
+<li>One file-based persistence test ensuring both parent+child survive restart.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

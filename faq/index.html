@@ -1,0 +1,1562 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/faq/">
+      
+      
+        <link rel="prev" href="../limits/">
+      
+      
+        <link rel="next" href="../manual_testing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>FAQ - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#faq" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              FAQ
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-abstractruntime-in-one-sentence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is AbstractRuntime (in one sentence)?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-abstractruntime-an-agent-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is AbstractRuntime an agent framework?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-does-abstractruntime-relate-to-abstractcore-abstractframework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How does AbstractRuntime relate to AbstractCore / AbstractFramework?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-is-the-public-api-documented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where is the public API documented?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-pauseresume-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do pause/resume work?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-time-based-waiting-wait_until-progress-automatically" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does time-based waiting (WAIT_UNTIL) progress automatically?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-resume-a-waiting-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I resume a waiting run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-is-my-ask_user-answer-a-dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why is my ASK_USER answer a dict?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-storage-backends-are-included" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What storage backends are included?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-must-be-json-serializable-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What must be JSON-serializable (and why)?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-run-llm-calls-and-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run LLM calls and tools?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What are “local / remote / hybrid” execution modes?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-does-passthrough-tool-mode-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What does passthrough tool mode mean?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-require-approval-before-tools-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I require approval before tools run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-should-provider-api-keys-be-passed-to-a-remote-abstractcore-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How should provider API keys be passed to a remote AbstractCore server?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-abstractruntime-retry-effects-llmtools-is-it-idempotent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does AbstractRuntime retry effects (LLM/tools)? Is it idempotent?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-the-ledger-tamper-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is the ledger tamper-proof?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-stream-progress-updates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I stream progress updates?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-evidence-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is “evidence capture”?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-are-snapshots-and-are-they-safe-to-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What are snapshots and are they safe to restore?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-workflowbundles-flow-relate-to-workflowspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do WorkflowBundles (.flow) relate to WorkflowSpec?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-run-the-mcp-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run the MCP worker?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-should-i-look-for-runnable-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should I look for runnable examples?
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-abstractruntime-in-one-sentence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is AbstractRuntime (in one sentence)?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-abstractruntime-an-agent-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is AbstractRuntime an agent framework?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-does-abstractruntime-relate-to-abstractcore-abstractframework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How does AbstractRuntime relate to AbstractCore / AbstractFramework?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-is-the-public-api-documented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where is the public API documented?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-pauseresume-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do pause/resume work?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-time-based-waiting-wait_until-progress-automatically" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does time-based waiting (WAIT_UNTIL) progress automatically?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-resume-a-waiting-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I resume a waiting run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-is-my-ask_user-answer-a-dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why is my ASK_USER answer a dict?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-storage-backends-are-included" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What storage backends are included?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-must-be-json-serializable-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What must be JSON-serializable (and why)?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-run-llm-calls-and-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run LLM calls and tools?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What are “local / remote / hybrid” execution modes?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-does-passthrough-tool-mode-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What does passthrough tool mode mean?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-require-approval-before-tools-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I require approval before tools run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-should-provider-api-keys-be-passed-to-a-remote-abstractcore-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How should provider API keys be passed to a remote AbstractCore server?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-abstractruntime-retry-effects-llmtools-is-it-idempotent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does AbstractRuntime retry effects (LLM/tools)? Is it idempotent?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#is-the-ledger-tamper-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is the ledger tamper-proof?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-stream-progress-updates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I stream progress updates?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-evidence-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is “evidence capture”?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-are-snapshots-and-are-they-safe-to-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What are snapshots and are they safe to restore?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-workflowbundles-flow-relate-to-workflowspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do WorkflowBundles (.flow) relate to WorkflowSpec?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-run-the-mcp-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run the MCP worker?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-should-i-look-for-runnable-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should I look for runnable examples?
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="faq">FAQ<a class="headerlink" href="#faq" title="Permanent link">&para;</a></h1>
+<h2 id="what-is-abstractruntime-in-one-sentence">What is AbstractRuntime (in one sentence)?<a class="headerlink" href="#what-is-abstractruntime-in-one-sentence" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it runs workflow graphs as a persisted state machine with explicit waits (pause → resume) and an append-only execution ledger.<br />
+Code: <code>src/abstractruntime/core/runtime.py</code>, <code>src/abstractruntime/core/models.py</code>.</p>
+<h2 id="is-abstractruntime-an-agent-framework">Is AbstractRuntime an agent framework?<a class="headerlink" href="#is-abstractruntime-an-agent-framework" title="Permanent link">&para;</a></h2>
+<p>No. AbstractRuntime is the <strong>execution substrate</strong>. Agent logic (ReAct/CodeAct loops, prompt policies, etc.) is built <em>on top</em> of it.<br />
+Docs: <code>proposal.md</code>. Code: <code>src/abstractruntime/core/*</code>.</p>
+<h2 id="how-does-abstractruntime-relate-to-abstractcore-abstractframework">How does AbstractRuntime relate to AbstractCore / AbstractFramework?<a class="headerlink" href="#how-does-abstractruntime-relate-to-abstractcore-abstractframework" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime is the <strong>durable execution kernel</strong>. In the AbstractFramework ecosystem, it is commonly paired with:
+- <strong>AbstractCore</strong> for LLM + tool execution (<code>EffectType.LLM_CALL</code>, <code>EffectType.TOOL_CALLS</code>)<br />
+  Code: <code>src/abstractruntime/integrations/abstractcore/*</code>. Repo: <a href="https://github.com/lpalbou/abstractcore">lpalbou/abstractcore</a></p>
+<p>AbstractFramework umbrella: <a href="https://github.com/lpalbou/AbstractFramework">lpalbou/AbstractFramework</a></p>
+<h2 id="where-is-the-public-api-documented">Where is the public API documented?<a class="headerlink" href="#where-is-the-public-api-documented" title="Permanent link">&para;</a></h2>
+<ul>
+<li>API guide: <code>api.md</code></li>
+<li>Canonical export list: <code>src/abstractruntime/__init__.py</code></li>
+</ul>
+<h2 id="how-do-pauseresume-work">How do pause/resume work?<a class="headerlink" href="#how-do-pauseresume-work" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A node returns a <code>StepPlan</code> with an <code>Effect</code> (e.g. <code>ASK_USER</code>, <code>WAIT_UNTIL</code>, <code>WAIT_EVENT</code>).</li>
+<li>The runtime persists a <code>WaitState</code> into <code>RunState.waiting</code> and returns <code>status=waiting</code>.</li>
+<li>You resume by calling <code>Runtime.resume(...)</code> (or <code>ScheduledRuntime.respond(...)</code>) with the matching <code>wait_key</code>.</li>
+</ul>
+<p>Docs: <code>getting-started.md</code>, <code>architecture.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code> (<code>tick</code>, <code>resume</code>) and <code>src/abstractruntime/core/models.py</code> (<code>WaitState</code>).</p>
+<h2 id="does-time-based-waiting-wait_until-progress-automatically">Does time-based waiting (<code>WAIT_UNTIL</code>) progress automatically?<a class="headerlink" href="#does-time-based-waiting-wait_until-progress-automatically" title="Permanent link">&para;</a></h2>
+<p>Only if <strong>something drives the runtime</strong>:
+- <code>Runtime.tick(...)</code> will auto-unblock a due <code>WAIT_UNTIL</code> run <em>when called</em>.
+- The built-in <code>Scheduler</code> provides a driver loop that polls due waits and ticks runs.</p>
+<p>Docs: <code>getting-started.md</code>, <code>architecture.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code> (<code>tick</code>), <code>src/abstractruntime/scheduler/scheduler.py</code>.</p>
+<h2 id="how-do-i-resume-a-waiting-run">How do I resume a waiting run?<a class="headerlink" href="#how-do-i-resume-a-waiting-run" title="Permanent link">&para;</a></h2>
+<ul>
+<li>If you have the <code>WorkflowSpec</code>: call <code>Runtime.resume(workflow=..., run_id=..., wait_key=..., payload=...)</code>.</li>
+<li>If you use <code>create_scheduled_runtime()</code>: call <code>sr.respond(run_id, payload)</code> (it uses <code>state.waiting.wait_key</code>).</li>
+</ul>
+<p>Docs: <code>getting-started.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code>, <code>src/abstractruntime/scheduler/convenience.py</code>.</p>
+<h2 id="why-is-my-ask_user-answer-a-dict">Why is my <code>ASK_USER</code> answer a dict?<a class="headerlink" href="#why-is-my-ask_user-answer-a-dict" title="Permanent link">&para;</a></h2>
+<p><code>Runtime.resume(..., payload=...)</code> always takes a <strong>dict</strong> payload. If the wait has a <code>result_key</code>, the runtime stores that dict into <code>RunState.vars</code> at <code>result_key</code>.<br />
+Code: <code>src/abstractruntime/core/runtime.py</code> (<code>Runtime.resume</code>) and <code>src/abstractruntime/core/models.py</code> (<code>WaitState.result_key</code>).</p>
+<p>Common pattern:
+- resume with <code>{"text": "..."}</code> (host-side)
+- read <code>run.vars["my_result_key"]["text"]</code> (node-side)</p>
+<h2 id="what-storage-backends-are-included">What storage backends are included?<a class="headerlink" href="#what-storage-backends-are-included" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime includes:
+- in-memory: <code>InMemoryRunStore</code>, <code>InMemoryLedgerStore</code>
+- filesystem: <code>JsonFileRunStore</code> (checkpoints), <code>JsonlLedgerStore</code> (append-only JSONL ledger)
+- SQLite: <code>SqliteRunStore</code>, <code>SqliteLedgerStore</code></p>
+<p>Docs: <code>architecture.md</code>. Code: <code>src/abstractruntime/storage/*</code>.</p>
+<h2 id="what-must-be-json-serializable-and-why">What must be JSON-serializable (and why)?<a class="headerlink" href="#what-must-be-json-serializable-and-why" title="Permanent link">&para;</a></h2>
+<p>Everything stored in <code>RunState.vars</code> must be JSON-serializable because it is persisted as durable state.<br />
+Code: <code>src/abstractruntime/core/models.py</code> (<code>RunState</code>) and store implementations under <code>src/abstractruntime/storage/</code>.</p>
+<p>For large values, use:
+- <code>ArtifactStore</code> references (<code>src/abstractruntime/storage/artifacts.py</code>)
+- offloading wrappers (<code>OffloadingRunStore</code>, <code>OffloadingLedgerStore</code>) (<code>src/abstractruntime/storage/offloading.py</code>)</p>
+<p>Docs: <code>architecture.md</code>.</p>
+<h2 id="how-do-i-run-llm-calls-and-tools">How do I run LLM calls and tools?<a class="headerlink" href="#how-do-i-run-llm-calls-and-tools" title="Permanent link">&para;</a></h2>
+<p>LLM and tool execution are wired via the <strong>AbstractCore integration</strong>:
+- <code>EffectType.LLM_CALL</code>
+- <code>EffectType.TOOL_CALLS</code></p>
+<p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
+<h2 id="what-are-local-remote-hybrid-execution-modes">What are “local / remote / hybrid” execution modes?<a class="headerlink" href="#what-are-local-remote-hybrid-execution-modes" title="Permanent link">&para;</a></h2>
+<p>They refer to where LLM and tools execute:
+- <strong>Local</strong>: in-process LLM + local tool execution
+- <strong>Remote</strong>: HTTP to an AbstractCore server + tools typically passthrough
+- <strong>Hybrid</strong>: remote LLM + local tools</p>
+<p>Docs: <code>integrations/abstractcore.md</code>, <code>../docs/adr/0002_execution_modes_local_remote_hybrid.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/factory.py</code>.</p>
+<h2 id="what-does-passthrough-tool-mode-mean">What does passthrough tool mode mean?<a class="headerlink" href="#what-does-passthrough-tool-mode-mean" title="Permanent link">&para;</a></h2>
+<p>In passthrough mode, tool calls are <strong>not executed</strong> in-process:
+- the <code>TOOL_CALLS</code> handler returns <code>WAITING</code> with tool call details
+- an external worker/operator executes the tools
+- the host resumes the run with the tool results</p>
+<p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code> (<code>PassthroughToolExecutor</code>).</p>
+<h2 id="how-do-i-require-approval-before-tools-run">How do I require approval before tools run?<a class="headerlink" href="#how-do-i-require-approval-before-tools-run" title="Permanent link">&para;</a></h2>
+<p>Use <code>ApprovalToolExecutor</code> around a trusted local executor. Safe read-only/default bridge tools can execute immediately; write, command, email/WhatsApp, and unknown tools produce a durable approval wait. Resume with <code>{"approved": true}</code> to run the pending calls or <code>{"approved": false, "reason": "..."}</code> to return structured tool errors.</p>
+<p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>.</p>
+<h2 id="how-should-provider-api-keys-be-passed-to-a-remote-abstractcore-server">How should provider API keys be passed to a remote AbstractCore server?<a class="headerlink" href="#how-should-provider-api-keys-be-passed-to-a-remote-abstractcore-server" title="Permanent link">&para;</a></h2>
+<p>Use <code>Authorization: Bearer &lt;server-key&gt;</code> for AbstractCore server authentication. If a request needs a per-request upstream provider key, pass <code>params.provider_api_key</code> (or legacy <code>params.api_key</code>) in the runtime payload; Runtime converts it to the <code>X-AbstractCore-Provider-API-Key</code> header. Current AbstractCore servers reject provider keys in query strings or JSON bodies for security.</p>
+<p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="does-abstractruntime-retry-effects-llmtools-is-it-idempotent">Does AbstractRuntime retry effects (LLM/tools)? Is it idempotent?<a class="headerlink" href="#does-abstractruntime-retry-effects-llmtools-is-it-idempotent" title="Permanent link">&para;</a></h2>
+<p>Retry and idempotency are controlled via <code>EffectPolicy</code>:
+- idempotency keys are used to reuse prior completed results after restarts
+- retry behavior is configurable (e.g. <code>RetryPolicy</code>)</p>
+<p>Docs: <code>architecture.md</code>. Code: <code>src/abstractruntime/core/policy.py</code>, <code>src/abstractruntime/core/runtime.py</code> (effect execution + reuse).</p>
+<h2 id="is-the-ledger-tamper-proof">Is the ledger tamper-proof?<a class="headerlink" href="#is-the-ledger-tamper-proof" title="Permanent link">&para;</a></h2>
+<p>No. The built-in provenance feature is <strong>tamper-evident</strong> (hash chain), not signature-backed non-forgeability.</p>
+<p>Docs: <code>provenance.md</code>. Code: <code>src/abstractruntime/storage/ledger_chain.py</code>.</p>
+<h2 id="how-do-i-stream-progress-updates">How do I stream progress updates?<a class="headerlink" href="#how-do-i-stream-progress-updates" title="Permanent link">&para;</a></h2>
+<p>If your <code>LedgerStore</code> supports subscriptions (or is wrapped with <code>ObservableLedgerStore</code>), you can subscribe in-process:
+- <code>Runtime.subscribe_ledger(callback, run_id=...)</code></p>
+<p>Docs: <code>architecture.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code> (<code>subscribe_ledger</code>), <code>src/abstractruntime/storage/observable.py</code>.</p>
+<h2 id="what-is-evidence-capture">What is “evidence capture”?<a class="headerlink" href="#what-is-evidence-capture" title="Permanent link">&para;</a></h2>
+<p>Evidence capture records durable, artifact-backed evidence for selected external-boundary tools:
+- <code>web_search</code>, <code>fetch_url</code>, <code>execute_command</code></p>
+<p>It runs best-effort after successful <code>TOOL_CALLS</code> and requires an <code>ArtifactStore</code>.<br />
+Docs: <code>evidence.md</code>. Code: <code>src/abstractruntime/evidence/recorder.py</code>, <code>src/abstractruntime/core/runtime.py</code> (<code>_maybe_record_tool_evidence</code>, <code>list_evidence</code>, <code>load_evidence</code>).</p>
+<h2 id="what-are-snapshots-and-are-they-safe-to-restore">What are snapshots and are they safe to restore?<a class="headerlink" href="#what-are-snapshots-and-are-they-safe-to-restore" title="Permanent link">&para;</a></h2>
+<p>Snapshots are named bookmarks of run state. Restoring a snapshot is a host-level operation (load + write back into your RunStore).<br />
+Safety depends on whether workflow code/spec has changed since the snapshot was taken.</p>
+<p>Docs: <code>snapshots.md</code>. Code: <code>src/abstractruntime/storage/snapshots.py</code>.</p>
+<h2 id="how-do-workflowbundles-flow-relate-to-workflowspec">How do WorkflowBundles (<code>.flow</code>) relate to <code>WorkflowSpec</code>?<a class="headerlink" href="#how-do-workflowbundles-flow-relate-to-workflowspec" title="Permanent link">&para;</a></h2>
+<p><code>WorkflowSpec</code> is an in-memory graph of Python callables (not portable). WorkflowBundles (<code>.flow</code>) distribute <strong>VisualFlow JSON</strong> plus a manifest; hosts compile VisualFlow JSON into <code>WorkflowSpec</code> using the VisualFlow compiler.</p>
+<p>Docs: <code>workflow-bundles.md</code>, <code>architecture.md</code>. Code: <code>src/abstractruntime/workflow_bundle/*</code>, <code>src/abstractruntime/visualflow_compiler/*</code>.</p>
+<h2 id="how-do-i-run-the-mcp-worker">How do I run the MCP worker?<a class="headerlink" href="#how-do-i-run-the-mcp-worker" title="Permanent link">&para;</a></h2>
+<p>Use the <code>abstractruntime-mcp-worker</code> CLI (from the <code>mcp-worker</code> extra) and select toolsets explicitly.</p>
+<p>Docs: <code>mcp-worker.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/mcp_worker.py</code>.</p>
+<h2 id="where-should-i-look-for-runnable-examples">Where should I look for runnable examples?<a class="headerlink" href="#where-should-i-look-for-runnable-examples" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>../examples/README.md</code> (runnable scripts)</li>
+<li><code>manual_testing.md</code> (smoke tests)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

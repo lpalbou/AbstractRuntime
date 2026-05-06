@@ -1,0 +1,1494 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/architecture/">
+      
+      
+        <link rel="prev" href="../api/">
+      
+      
+        <link rel="next" href="../integrations/abstractcore/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Architecture - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#abstractruntime-architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#ecosystem-abstractframework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ecosystem (AbstractFramework)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#component-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-execution-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable execution model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Durable execution model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workflowspec-and-node-handlers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkflowSpec and node handlers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runstate-and-the-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RunState and the ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-loop-start-tick-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime loop (start / tick / resume)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#effects-built-in-vs-wired-by-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Effects: built-in vs wired by hosts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Effects: built-in vs wired by hosts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#built-in-kernel-owned-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in (kernel-owned) effects
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#host-wired-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-wired effects
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reliability-retries-idempotency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reliability: retries + idempotency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#drivers-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drivers: scheduler
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-what-you-can-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability: what you can export
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#visualflow-workflowbundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VisualFlow + WorkflowBundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#ecosystem-abstractframework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ecosystem (AbstractFramework)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#component-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-execution-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable execution model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Durable execution model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workflowspec-and-node-handlers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkflowSpec and node handlers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runstate-and-the-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RunState and the ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-loop-start-tick-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime loop (start / tick / resume)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#effects-built-in-vs-wired-by-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Effects: built-in vs wired by hosts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Effects: built-in vs wired by hosts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#built-in-kernel-owned-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in (kernel-owned) effects
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#host-wired-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-wired effects
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reliability-retries-idempotency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reliability: retries + idempotency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#drivers-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drivers: scheduler
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-what-you-can-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability: what you can export
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#visualflow-workflowbundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VisualFlow + WorkflowBundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Updated: 2026-05-06
+Version: 0.4.3 (see <code>pyproject.toml</code>)
+Scope: this describes <strong>what is implemented in this repository</strong>.</p>
+</blockquote>
+<p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
+<h2 id="ecosystem-abstractframework">Ecosystem (AbstractFramework)<a class="headerlink" href="#ecosystem-abstractframework" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime is the durable execution kernel inside the wider AbstractFramework ecosystem:
+- AbstractFramework umbrella: <a href="https://github.com/lpalbou/AbstractFramework">lpalbou/AbstractFramework</a>
+- AbstractCore (LLM + tools): <a href="https://github.com/lpalbou/abstractcore">lpalbou/abstractcore</a></p>
+<p>The runtime stays dependency-light and delegates LLM/tool execution to integrations (notably AbstractCore): <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  Host[&quot;Host app / AbstractFlow / service&quot;] --&gt;|&quot;WorkflowSpec&quot;| RT[&quot;AbstractRuntime&quot;]
+  RT --&gt;|&quot;LLM_CALL / TOOL_CALLS&quot;| AC[&quot;AbstractCore&quot;]
+  AC --&gt;|&quot;results / waits&quot;| RT
+</code></pre></div>
+<p>Key invariants (enforced by code, not convention):
+- <strong>Durable state is JSON-safe</strong>: <code>RunState.vars</code> must remain JSON-serializable (<code>src/abstractruntime/core/models.py</code>). Large payloads should be stored as artifacts and referenced (<code>src/abstractruntime/storage/artifacts.py</code>, <code>src/abstractruntime/storage/offloading.py</code>).
+- <strong>Append-only observability</strong>: every step is recorded as a <code>StepRecord</code> in a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).
+- <strong>Side effects are mediated</strong>: nodes request work via <code>Effect</code>/<code>EffectType</code>; execution happens via effect handlers (<code>src/abstractruntime/core/runtime.py</code>).</p>
+<h2 id="component-map">Component map<a class="headerlink" href="#component-map" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>flowchart TB
+  subgraph Core[&quot;core/ (execution kernel)&quot;]
+    Models[&quot;models.py\nRunState / StepPlan / Effect / WaitState / StepRecord&quot;]
+    Runtime[&quot;runtime.py\nRuntime.start / tick / resume&quot;]
+    Spec[&quot;spec.py\nWorkflowSpec&quot;]
+    Policy[&quot;policy.py\nEffectPolicy + idempotency&quot;]
+    Vars[&quot;vars.py\nnamespaces + _limits + node_traces&quot;]
+    Config[&quot;config.py\nRuntimeConfig&quot;]
+  end
+
+  subgraph Storage[&quot;storage/ (durability)&quot;]
+    RunStore[&quot;RunStore\nin_memory / json_files / sqlite&quot;]
+    LedgerStore[&quot;LedgerStore\n(+observable + hash_chain)&quot;]
+    Commands[&quot;commands.py\nCommandStore / CommandCursorStore&quot;]
+    Artifacts[&quot;ArtifactStore\nin_memory / file&quot;]
+    Offload[&quot;Offloading* wrappers\nstore large values by ref&quot;]
+    Snapshots[&quot;SnapshotStore\nin_memory / json&quot;]
+  end
+
+  subgraph Scheduler[&quot;scheduler/ (drivers)&quot;]
+    Registry[&quot;WorkflowRegistry&quot;]
+    SchedulerMod[&quot;Scheduler\npoll + resume&quot;]
+    SR[&quot;ScheduledRuntime\nconvenience&quot;]
+  end
+
+  subgraph Distribution[&quot;workflow_bundle/ + visualflow_compiler/&quot;]
+    Bundles[&quot;WorkflowBundles (.flow)\nmanifest + flows/*.json&quot;]
+    Compiler[&quot;VisualFlow compiler\nVisualFlow JSON -&gt; WorkflowSpec&quot;]
+  end
+
+  subgraph Integrations[&quot;integrations/ (optional wiring)&quot;]
+    AC[&quot;abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker&quot;]
+    AM[&quot;abstractmemory/\nMEMORY_KG_* handlers&quot;]
+  end
+
+  Runtime --&gt; RunStore
+  Runtime --&gt; LedgerStore
+  Runtime --&gt; Artifacts
+  Runtime --&gt; Policy
+  Runtime --&gt; Vars
+  Runtime --&gt; Config
+
+  SR --&gt; SchedulerMod
+  SR --&gt; Runtime
+  SchedulerMod --&gt; RunStore
+  SchedulerMod --&gt; Registry
+
+  Bundles --&gt; Compiler
+  AC --&gt; Runtime
+  AM --&gt; Runtime
+</code></pre></div>
+<h2 id="durable-execution-model">Durable execution model<a class="headerlink" href="#durable-execution-model" title="Permanent link">&para;</a></h2>
+<h3 id="workflowspec-and-node-handlers">WorkflowSpec and node handlers<a class="headerlink" href="#workflowspec-and-node-handlers" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A workflow is a <code>WorkflowSpec</code> (<code>src/abstractruntime/core/spec.py</code>): <code>workflow_id</code>, <code>entry_node</code>, <code>nodes: dict[node_id, handler]</code>.</li>
+<li>A node handler returns a <code>StepPlan</code> (<code>src/abstractruntime/core/models.py</code>):</li>
+<li><code>effect</code>: optional side-effect request (<code>Effect</code>)</li>
+<li><code>next_node</code>: move the execution cursor</li>
+<li><code>complete_output</code>: finish the run</li>
+</ul>
+<h3 id="runstate-and-the-ledger">RunState and the ledger<a class="headerlink" href="#runstate-and-the-ledger" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>RunState</code> is the durable checkpoint stored by a <code>RunStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).</li>
+<li>Each executed step appends a <code>StepRecord</code> to a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).</li>
+</ul>
+<p><strong>Invariant:</strong> values stored in <code>RunState.vars</code> must be JSON-serializable. Use artifact references for large values (<code>src/abstractruntime/storage/artifacts.py</code>) or wrap stores with <code>OffloadingRunStore</code> / <code>OffloadingLedgerStore</code> (<code>src/abstractruntime/storage/offloading.py</code>).</p>
+<h2 id="runtime-loop-start-tick-resume">Runtime loop (start / tick / resume)<a class="headerlink" href="#runtime-loop-start-tick-resume" title="Permanent link">&para;</a></h2>
+<p>Implemented in <code>src/abstractruntime/core/runtime.py</code>:</p>
+<ul>
+<li><code>Runtime.start(...)</code> creates a new <code>RunState</code> and initializes <code>_limits</code> from <code>RuntimeConfig</code> (<code>src/abstractruntime/core/config.py</code>).</li>
+<li><code>Runtime.tick(...)</code> executes nodes until the run becomes <code>WAITING</code>, <code>COMPLETED</code>, <code>FAILED</code>, or is <code>CANCELLED</code>.</li>
+<li><code>Runtime.resume(...)</code> validates the <code>wait_key</code>, writes the payload to <code>WaitState.result_key</code>, and continues execution <strong>from</strong> <code>WaitState.resume_to_node</code>.</li>
+</ul>
+<div class="highlight"><pre><span></span><code>sequenceDiagram
+  participant Host
+  participant RT as Runtime
+  participant Node as Node handler
+  participant EH as Effect handler
+  participant RS as RunStore
+  participant LS as LedgerStore
+
+  Host-&gt;&gt;RT: start(workflow, vars)
+  RT-&gt;&gt;RS: save(RunState RUNNING)
+
+  Host-&gt;&gt;RT: tick(run_id)
+  RT-&gt;&gt;Node: handler(run, ctx)
+  Node--&gt;&gt;RT: StepPlan(effect?, next_node?, complete_output?)
+
+  alt StepPlan.effect
+    RT-&gt;&gt;LS: append(StepRecord STARTED)
+    RT-&gt;&gt;EH: handle(effect)
+    EH--&gt;&gt;RT: outcome (completed|waiting|failed)
+    RT-&gt;&gt;LS: append(StepRecord COMPLETED/WAITING/FAILED)
+  end
+
+  alt outcome=waiting
+    RT-&gt;&gt;RS: save(RunState WAITING + WaitState)
+    RT--&gt;&gt;Host: RunState(waiting)
+  else outcome=completed
+    RT-&gt;&gt;RS: save(RunState RUNNING/COMPLETED)
+  end
+
+  Host-&gt;&gt;RT: resume(run_id, wait_key, payload)
+  RT-&gt;&gt;RS: save(RunState RUNNING)
+  RT-&gt;&gt;RT: tick(...)
+</code></pre></div>
+<h2 id="effects-built-in-vs-wired-by-hosts">Effects: built-in vs wired by hosts<a class="headerlink" href="#effects-built-in-vs-wired-by-hosts" title="Permanent link">&para;</a></h2>
+<h3 id="built-in-kernel-owned-effects">Built-in (kernel-owned) effects<a class="headerlink" href="#built-in-kernel-owned-effects" title="Permanent link">&para;</a></h3>
+<p>Registered in <code>Runtime._register_builtin_handlers()</code> (<code>src/abstractruntime/core/runtime.py</code>):
+- waits: <code>WAIT_EVENT</code>, <code>WAIT_UNTIL</code>, <code>ASK_USER</code>, <code>ANSWER_USER</code>
+- durable events: <code>EMIT_EVENT</code> (resumes matching <code>WAIT_EVENT</code> runs; requires <code>QueryableRunStore</code> and a workflow registry when listeners exist)
+- subworkflows: <code>START_SUBWORKFLOW</code> (requires <code>runtime.workflow_registry</code>; see <code>src/abstractruntime/scheduler/registry.py</code>)
+- memory primitives (JSON-safe): <code>MEMORY_NOTE</code>, <code>MEMORY_QUERY</code>, <code>MEMORY_TAG</code>, <code>MEMORY_COMPACT</code>, <code>MEMORY_REHYDRATE</code>
+  - <code>MEMORY_COMPACT</code> requires an <code>ArtifactStore</code>. It uses an injected <code>chat_summarizer</code> when available; otherwise it runs an internal <code>LLM_CALL</code> subworkflow and therefore requires an <code>LLM_CALL</code> handler to be wired.
+- inspection: <code>VARS_QUERY</code> (read-only access to <code>RunState.vars</code> paths; parsing helpers in <code>src/abstractruntime/core/vars.py</code>)</p>
+<h3 id="host-wired-effects">Host-wired effects<a class="headerlink" href="#host-wired-effects" title="Permanent link">&para;</a></h3>
+<p>The kernel defines the protocol; concrete integrations provide handlers:
+- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, prompt-cache control, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
+<h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Policies live in <code>src/abstractruntime/core/policy.py</code> (e.g., <code>RetryPolicy</code>, <code>NoRetryPolicy</code>, <code>compute_idempotency_key()</code>).</li>
+<li>The runtime records <code>idempotency_key</code> and <code>attempt</code> on ledger records (<code>StepRecord</code>) and can reuse prior results after restarts (<code>src/abstractruntime/core/runtime.py</code>).</li>
+</ul>
+<h2 id="storage-layer">Storage layer<a class="headerlink" href="#storage-layer" title="Permanent link">&para;</a></h2>
+<p>Interfaces: <code>src/abstractruntime/storage/base.py</code>.</p>
+<p>Included backends:
+- in-memory (tests/dev): <code>src/abstractruntime/storage/in_memory.py</code>
+- filesystem JSON/JSONL: <code>src/abstractruntime/storage/json_files.py</code>
+- SQLite: <code>src/abstractruntime/storage/sqlite.py</code></p>
+<p>Decorators/helpers:
+- <code>ObservableLedgerStore</code> for in-process subscriptions (<code>src/abstractruntime/storage/observable.py</code>, exposed via <code>Runtime.subscribe_ledger()</code>)
+- <code>HashChainedLedgerStore</code> for tamper-evidence (<code>src/abstractruntime/storage/ledger_chain.py</code>)
+- <code>ArtifactStore</code> + helpers (<code>src/abstractruntime/storage/artifacts.py</code>)
+- <code>OffloadingRunStore</code> / <code>OffloadingLedgerStore</code> to keep checkpoints bounded (<code>src/abstractruntime/storage/offloading.py</code>)
+- snapshots/bookmarks (<code>src/abstractruntime/storage/snapshots.py</code>)</p>
+<h2 id="drivers-scheduler">Drivers: scheduler<a class="headerlink" href="#drivers-scheduler" title="Permanent link">&para;</a></h2>
+<p>The scheduler is an in-process driver loop that resumes due waits and can deliver external events:
+- <code>Scheduler</code> (<code>src/abstractruntime/scheduler/scheduler.py</code>) polls <code>QueryableRunStore.list_due_wait_until(...)</code>
+- <code>ScheduledRuntime</code> + <code>create_scheduled_runtime()</code> (<code>src/abstractruntime/scheduler/convenience.py</code>) is the "zero-config" wrapper used in <code>examples/</code></p>
+<h2 id="observability-what-you-can-export">Observability: what you can export<a class="headerlink" href="#observability-what-you-can-export" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Ledger (source of truth): <code>Runtime.get_ledger(run_id)</code> (<code>src/abstractruntime/core/runtime.py</code>)</li>
+<li>Runtime-owned node traces (bounded): stored at <code>vars["_runtime"]["node_traces"]</code> (<code>src/abstractruntime/core/runtime.py</code>, helpers in <code>src/abstractruntime/core/vars.py</code>)</li>
+<li>Evidence capture for external-boundary tools (<code>web_search</code>, <code>fetch_url</code>, <code>execute_command</code>):</li>
+<li>recorder: <code>src/abstractruntime/evidence/recorder.py</code></li>
+<li>API: <code>Runtime.list_evidence(...)</code> / <code>Runtime.load_evidence(...)</code> (<code>src/abstractruntime/core/runtime.py</code>)</li>
+<li>Run history bundle export (portable replay artifact):</li>
+<li><code>export_run_history_bundle(...)</code> (<code>src/abstractruntime/history_bundle.py</code>)</li>
+</ul>
+<h2 id="visualflow-workflowbundles">VisualFlow + WorkflowBundles<a class="headerlink" href="#visualflow-workflowbundles" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime includes a compiler and a portable bundle format:
+- VisualFlow compiler: <code>src/abstractruntime/visualflow_compiler/*</code> (VisualFlow JSON -&gt; <code>WorkflowSpec</code>)
+- Multi-entry VisualFlow authoring routes are lowered into internal <code>join_exec</code> and <code>path_mux</code> nodes when a target has multiple incoming <code>exec-in</code> edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See <code>workflow-bundles.md</code> for the concrete metadata shape.
+- WorkflowBundles (<code>.flow</code>): <code>src/abstractruntime/workflow_bundle/*</code> (manifest + flows + assets)
+  - pack/unpack helpers: <code>pack_workflow_bundle(...)</code>, <code>open_workflow_bundle(...)</code></p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>../README.md</code> — install + quick start</li>
+<li><code>getting-started.md</code> — first steps</li>
+<li><code>api.md</code> — public API surface (imports + pointers)</li>
+<li><code>limits.md</code> — <code>_limits</code> and RuntimeConfig</li>
+<li><code>snapshots.md</code> — snapshot/bookmark stores</li>
+<li><code>provenance.md</code> — hash chain and verification</li>
+<li><code>evidence.md</code> — artifact-backed evidence capture</li>
+<li><code>workflow-bundles.md</code> — <code>.flow</code> bundles + VisualFlow distribution</li>
+<li><code>mcp-worker.md</code> — MCP worker entrypoint (<code>abstractruntime-mcp-worker</code>)</li>
+<li><code>integrations/abstractcore.md</code> — AbstractCore wiring</li>
+<li><code>manual_testing.md</code> — end-to-end smoke tests</li>
+<li><code>adr/README.md</code> — rationale (why)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

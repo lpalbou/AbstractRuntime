@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-07
+
+### Changed
+- Minimum `abstractcore` optional dependency increased to `>=2.13.9` so Runtime can use AbstractCore's public output-selector contract instead of mirroring provider-private multimodal selector logic.
+- Runtime's AbstractCore output-spec adapter now delegates selector detection, normalization, generated-media detection, non-chat dispatch detection, and runtime metadata stripping to `abstractcore.core.output_specs`.
+
+### Fixed
+- Explicit `voice_clone` output specs no longer require a Runtime `ArtifactStore` before dispatch because AbstractCore exposes them as generated resources rather than binary media outputs.
+
 ## [0.4.4] - 2026-05-07
 
 ### Added
@@ -323,7 +332,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/lpalbou/abstractruntime/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.4
 [0.4.3]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.3
 [0.4.2]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.2

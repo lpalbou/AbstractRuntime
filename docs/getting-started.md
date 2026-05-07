@@ -18,7 +18,7 @@ Optional (LLM + tools via AbstractCore):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This installs AbstractCore 2.13.8 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, current tool behavior, and unified multimodal generation response types. Use `abstractruntime[multimodal]` when your workflows need common media, vision, voice, or audio dependencies.
+This installs AbstractCore 2.13.9 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, current tool behavior, unified multimodal generation response types, and public output-selector contract. Use `abstractruntime[multimodal]` when your workflows need common media, vision, voice, or audio dependencies.
 
 ## Mental model (source of truth)
 

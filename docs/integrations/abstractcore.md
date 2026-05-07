@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.8 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, current tool catalog, and the unified multimodal `generate(..., output=...)` response types.
+This extra installs AbstractCore 2.13.9 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, current tool catalog, the unified multimodal `generate(..., output=...)` response types, and AbstractCore's public output-selector contract.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.8`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
+This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.9`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 

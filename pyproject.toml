@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.4"
+version = "0.4.5"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,18 +42,18 @@ dependencies = [
 [project.optional-dependencies]
 # Enables `abstractruntime.integrations.abstractcore.*` imports.
 abstractcore = [
-  "abstractcore>=2.13.8",
+  "abstractcore>=2.13.9",
 ]
 
 # Enables AbstractCore multimodal generation helpers with common OpenAI-backed
 # image/voice capability packages.
 multimodal = [
-  "abstractcore[media,openai,vision,voice,audio]>=2.13.8",
+  "abstractcore[media,openai,vision,voice,audio]>=2.13.9",
 ]
 
 # Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
 mcp-worker = [
-  "abstractcore[tools]>=2.13.8",
+  "abstractcore[tools]>=2.13.9",
 ]
 
 # CI/test dependencies. The workflow runs the basic contract suite plus focused

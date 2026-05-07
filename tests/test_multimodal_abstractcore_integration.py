@@ -13,7 +13,10 @@ from abstractruntime.integrations.abstractcore.llm_client import (
     RemoteAbstractCoreLLMClient,
     _normalize_local_response,
 )
-from abstractruntime.integrations.abstractcore.output_specs import is_abstractcore_output_request
+from abstractruntime.integrations.abstractcore.output_specs import (
+    is_abstractcore_output_request,
+    output_request_has_generated_media,
+)
 from abstractruntime.storage.artifacts import InMemoryArtifactStore
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 
@@ -239,8 +242,8 @@ def test_llm_call_generated_media_requires_artifact_store() -> None:
     assert "ArtifactStore" in str(state.error)
 
 
-def test_runtime_output_selector_detection_matches_abstractcore_for_known_shapes() -> None:
-    from abstractcore.providers.base import BaseProvider
+def test_runtime_output_selector_adapter_delegates_to_public_abstractcore_contract() -> None:
+    from abstractcore.core.output_specs import is_output_request, output_has_generated_media
 
     cases = [
         "text",
@@ -255,7 +258,50 @@ def test_runtime_output_selector_detection_matches_abstractcore_for_known_shapes
     ]
 
     for case in cases:
-        assert is_abstractcore_output_request(case) is BaseProvider._is_acore_output_request(case)
+        assert is_abstractcore_output_request(case) is is_output_request(case)
+
+    assert output_request_has_generated_media("image") is output_has_generated_media("image")
+    assert output_request_has_generated_media({"task": "voice_clone"}) is False
+
+
+def test_local_voice_clone_resource_does_not_require_artifact_store() -> None:
+    from abstractcore.core.multimodal_generation import GeneratedResource, MultimodalGenerateResponse
+
+    seen = {}
+
+    class _FakeLLM:
+        def generate(self, **kwargs):
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                resources={
+                    "voice": [
+                        GeneratedResource(
+                            modality="voice",
+                            task="voice_clone",
+                            resource_type="voice",
+                            resource_id="voice-demo",
+                        )
+                    ]
+                }
+            )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "openai"
+    client._model = "gpt-4o-mini"
+    client._artifact_store = None
+    client._generate_lock = None
+    client._llm = _FakeLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out = client.generate(
+        prompt="Reference text.",
+        media=[{"type": "audio", "path": "reference.wav"}],
+        params={"output": {"task": "voice_clone", "run_id": "run-voice", "tags": {"node_id": "n-voice"}}},
+    )
+
+    assert seen["output"] == {"task": "voice_clone"}
+    resource = out["resources"]["voice"][0]
+    assert resource["resource_id"] == "voice-demo"
 
 
 class _RemoteImageSender:

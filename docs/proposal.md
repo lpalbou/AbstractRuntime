@@ -79,7 +79,7 @@ AbstractRuntime stays dependency-light at the kernel level; concrete integration
 
 ## Status (implemented in this repository)
 
-As of v0.4.4:
+As of v0.4.5:
 - durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
 - built-in waits + events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - persistence backends: in-memory, JSON/JSONL, SQLite

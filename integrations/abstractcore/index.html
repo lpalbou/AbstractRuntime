@@ -436,6 +436,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#multimodal-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multimodal generation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tool_calls-payload" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1006,6 +1017,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#multimodal-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multimodal generation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tool_calls-payload" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1092,7 +1114,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.5 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), prompt-cache control-plane endpoints, and current tool catalog.</p>
+<p>This extra installs AbstractCore 2.13.8 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), prompt-cache control-plane endpoints, current tool catalog, and the unified multimodal <code>generate(..., output=...)</code> response types.</p>
+<p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
+</code></pre></div>
+<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.8</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>
@@ -1145,8 +1171,11 @@
 <p><code>Effect(type=EffectType.LLM_CALL, payload=...)</code></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional text alias, useful for TTS&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}],</span>
 <span class="w">  </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;media&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;path/or/artifact-ref&quot;</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text|image|voice&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional&quot;</span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;parameters&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}],</span>
 <span class="w">  </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
@@ -1158,7 +1187,58 @@
 <p>Notes:
 - Remote mode supports per-request dynamic routing by forwarding <code>params.base_url</code> to the AbstractCore server request body (<code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>).
 - Remote mode sends per-request provider key overrides from <code>params.api_key</code> / <code>params.provider_api_key</code> as <code>X-AbstractCore-Provider-API-Key</code> headers. Server/master auth should be supplied separately through the client's configured headers, usually <code>Authorization: Bearer &lt;ABSTRACTCORE_SERVER_API_KEY&gt;</code>.
-- Local mode treats <code>base_url</code> as a provider construction concern; the local client intentionally strips <code>params.base_url</code>.</p>
+- Local mode treats <code>base_url</code> as a provider construction concern; the local client intentionally strips <code>params.base_url</code>.
+- <code>media</code> accepts one item or a list. Durable artifact refs such as <code>{"$artifact": "...", "filename": "speech.wav"}</code> are materialized to temporary files for AbstractCore and never stored as raw bytes in <code>RunState</code>.
+- <code>output</code> may be top-level or inside <code>params</code>; top-level <code>outputs</code> is accepted as a runtime alias for AbstractCore's <code>output</code>.
+- <code>output.tags</code>, when present, are merged into the generated artifact metadata. Runtime metadata such as <code>run_id</code> and <code>tags</code> is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.</p>
+<h2 id="multimodal-generation">Multimodal generation<a class="headerlink" href="#multimodal-generation" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime forwards AbstractCore's unified <code>generate(..., output=...)</code> selector and normalizes multimodal responses into JSON-safe, artifact-backed results.</p>
+<p>Generate an image:</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;A red ceramic mug on a white table.&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span> <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span> <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">},</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;image_result&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Generate speech:</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello from AbstractRuntime.&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;voice&quot;</span><span class="p">,</span> <span class="s2">&quot;voice&quot;</span><span class="p">:</span> <span class="s2">&quot;coral&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">},</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;speech_result&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Transcribe/analyze audio:</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;media&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;$artifact&quot;</span><span class="p">:</span> <span class="s2">&quot;audio_artifact_id&quot;</span><span class="p">,</span> <span class="s2">&quot;filename&quot;</span><span class="p">:</span> <span class="s2">&quot;speech.wav&quot;</span><span class="p">},</span>
+        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;transcript&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Generated binary media requires a runtime <code>ArtifactStore</code> and is stored there. The persisted result contains artifact references:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;outputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;image&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image_generation&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;artifact_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;artifact_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;$artifact&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image/png&quot;</span><span class="p">}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), TTS (<code>/v1/audio/speech</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.</p>
+<p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
 <p>Remote auth example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_remote_runtime</span>
 

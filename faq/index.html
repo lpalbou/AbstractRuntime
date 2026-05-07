@@ -729,6 +729,50 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#can-llm_call-analyze-images-audio-or-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can LLM_CALL analyze images, audio, or files?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-generate-images-or-voiceaudio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I generate images or voice/audio?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-abstractruntime-implement-image-voice-music-or-video-engines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does AbstractRuntime implement image, voice, music, or video engines?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-should-cached-session-or-prompt-cache-state-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should cached session or prompt-cache state live?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1237,6 +1281,50 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#can-llm_call-analyze-images-audio-or-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can LLM_CALL analyze images, audio, or files?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-generate-images-or-voiceaudio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I generate images or voice/audio?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-abstractruntime-implement-image-voice-music-or-video-engines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does AbstractRuntime implement image, voice, music, or video engines?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-should-cached-session-or-prompt-cache-state-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should cached session or prompt-cache state live?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1447,6 +1535,22 @@ Code: <code>src/abstractruntime/core/models.py</code> (<code>RunState</code>) an
 - <code>EffectType.LLM_CALL</code>
 - <code>EffectType.TOOL_CALLS</code></p>
 <p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
+<h2 id="can-llm_call-analyze-images-audio-or-files">Can <code>LLM_CALL</code> analyze images, audio, or files?<a class="headerlink" href="#can-llm_call-analyze-images-audio-or-files" title="Permanent link">&para;</a></h2>
+<p>Yes, when the configured AbstractCore provider/model supports the media. Pass <code>payload.media</code> as a path, a media dict, an artifact ref such as <code>{"$artifact": "..."}</code>, or a list of those. The runtime keeps the effect payload JSON-safe and materializes artifact refs into temporary provider-ready files for the call.</p>
+<p>Install <code>abstractruntime[multimodal]</code> for common media/vision/audio dependencies.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="how-do-i-generate-images-or-voiceaudio">How do I generate images or voice/audio?<a class="headerlink" href="#how-do-i-generate-images-or-voiceaudio" title="Permanent link">&para;</a></h2>
+<p>Use <code>LLM_CALL</code> with AbstractCore's <code>output</code> selector:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;A red cube on a white table&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">}}</span>
+<span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello from Runtime&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;voice&quot;</span><span class="p">,</span> <span class="s2">&quot;voice&quot;</span><span class="p">:</span> <span class="s2">&quot;alloy&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">}}</span>
+</code></pre></div>
+<p>Generated bytes require a runtime <code>ArtifactStore</code>. The durable result contains <code>artifact_id</code> / <code>artifact_ref</code>, not inline binary data. Remote and hybrid runtimes support common AbstractCore Server endpoints for image generation, speech, transcription, and chat media. Local runtimes can use richer AbstractCore capability plugins for image edits, voice cloning, and reference-guided generation.</p>
+<h2 id="does-abstractruntime-implement-image-voice-music-or-video-engines">Does AbstractRuntime implement image, voice, music, or video engines?<a class="headerlink" href="#does-abstractruntime-implement-image-voice-music-or-video-engines" title="Permanent link">&para;</a></h2>
+<p>No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Future music/video support should use the same JSON-safe <code>output</code> selector plus artifact-backed result shape unless a new workflow-level wait/effect semantic is needed.</p>
+<h2 id="where-should-cached-session-or-prompt-cache-state-live">Where should cached session or prompt-cache state live?<a class="headerlink" href="#where-should-cached-session-or-prompt-cache-state-live" title="Permanent link">&para;</a></h2>
+<p>Store stable cache keys or cache configuration in runtime-visible JSON, for example <code>payload.params.prompt_cache_key</code> or <code>run.vars["_runtime"]["prompt_cache"]</code>. Do not store provider session objects, cache handles, clients, or warm-cache state in <code>RunState.vars</code>. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.</p>
+<p>Hosts can inspect or prepare caches through the configured <code>_abstractcore_llm_client</code> control-plane methods (<code>get_prompt_cache_capabilities</code>, <code>prompt_cache_prepare_modules</code>, and related methods).
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
 <h2 id="what-are-local-remote-hybrid-execution-modes">What are “local / remote / hybrid” execution modes?<a class="headerlink" href="#what-are-local-remote-hybrid-execution-modes" title="Permanent link">&para;</a></h2>
 <p>They refer to where LLM and tools execute:
 - <strong>Local</strong>: in-process LLM + local tool execution

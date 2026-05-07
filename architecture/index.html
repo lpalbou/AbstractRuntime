@@ -376,6 +376,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#abstractcore-capability-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractCore capability boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#component-map" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1051,6 +1062,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#abstractcore-capability-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractCore capability boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#component-map" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1238,8 +1260,8 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-05-06
-Version: 0.4.3 (see <code>pyproject.toml</code>)
+<p>Updated: 2026-05-07
+Version: 0.4.4
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1257,6 +1279,16 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - <strong>Durable state is JSON-safe</strong>: <code>RunState.vars</code> must remain JSON-serializable (<code>src/abstractruntime/core/models.py</code>). Large payloads should be stored as artifacts and referenced (<code>src/abstractruntime/storage/artifacts.py</code>, <code>src/abstractruntime/storage/offloading.py</code>).
 - <strong>Append-only observability</strong>: every step is recorded as a <code>StepRecord</code> in a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).
 - <strong>Side effects are mediated</strong>: nodes request work via <code>Effect</code>/<code>EffectType</code>; execution happens via effect handlers (<code>src/abstractruntime/core/runtime.py</code>).</p>
+<h2 id="abstractcore-capability-boundary">AbstractCore capability boundary<a class="headerlink" href="#abstractcore-capability-boundary" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, transcription, and future modalities such as music or video.</p>
+<p>The boundary is intentionally narrow:
+- Workflow nodes request model work with <code>EffectType.LLM_CALL</code>; the runtime persists the request/result and delegates execution to the configured AbstractCore client.
+- <code>media</code> inputs remain JSON-safe in the effect payload. Artifact refs are materialized into temporary provider-ready files for the call, then cleaned up.
+- Generated binary outputs are written to <code>ArtifactStore</code> and returned as <code>artifact_id</code> / <code>artifact_ref</code>, keeping <code>RunState.vars</code> and ledger records bounded and JSON-safe.
+- Remote chat media is sent to AbstractCore Server as provider-ready content arrays, but persisted provider-request metadata redacts data URLs so checkpoints and ledgers do not embed media bytes.
+- Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches.
+- Local execution can use richer AbstractCore capability plugins. Remote and hybrid execution map the common media cases to AbstractCore Server endpoints and OpenAI-compatible content arrays, while hybrid keeps tool execution local.</p>
+<p>This keeps the runtime usable by <code>../abstractgateway</code> and application layers such as <code>../abstractflow</code>, <code>../abstractassistant</code>, <code>../abstractobserver</code>, and <code>../abstractcode</code> without embedding provider-specific model logic in the durable kernel.</p>
 <h2 id="component-map">Component map<a class="headerlink" href="#component-map" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>flowchart TB
   subgraph Core[&quot;core/ (execution kernel)&quot;]
@@ -1375,7 +1407,7 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - inspection: <code>VARS_QUERY</code> (read-only access to <code>RunState.vars</code> paths; parsing helpers in <code>src/abstractruntime/core/vars.py</code>)</p>
 <h3 id="host-wired-effects">Host-wired effects<a class="headerlink" href="#host-wired-effects" title="Permanent link">&para;</a></h3>
 <p>The kernel defines the protocol; concrete integrations provide handlers:
-- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, prompt-cache control, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control, media inputs, generated media outputs, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
 - <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
 <h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
 <ul>

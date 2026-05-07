@@ -1335,7 +1335,8 @@
 - helpers: <code>artifact_ref(...)</code>, <code>resolve_artifact(...)</code>, <code>is_artifact_ref(...)</code></p>
 <p>Artifacts are used by:
 - offloading wrappers (<code>src/abstractruntime/storage/offloading.py</code>)
-- evidence capture (<code>docs/evidence.md</code>, <code>src/abstractruntime/evidence/recorder.py</code>)</p>
+- evidence capture (<code>docs/evidence.md</code>, <code>src/abstractruntime/evidence/recorder.py</code>)
+- AbstractCore media integration: input artifact refs can be materialized for LLM calls, and generated image/voice/audio outputs are stored as artifact refs</p>
 <h2 id="snapshots-bookmarks">Snapshots / bookmarks<a class="headerlink" href="#snapshots-bookmarks" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/storage/snapshots.py</code>.</p>
 <ul>
@@ -1372,13 +1373,28 @@
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.</p>
 <h2 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.5 or newer).</p>
+<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.8 or newer).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
 - effect handler wiring: <code>build_effect_handlers(...)</code> (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>)
 - tool executors: <code>MappingToolExecutor</code>, <code>AbstractCoreToolExecutor</code>, <code>PassthroughToolExecutor</code>, <code>ApprovalToolExecutor</code>, <code>ToolApprovalPolicy</code> (<code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>)
 - prompt-cache control methods on the configured LLM client: <code>get_prompt_cache_capabilities</code>, <code>get_prompt_cache_stats</code>, <code>prompt_cache_set</code>, <code>prompt_cache_update</code>, <code>prompt_cache_fork</code>, <code>prompt_cache_clear</code>, <code>prompt_cache_prepare_modules</code> (<code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>)</p>
+<p><code>LLM_CALL</code> payloads are JSON-safe effect payloads. Common fields:
+- <code>prompt</code>, <code>messages</code>, <code>system_prompt</code>, and convenience <code>text</code>
+- <code>media</code>: a media path, artifact ref (<code>{"$artifact": "..."}</code> or <code>{"artifact_id": "..."}</code>), media dict, or list of those
+- <code>output</code>: AbstractCore output selector; top-level <code>outputs</code> is accepted as a runtime alias
+- <code>params</code>: provider/model routing, generation controls, prompt-cache keys, structured-output schema options, and tracing metadata</p>
+<p>Multimodal support:
+- install <code>abstractruntime[multimodal]</code> for common AbstractCore media, vision, voice, and audio dependencies
+- local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
+- generated image/voice/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes</p>
+<p>Prompt cache / cached sessions:
+- LLM clients expose cache control methods listed above for host-side preparation and inspection
+- <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code>
+- provider cache/session handles are not durable runtime state and should not be stored in <code>RunState.vars</code></p>
 <p>Docs: <code>integrations/abstractcore.md</code>.</p>
 <h3 id="abstractmemory-bridge-kg-effects">AbstractMemory bridge (KG effects)<a class="headerlink" href="#abstractmemory-bridge-kg-effects" title="Permanent link">&para;</a></h3>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>.</p>

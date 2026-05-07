@@ -16,7 +16,15 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.5 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, and current tool catalog.
+This extra installs AbstractCore 2.13.8 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, current tool catalog, and the unified multimodal `generate(..., output=...)` response types.
+
+For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
+
+```bash
+pip install "abstractruntime[multimodal]"
+```
+
+This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.8`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -82,8 +90,11 @@ print(state.output)
 ```json
 {
   "prompt": "...",
+  "text": "optional text alias, useful for TTS",
   "messages": [{"role": "user", "content": "..."}],
   "system_prompt": "...",
+  "media": ["path/or/artifact-ref"],
+  "output": {"modality": "text|image|voice", "task": "optional"},
   "tools": [{"name": "...", "description": "...", "parameters": {...}}],
   "params": {
     "temperature": 0.0,
@@ -97,6 +108,73 @@ Notes:
 - Remote mode supports per-request dynamic routing by forwarding `params.base_url` to the AbstractCore server request body (`src/abstractruntime/integrations/abstractcore/llm_client.py`).
 - Remote mode sends per-request provider key overrides from `params.api_key` / `params.provider_api_key` as `X-AbstractCore-Provider-API-Key` headers. Server/master auth should be supplied separately through the client's configured headers, usually `Authorization: Bearer <ABSTRACTCORE_SERVER_API_KEY>`.
 - Local mode treats `base_url` as a provider construction concern; the local client intentionally strips `params.base_url`.
+- `media` accepts one item or a list. Durable artifact refs such as `{"$artifact": "...", "filename": "speech.wav"}` are materialized to temporary files for AbstractCore and never stored as raw bytes in `RunState`.
+- `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
+- `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
+
+## Multimodal generation
+
+AbstractRuntime forwards AbstractCore's unified `generate(..., output=...)` selector and normalizes multimodal responses into JSON-safe, artifact-backed results.
+
+Generate an image:
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "prompt": "A red ceramic mug on a white table.",
+        "output": {"modality": "image", "format": "png", "width": 1024, "height": 1024},
+    },
+    result_key="image_result",
+)
+```
+
+Generate speech:
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "text": "Hello from AbstractRuntime.",
+        "output": {"modality": "voice", "voice": "coral", "format": "wav"},
+    },
+    result_key="speech_result",
+)
+```
+
+Transcribe/analyze audio:
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "media": {"$artifact": "audio_artifact_id", "filename": "speech.wav"},
+        "output": "text",
+    },
+    result_key="transcript",
+)
+```
+
+Generated binary media requires a runtime `ArtifactStore` and is stored there. The persisted result contains artifact references:
+
+```json
+{
+  "outputs": {
+    "image": [
+      {
+        "modality": "image",
+        "task": "image_generation",
+        "artifact_id": "...",
+        "artifact_ref": {"$artifact": "...", "content_type": "image/png"}
+      }
+    ]
+  }
+}
+```
+
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), TTS (`/v1/audio/speech`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.
+
+Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
 Remote auth example:
 

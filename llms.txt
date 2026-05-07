@@ -3,10 +3,11 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.3 (see `pyproject.toml`)
+- Version: 0.4.4
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.4`
+- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.8`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.8`
 
 ## Start here
 
@@ -32,7 +33,9 @@
 
 ## Integrations
 
-- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid, prompt cache, provider-key headers, tool approval waits
+- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid, cached sessions/prompt cache, media inputs, generated media outputs, provider-key headers, tool approval waits
+- [Artifacts](docs/api.md#artifacts-store-by-reference): JSON-safe refs for large payloads; generated images/audio/voice are stored here rather than embedded in `RunState.vars`
+- Remote multimodal guardrail: remote/hybrid media generation uses AbstractCore Server endpoints, does not inherit the chat model for media endpoints, rejects unsupported input media and non-file STT inputs instead of ignoring them, and redacts data URLs from persisted provider-request metadata
 - [MCP worker](docs/mcp-worker.md): `abstractruntime-mcp-worker` CLI (stdio/HTTP)
 - [Comms toolset](docs/tools-comms.md): opt-in email/WhatsApp/Telegram gating
 

@@ -14,6 +14,7 @@ Remote mode is the preferred way to support per-request dynamic routing (e.g. `b
 from __future__ import annotations
 
 import ast
+import base64
 import hashlib
 import json
 import locale
@@ -28,6 +29,14 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from urllib.parse import urlencode
 
 from .logging import get_logger
+from .output_specs import (
+    is_abstractcore_output_request as _is_abstractcore_output_request,
+    normalize_output_specs_for_runtime as _normalize_output_specs_for_runtime,
+    output_request_has_generated_media as _output_request_has_generated_media,
+    output_request_has_non_text_result as _output_request_has_non_text_result,
+    output_runtime_metadata as _output_runtime_metadata,
+    strip_runtime_output_metadata_for_core as _strip_runtime_output_metadata_for_core,
+)
 
 logger = get_logger(__name__)
 
@@ -390,6 +399,23 @@ def _inject_turn_grounding(
             return f"{bracket} {rest}" if rest else bracket
         return f"{header} {raw}"
 
+    def _prefix_content(content: Any) -> Any:
+        if isinstance(content, str):
+            return _prefix_with_header(content)
+        if isinstance(content, list):
+            items: List[Any] = [dict(item) if isinstance(item, dict) else item for item in content]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("type") or "").strip().lower() != "text":
+                    continue
+                text_value = item.get("text")
+                if isinstance(text_value, str):
+                    item["text"] = _prefix_with_header(text_value)
+                    return items
+            return [{"type": "text", "text": header}, *items]
+        return _prefix_with_header(str(content or ""))
+
     prompt_str = str(prompt or "")
     if prompt_str.strip():
         return _prefix_with_header(prompt_str), messages
@@ -404,8 +430,7 @@ def _inject_turn_grounding(
             if role != "user":
                 continue
             content = out[i].get("content")
-            content_str = content if isinstance(content, str) else str(content or "")
-            out[i]["content"] = _prefix_with_header(content_str)
+            out[i]["content"] = _prefix_content(content)
             return prompt_str, out
 
         # No user message found; append a synthetic user turn.
@@ -475,6 +500,12 @@ class HttpResponse:
     headers: Dict[str, str]
 
 
+@dataclass(frozen=True)
+class HttpBinaryResponse:
+    content: bytes
+    headers: Dict[str, str]
+
+
 class RequestSender(Protocol):
     def get(
         self,
@@ -495,6 +526,9 @@ class RequestSender(Protocol):
 
 
 class AbstractCoreLLMClient(Protocol):
+    def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
+        """Return the default provider/model identity used to partition derived prompt-cache keys."""
+
     def generate(
         self,
         *,
@@ -698,13 +732,31 @@ def _prompt_cache_unsupported_payload(provider: Any, *, operation: str, error: s
     }
 
 
+def _artifact_id_from_media_item(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    for key in ("$artifact", "artifact_id"):
+        raw = item.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def _media_items_need_artifact_store(media: Optional[List[Any]]) -> bool:
+    return any(_artifact_id_from_media_item(item) is not None for item in list(media or []))
+
+
 def _resolve_media_artifacts(
     media: Optional[List[Any]],
     *,
     artifact_store: Optional[Any],
     temp_dir: Optional[str] = None,
 ) -> Optional[List[Any]]:
-    if not media or artifact_store is None:
+    if not media:
+        return media
+    if artifact_store is None:
+        if _media_items_need_artifact_store(media):
+            raise ValueError("Artifact-backed media requires an ArtifactStore.")
         return media
 
     load_fn = getattr(artifact_store, "load", None)
@@ -717,10 +769,8 @@ def _resolve_media_artifacts(
             out.append(item)
             continue
 
-        aid = item.get("$artifact")
-        if not (isinstance(aid, str) and aid.strip()):
-            aid = item.get("artifact_id")
-        if not (isinstance(aid, str) and aid.strip()):
+        aid = _artifact_id_from_media_item(item)
+        if aid is None:
             out.append(item)
             continue
 
@@ -796,8 +846,7 @@ def _resolve_media_artifacts(
             out.append(str(file_path))
             continue
 
-        logger.warning("#FALLBACK: unable to resolve artifact %s to media content", str(aid))
-        out.append(item)
+        raise ValueError(f"Unable to resolve artifact '{aid}' to provider-ready media content.")
 
     return out or media
 
@@ -891,7 +940,244 @@ def _normalize_tool_calls(tool_calls: Any) -> Optional[List[Dict[str, Any]]]:
     return normalized or None
 
 
-def _normalize_local_response(resp: Any) -> Dict[str, Any]:
+def _artifact_ref_payload(ref: Any, *, content_type: Optional[str] = None, size_bytes: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    if not isinstance(ref, dict):
+        return None
+    artifact_id = ref.get("$artifact") or ref.get("artifact_id") or ref.get("id")
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        return None
+    out = dict(ref)
+    out["$artifact"] = artifact_id.strip()
+    out["artifact_id"] = artifact_id.strip()
+    if content_type and "content_type" not in out:
+        out["content_type"] = str(content_type)
+    if size_bytes is not None and "size_bytes" not in out:
+        out["size_bytes"] = int(size_bytes)
+    return out
+
+
+def _string_tags(tags: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not isinstance(tags, dict):
+        return out
+    for k, v in tags.items():
+        if k is None or v is None:
+            continue
+        out[str(k)] = str(v)
+    return out
+
+
+def _store_generated_bytes(
+    data: bytes,
+    *,
+    artifact_store: Optional[Any],
+    run_id: Optional[str],
+    content_type: str,
+    tags: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    if artifact_store is None:
+        return None
+    store = getattr(artifact_store, "store", None)
+    if not callable(store):
+        return None
+    meta = store(
+        bytes(data),
+        content_type=str(content_type or "application/octet-stream"),
+        run_id=str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None,
+        tags=_string_tags(tags),
+    )
+    artifact_id = getattr(meta, "artifact_id", None)
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        return None
+    size_bytes = getattr(meta, "size_bytes", None)
+    try:
+        size_i = int(size_bytes) if size_bytes is not None else len(data)
+    except Exception:
+        size_i = len(data)
+    return {
+        "$artifact": artifact_id.strip(),
+        "artifact_id": artifact_id.strip(),
+        "content_type": str(content_type or "application/octet-stream"),
+        "size_bytes": size_i,
+    }
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _normalize_generation_issue(issue: Any) -> Dict[str, Any]:
+    return {
+        "modality": str(_field(issue, "modality", "") or ""),
+        "task": str(_field(issue, "task", "") or ""),
+        "message": str(_field(issue, "message", "") or ""),
+        "type": str(_field(issue, "type", "error") or "error"),
+        "metadata": _jsonable(_field(issue, "metadata", {}) or {}),
+    }
+
+
+def _normalize_generated_resource(resource: Any) -> Dict[str, Any]:
+    artifact_ref = _artifact_ref_payload(_field(resource, "artifact_ref", None))
+    out: Dict[str, Any] = {
+        "modality": str(_field(resource, "modality", "") or ""),
+        "task": str(_field(resource, "task", "") or ""),
+        "resource_type": str(_field(resource, "resource_type", "") or ""),
+        "resource_id": str(_field(resource, "resource_id", "") or ""),
+        "name": _field(resource, "name", None),
+        "backend_id": _field(resource, "backend_id", None),
+        "provider": _field(resource, "provider", None),
+        "model": _field(resource, "model", None),
+        "artifact_ref": artifact_ref,
+        "metadata": _jsonable(_field(resource, "metadata", {}) or {}),
+    }
+    if artifact_ref is not None:
+        out["artifact_id"] = artifact_ref.get("artifact_id")
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _normalize_generated_item(
+    item: Any,
+    *,
+    artifact_store: Optional[Any],
+    run_id: Optional[str],
+    default_tags: Optional[Dict[str, Any]],
+    fallback_modality: Optional[str] = None,
+) -> Dict[str, Any]:
+    modality = str(_field(item, "modality", fallback_modality or "") or fallback_modality or "").strip().lower()
+    task = str(_field(item, "task", "") or "").strip().lower()
+    fmt = _field(item, "format", None)
+    content_type = _field(item, "content_type", None)
+    if not isinstance(content_type, str) or not content_type.strip():
+        if modality == "image":
+            content_type = f"image/{str(fmt or 'png').strip().lower() or 'png'}"
+        elif modality in {"voice", "audio"}:
+            content_type = f"audio/{str(fmt or 'wav').strip().lower() or 'wav'}"
+        else:
+            content_type = "application/octet-stream"
+    content_type = str(content_type).strip() or "application/octet-stream"
+
+    data = _field(item, "data", None)
+    data_len: Optional[int] = None
+    if isinstance(data, (bytes, bytearray)):
+        data_len = len(data)
+
+    artifact_ref = _artifact_ref_payload(
+        _field(item, "artifact_ref", None),
+        content_type=content_type,
+        size_bytes=data_len,
+    )
+
+    if artifact_ref is None and isinstance(data, (bytes, bytearray)):
+        tags = _string_tags(default_tags)
+        tags.update({"kind": "generated_media"})
+        if modality:
+            tags["modality"] = modality
+        if task:
+            tags["task"] = task
+        stored_ref = _store_generated_bytes(
+            bytes(data),
+            artifact_store=artifact_store,
+            run_id=run_id,
+            content_type=content_type,
+            tags=tags,
+        )
+        artifact_ref = stored_ref
+
+    out: Dict[str, Any] = {
+        "modality": modality,
+        "task": task,
+        "content_type": content_type,
+        "format": fmt,
+        "backend_id": _field(item, "backend_id", None),
+        "provider": _field(item, "provider", None),
+        "model": _field(item, "model", None),
+        "artifact_ref": artifact_ref,
+        "metadata": _jsonable(_field(item, "metadata", {}) or {}),
+    }
+    if artifact_ref is not None:
+        out["artifact_id"] = artifact_ref.get("artifact_id")
+        out["size_bytes"] = artifact_ref.get("size_bytes")
+    elif isinstance(data, (bytes, bytearray)):
+        raise ValueError("Generated binary media requires an ArtifactStore that can persist artifacts.")
+    elif data is not None:
+        out["data"] = _jsonable(data)
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _normalize_multimodal_response(
+    resp: Any,
+    *,
+    artifact_store: Optional[Any] = None,
+    run_id: Optional[str] = None,
+    default_tags: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    text_resp = _field(resp, "text", None)
+    text = _normalize_local_response(text_resp) if text_resp is not None else None
+
+    outputs_raw = _field(resp, "outputs", {}) or {}
+    outputs: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(outputs_raw, dict):
+        for modality, items in outputs_raw.items():
+            if not isinstance(items, list):
+                continue
+            normalized_items = [
+                _normalize_generated_item(
+                    item,
+                    artifact_store=artifact_store,
+                    run_id=run_id,
+                    default_tags=default_tags,
+                    fallback_modality=str(modality),
+                )
+                for item in items
+            ]
+            if normalized_items:
+                outputs[str(modality)] = normalized_items
+
+    resources_raw = _field(resp, "resources", {}) or {}
+    resources: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(resources_raw, dict):
+        for modality, items in resources_raw.items():
+            if not isinstance(items, list):
+                continue
+            normalized_resources = [_normalize_generated_resource(item) for item in items]
+            if normalized_resources:
+                resources[str(modality)] = normalized_resources
+
+    warnings = [_normalize_generation_issue(x) for x in (_field(resp, "warnings", []) or []) if x is not None]
+    errors = [_normalize_generation_issue(x) for x in (_field(resp, "errors", []) or []) if x is not None]
+    metadata = _jsonable(_field(resp, "metadata", {}) or {})
+    if not isinstance(metadata, dict):
+        metadata = {"value": metadata}
+
+    content = text.get("content") if isinstance(text, dict) else _field(resp, "content", None)
+    result: Dict[str, Any] = {
+        "content": content,
+        "reasoning": text.get("reasoning") if isinstance(text, dict) else None,
+        "data": text.get("data") if isinstance(text, dict) else None,
+        "text": text,
+        "outputs": outputs,
+        "resources": resources,
+        "warnings": warnings,
+        "errors": errors,
+        "usage": text.get("usage") if isinstance(text, dict) else None,
+        "model": (text.get("model") if isinstance(text, dict) else None) or metadata.get("model"),
+        "finish_reason": text.get("finish_reason") if isinstance(text, dict) else None,
+        "metadata": metadata,
+        "trace_id": text.get("trace_id") if isinstance(text, dict) else None,
+        "gen_time": text.get("gen_time") if isinstance(text, dict) else None,
+    }
+    return result
+
+
+def _normalize_local_response(
+    resp: Any,
+    *,
+    artifact_store: Optional[Any] = None,
+    run_id: Optional[str] = None,
+    default_tags: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Normalize an AbstractCore local `generate()` result into JSON."""
 
     def _extract_reasoning_from_openai_like(raw: Any) -> Optional[str]:
@@ -931,6 +1217,15 @@ def _normalize_local_response(resp: Any) -> Dict[str, Any]:
                 return r
 
         return None
+
+    # AbstractCore multimodal output response (`generate(..., output=...)`).
+    if hasattr(resp, "outputs") or hasattr(resp, "resources"):
+        return _normalize_multimodal_response(
+            resp,
+            artifact_store=artifact_store,
+            run_id=run_id,
+            default_tags=default_tags,
+        )
 
     # Dict-like already
     if isinstance(resp, dict):
@@ -1178,6 +1473,9 @@ class LocalAbstractCoreLLMClient:
         self._prompt_cache_state_lock = threading.Lock()
         self._prompt_cache_state: Dict[str, _PromptCacheSessionState] = {}
 
+    def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
+        return self._provider, self._model
+
     def _maybe_prepare_prompt_cache(
         self,
         *,
@@ -1360,7 +1658,11 @@ class LocalAbstractCoreLLMClient:
             )
             if has_artifacts:
                 tmpdir = tempfile.TemporaryDirectory(prefix="abstractruntime_llm_media_")
-                media = _resolve_media_artifacts(media, artifact_store=self._artifact_store, temp_dir=tmpdir.name)
+                try:
+                    media = _resolve_media_artifacts(media, artifact_store=self._artifact_store, temp_dir=tmpdir.name)
+                except Exception:
+                    tmpdir.cleanup()
+                    raise
             else:
                 media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
         else:
@@ -1368,9 +1670,36 @@ class LocalAbstractCoreLLMClient:
 
         try:
             params = dict(params or {})
+            prompt = _promote_text_param_to_prompt(prompt, params)
+            output_request = params.get("output")
+            acore_output_request = _is_abstractcore_output_request(output_request)
+            if _output_request_has_generated_media(output_request) and self._artifact_store is None:
+                raise ValueError("Generated media outputs require an ArtifactStore.")
+            skip_turn_grounding = _output_request_has_non_text_result(output_request)
+            trace_metadata = params.get("trace_metadata") if isinstance(params.get("trace_metadata"), dict) else {}
+            run_id = trace_metadata.get("run_id") if isinstance(trace_metadata, dict) else None
+            run_id = str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None
+            default_artifact_tags: Dict[str, Any] = {
+                "source": "llm_call",
+                "provider": self._provider,
+                "model": self._model,
+            }
+            if isinstance(trace_metadata, dict):
+                for key in ("workflow_id", "node_id", "actor_id", "session_id", "parent_run_id"):
+                    raw = trace_metadata.get(key)
+                    if raw is not None and str(raw).strip():
+                        default_artifact_tags[key] = str(raw)
+            output_run_id, output_tags = _output_runtime_metadata(output_request)
+            if run_id is None and output_run_id:
+                run_id = output_run_id
+            if output_tags:
+                default_artifact_tags.update(output_tags)
 
             system_prompt = _strip_system_context_header(system_prompt)
-            prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+            if not skip_turn_grounding:
+                prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+            else:
+                prompt = str(prompt or "")
             messages = _strip_internal_system_messages(messages)
             system_prompt, messages = _coalesce_leading_system_messages(
                 system_prompt=system_prompt,
@@ -1392,6 +1721,9 @@ class LocalAbstractCoreLLMClient:
             params.pop("_provider", None)
             params.pop("_model", None)
 
+            if acore_output_request and "output" in params:
+                params["output"] = _strip_runtime_output_metadata_for_core(params.get("output"))
+
             lock = getattr(self, "_generate_lock", None)
             if lock is None:
                 self._maybe_prepare_prompt_cache(
@@ -1412,7 +1744,12 @@ class LocalAbstractCoreLLMClient:
                 if stream and hasattr(resp, "__next__"):
                     result = _normalize_local_streaming_response(resp)
                 else:
-                    result = _normalize_local_response(resp)
+                    result = _normalize_local_response(
+                        resp,
+                        artifact_store=self._artifact_store if acore_output_request else None,
+                        run_id=run_id,
+                        default_tags=default_artifact_tags,
+                    )
                 result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
             else:
                 # Serialize generation for non-thread-safe providers (e.g. MLX).
@@ -1435,7 +1772,12 @@ class LocalAbstractCoreLLMClient:
                     if stream and hasattr(resp, "__next__"):
                         result = _normalize_local_streaming_response(resp)
                     else:
-                        result = _normalize_local_response(resp)
+                        result = _normalize_local_response(
+                            resp,
+                            artifact_store=self._artifact_store if acore_output_request else None,
+                            run_id=run_id,
+                            default_tags=default_artifact_tags,
+                        )
                     result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
             # Durable observability: ensure a provider request payload exists even when the
@@ -1764,6 +2106,9 @@ class MultiLocalAbstractCoreLLMClient:
         # Provide a stable underlying LLM for components that need one (e.g. summarizer).
         self._llm = getattr(self._default_client, "_llm", None)
 
+    def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
+        return self._default_provider, self._default_model
+
     def _get_client(self, provider: str, model: str) -> LocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
         client = self._clients.get(key)
@@ -1992,6 +2337,34 @@ class HttpxRequestSender:
         resp.raise_for_status()
         return HttpResponse(body=resp.json(), headers=dict(resp.headers))
 
+    def post_bytes(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Dict[str, Any],
+        timeout: float,
+    ) -> HttpBinaryResponse:
+        resp = self._httpx.post(url, headers=headers, json=json, timeout=timeout)
+        resp.raise_for_status()
+        return HttpBinaryResponse(content=bytes(resp.content or b""), headers=dict(resp.headers))
+
+    def post_multipart(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        data: Dict[str, Any],
+        files: Dict[str, Any],
+        timeout: float,
+    ) -> Any:
+        resp = self._httpx.post(url, headers=headers, data=data, files=files, timeout=timeout)
+        resp.raise_for_status()
+        content_type = str(resp.headers.get("content-type", "") or "").split(";", 1)[0].strip().lower()
+        if content_type == "application/json" or content_type.endswith("+json"):
+            return HttpResponse(body=resp.json(), headers=dict(resp.headers))
+        return HttpBinaryResponse(content=bytes(resp.content or b""), headers=dict(resp.headers))
+
 
 def _unwrap_http_response(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
     if isinstance(value, dict):
@@ -2011,6 +2384,213 @@ def _unwrap_http_response(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
     return {"data": _jsonable(value)}, {}
 
 
+def _unwrap_binary_response(value: Any) -> Tuple[bytes, Dict[str, str]]:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value), {}
+    content = getattr(value, "content", None)
+    headers = getattr(value, "headers", None)
+    if isinstance(content, (bytes, bytearray)):
+        return bytes(content), dict(headers) if isinstance(headers, dict) else {}
+    if isinstance(value, dict):
+        data = value.get("content") or value.get("bytes") or value.get("data")
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data), {}
+        if isinstance(data, str):
+            raw = data.split(",", 1)[1] if data.startswith("data:") and "," in data else data
+            try:
+                return base64.b64decode("".join(raw.split()), validate=True), {}
+            except Exception as e:
+                raise ValueError("Remote binary response string must be base64 or a data URL.") from e
+    raise ValueError("Remote binary response did not contain bytes.")
+
+
+def _mime_type_for_path(path: str, *, fallback: str = "application/octet-stream") -> str:
+    guessed, _enc = mimetypes.guess_type(str(path or ""))
+    return str(guessed or fallback)
+
+
+def _promote_text_param_to_prompt(prompt: Any, params: Dict[str, Any]) -> str:
+    prompt_s = str(prompt or "")
+    if "text" not in params:
+        return prompt_s
+    text_value = params.pop("text")
+    if prompt_s.strip():
+        return prompt_s
+    return "" if text_value is None else str(text_value)
+
+
+def _redact_data_urls_for_observability(value: Any) -> Any:
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.lower().startswith("data:") and ";base64," in raw[:160].lower():
+            header, b64 = raw.split(",", 1)
+            try:
+                size_bytes = len(base64.b64decode("".join(b64.split()), validate=False))
+            except Exception:
+                size_bytes = None
+            size_label = f"{size_bytes} bytes" if isinstance(size_bytes, int) else "unknown size"
+            return f"{header},<redacted {size_label}>"
+        return value
+    if isinstance(value, list):
+        return [_redact_data_urls_for_observability(item) for item in value]
+    if isinstance(value, dict):
+        return {str(k): _redact_data_urls_for_observability(v) for k, v in value.items()}
+    return value
+
+
+def _data_url_for_file(path: str) -> tuple[str, str, int]:
+    with open(path, "rb") as f:
+        raw = f.read()
+    mime = _mime_type_for_path(path)
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{b64}", mime, len(raw)
+
+
+def _decode_data_url(value: str) -> tuple[bytes, str]:
+    raw = str(value or "").strip()
+    if not raw.lower().startswith("data:") or "," not in raw:
+        raise ValueError("media data URL must start with data: and contain a comma")
+    header, data = raw.split(",", 1)
+    mime = header[5:].split(";", 1)[0].strip().lower() or "application/octet-stream"
+    if ";base64" not in header.lower():
+        raise ValueError("media data URL must be base64 encoded")
+    return base64.b64decode("".join(data.split()), validate=True), mime
+
+
+def _data_url_for_media_item(item: Any) -> tuple[str, str, Optional[int]]:
+    if isinstance(item, str) and item.strip():
+        raw_item = item.strip()
+        if raw_item.lower().startswith("data:"):
+            raw, mime = _decode_data_url(raw_item)
+            return raw_item, mime, len(raw)
+        if raw_item.startswith(("http://", "https://")):
+            return raw_item, _mime_type_for_path(raw_item, fallback=""), None
+
+    path = _media_path_from_item(item)
+    if path:
+        return _data_url_for_file(path)
+
+    if isinstance(item, (bytes, bytearray)):
+        raw = bytes(item)
+        data_url = f"data:application/octet-stream;base64,{base64.b64encode(raw).decode('ascii')}"
+        return data_url, "application/octet-stream", len(raw)
+
+    if not isinstance(item, dict):
+        raise ValueError("Remote media item must be a file path, URL, data URL, or content bytes.")
+
+    for key in ("url", "uri"):
+        raw_url = item.get(key)
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            continue
+        url = raw_url.strip()
+        if url.lower().startswith("data:"):
+            raw, mime = _decode_data_url(url)
+            return url, mime, len(raw)
+        if url.startswith(("http://", "https://")):
+            return url, _media_mime_from_item(item), None
+        raise ValueError("Remote media URL must be http(s) or a data URL.")
+
+    content = None
+    for key in ("content", "data", "bytes"):
+        if key in item:
+            content = item.get(key)
+            break
+    if isinstance(content, (bytes, bytearray)):
+        raw = bytes(content)
+    elif isinstance(content, str) and content.strip().lower().startswith("data:"):
+        raw, mime = _decode_data_url(content)
+        return content.strip(), mime, len(raw)
+    elif isinstance(content, str) and str(item.get("content_format") or item.get("contentFormat") or "").strip().lower() == "base64":
+        raw = base64.b64decode("".join(content.strip().split()), validate=True)
+    elif content is None:
+        raise ValueError("Remote media item is missing file path, URL, data URL, or content bytes.")
+    else:
+        raise ValueError("Remote media content must be bytes, base64, or a data URL.")
+
+    mime = _media_mime_from_item(item) or "application/octet-stream"
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{b64}", mime, len(raw)
+
+
+def _media_path_from_item(item: Any) -> Optional[str]:
+    if isinstance(item, str) and item.strip():
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("file_path", "filePath", "path"):
+            raw = item.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+    return None
+
+
+def _media_mime_from_item(item: Any) -> str:
+    if isinstance(item, dict):
+        for key in ("content_type", "mime_type", "mimeType", "mime"):
+            raw = item.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip().lower()
+    path = _media_path_from_item(item)
+    if path:
+        return _mime_type_for_path(path, fallback="").lower()
+    return ""
+
+
+def _is_audio_media_item(item: Any) -> bool:
+    mime = _media_mime_from_item(item)
+    if mime.startswith("audio/"):
+        return True
+    if isinstance(item, dict):
+        raw_type = item.get("type") or item.get("media_type") or item.get("mediaType")
+        if isinstance(raw_type, str) and raw_type.strip().lower() == "audio":
+            return True
+    return False
+
+
+def _text_from_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip().lower() != "text":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _remote_media_content_items(*, text: str, media: Optional[List[Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if str(text or ""):
+        items.append({"type": "text", "text": str(text or "")})
+    for media_item in list(media or []):
+        data_url, mime, _size = _data_url_for_media_item(media_item)
+        if mime.lower().startswith("image/"):
+            items.append({"type": "image_url", "image_url": {"url": data_url}})
+        else:
+            items.append({"type": "file", "file_url": {"url": data_url}})
+    return items
+
+
+def _merge_remote_media_content(existing: Any, *, media: Optional[List[Any]]) -> List[Dict[str, Any]]:
+    if isinstance(existing, list):
+        items: List[Dict[str, Any]] = []
+        for item in existing:
+            if isinstance(item, dict):
+                items.append(dict(item))
+            elif item is not None:
+                items.append({"type": "text", "text": str(item)})
+        items.extend(_remote_media_content_items(text="", media=media))
+        return items
+
+    existing_text = existing if isinstance(existing, str) else ""
+    return _remote_media_content_items(text=existing_text, media=media)
+
+
 class RemoteAbstractCoreLLMClient:
     """Remote LLM client calling an AbstractCore server endpoint."""
 
@@ -2024,6 +2604,7 @@ class RemoteAbstractCoreLLMClient:
         timeout_s: Optional[float] = None,
         headers: Optional[Dict[str, str]] = None,
         request_sender: Optional[RequestSender] = None,
+        artifact_store: Optional[Any] = None,
     ):
         from .constants import DEFAULT_LLM_TIMEOUT_S
 
@@ -2032,6 +2613,10 @@ class RemoteAbstractCoreLLMClient:
         self._timeout_s = float(timeout_s) if timeout_s is not None else DEFAULT_LLM_TIMEOUT_S
         self._headers = dict(headers or {})
         self._sender = request_sender or HttpxRequestSender()
+        self._artifact_store = artifact_store
+
+    def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
+        return "remote", self._model
 
     def _prompt_cache_proxy_fields(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -2221,6 +2806,347 @@ class RemoteAbstractCoreLLMClient:
             kwargs=kwargs,
         )
 
+    def _effective_model_from_params(self, params: Dict[str, Any]) -> str:
+        provider = params.pop("_provider", None)
+        model = params.pop("_model", None)
+        provider_s = str(provider).strip() if isinstance(provider, str) and provider.strip() else ""
+        model_s = str(model).strip() if isinstance(model, str) and model.strip() else ""
+        if provider_s and model_s:
+            return f"{provider_s}/{model_s}"
+        if model_s:
+            return model_s
+        return self._model
+
+    def _trace_run_id_and_tags(
+        self,
+        params: Dict[str, Any],
+        *,
+        task: str,
+        modality: str,
+        model: Optional[str] = None,
+    ) -> tuple[Optional[str], Dict[str, Any]]:
+        trace_metadata = params.get("trace_metadata") if isinstance(params.get("trace_metadata"), dict) else {}
+        run_id = trace_metadata.get("run_id") if isinstance(trace_metadata, dict) else None
+        run_id = str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None
+        tags: Dict[str, Any] = {
+            "kind": "generated_media",
+            "source": "remote_llm_call",
+            "modality": modality,
+            "task": task,
+        }
+        if isinstance(model, str) and model.strip():
+            tags["model"] = model.strip()
+        if isinstance(trace_metadata, dict):
+            for key in ("workflow_id", "node_id", "actor_id", "session_id", "parent_run_id"):
+                raw = trace_metadata.get(key)
+                if raw is not None and str(raw).strip():
+                    tags[key] = str(raw)
+        output_run_id, output_tags = _output_runtime_metadata(params.get("output"))
+        if run_id is None and output_run_id:
+            run_id = output_run_id
+        if output_tags:
+            tags.update(output_tags)
+        return run_id, tags
+
+    def _post_bytes(self, url: str, *, headers: Dict[str, str], json_body: Dict[str, Any]) -> tuple[bytes, Dict[str, str]]:
+        sender = self._sender
+        post_bytes = getattr(sender, "post_bytes", None)
+        if callable(post_bytes):
+            raw = post_bytes(url, headers=headers, json=json_body, timeout=self._timeout_s)
+        else:
+            raw = sender.post(url, headers=headers, json=json_body, timeout=self._timeout_s)
+        return _unwrap_binary_response(raw)
+
+    def _post_multipart(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        data: Dict[str, Any],
+        file_path: str,
+        file_field: str = "file",
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        filename = os.path.basename(file_path) or "media.bin"
+        mime = _mime_type_for_path(file_path)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        files = {file_field: (filename, file_bytes, mime)}
+        sender = self._sender
+        post_multipart = getattr(sender, "post_multipart", None)
+        if callable(post_multipart):
+            raw = post_multipart(url, headers=headers, data=data, files=files, timeout=self._timeout_s)
+        else:
+            raise ValueError("Remote multipart media output requires a request sender with post_multipart().")
+        return _unwrap_http_response(raw)
+
+    def _remote_image_generation(
+        self,
+        *,
+        spec: Dict[str, Any],
+        prompt: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        endpoint_model = str(spec.get("model") or "").strip()
+        body: Dict[str, Any] = {
+            "prompt": prompt,
+            "response_format": "b64_json",
+        }
+        if endpoint_model:
+            body["model"] = endpoint_model
+        for key in (
+            "n",
+            "width",
+            "height",
+            "size",
+            "negative_prompt",
+            "seed",
+            "steps",
+            "guidance_scale",
+            "quality",
+            "style",
+            "user",
+            "background",
+            "output_format",
+            "output_compression",
+            "moderation",
+            "extra",
+        ):
+            if key in spec and spec.get(key) is not None:
+                body[key] = spec.get(key)
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            body["base_url"] = base_url.strip()
+
+        url = f"{self._server_base_url}/v1/images/generations"
+        raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+        resp, _resp_headers = _unwrap_http_response(raw)
+
+        data_items = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data_items, list) or not data_items:
+            raise ValueError("Remote image generation returned no data items.")
+
+        fmt = str(spec.get("format") or spec.get("output_format") or "png").strip().lower() or "png"
+        content_type = f"image/{fmt}"
+        outputs: List[Dict[str, Any]] = []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            raw_b64 = item.get("b64_json") or item.get("image") or item.get("data")
+            if not isinstance(raw_b64, str) or not raw_b64.strip():
+                continue
+            image_bytes = base64.b64decode("".join(raw_b64.strip().split()), validate=True)
+            outputs.append(
+                {
+                    "modality": "image",
+                    "task": "image_generation",
+                    "data": image_bytes,
+                    "content_type": content_type,
+                    "format": fmt,
+                    "provider": "abstractcore-server",
+                    "model": str(body.get("model") or "") or None,
+                    "metadata": {"_provider_request": {"url": url, "payload": body}},
+                }
+            )
+        if not outputs:
+            raise ValueError("Remote image generation response did not contain b64_json data.")
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="image_generation",
+            modality="image",
+            model=str(body.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {"outputs": {"image": outputs}, "metadata": {"model": body.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
+    def _remote_tts(
+        self,
+        *,
+        spec: Dict[str, Any],
+        text: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
+        endpoint_model = str(spec.get("model") or "").strip()
+        body: Dict[str, Any] = {
+            "input": str(text or ""),
+            "voice": spec.get("voice") or spec.get("voice_id") or "alloy",
+            "response_format": fmt,
+        }
+        if endpoint_model:
+            body["model"] = endpoint_model
+        for key in ("speed", "instructions", "provider"):
+            if key in spec and spec.get(key) is not None:
+                body[key] = spec.get(key)
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            body["base_url"] = base_url.strip()
+
+        url = f"{self._server_base_url}/v1/audio/speech"
+        audio_bytes, resp_headers = self._post_bytes(url, headers=headers, json_body=body)
+        content_type = str(resp_headers.get("content-type") or f"audio/{fmt}").split(";", 1)[0].strip() or f"audio/{fmt}"
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="tts",
+            modality="voice",
+            model=str(body.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {
+                "outputs": {
+                    "voice": [
+                        {
+                            "modality": "voice",
+                            "task": "tts",
+                            "data": audio_bytes,
+                            "content_type": content_type,
+                            "format": fmt,
+                            "provider": "abstractcore-server",
+                            "model": str(body.get("model") or "") or None,
+                            "metadata": {"_provider_request": {"url": url, "payload": body}},
+                        }
+                    ]
+                },
+                "metadata": {"model": body.get("model"), "provider": "abstractcore-server"},
+            },
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
+    def _remote_transcription(
+        self,
+        *,
+        spec: Dict[str, Any],
+        media: Optional[List[Any]],
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        media_paths: List[str] = []
+        for item in list(media or []):
+            path = _media_path_from_item(item)
+            if not path:
+                continue
+            if path.lower().startswith("data:") or path.startswith(("http://", "https://")):
+                raise ValueError("Remote transcription requires a local file path or artifact-backed audio media item.")
+            media_paths.append(path)
+        if len(media_paths) != 1:
+            if any(_is_audio_media_item(item) for item in list(media or [])):
+                raise ValueError("Remote transcription audio media must resolve to a local file path.")
+            raise ValueError("Remote transcription requires exactly one audio media item.")
+        endpoint_model = str(spec.get("model") or "").strip()
+        data: Dict[str, Any] = {}
+        if endpoint_model:
+            data["model"] = endpoint_model
+        for key in ("language", "prompt", "response_format", "temperature", "format"):
+            if key in spec and spec.get(key) is not None:
+                data[key] = spec.get(key)
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            data["base_url"] = base_url.strip()
+        url = f"{self._server_base_url}/v1/audio/transcriptions"
+        resp, _resp_headers = self._post_multipart(url, headers=headers, data=data, file_path=media_paths[0])
+        text = resp.get("text") if isinstance(resp, dict) else None
+        if text is None and isinstance(resp, dict):
+            text = resp.get("content") or resp.get("data")
+        text_resp = {
+            "content": str(text or "").strip(),
+            "model": data.get("model"),
+            "metadata": {"task": "transcription", "modality": "text", "_provider_request": {"url": url, "payload": data}},
+        }
+        return _normalize_multimodal_response(
+            {"text": text_resp, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+        )
+
+    def _generate_remote_multimodal(
+        self,
+        *,
+        prompt: str,
+        messages: Optional[List[Dict[str, Any]]],
+        media: Optional[List[Any]],
+        params: Dict[str, Any],
+        headers: Dict[str, str],
+    ) -> Dict[str, Any]:
+        output_request = params.get("output")
+        specs = _normalize_output_specs_for_runtime(output_request)
+        if len(specs) != 1:
+            raise ValueError("Remote multimodal generation currently supports one output spec per LLM_CALL.")
+
+        spec = specs[0]
+        modality = str(spec.get("modality") or "").strip().lower()
+        task = str(spec.get("task") or "").strip().lower()
+        text = str(params.get("text") or prompt or "").strip()
+        if not text and isinstance(messages, list):
+            for msg in reversed(messages):
+                if not isinstance(msg, dict) or msg.get("role") != "user":
+                    continue
+                content = msg.get("content")
+                content_text = _text_from_message_content(content)
+                if content_text:
+                    text = content_text
+                    break
+
+        if modality == "image":
+            if task and task not in {"image_generation", "t2i"}:
+                raise ValueError("Remote image edits are not supported through this client yet; use local execution.")
+            if media:
+                raise ValueError("Remote image output does not accept input media yet; use local execution for image edits.")
+            if not text:
+                raise ValueError("Remote image generation requires prompt or text.")
+            return self._remote_image_generation(spec=spec, prompt=text, headers=headers, params=params)
+
+        if modality == "voice":
+            if task in {"voice_clone", "clone"}:
+                raise ValueError("Remote voice clone is not supported through this client yet; use local execution.")
+            if media:
+                raise ValueError("Remote voice output does not accept input audio media yet; use local execution for cloning or reference-guided TTS.")
+            if not text:
+                raise ValueError("Remote TTS requires prompt or text.")
+            return self._remote_tts(spec=spec, text=text, headers=headers, params=params)
+
+        if modality == "text" and (task == "transcription" or (media and not text)):
+            audio_items = [item for item in list(media or []) if _is_audio_media_item(item)]
+            if len(audio_items) != 1 or len(list(media or [])) != 1:
+                raise ValueError("Remote transcription requires exactly one audio media item.")
+            return self._remote_transcription(spec=spec, media=media, headers=headers, params=params)
+
+        raise ValueError(f"Unsupported remote multimodal output: modality={modality!r} task={task!r}")
+
+    def _resolve_media_for_call(
+        self,
+        media: Optional[List[Any]],
+    ) -> tuple[Optional[List[Any]], Optional[tempfile.TemporaryDirectory]]:
+        tmpdir: Optional[tempfile.TemporaryDirectory] = None
+        if isinstance(media, list) and media and self._artifact_store is not None:
+            has_artifacts = any(
+                isinstance(item, dict)
+                and (
+                    (isinstance(item.get("$artifact"), str) and str(item.get("$artifact") or "").strip())
+                    or (isinstance(item.get("artifact_id"), str) and str(item.get("artifact_id") or "").strip())
+                )
+                and not (isinstance(item.get("file_path"), str) and str(item.get("file_path") or "").strip())
+                and item.get("content") is None
+                for item in media
+            )
+            if has_artifacts:
+                tmpdir = tempfile.TemporaryDirectory(prefix="abstractruntime_remote_llm_media_")
+                try:
+                    media = _resolve_media_artifacts(media, artifact_store=self._artifact_store, temp_dir=tmpdir.name)
+                except Exception:
+                    tmpdir.cleanup()
+                    raise
+            else:
+                media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
+        else:
+            media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
+        return media, tmpdir
+
     def generate(
         self,
         *,
@@ -2231,17 +3157,47 @@ class RemoteAbstractCoreLLMClient:
         media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        params = dict(params or {})
-        if media:
-            raise ValueError(
-                "RemoteAbstractCoreLLMClient does not support media yet (artifact-backed attachments require local/hybrid execution)."
+        resolved_media, tmpdir = self._resolve_media_for_call(media)
+        try:
+            return self._generate_resolved(
+                prompt=prompt,
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                media=resolved_media,
+                params=params,
             )
+        finally:
+            if tmpdir is not None:
+                tmpdir.cleanup()
+
+    def _generate_resolved(
+        self,
+        *,
+        prompt: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        media: Optional[List[Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        params = dict(params or {})
+        prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)
+        effective_model = self._effective_model_from_params(params)
 
         trace_metadata = params.pop("trace_metadata", None)
         system_prompt = _strip_system_context_header(system_prompt)
-        prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+        output_request = params.get("output")
+        acore_output_request = _is_abstractcore_output_request(output_request)
+        if _output_request_has_generated_media(output_request) and self._artifact_store is None:
+            raise ValueError("Generated media outputs require an ArtifactStore.")
+        skip_turn_grounding = _output_request_has_non_text_result(output_request)
+        if not skip_turn_grounding:
+            prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
+        else:
+            prompt = str(prompt or "")
         messages = _strip_internal_system_messages(messages)
         system_prompt, messages = _coalesce_leading_system_messages(
             system_prompt=system_prompt,
@@ -2263,18 +3219,46 @@ class RemoteAbstractCoreLLMClient:
                 if val is not None and header not in req_headers:
                     req_headers[header] = str(val)
 
+        if acore_output_request and (skip_turn_grounding or (media and not str(prompt or "").strip())):
+            params_for_mm = dict(params)
+            if isinstance(trace_metadata, dict):
+                params_for_mm["trace_metadata"] = trace_metadata
+            return self._generate_remote_multimodal(
+                prompt=str(prompt or ""),
+                messages=messages,  # type: ignore[arg-type]
+                media=media,
+                params=params_for_mm,
+                headers=req_headers,
+            )
+
         # Build OpenAI-like messages for AbstractCore server.
-        out_messages: List[Dict[str, str]] = []
+        out_messages: List[Dict[str, Any]] = []
         if system_prompt:
             out_messages.append({"role": "system", "content": system_prompt})
 
         if messages:
-            out_messages.extend(messages)
+            out_messages.extend([dict(m) for m in messages if isinstance(m, dict)])
         else:
             out_messages.append({"role": "user", "content": prompt})
 
+        if media:
+            # AbstractCore Server chat endpoints accept OpenAI content arrays with
+            # image_url/file data URLs. Attach media to the last user turn.
+            user_idx = None
+            for i in range(len(out_messages) - 1, -1, -1):
+                if out_messages[i].get("role") == "user":
+                    user_idx = i
+                    break
+            if user_idx is None:
+                out_messages.append({"role": "user", "content": ""})
+                user_idx = len(out_messages) - 1
+            out_messages[user_idx]["content"] = _merge_remote_media_content(
+                out_messages[user_idx].get("content"),
+                media=media,
+            )
+
         body: Dict[str, Any] = {
-            "model": self._model,
+            "model": effective_model,
             "messages": out_messages,
             "stream": False,
             # Orchestrator policy: ask AbstractCore server to use the same timeout it expects.
@@ -2330,8 +3314,9 @@ class RemoteAbstractCoreLLMClient:
         try:
             choice0 = (resp.get("choices") or [])[0]
             msg = choice0.get("message") or {}
+            observable_body = _redact_data_urls_for_observability(body)
             meta: Dict[str, Any] = {
-                "_provider_request": {"url": url, "payload": body}
+                "_provider_request": {"url": url, "payload": observable_body}
             }
             if trace_id:
                 meta["trace_id"] = trace_id
@@ -2368,11 +3353,11 @@ class RemoteAbstractCoreLLMClient:
                 "model": resp.get("model") if isinstance(resp, dict) else None,
                 "finish_reason": None,
                 "metadata": {
-                    "_provider_request": {"url": url, "payload": body},
+                    "_provider_request": {"url": url, "payload": _redact_data_urls_for_observability(body)},
                     "trace_id": trace_id,
                 }
                 if trace_id
-                else {"_provider_request": {"url": url, "payload": body}},
+                else {"_provider_request": {"url": url, "payload": _redact_data_urls_for_observability(body)}},
                 "trace_id": trace_id,
                 "raw_response": _jsonable(resp) if resp is not None else None,
             }

@@ -333,3 +333,73 @@ def test_remote_prompt_cache_control_plane_proxies_endpoint() -> None:
         ("GET", "http://endpoint/acore/prompt_cache/stats", {}),
         ("POST", "http://endpoint/acore/prompt_cache/update", {"key": "k1", "prompt": "hello", "add_generation_prompt": False}),
     ]
+
+
+def test_llm_call_derives_prompt_cache_key_from_effective_client_identity() -> None:
+    from abstractruntime.core.models import Effect, EffectType, RunState
+    from abstractruntime.integrations.abstractcore.effect_handlers import (
+        _derive_prompt_cache_key,
+        make_llm_call_handler,
+    )
+
+    class _CapturingLLM:
+        def __init__(self) -> None:
+            self.calls: List[Dict[str, Any]] = []
+
+        def default_prompt_cache_identity(self) -> Tuple[str, str]:
+            return "stub-provider", "default-model"
+
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
+            self.calls.append(
+                {
+                    "prompt": prompt,
+                    "messages": messages,
+                    "system_prompt": system_prompt,
+                    "media": media,
+                    "tools": tools,
+                    "params": dict(params or {}),
+                }
+            )
+            return {"content": "ok"}
+
+    llm = _CapturingLLM()
+    handler = make_llm_call_handler(llm=llm)
+    run = RunState.new(
+        workflow_id="wf-cache",
+        entry_node="node-a",
+        session_id="sess-cache",
+        vars={"_runtime": {"prompt_cache": True}},
+    )
+    run.current_node = "node-a"
+
+    effect = Effect(type=EffectType.LLM_CALL, payload={"prompt": "hello", "params": {}}, result_key="llm")
+    outcome = handler(run, effect, None)
+
+    assert outcome.status == "completed"
+    params = llm.calls[-1]["params"]
+    assert params["prompt_cache_key"] == _derive_prompt_cache_key(
+        namespace="session",
+        session_id="sess-cache",
+        provider="stub-provider",
+        model="default-model",
+        workflow_id="wf-cache",
+        node_id="node-a",
+    )
+
+    effect_override = Effect(
+        type=EffectType.LLM_CALL,
+        payload={"prompt": "hello", "provider": "other-provider", "model": "other-model", "params": {}},
+        result_key="llm",
+    )
+    outcome = handler(run, effect_override, None)
+
+    assert outcome.status == "completed"
+    params = llm.calls[-1]["params"]
+    assert params["prompt_cache_key"] == _derive_prompt_cache_key(
+        namespace="session",
+        session_id="sess-cache",
+        provider="other-provider",
+        model="other-model",
+        workflow_id="wf-cache",
+        node_id="node-a",
+    )

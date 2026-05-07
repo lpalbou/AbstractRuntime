@@ -211,6 +211,7 @@ def create_remote_runtime(
         model=model,
         headers=headers,
         timeout_s=resolved_timeout_s,
+        artifact_store=artifact_store,
     )
     tools = tool_executor or PassthroughToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
@@ -275,6 +276,7 @@ def create_hybrid_runtime(
         model=model,
         headers=headers,
         timeout_s=resolved_timeout_s,
+        artifact_store=artifact_store,
     )
     tools = AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     try:

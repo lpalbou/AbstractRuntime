@@ -39,22 +39,28 @@ from abstractruntime.scheduler import WorkflowRegistry
 # Setup
 # -----------------------------------------------------------------------------
 
+MODEL = "gemma3:1b-it-q4_K_M"
+PROVIDER = "ollama"
+
+
 def ollama_available() -> bool:
     try:
         import httpx
         resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        models = data.get("models") if isinstance(data, dict) else None
+        names = {str(m.get("name") or "") for m in models or [] if isinstance(m, dict)}
+        return MODEL in names
     except Exception:
         return False
 
 
 pytestmark = pytest.mark.skipif(
     not ollama_available(),
-    reason="Ollama not available"
+    reason=f"Ollama model {MODEL!r} not available"
 )
-
-MODEL = "gemma3:1b-it-q4_K_M"
-PROVIDER = "ollama"
 
 
 def create_test_runtime(**kwargs) -> Runtime:

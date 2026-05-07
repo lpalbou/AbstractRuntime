@@ -7,9 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-07
+
 ### Added
+- **AbstractCore multimodal generation integration**:
+  - `LLM_CALL` now forwards AbstractCore's unified `generate(..., output=...)` selector for image generation, TTS/voice output, and audio transcription
+  - generated binary outputs are normalized into JSON-safe runtime results with ArtifactStore-backed refs instead of inline bytes
+  - local runtimes can use AbstractCore capability plugins such as AbstractVision and AbstractVoice through the same runtime effect shape
+  - remote runtimes support AbstractCore Server image generation, speech, and transcription endpoints, plus OpenAI-compatible chat media content arrays
+- **Multimodal packaging extra**:
+  - new `abstractruntime[multimodal]` extra installs `abstractcore[media,openai,vision,voice,audio]>=2.13.8`
+- **VisualFlow LLM media selectors**:
+  - LLM nodes lowered from VisualFlow can request generated media through `output` / `outputs` from node config or input data
+
 ### Changed
+- Minimum `abstractcore` optional dependency increased to `>=2.13.8` for the unified multimodal response types.
+- `LLM_CALL` accepts top-level `text`, top-level `output`, and top-level `outputs` as a runtime alias for AbstractCore `output`.
+- `LLM_CALL.media` accepts one media item or a list; artifact refs are materialized to provider-ready temporary files before model calls.
+- Remote AbstractCore clients now preserve existing OpenAI-style content arrays when adding media attachments.
+- Remote AbstractCore clients now resolve ArtifactStore-backed media refs for direct client use, matching the runtime effect-handler path.
+- VisualFlow LLM pending-call lowering now carries `output` / `outputs` selectors into runtime LLM effects.
+- VisualFlow LLM result syncing now projects generated media artifacts into node outputs such as `outputs`, `resources`, `artifact_ref`, `artifact_id`, and `meta.output_mode`.
+
 ### Fixed
+- Runtime artifact metadata (`run_id`, tags, artifact ids) is kept out of AbstractCore provider/capability kwargs while still being applied to stored generated media artifacts.
+- Generated binary media now fails closed without an ArtifactStore instead of embedding base64 bytes in durable state.
+- Remote image/TTS/STT calls no longer reuse the chat model unless an output-specific media model is supplied.
+- Remote media inputs now either convert to a provider-ready content item or fail before dispatch; unsupported remote image edits, voice reference inputs, and non-file STT inputs are rejected explicitly.
+- Turn-grounding injection now preserves structured multimodal message content arrays instead of stringifying them.
+- Session-scoped prompt-cache key derivation now uses the effective AbstractCore client provider/model identity when an `LLM_CALL` payload omits explicit provider/model overrides.
+
+### Documentation
+- Documented multimodal `LLM_CALL` payloads, artifact-backed response shape, remote endpoint coverage, cached-session/prompt-cache boundaries, and the `abstractruntime[multimodal]` extra in the AbstractCore integration guide, API reference, architecture guide, FAQ, README, getting-started guide, docs index, and AI-ready `llms*.txt` files.
+- Added a planned workspace/media access policy item covering default workspace-only access, explicit user allow/deny paths, and a conscious full-machine access mode for long-running agency deployments.
+
+### Testing
+- Added focused coverage for multimodal response normalization, artifact-backed generated media, media-only transcription calls, remote image/TTS/STT endpoints, remote media guardrails, remote chat media content arrays, content-array prompt extraction, direct remote artifact-ref media resolution, text-alias routing, provider-request redaction, and runtime metadata/tag boundaries.
+- Added coverage for effective prompt-cache key identity and VisualFlow LLM media selector/result projection.
 
 ## [0.4.3] - 2026-05-06
 
@@ -19,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - local clients can maintain compartmentalized `system | tools | history` prompt-cache modules when providers support `local_control_plane`
   - remote clients proxy `/acore/prompt_cache/*` endpoints for gateway/CLI hosts
 - **Artifact-backed media for AbstractCore LLM calls**:
-  - local/hybrid AbstractCore clients can resolve runtime artifact refs into provider-ready media inputs
+  - local and remote AbstractCore clients can resolve runtime artifact refs into provider-ready media inputs
   - AbstractCore runtime factories now pass the runtime artifact store into LLM clients
 - **Durable tool approval execution**:
   - `ToolApprovalPolicy` and `ApprovalToolExecutor` support safe auto-approval, durable approval waits, and approved re-execution
@@ -289,7 +323,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.4
 [0.4.3]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.3
 [0.4.2]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.2
 [0.4.1]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.1

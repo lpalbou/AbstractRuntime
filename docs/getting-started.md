@@ -18,7 +18,7 @@ Optional (LLM + tools via AbstractCore):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This installs AbstractCore 2.13.5 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, and current tool behavior.
+This installs AbstractCore 2.13.8 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, current tool behavior, and unified multimodal generation response types. Use `abstractruntime[multimodal]` when your workflows need common media, vision, voice, or audio dependencies.
 
 ## Mental model (source of truth)
 
@@ -142,4 +142,4 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 - `architecture.md` — component map + durability invariants (with diagrams)
 - `manual_testing.md` — smoke tests and how to run `pytest`
 - `../examples/README.md` — runnable scripts
-- `integrations/abstractcore.md` — `LLM_CALL` / `TOOL_CALLS`
+- `integrations/abstractcore.md` — `LLM_CALL` / `TOOL_CALLS`, cached sessions/prompt-cache, media inputs, generated media

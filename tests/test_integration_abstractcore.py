@@ -25,19 +25,27 @@ from abstractruntime import (
 from abstractruntime.integrations.abstractcore import create_local_runtime
 
 
+OLLAMA_MODEL = "gemma3:1b-it-q4_K_M"
+
+
 # Skip if Ollama not available
 def ollama_available() -> bool:
     try:
         import httpx
         resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        models = data.get("models") if isinstance(data, dict) else None
+        names = {str(m.get("name") or "") for m in models or [] if isinstance(m, dict)}
+        return OLLAMA_MODEL in names
     except Exception:
         return False
 
 
 pytestmark = pytest.mark.skipif(
     not ollama_available(),
-    reason="Ollama not available"
+    reason=f"Ollama model {OLLAMA_MODEL!r} not available"
 )
 
 
@@ -85,7 +93,7 @@ class TestAbstractCoreIntegration:
 
         runtime = create_local_runtime(
             provider="ollama",
-            model="gemma3:1b-it-q4_K_M",
+            model=OLLAMA_MODEL,
         )
 
         run_id = runtime.start(workflow=workflow)
@@ -147,7 +155,7 @@ class TestAbstractCoreIntegration:
 
         runtime = create_local_runtime(
             provider="ollama",
-            model="gemma3:1b-it-q4_K_M",
+            model=OLLAMA_MODEL,
         )
 
         run_id = runtime.start(workflow=workflow)
@@ -190,7 +198,7 @@ class TestAbstractCoreIntegration:
 
         runtime = create_local_runtime(
             provider="ollama",
-            model="gemma3:1b-it-q4_K_M",
+            model=OLLAMA_MODEL,
             effect_policy=RetryPolicy(llm_max_attempts=2),
         )
 
@@ -274,7 +282,7 @@ class TestSubworkflowWithLLM:
 
         runtime = create_local_runtime(
             provider="ollama",
-            model="gemma3:1b-it-q4_K_M",
+            model=OLLAMA_MODEL,
         )
         runtime.set_workflow_registry(registry)
 

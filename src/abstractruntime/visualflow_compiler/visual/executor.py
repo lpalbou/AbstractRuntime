@@ -1568,6 +1568,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if max_output_tokens_default is None:
             max_output_tokens_default = config.get("maxOutputTokens")
 
+        output_default_marker = object()
+        output_default = config.get("output", output_default_marker)
+        if output_default is output_default_marker:
+            output_default = config.get("outputs", output_default_marker)
+
         structured_output_fallback_cfg = config.get("structured_output_fallback")
         structured_output_fallback_default = (
             _coerce_bool(structured_output_fallback_cfg) if structured_output_fallback_cfg is not None else False
@@ -1805,6 +1810,19 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
                 params["max_output_tokens"] = int(max_output_tokens_value)
 
+            output_specified = False
+            output_request: Any = None
+            if isinstance(input_data, dict):
+                if "output" in input_data:
+                    output_request = input_data.get("output")
+                    output_specified = True
+                elif "outputs" in input_data:
+                    output_request = input_data.get("outputs")
+                    output_specified = True
+            if not output_specified and output_default is not output_default_marker:
+                output_request = output_default
+                output_specified = True
+
             # Memory-source access pins (467): pass through for compiler/runtime pre-call scheduling.
             #
             # NOTE: we intentionally keep values JSON-safe and mostly unmodified here.
@@ -1863,17 +1881,20 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                         mem_cfg[raw_key] = input_data.get(raw_key)
 
             if not provider or not model:
+                pending_missing: Dict[str, Any] = {
+                    "type": "llm_call",
+                    "prompt": prompt,
+                    "system_prompt": system,
+                    "tools": tools,
+                    "params": dict(params),
+                    "include_context": include_context_value,
+                    **mem_cfg,
+                }
+                if output_specified:
+                    pending_missing["output"] = output_request
                 return {
                     "response": "[LLM Call: missing provider/model]",
-                    "_pending_effect": {
-                        "type": "llm_call",
-                        "prompt": prompt,
-                        "system_prompt": system,
-                        "tools": tools,
-                        "params": dict(params),
-                        "include_context": include_context_value,
-                        **mem_cfg,
-                    },
+                    "_pending_effect": pending_missing,
                     "error": "Missing provider or model configuration",
                 }
 
@@ -1896,6 +1917,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "include_context": include_context_value,
                 **mem_cfg,
             }
+            if output_specified:
+                pending["output"] = output_request
             if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
                 pending["max_input_tokens"] = int(max_input_tokens_value)
             if isinstance(response_schema, dict) and response_schema:

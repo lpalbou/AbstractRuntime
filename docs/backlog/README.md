@@ -33,8 +33,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 014 | `planned/014_remote_tool_worker_executor.md` |
 | 015 | `planned/015_agent_integration_improvements.md` |
 | 017 | `planned/017_limit_warnings_and_observability.md` |
+| 018 | `planned/018_workspace_access_policy_for_media_and_tools.md` |
 
 ## Deprecated
 
 See `deprecated/DEPRECATED_README.md` for context on the deprecated backlog set.
-

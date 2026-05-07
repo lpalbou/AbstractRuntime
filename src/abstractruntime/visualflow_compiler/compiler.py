@@ -2339,6 +2339,62 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             return out
         return []
 
+    def _has_nonempty_generation_map(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        for items in value.values():
+            if isinstance(items, list) and items:
+                return True
+        return False
+
+    def _artifact_ref_from_generated_item(item: Any) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if not isinstance(item, dict):
+            return None, None
+
+        raw_ref = item.get("artifact_ref")
+        if isinstance(raw_ref, dict):
+            artifact_id = raw_ref.get("$artifact") or raw_ref.get("artifact_id") or raw_ref.get("id")
+            if isinstance(artifact_id, str) and artifact_id.strip():
+                ref = dict(raw_ref)
+                ref["$artifact"] = artifact_id.strip()
+                ref["artifact_id"] = artifact_id.strip()
+                return artifact_id.strip(), ref
+
+        artifact_id = item.get("$artifact") or item.get("artifact_id")
+        if isinstance(artifact_id, str) and artifact_id.strip():
+            ref = {"$artifact": artifact_id.strip(), "artifact_id": artifact_id.strip()}
+            content_type = item.get("content_type")
+            if isinstance(content_type, str) and content_type.strip():
+                ref["content_type"] = content_type.strip()
+            size_bytes = item.get("size_bytes")
+            if size_bytes is not None and not isinstance(size_bytes, bool):
+                ref["size_bytes"] = size_bytes
+            return artifact_id.strip(), ref
+
+        return None, None
+
+    def _first_generated_artifact(raw: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        aid, ref = _artifact_ref_from_generated_item({"artifact_ref": raw.get("artifact_ref")})
+        if aid and ref:
+            return aid, ref
+
+        top_artifact_id = raw.get("artifact_id")
+        if isinstance(top_artifact_id, str) and top_artifact_id.strip():
+            return top_artifact_id.strip(), {"$artifact": top_artifact_id.strip(), "artifact_id": top_artifact_id.strip()}
+
+        for bucket_key in ("outputs", "resources"):
+            bucket = raw.get(bucket_key)
+            if not isinstance(bucket, dict):
+                continue
+            for items in bucket.values():
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    aid, ref = _artifact_ref_from_generated_item(item)
+                    if aid and ref:
+                        return aid, ref
+        return None, None
+
     def _extract_agent_tool_activity(scratchpad: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extract tool call requests and tool results from an agent scratchpad.
 
@@ -2436,6 +2492,9 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             if isinstance(raw, dict):
                 tool_calls = _as_dict_list(raw.get("tool_calls"))
                 data = raw.get("data")
+                outputs = raw.get("outputs")
+                resources = raw.get("resources")
+                has_generated_output = _has_nonempty_generation_map(outputs) or _has_nonempty_generation_map(resources)
                 response_text = ""
                 if isinstance(data, (dict, list)):
                     try:
@@ -2452,11 +2511,26 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 # to drill into `result.tool_calls` via a Break Object node.
                 current["tool_calls"] = tool_calls
                 current["success"] = True
+                if isinstance(outputs, dict):
+                    current["outputs"] = outputs
+                if isinstance(resources, dict):
+                    current["resources"] = resources
+                artifact_id, artifact_ref = _first_generated_artifact(raw)
+                if artifact_id:
+                    current["artifact_id"] = artifact_id
+                if artifact_ref:
+                    current["artifact_ref"] = artifact_ref
 
                 meta: Dict[str, Any] = {
                     "schema": "abstractflow.llm_call.v1.meta",
                     "version": 1,
-                    "output_mode": "structured" if isinstance(data, (dict, list)) else "unstructured",
+                    "output_mode": (
+                        "media"
+                        if has_generated_output
+                        else "structured"
+                        if isinstance(data, (dict, list))
+                        else "unstructured"
+                    ),
                     "tool_calls": len(tool_calls),
                 }
                 provider = raw.get("provider")

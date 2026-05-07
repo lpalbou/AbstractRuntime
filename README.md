@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.3 (see `pyproject.toml`) • **Python:** 3.10+
+**Version:** 0.4.4 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.5 or newer so the hardened server auth model, provider-key header routing, prompt-cache control plane, and current tool catalog are available.
+The `abstractcore` extra installs AbstractCore 2.13.8 or newer so the hardened server auth model, provider-key header routing, prompt-cache control plane, current tool catalog, and unified multimodal generation response types are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, and audio dependencies.
 
 MCP worker entrypoint (default toolsets over stdio):
 
@@ -87,7 +87,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.3)
+## What’s included (v0.4.4)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -111,7 +111,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Optional integrations:
-- AbstractCore (LLM + tools, prompt cache, tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, cached sessions/prompt cache, media inputs, generated media, tool approval waits): `docs/integrations/abstractcore.md`
 - comms toolset gating (email/WhatsApp/Telegram): `docs/tools-comms.md`
 
 ## Built-in scheduler (zero-config)

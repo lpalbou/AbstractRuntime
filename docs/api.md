@@ -125,6 +125,7 @@ Key types:
 Artifacts are used by:
 - offloading wrappers (`src/abstractruntime/storage/offloading.py`)
 - evidence capture (`docs/evidence.md`, `src/abstractruntime/evidence/recorder.py`)
+- AbstractCore media integration: input artifact refs can be materialized for LLM calls, and generated image/voice/audio outputs are stored as artifact refs
 
 ## Snapshots / bookmarks
 
@@ -175,7 +176,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.5 or newer).
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.8 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -184,6 +185,24 @@ Entry points:
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - prompt-cache control methods on the configured LLM client: `get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules` (`src/abstractruntime/integrations/abstractcore/llm_client.py`)
+
+`LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
+- `prompt`, `messages`, `system_prompt`, and convenience `text`
+- `media`: a media path, artifact ref (`{"$artifact": "..."}` or `{"artifact_id": "..."}`), media dict, or list of those
+- `output`: AbstractCore output selector; top-level `outputs` is accepted as a runtime alias
+- `params`: provider/model routing, generation controls, prompt-cache keys, structured-output schema options, and tracing metadata
+
+Multimodal support:
+- install `abstractruntime[multimodal]` for common AbstractCore media, vision, voice, and audio dependencies
+- local clients call AbstractCore's unified `generate(..., media=..., output=...)`
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
+- generated image/voice/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+
+Prompt cache / cached sessions:
+- LLM clients expose cache control methods listed above for host-side preparation and inspection
+- `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]`
+- provider cache/session handles are not durable runtime state and should not be stored in `RunState.vars`
 
 Docs: `integrations/abstractcore.md`.
 

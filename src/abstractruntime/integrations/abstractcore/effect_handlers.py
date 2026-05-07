@@ -26,6 +26,11 @@ from ...core.runtime import EffectOutcome, EffectHandler
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient
+from .output_specs import (
+    is_abstractcore_output_request,
+    output_request_has_generated_media,
+    normalize_output_specs_for_runtime,
+)
 from .tool_executor import ToolExecutor
 from .logging import get_logger
 from .session_attachments import (
@@ -118,6 +123,81 @@ def _jsonable(value: Any) -> Any:
         return value
     except Exception:
         return str(value)
+
+
+_MISSING = object()
+
+
+def _coerce_media_input(media: Any) -> Any:
+    """Accept AbstractCore's single-media convenience shapes while keeping payloads JSON-safe."""
+    if media is None:
+        return None
+    if isinstance(media, tuple):
+        return list(media)
+    if isinstance(media, list):
+        return media
+    if isinstance(media, (str, dict)):
+        return [media]
+    return media
+
+
+def _payload_output_request(payload: Dict[str, Any], params: Dict[str, Any]) -> Any:
+    if "output" in params:
+        return params.get("output")
+    if "output" in payload:
+        return payload.get("output")
+    if "outputs" in payload:
+        # Runtime convenience alias for AbstractCore's `output=...`.
+        return payload.get("outputs")
+    return _MISSING
+
+
+def _runtime_output_tags(run: RunState, *, generated_media: bool) -> Dict[str, str]:
+    tags: Dict[str, str] = {
+        "kind": "generated_media" if generated_media else "llm_output",
+        "source": "llm_call",
+        "run_id": str(run.run_id),
+        "workflow_id": str(run.workflow_id),
+        "node_id": str(run.current_node),
+    }
+    if run.actor_id:
+        tags["actor_id"] = str(run.actor_id)
+    if getattr(run, "session_id", None):
+        tags["session_id"] = str(run.session_id)
+    if run.parent_run_id:
+        tags["parent_run_id"] = str(run.parent_run_id)
+    return tags
+
+
+def _augment_output_request_for_runtime(output: Any, *, run: RunState) -> Any:
+    """Attach run-scoped artifact metadata to AbstractCore output specs."""
+
+    if not is_abstractcore_output_request(output):
+        return output
+
+    specs = normalize_output_specs_for_runtime(output)
+    out_specs: list[Dict[str, Any]] = []
+    for spec in specs:
+        s = dict(spec)
+        if not isinstance(s.get("run_id"), str) or not str(s.get("run_id") or "").strip():
+            s["run_id"] = str(run.run_id)
+
+        modality = str(s.get("modality") or "").strip().lower()
+        task = str(s.get("task") or "").strip()
+        tags = _runtime_output_tags(run, generated_media=modality != "text")
+        existing_tags = s.get("tags")
+        if isinstance(existing_tags, dict):
+            tags.update({str(k): str(v) for k, v in existing_tags.items() if v is not None})
+        if modality:
+            tags.setdefault("modality", modality)
+        if task:
+            tags.setdefault("task", task)
+        s["tags"] = tags
+        out_specs.append(s)
+
+    if isinstance(output, (list, tuple)):
+        return out_specs
+    return out_specs[0] if out_specs else output
 
 
 def _normalize_response_schema(raw: Any) -> Optional[Dict[str, Any]]:
@@ -420,7 +500,42 @@ def _derive_prompt_cache_key(
     return f"{ns}:{digest}"
 
 
-def _maybe_inject_prompt_cache_key(*, run: RunState, params: Dict[str, Any]) -> None:
+def _llm_prompt_cache_identity(llm: Any) -> tuple[Optional[str], Optional[str]]:
+    getter = getattr(llm, "default_prompt_cache_identity", None)
+    if callable(getter):
+        try:
+            raw = getter()
+        except Exception:
+            raw = None
+        if isinstance(raw, dict):
+            provider = raw.get("provider")
+            model = raw.get("model")
+            return (
+                provider.strip().lower() if isinstance(provider, str) and provider.strip() else None,
+                model.strip() if isinstance(model, str) and model.strip() else None,
+            )
+        if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            provider, model = raw[0], raw[1]
+            return (
+                provider.strip().lower() if isinstance(provider, str) and provider.strip() else None,
+                model.strip() if isinstance(model, str) and model.strip() else None,
+            )
+
+    provider = getattr(llm, "_default_provider", None) or getattr(llm, "_provider", None)
+    model = getattr(llm, "_default_model", None) or getattr(llm, "_model", None)
+    return (
+        provider.strip().lower() if isinstance(provider, str) and provider.strip() else None,
+        model.strip() if isinstance(model, str) and model.strip() else None,
+    )
+
+
+def _maybe_inject_prompt_cache_key(
+    *,
+    run: RunState,
+    params: Dict[str, Any],
+    default_provider: Optional[str] = None,
+    default_model: Optional[str] = None,
+) -> None:
     # Explicit caller override wins (including None/empty for "disable").
     if "prompt_cache_key" in params:
         return
@@ -464,8 +579,8 @@ def _maybe_inject_prompt_cache_key(*, run: RunState, params: Dict[str, Any]) -> 
     workflow_id = str(trace_md.get("workflow_id") or run.workflow_id or "").strip()
     node_id = str(trace_md.get("node_id") or run.current_node or "").strip()
 
-    provider = str(params.get("_provider") or "").strip().lower()
-    model = str(params.get("_model") or "").strip()
+    provider = str(params.get("_provider") or default_provider or "").strip().lower()
+    model = str(params.get("_model") or default_model or "").strip()
     if not provider or not model:
         return
 
@@ -730,9 +845,10 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
         prompt = payload.get("prompt")
+        text_input = payload.get("text")
         messages = payload.get("messages")
         system_prompt = payload.get("system_prompt")
-        media = payload.get("media")
+        media = _coerce_media_input(payload.get("media"))
         provider = payload.get("provider")
         model = payload.get("model")
         tools_raw = payload.get("tools")
@@ -742,6 +858,12 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         structured_output_fallback = payload.get("structured_output_fallback")
         raw_params = payload.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        output_request = _payload_output_request(payload, params)
+        if output_request is not _MISSING:
+            params["output"] = output_request
+        if text_input is not None and not (isinstance(prompt, str) and prompt.strip()):
+            prompt = str(text_input)
 
         # Propagate durable trace context into AbstractCore calls.
         trace_metadata = params.get("trace_metadata")
@@ -758,7 +880,18 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         if isinstance(model, str) and model.strip():
             params["_model"] = model.strip()
 
-        _maybe_inject_prompt_cache_key(run=run, params=params)
+        default_provider, default_model = _llm_prompt_cache_identity(llm)
+        _maybe_inject_prompt_cache_key(
+            run=run,
+            params=params,
+            default_provider=default_provider,
+            default_model=default_model,
+        )
+        if "output" in params:
+            params["output"] = _augment_output_request_for_runtime(params.get("output"), run=run)
+
+        if artifact_store is None and output_request_has_generated_media(params.get("output")):
+            return EffectOutcome.failed("llm_call generated media outputs require an ArtifactStore")
 
         def _nonempty_str(value: Any) -> Optional[str]:
             if not isinstance(value, str):
@@ -770,7 +903,14 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
         has_messages = isinstance(messages, list) and len(messages) > 0
         has_prompt = isinstance(prompt, str) and bool(prompt)
-        if not has_prompt and not has_messages:
+        has_text_input = isinstance(text_input, str) and bool(text_input.strip())
+        has_media_input = isinstance(media, list) and len(media) > 0
+        has_output_request = "output" in params and is_abstractcore_output_request(params.get("output"))
+        if not has_prompt and not has_messages and not has_text_input and not (has_media_input and has_output_request):
+            if has_media_input or "output" in params:
+                return EffectOutcome.failed(
+                    "llm_call requires payload.prompt, payload.messages, payload.text, or media with payload.output"
+                )
             return EffectOutcome.failed(
                 "llm_call requires payload.prompt or payload.messages"
             )

@@ -51,6 +51,8 @@ jobs:
             tests/test_tool_approval_resume_executes.py \
             tests/test_remote_llm_client.py \
             tests/test_prompt_cache_modules.py \
+            tests/test_multimodal_abstractcore_integration.py \
+            tests/test_visualflow_llm_call_multimodal_output.py \
             tests/test_visual_multi_entry_loop_overrides.py \
             tests/test_control_adapter_while.py \
             tests/test_jsonl_ledger_recovery.py \

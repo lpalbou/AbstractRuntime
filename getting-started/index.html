@@ -1046,7 +1046,7 @@
 <p>Optional (LLM + tools via AbstractCore):</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This installs AbstractCore 2.13.9 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, current tool behavior, unified multimodal generation response types, and public output-selector contract. Use <code>abstractruntime[multimodal]</code> when your workflows need common media, vision, voice, or audio dependencies.</p>
+<p>This installs AbstractCore 2.13.10 or newer, which matches the documented server auth, provider-key header routing, prompt-cache control plane, current tool behavior, unified multimodal generation response types, public output-selector contract, and async/sync text-generation output-selector parity. Use <code>abstractruntime[multimodal]</code> when your workflows need common media, vision, voice, or audio dependencies.</p>
 <h2 id="mental-model-source-of-truth">Mental model (source of truth)<a class="headerlink" href="#mental-model-source-of-truth" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Workflows are in-memory graphs: <code>WorkflowSpec</code> (<code>src/abstractruntime/core/spec.py</code>)</li>

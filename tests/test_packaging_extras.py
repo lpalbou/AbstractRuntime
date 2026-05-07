@@ -27,7 +27,8 @@ def test_runtime_exposes_abstractcore_and_worker_extras() -> None:
     assert "[project.optional-dependencies]" in text
     assert "abstractcore = [" in text
     assert "mcp-worker = [" in text
+    assert '"abstractcore>=2.13.10"' in text
+    assert '"abstractcore[media,openai,vision,voice,audio]>=2.13.10"' in text
 
     worker_block = _extract_optional_dependency_block(text, key="mcp-worker")
-    assert "abstractcore[tools]" in worker_block
-
+    assert '"abstractcore[tools]>=2.13.10"' in worker_block

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-07
+
+### Changed
+- Minimum `abstractcore` optional dependency increased to `>=2.13.10` so Runtime picks up AbstractCore's async/sync text-generation output-selector parity in addition to the public output-selector contract.
+
+### Fixed
+- AbstractCore output-selector imports now fail fast when an older local AbstractCore install exposes the helper module but does not include the 2.13.10 async parity fix.
+
 ## [0.4.5] - 2026-05-07
 
 ### Changed
@@ -332,7 +340,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/lpalbou/abstractruntime/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/lpalbou/abstractruntime/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.4
 [0.4.3]: https://github.com/lpalbou/abstractruntime/releases/tag/v0.4.3

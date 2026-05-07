@@ -4,7 +4,26 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+_MIN_ABSTRACTCORE_VERSION = (2, 13, 10)
+_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.10"
+
+
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    parts: list[int] = []
+    for raw in str(value or "").split(".")[:3]:
+        digits = []
+        for char in raw:
+            if not char.isdigit():
+                break
+            digits.append(char)
+        parts.append(int("".join(digits) or "0"))
+    while len(parts) < 3:
+        parts.append(0)
+    return parts[0], parts[1], parts[2]
+
+
 try:
+    from abstractcore.utils.version import __version__ as _abstractcore_version
     from abstractcore.core.output_specs import (
         is_output_request,
         normalize_output_spec,
@@ -15,9 +34,15 @@ try:
     )
 except ImportError as exc:  # pragma: no cover - import-time dependency guard
     raise ImportError(
-        "abstractruntime.integrations.abstractcore requires abstractcore>=2.13.9 "
+        f"abstractruntime.integrations.abstractcore requires abstractcore>={_MIN_ABSTRACTCORE_VERSION_TEXT} "
         "for the public output selector contract."
     ) from exc
+
+if _version_tuple(_abstractcore_version) < _MIN_ABSTRACTCORE_VERSION:  # pragma: no cover - environment guard
+    raise ImportError(
+        f"abstractruntime.integrations.abstractcore requires abstractcore>={_MIN_ABSTRACTCORE_VERSION_TEXT} "
+        f"for async/sync output-selector parity; found abstractcore {_abstractcore_version}."
+    )
 
 
 def is_abstractcore_output_request(output: Any) -> bool:

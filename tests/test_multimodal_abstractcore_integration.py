@@ -15,7 +15,9 @@ from abstractruntime.integrations.abstractcore.llm_client import (
 )
 from abstractruntime.integrations.abstractcore.output_specs import (
     is_abstractcore_output_request,
+    normalize_output_specs_for_runtime,
     output_request_has_generated_media,
+    output_request_has_non_text_result,
 )
 from abstractruntime.storage.artifacts import InMemoryArtifactStore
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
@@ -243,7 +245,12 @@ def test_llm_call_generated_media_requires_artifact_store() -> None:
 
 
 def test_runtime_output_selector_adapter_delegates_to_public_abstractcore_contract() -> None:
-    from abstractcore.core.output_specs import is_output_request, output_has_generated_media
+    from abstractcore.core.output_specs import (
+        is_output_request,
+        normalize_output_specs,
+        output_has_generated_media,
+        output_requires_non_chat_dispatch,
+    )
 
     cases = [
         "text",
@@ -251,6 +258,7 @@ def test_runtime_output_selector_adapter_delegates_to_public_abstractcore_contra
         {"modality": "audio"},
         {"modality": "voice"},
         {"task": "tts"},
+        {"task": "text_generation"},
         {"task": "image_edit"},
         [{"modality": "text"}, {"modality": "image"}],
         "json",
@@ -260,7 +268,12 @@ def test_runtime_output_selector_adapter_delegates_to_public_abstractcore_contra
     for case in cases:
         assert is_abstractcore_output_request(case) is is_output_request(case)
 
+    text_generation = {"task": "text_generation"}
+    assert normalize_output_specs_for_runtime(text_generation) == normalize_output_specs(text_generation)
     assert output_request_has_generated_media("image") is output_has_generated_media("image")
+    assert output_request_has_generated_media(text_generation) is False
+    assert output_request_has_non_text_result(text_generation) is output_requires_non_chat_dispatch(text_generation)
+    assert output_request_has_non_text_result(text_generation) is False
     assert output_request_has_generated_media({"task": "voice_clone"}) is False
 
 

@@ -10,11 +10,11 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.5
+- Version: 0.4.6
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
-- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.9`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.9`
+- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.10`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.10`
 
 ```mermaid
 flowchart LR

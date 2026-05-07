@@ -1114,11 +1114,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.8 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), prompt-cache control-plane endpoints, current tool catalog, and the unified multimodal <code>generate(..., output=...)</code> response types.</p>
+<p>This extra installs AbstractCore 2.13.9 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), prompt-cache control-plane endpoints, current tool catalog, the unified multimodal <code>generate(..., output=...)</code> response types, and AbstractCore's public output-selector contract.</p>
 <p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.8</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
+<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.9</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>

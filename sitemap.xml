@@ -2,210 +2,218 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/api/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/architecture/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/evidence/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/faq/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/getting-started/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/limits/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/manual_testing/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/mcp-worker/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/proposal/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/provenance/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/snapshots/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/tools-comms/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/workflow-bundles/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/adr/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/adr/0001_layered_coupling_with_abstractcore/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/adr/0002_execution_modes_local_remote_hybrid/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/adr/0003_provenance_tamper_evident_hash_chain/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/001_runtime_kernel/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/002_persistence_and_ledger/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/003_wait_primitives/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/004_scheduler_driver/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/005_abstractcore_integration/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/006_snapshots_bookmarks/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/007_provenance_hash_chain/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/009_artifact_store/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/010_examples_and_composition/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/011_subworkflow_support/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/012_run_store_query_and_scheduler_support/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/013_effect_retries_and_idempotency/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/016_runtime_aware_parameters/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/001_integrations_abstractcore/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/001_runtime_kernel/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/002_persistence_and_ledger/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/002_snapshots_bookmarks/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/003_provenance_ledger_chain/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/003_wait_resume_and_scheduler/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/004_effect_handlers_and_integrations/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/004_tests/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/005_docs_updates/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/005_examples_and_composition/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/006_ai_fingerprint_and_provenance/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/DEPRECATED_README/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/abstractruntime_docs_final_02a7373b.plan/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/008_signatures_and_keys/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/014_remote_tool_worker_executor/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/015_agent_integration_improvements/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/017_limit_warnings_and_observability/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/018_workspace_access_policy_for_media_and_tools/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-08_runtime_gateway_env_namespace_cleanup/</loc>
+         <lastmod>2026-05-08</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-08_runtime_gateway_install_boundary/</loc>
+         <lastmod>2026-05-08</lastmod>
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/integrations/abstractcore/</loc>
-         <lastmod>2026-05-07</lastmod>
+         <lastmod>2026-05-08</lastmod>
     </url>
 </urlset>

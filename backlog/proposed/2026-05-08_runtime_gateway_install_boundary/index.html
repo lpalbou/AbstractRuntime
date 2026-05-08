@@ -10,28 +10,24 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/adr/0002_execution_modes_local_remote_hybrid/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-08_runtime_gateway_install_boundary/">
       
       
-        <link rel="prev" href="../0001_layered_coupling_with_abstractcore/">
-      
-      
-        <link rel="next" href="../0003_provenance_tamper_evident_hash_chain/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Execution Modes - AbstractRuntime</title>
+        <title>Proposed: Runtime Gateway Install Boundary - AbstractRuntime</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -50,7 +46,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -68,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#adr-0002-execution-modes-local-remote-hybrid" class="md-skip">
+        <a href="#proposed-runtime-gateway-install-boundary" class="md-skip">
           Skip to content
         </a>
       
@@ -84,7 +80,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -104,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Execution Modes
+              Proposed: Runtime Gateway Install Boundary
             
           </span>
         </div>
@@ -194,7 +190,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -224,7 +220,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -251,7 +247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/" class="md-nav__link">
+      <a href="../../../getting-started/" class="md-nav__link">
         
   
   
@@ -278,7 +274,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/" class="md-nav__link">
+      <a href="../../../api/" class="md-nav__link">
         
   
   
@@ -305,7 +301,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/" class="md-nav__link">
+      <a href="../../../architecture/" class="md-nav__link">
         
   
   
@@ -332,7 +328,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/abstractcore/" class="md-nav__link">
+      <a href="../../../integrations/abstractcore/" class="md-nav__link">
         
   
   
@@ -359,7 +355,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tools-comms/" class="md-nav__link">
+      <a href="../../../tools-comms/" class="md-nav__link">
         
   
   
@@ -386,7 +382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../mcp-worker/" class="md-nav__link">
+      <a href="../../../mcp-worker/" class="md-nav__link">
         
   
   
@@ -413,7 +409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../workflow-bundles/" class="md-nav__link">
+      <a href="../../../workflow-bundles/" class="md-nav__link">
         
   
   
@@ -440,7 +436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../snapshots/" class="md-nav__link">
+      <a href="../../../snapshots/" class="md-nav__link">
         
   
   
@@ -467,7 +463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../provenance/" class="md-nav__link">
+      <a href="../../../provenance/" class="md-nav__link">
         
   
   
@@ -494,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evidence/" class="md-nav__link">
+      <a href="../../../evidence/" class="md-nav__link">
         
   
   
@@ -521,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../limits/" class="md-nav__link">
+      <a href="../../../limits/" class="md-nav__link">
         
   
   
@@ -548,7 +544,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../faq/" class="md-nav__link">
+      <a href="../../../faq/" class="md-nav__link">
         
   
   
@@ -575,7 +571,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../manual_testing/" class="md-nav__link">
+      <a href="../../../manual_testing/" class="md-nav__link">
         
   
   
@@ -599,20 +595,18 @@
       
   
   
-    
   
   
-  
     
     
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
         
           
           <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
@@ -633,7 +627,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_15">
             <span class="md-nav__icon md-icon"></span>
             
@@ -651,7 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../proposal/" class="md-nav__link">
+      <a href="../../../proposal/" class="md-nav__link">
         
   
   
@@ -679,7 +673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../../adr/" class="md-nav__link">
         
   
   
@@ -707,7 +701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
         
   
   
@@ -732,35 +726,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Execution Modes
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
         
   
   
@@ -776,96 +745,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#adr-0002-execution-modes-local-remote-hybrid" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ADR 0002: Execution modes (local, remote, hybrid)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="ADR 0002: Execution modes (local, remote, hybrid)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#context" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Context
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#decision" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Decision
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#consequences" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Consequences
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -878,7 +757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
         
   
   
@@ -923,6 +802,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -931,29 +812,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#adr-0002-execution-modes-local-remote-hybrid" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ADR 0002: Execution modes (local, remote, hybrid)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="ADR 0002: Execution modes (local, remote, hybrid)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Status
+        Metadata
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -963,42 +832,81 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#decision" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Decision
+        Current Code Reality
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#consequences" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Consequences
+        Problem
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#proposed-direction" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See Also
+        Proposed Direction
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#gateway-configuration-handoff-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gateway Configuration Handoff Rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#promotion-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Promotion Criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1022,44 +930,112 @@
   
 
 
-  <h1>Execution Modes</h1>
-
-<h2 id="adr-0002-execution-modes-local-remote-hybrid">ADR 0002: Execution modes (local, remote, hybrid)<a class="headerlink" href="#adr-0002-execution-modes-local-remote-hybrid" title="Permanent link">&para;</a></h2>
-<h3 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h3>
-<p>Accepted (2025-12-11); clarified 2026-05-08 by framework ADR-0033</p>
-<h3 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h3>
-<p>Agents/workflows must run in multiple deployment topologies:
-- thin clients (mobile/web) calling a backend LLM gateway
-- backend orchestration calling GPU inference fleets
-- local/dev mode (everything on one machine)</p>
-<p>AbstractCore already provides two compatible boundaries:
-- in-process python API (<code>create_llm(...).generate(...)</code>)
-- HTTP server boundary (<code>/v1/chat/completions</code>)</p>
-<h3 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h3>
-<p>AbstractRuntime supports three execution modes:</p>
+<h1 id="proposed-runtime-gateway-install-boundary">Proposed: Runtime Gateway Install Boundary<a class="headerlink" href="#proposed-runtime-gateway-install-boundary" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Local</strong>: in-process AbstractCore LLM + local tool execution</li>
-<li><strong>Remote</strong>: HTTP to AbstractCore server; tools default to passthrough (untrusted)</li>
-<li><strong>Hybrid</strong>: remote LLM + local tool execution</li>
+<li>Created: 2026-05-08</li>
+<li>Status: Completed</li>
+<li>Completed: 2026-05-08</li>
 </ul>
-<p>Remote AbstractCore server mode uses the Core server's own URL, auth token, base URL allowlists,
-and provider-key override rules. It must not inherit Gateway bearer tokens or browser origin policy
-implicitly. If Gateway is the caller, Gateway acts as an explicit Core-server client.
-Gateway-specific env/config is consumed by Gateway and passed to Runtime through explicit run state,
-effect payloads, client construction arguments, or Runtime-owned environment variables.</p>
-<h3 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h3>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime is the durable graph runner. It persists runs, effects, waits, ledgers, artifacts,
+snapshots, and resume behavior. It should remain stable and dependency-light even when Gateway
+deployments pull in Core, agents, media, memory, tools, and provider SDKs.</p>
+<h2 id="current-code-reality">Current Code Reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Thin-mode clients can run the workflow logic while delegating inference to a server.</li>
-<li>Remote mode supports AbstractCore per-request <code>base_url</code> routing (dynamic endpoint selection).</li>
-<li>Tool execution can be gated by trust/sandbox policy outside the router.</li>
+<li>Runtime base depends on <code>abstractsemantics&gt;=0.0.2</code>.</li>
+<li>AbstractCore integration is explicit through <code>abstractruntime[abstractcore]</code>.</li>
+<li>Multimodal helper dependencies are explicit through <code>abstractruntime[multimodal]</code>.</li>
+<li>Runtime does not directly depend on AbstractMemory; memory effects are integration/host-wired.</li>
+<li>Runtime config contains run-level defaults and limits, not deployment auth or provider secrets.</li>
+<li>As of the AbstractCore <code>2.13.11</code> release, Core exposes the canonical install-profile aliases
+  <code>abstractcore[apple]</code>, <code>abstractcore[gpu]</code>, <code>abstractcore[all-apple]</code>, and
+  <code>abstractcore[all-gpu]</code>, plus the released Voice/Vision catalog-capable floors
+  <code>abstractvoice&gt;=0.9.1</code> and <code>abstractvision&gt;=0.3.2</code>.</li>
+<li>Runtime's package metadata now points its AbstractCore extras at <code>abstractcore&gt;=2.13.11</code>
+  for Gateway deployment alignment.</li>
 </ul>
-<h3 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h3>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>The desire for cascading Gateway installs can accidentally push Core/Vision/Voice/Memory/local
+engine dependencies down into Runtime. That would weaken the clean boundary:</p>
 <ul>
-<li>Implementation: <a href="../../backlog/completed/005_abstractcore_integration/"><code>backlog/completed/005_abstractcore_integration.md</code></a></li>
-<li>Integration guide: <a href="../../integrations/abstractcore/"><code>integrations/abstractcore.md</code></a></li>
-<li>Gateway install boundary: <a href="../../backlog/proposed/2026-05-08_runtime_gateway_install_boundary/"><code>backlog/proposed/2026-05-08_runtime_gateway_install_boundary.md</code></a></li>
-<li>Code: <code>src/abstractruntime/integrations/abstractcore/factory.py</code></li>
-<li>Framework ADR: <code>../../../docs/adr/0033-install-profiles-config-entrypoints-and-server-boundaries.md</code></li>
+<li>Runtime should be able to execute non-LLM workflows without Core.</li>
+<li>Runtime should not own provider configuration.</li>
+<li>Runtime should not import Vision, Voice, Music, or Memory in its kernel.</li>
+<li>Runtime should persist artifact refs and JSON-safe results, not model/provider clients.</li>
+</ul>
+<h2 id="proposed-direction">Proposed Direction<a class="headerlink" href="#proposed-direction" title="Permanent link">&para;</a></h2>
+<p>Keep Runtime base minimal.</p>
+<p>Profile guidance:</p>
+<ul>
+<li><code>abstractruntime</code>: durable kernel plus Semantics schema refs.</li>
+<li><code>abstractruntime[abstractcore]</code>: LLM/tool integration, with a floor of
+  <code>abstractcore&gt;=2.13.11</code> so Gateway receives the current Core server-auth, provider-key,
+  generated-media, and capability-catalog contracts.</li>
+<li><code>abstractruntime[multimodal]</code>: Core media/capability helpers for generated images, voice/audio,
+  and media inputs, also with <code>abstractcore&gt;=2.13.11</code>.</li>
+<li>Do not add <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code> to Runtime unless Runtime itself owns a
+  hardware-specific dependency, which it currently does not.</li>
+</ul>
+<p>Gateway should compose Runtime with the selected Core/capability/memory profile. The cascade belongs
+to Gateway, not Runtime.</p>
+<h2 id="gateway-configuration-handoff-rules">Gateway Configuration Handoff Rules<a class="headerlink" href="#gateway-configuration-handoff-rules" title="Permanent link">&para;</a></h2>
+<p>Runtime should stay explicit about configuration handoff:</p>
+<ul>
+<li>Gateway may pass run defaults in JSON-safe run state, such as <code>run.vars["_runtime"]["provider"]</code>
+  and <code>run.vars["_runtime"]["model"]</code>.</li>
+<li>Gateway may pass effect-level overrides in LLM/media effect payloads when workflow pins or request
+  values require them.</li>
+<li>Gateway may construct local/remote/hybrid AbstractCore clients with explicit Core server URL,
+  Core server auth headers, provider/model defaults, tool executor, retry policy, and artifact
+  store.</li>
+<li>Runtime should not read <code>ABSTRACTGATEWAY_*</code> env vars directly; Gateway-owned config must be
+  translated into explicit Runtime inputs or Runtime-owned env names.</li>
+<li>Runtime should not reinterpret Gateway auth tokens as Core server auth tokens or provider keys.</li>
+<li>Runtime should keep persisted run state JSON-safe: provider names, model ids, policy flags, and
+  artifact refs are fine; provider clients, auth objects, downloaded model handles, and server
+  sessions are not.</li>
+</ul>
+<h2 id="implementation-notes">Implementation Notes<a class="headerlink" href="#implementation-notes" title="Permanent link">&para;</a></h2>
+<p>Runtime was touched only for release-alignment and boundary validation.</p>
+<p>What changed in Runtime 0.4.7:</p>
+<ul>
+<li><code>abstractruntime[abstractcore]</code>, <code>abstractruntime[multimodal]</code>, and
+  <code>abstractruntime[mcp-worker]</code> now require <code>abstractcore&gt;=2.13.11</code>.</li>
+<li>Runtime still exposes no <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code> extras.</li>
+<li>The AbstractCore integration version guard now fails fast on stale Core installs older than
+  2.13.11.</li>
+<li>Runtime no longer reads Gateway-owned environment variables for prompt-cache defaults,
+  attachment registration limits, or workflow bundle registry paths.</li>
+<li>Tests now cover the optional-stack import boundary, package metadata floor, missing hardware
+  profile extras, Gateway env namespace isolation, and the rule that Gateway auth/provider-key
+  environment variables are not inherited by remote AbstractCore clients.</li>
+</ul>
+<p>Related package guidance remains:</p>
+<ul>
+<li>Gateway should keep Runtime base as the dependency for minimal installs.</li>
+<li>Gateway server profiles may choose <code>AbstractRuntime[multimodal]</code>.</li>
+<li>Gateway Apple/GPU profiles should cascade through Core profile names such as
+  <code>abstractcore[all-apple]</code> or <code>abstractcore[all-gpu]</code>; Runtime should remain unchanged.</li>
+<li>Root <code>abstractframework</code> should update Runtime version floors to match the current Gateway/Core
+  integration baseline.</li>
+<li>AbstractAgent should tighten its Runtime dependency floor.</li>
+</ul>
+<h2 id="promotion-criteria">Promotion Criteria<a class="headerlink" href="#promotion-criteria" title="Permanent link">&para;</a></h2>
+<p>Promoted because the Runtime release needed package metadata alignment, clearer install-boundary
+docs, and regression tests for the Gateway handoff.</p>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[x] Subprocess import test for <code>abstractruntime</code> with Core/Vision/Voice/Memory/Music blocked.</li>
+<li>[x] Fresh venv import test for <code>abstractruntime</code> without AbstractCore installed.</li>
+<li>[x] Fresh venv import test for <code>abstractruntime[abstractcore]</code>.</li>
+<li>[x] Runtime LLM/media integration tests gated behind extras.</li>
+<li>[x] Static import checks that Runtime kernel modules do not import Core, Vision, Voice, Memory, or
+  Music.</li>
+<li>[x] Package metadata test proving Runtime exposes no fake <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code>
+  extras.</li>
+<li>[x] Package metadata test proving <code>abstractruntime[abstractcore]</code> and <code>abstractruntime[multimodal]</code>
+  depend on <code>abstractcore&gt;=2.13.11</code>.</li>
 </ul>
 
 
@@ -1116,10 +1092,10 @@ effect payloads, client construction arguments, or Runtime-owned environment var
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

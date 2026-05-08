@@ -1373,7 +1373,7 @@
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.</p>
 <h2 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.10 or newer).</p>
+<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.11 or newer).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1390,11 +1390,14 @@
 - local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
-- generated image/voice/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes</p>
+- generated image/voice/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
+- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs</p>
 <p>Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
-- <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code>
+- <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code> or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default
 - provider cache/session handles are not durable runtime state and should not be stored in <code>RunState.vars</code></p>
+<p>Attachment registration limits:
+- <code>TOOL_CALLS.payload.max_attachment_bytes</code>, <code>run.vars["_runtime"]["max_attachment_bytes"]</code>, or <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code> bound the bytes Runtime stores when local <code>read_file</code> outputs are captured as session attachments</p>
 <p>Docs: <code>integrations/abstractcore.md</code>.</p>
 <h3 id="abstractmemory-bridge-kg-effects">AbstractMemory bridge (KG effects)<a class="headerlink" href="#abstractmemory-bridge-kg-effects" title="Permanent link">&para;</a></h3>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>.</p>

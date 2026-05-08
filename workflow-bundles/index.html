@@ -1054,6 +1054,7 @@ flows/&lt;flow_id&gt;.json
 <p><code>WorkflowBundleRegistry</code> is a host-side convenience layer for storing and resolving <code>.flow</code> bundles from a directory:
 - default directory resolution: <code>default_workflow_bundles_dir()</code> (<code>src/abstractruntime/workflow_bundle/registry.py</code>)
 - resolve <code>bundle_id[@version]</code> and entrypoints (<code>resolve_bundle</code>, <code>resolve_entrypoint</code>)</p>
+<p>Default directory resolution checks <code>ABSTRACTFRAMEWORK_WORKFLOWS_DIR</code>, then AbstractFlow authoring env names, then <code>./flows/bundles/</code>, then <code>~/.abstractframework/workflows/</code>. Hosts with Gateway-specific flow settings should pass <code>bundles_dir</code> explicitly or translate them to the shared framework env name before constructing the registry.</p>
 <h2 id="visualflow-multi-entry-fan-in">VisualFlow multi-entry fan-in<a class="headerlink" href="#visualflow-multi-entry-fan-in" title="Permanent link">&para;</a></h2>
 <p>Visual authoring tools may connect more than one execution edge into the same target <code>exec-in</code> pin. For example, a first prompt can enter a node from <code>on_flow_start</code>, while a later loop can re-enter the same node with a different prompt produced by the previous turn.</p>
 <p>Store two metadata fields on the target node:

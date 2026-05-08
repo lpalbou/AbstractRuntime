@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-05-08
+
+### Changed
+- Minimum `abstractcore` optional dependency increased to `>=2.13.12`, and the
+  semantics floor increased to `abstractsemantics>=0.0.3`.
+- Added explicit hardware-profile cascade extras:
+  `abstractruntime[apple]`, `abstractruntime[gpu]`,
+  `abstractruntime[all-apple]`, and `abstractruntime[all-gpu]`.
+
+### Notes
+- Runtime still owns durable execution, not local model engines. These extras
+  delegate to the matching AbstractCore profile so Gateway and root aggregate
+  installs can compose a single profile vocabulary.
+
 ## [0.4.7] - 2026-05-08
 
 ### Changed

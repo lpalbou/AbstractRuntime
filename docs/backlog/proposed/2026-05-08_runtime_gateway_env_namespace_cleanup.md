@@ -20,11 +20,11 @@ This matters for the two-entry-point design:
 
 ## Current Code Reality
 
-Runtime 0.4.7 largely carried out the install-boundary work:
+Runtime 0.4.8 carries the current install-boundary work:
 
-- `pyproject.toml` now points Runtime AbstractCore extras at `abstractcore>=2.13.11`.
-- Runtime does not expose `apple`, `gpu`, `all-apple`, or `all-gpu` extras.
-- `tests/test_packaging_extras.py` verifies the Core floor and absence of fake hardware extras.
+- `pyproject.toml` now points Runtime AbstractCore extras at `abstractcore>=2.13.12`.
+- Runtime exposes `apple`, `gpu`, `all-apple`, and `all-gpu` as explicit Core profile cascades.
+- `tests/test_packaging_extras.py` verifies the Core floor and profile cascade dependencies.
 - `tests/test_runtime_install_boundary.py` verifies the package root/kernel import boundary.
 - `tests/test_remote_llm_client.py` verifies remote AbstractCore clients do not inherit Gateway auth
   or provider-key env vars.

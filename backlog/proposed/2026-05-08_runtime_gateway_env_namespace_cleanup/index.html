@@ -982,11 +982,11 @@ Gateway-specific environment variable names.</p>
 <li>lower packages should not depend on higher-package env namespaces.</li>
 </ul>
 <h2 id="current-code-reality">Current Code Reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
-<p>Runtime 0.4.7 largely carried out the install-boundary work:</p>
+<p>Runtime 0.4.8 carries the current install-boundary work:</p>
 <ul>
-<li><code>pyproject.toml</code> now points Runtime AbstractCore extras at <code>abstractcore&gt;=2.13.11</code>.</li>
-<li>Runtime does not expose <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code> extras.</li>
-<li><code>tests/test_packaging_extras.py</code> verifies the Core floor and absence of fake hardware extras.</li>
+<li><code>pyproject.toml</code> now points Runtime AbstractCore extras at <code>abstractcore&gt;=2.13.12</code>.</li>
+<li>Runtime exposes <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, and <code>all-gpu</code> as explicit Core profile cascades.</li>
+<li><code>tests/test_packaging_extras.py</code> verifies the Core floor and profile cascade dependencies.</li>
 <li><code>tests/test_runtime_install_boundary.py</code> verifies the package root/kernel import boundary.</li>
 <li><code>tests/test_remote_llm_client.py</code> verifies remote AbstractCore clients do not inherit Gateway auth
   or provider-key env vars.</li>

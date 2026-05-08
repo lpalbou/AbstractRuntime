@@ -943,17 +943,19 @@ snapshots, and resume behavior. It should remain stable and dependency-light eve
 deployments pull in Core, agents, media, memory, tools, and provider SDKs.</p>
 <h2 id="current-code-reality">Current Code Reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Runtime base depends on <code>abstractsemantics&gt;=0.0.2</code>.</li>
+<li>Runtime base depends on <code>abstractsemantics&gt;=0.0.3</code>.</li>
 <li>AbstractCore integration is explicit through <code>abstractruntime[abstractcore]</code>.</li>
 <li>Multimodal helper dependencies are explicit through <code>abstractruntime[multimodal]</code>.</li>
 <li>Runtime does not directly depend on AbstractMemory; memory effects are integration/host-wired.</li>
 <li>Runtime config contains run-level defaults and limits, not deployment auth or provider secrets.</li>
-<li>As of the AbstractCore <code>2.13.11</code> release, Core exposes the canonical install-profile aliases
+<li>As of the AbstractCore <code>2.13.12</code> release, Core exposes the canonical install-profile aliases
   <code>abstractcore[apple]</code>, <code>abstractcore[gpu]</code>, <code>abstractcore[all-apple]</code>, and
   <code>abstractcore[all-gpu]</code>, plus the released Voice/Vision catalog-capable floors
-  <code>abstractvoice&gt;=0.9.1</code> and <code>abstractvision&gt;=0.3.2</code>.</li>
-<li>Runtime's package metadata now points its AbstractCore extras at <code>abstractcore&gt;=2.13.11</code>
+  <code>abstractvoice&gt;=0.9.2</code> and <code>abstractvision&gt;=0.3.3</code>.</li>
+<li>Runtime's package metadata now points its AbstractCore extras at <code>abstractcore&gt;=2.13.12</code>
   for Gateway deployment alignment.</li>
+<li>Runtime exposes pass-through profile extras <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, and <code>all-gpu</code> so
+  Gateway/root aggregate installs can cascade through Core without Runtime owning hardware engines.</li>
 </ul>
 <h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
 <p>The desire for cascading Gateway installs can accidentally push Core/Vision/Voice/Memory/local
@@ -970,12 +972,13 @@ engine dependencies down into Runtime. That would weaken the clean boundary:</p>
 <ul>
 <li><code>abstractruntime</code>: durable kernel plus Semantics schema refs.</li>
 <li><code>abstractruntime[abstractcore]</code>: LLM/tool integration, with a floor of
-  <code>abstractcore&gt;=2.13.11</code> so Gateway receives the current Core server-auth, provider-key,
+  <code>abstractcore&gt;=2.13.12</code> so Gateway receives the current Core server-auth, provider-key,
   generated-media, and capability-catalog contracts.</li>
 <li><code>abstractruntime[multimodal]</code>: Core media/capability helpers for generated images, voice/audio,
-  and media inputs, also with <code>abstractcore&gt;=2.13.11</code>.</li>
-<li>Do not add <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code> to Runtime unless Runtime itself owns a
-  hardware-specific dependency, which it currently does not.</li>
+  and media inputs, also with <code>abstractcore&gt;=2.13.12</code>.</li>
+<li><code>abstractruntime[apple]</code>, <code>abstractruntime[gpu]</code>, <code>abstractruntime[all-apple]</code>, and
+  <code>abstractruntime[all-gpu]</code>: pass-through Core profile cascades. Runtime still owns no
+  hardware-specific engine.</li>
 </ul>
 <p>Gateway should compose Runtime with the selected Core/capability/memory profile. The cascade belongs
 to Gateway, not Runtime.</p>
@@ -1016,10 +1019,19 @@ to Gateway, not Runtime.</p>
 <li>Gateway should keep Runtime base as the dependency for minimal installs.</li>
 <li>Gateway server profiles may choose <code>AbstractRuntime[multimodal]</code>.</li>
 <li>Gateway Apple/GPU profiles should cascade through Core profile names such as
-  <code>abstractcore[all-apple]</code> or <code>abstractcore[all-gpu]</code>; Runtime should remain unchanged.</li>
+  <code>abstractcore[all-apple]</code> or <code>abstractcore[all-gpu]</code>.</li>
 <li>Root <code>abstractframework</code> should update Runtime version floors to match the current Gateway/Core
   integration baseline.</li>
 <li>AbstractAgent should tighten its Runtime dependency floor.</li>
+</ul>
+<p>What changed in Runtime 0.4.8:</p>
+<ul>
+<li><code>abstractruntime[abstractcore]</code>, <code>abstractruntime[multimodal]</code>, and
+  <code>abstractruntime[mcp-worker]</code> now require <code>abstractcore&gt;=2.13.12</code>.</li>
+<li><code>abstractruntime[apple]</code> and <code>abstractruntime[gpu]</code> delegate to matching Core local-engine
+  aliases.</li>
+<li><code>abstractruntime[all-apple]</code> and <code>abstractruntime[all-gpu]</code> delegate to matching Core aggregate
+  profiles.</li>
 </ul>
 <h2 id="promotion-criteria">Promotion Criteria<a class="headerlink" href="#promotion-criteria" title="Permanent link">&para;</a></h2>
 <p>Promoted because the Runtime release needed package metadata alignment, clearer install-boundary
@@ -1032,10 +1044,9 @@ docs, and regression tests for the Gateway handoff.</p>
 <li>[x] Runtime LLM/media integration tests gated behind extras.</li>
 <li>[x] Static import checks that Runtime kernel modules do not import Core, Vision, Voice, Memory, or
   Music.</li>
-<li>[x] Package metadata test proving Runtime exposes no fake <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, or <code>all-gpu</code>
-  extras.</li>
+<li>[x] Package metadata test proving Runtime profile extras are explicit Core cascades.</li>
 <li>[x] Package metadata test proving <code>abstractruntime[abstractcore]</code> and <code>abstractruntime[multimodal]</code>
-  depend on <code>abstractcore&gt;=2.13.11</code>.</li>
+  depend on <code>abstractcore&gt;=2.13.12</code>.</li>
 </ul>
 
 

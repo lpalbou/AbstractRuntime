@@ -107,7 +107,9 @@ No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, 
 
 ## Where should cached session or prompt-cache state live?
 
-Store stable cache keys or cache configuration in runtime-visible JSON, for example `payload.params.prompt_cache_key` or `run.vars["_runtime"]["prompt_cache"]`. Do not store provider session objects, cache handles, clients, or warm-cache state in `RunState.vars`. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.
+Store stable cache keys or cache configuration in runtime-visible JSON, for example `payload.params.prompt_cache_key` or `run.vars["_runtime"]["prompt_cache"]`. A Runtime process can also opt in with `ABSTRACTRUNTIME_PROMPT_CACHE`. Do not store provider session objects, cache handles, clients, or warm-cache state in `RunState.vars`. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.
+
+Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.
 
 Hosts can inspect or prepare caches through the configured `_abstractcore_llm_client` control-plane methods (`get_prompt_cache_capabilities`, `prompt_cache_prepare_modules`, and related methods).
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/llm_client.py`.

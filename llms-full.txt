@@ -10,11 +10,12 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.6
+- Version: 0.4.7
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
-- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.10`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.10`
+- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.11`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.11`
+- Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned env/config should be translated into explicit Runtime inputs or Runtime-owned env names.
 
 ```mermaid
 flowchart LR
@@ -219,9 +220,11 @@ Notes:
 - Tool calls and results are durable (ledger + checkpoints). Keep secrets out of tool arguments.
 - Use `ApprovalToolExecutor(delegate=..., policy=ToolApprovalPolicy())` when a local host should auto-run safe tools but pause for user approval before write/command/unknown tools.
 - Remote `params.api_key` and `params.provider_api_key` are compatibility inputs; runtime converts them to `X-AbstractCore-Provider-API-Key` headers for current AbstractCore servers.
+- Gateway/hosts choose Core server URLs, Core server auth headers, provider/model defaults, tool executors, artifact stores, and any Gateway env/config translation before Runtime sees the call.
 - Hosts can access the configured LLM client via the factory-set `_abstractcore_llm_client` attribute for prompt-cache operations such as `get_prompt_cache_capabilities()` and `prompt_cache_prepare_modules(...)`.
 - Use `pip install "abstractruntime[multimodal]"` for common AbstractCore media, vision, voice, and audio dependencies.
 - Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
+- Read-file session attachment registration is bounded by `TOOL_CALLS.payload.max_attachment_bytes`, `run.vars["_runtime"]["max_attachment_bytes"]`, `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`, then the 25 MiB default.
 
 Minimal approval executor wiring:
 
@@ -307,7 +310,8 @@ Remote multimodal guardrails:
 - provider-request metadata redacts data URLs before persistence so ledger/checkpoints do not embed media bytes
 
 Cached sessions / prompt cache:
-- Prefer stable `params.prompt_cache_key` values or `run.vars["_runtime"]["prompt_cache"]` config to select cache namespaces.
+- Prefer stable `params.prompt_cache_key` values or `run.vars["_runtime"]["prompt_cache"]` config to select cache namespaces; Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` is the process-wide opt-in.
+- Gateway prompt-cache env vars should be consumed by Gateway and translated into `_runtime.prompt_cache`; Runtime does not read Gateway env names directly.
 - Keep provider cache handles, session objects, and warm-cache state inside AbstractCore clients or servers.
 - Runtime correctness must not depend on a warm cache; a cold cache may be slower but should produce the same durable graph behavior.
 - Use `_abstractcore_llm_client` only as a host-side control-plane escape hatch for cache inspection/preparation, not as data stored in `RunState.vars`.

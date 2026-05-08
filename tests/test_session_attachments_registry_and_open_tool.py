@@ -322,6 +322,78 @@ def test_tool_calls_read_file_registers_session_attachment_and_open_attachment_w
 
 
 @pytest.mark.basic
+def test_read_file_attachment_registration_ignores_gateway_max_attachment_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES", "1")
+    monkeypatch.delenv("ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES", raising=False)
+
+    store = InMemoryArtifactStore()
+    sid = "s-gateway-env"
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"workspace_root": str(tmp_path)})
+
+    handler = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([read_file]), artifact_store=store)
+    effect = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={"tool_calls": [{"name": "read_file", "arguments": {"file_path": "notes.txt"}}]},
+    )
+
+    outcome = handler(run, effect, None)
+
+    assert outcome.status == "completed"
+    metas = list_session_attachments(artifact_store=store, session_id=sid)
+    assert any(m.get("handle") == "notes.txt" for m in metas)
+
+
+@pytest.mark.basic
+def test_read_file_attachment_registration_honors_runtime_max_attachment_limit(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    sid = "s-runtime-limit"
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    run = RunState.new(
+        workflow_id="wf",
+        entry_node="n1",
+        session_id=sid,
+        vars={"workspace_root": str(tmp_path), "_runtime": {"max_attachment_bytes": 1}},
+    )
+
+    handler = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([read_file]), artifact_store=store)
+    effect = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={"tool_calls": [{"name": "read_file", "arguments": {"file_path": "notes.txt"}}]},
+    )
+
+    outcome = handler(run, effect, None)
+
+    assert outcome.status == "completed"
+    metas = list_session_attachments(artifact_store=store, session_id=sid)
+    assert metas == []
+
+
+@pytest.mark.basic
+def test_read_file_attachment_registration_honors_payload_max_attachment_limit(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    sid = "s-payload-limit"
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={"workspace_root": str(tmp_path)})
+
+    handler = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([read_file]), artifact_store=store)
+    effect = Effect(
+        type=EffectType.TOOL_CALLS,
+        payload={
+            "max_attachment_bytes": 1,
+            "tool_calls": [{"name": "read_file", "arguments": {"file_path": "notes.txt"}}],
+        },
+    )
+
+    outcome = handler(run, effect, None)
+
+    assert outcome.status == "completed"
+    assert list_session_attachments(artifact_store=store, session_id=sid) == []
+
+
+@pytest.mark.basic
 def test_tool_calls_open_attachment_binary_enqueues_pending_media_and_llm_call_consumes(tmp_path: Path) -> None:
     store = InMemoryArtifactStore()
     sid = "s1"

@@ -484,6 +484,16 @@ def _truthy_env(name: str) -> bool:
     return s in {"1", "true", "yes", "y", "on"}
 
 
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(str(value).strip() if isinstance(value, str) else value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _derive_prompt_cache_key(
     *,
     namespace: str,
@@ -558,8 +568,9 @@ def _maybe_inject_prompt_cache_key(
             params["prompt_cache_key"] = key_override.strip()
             return
     else:
-        # Operator-wide opt-in (e.g. enable caching for AbstractGateway sessions).
-        enabled = _truthy_env("ABSTRACTRUNTIME_PROMPT_CACHE") or _truthy_env("ABSTRACTGATEWAY_PROMPT_CACHE")
+        # Runtime-owned operator-wide opt-in. Hosts with their own env namespace
+        # should translate that config into `_runtime.prompt_cache` explicitly.
+        enabled = _truthy_env("ABSTRACTRUNTIME_PROMPT_CACHE")
 
     if not enabled:
         return
@@ -1692,14 +1703,18 @@ def make_tool_calls_handler(
                 pass
 
         def _max_attachment_bytes() -> int:
-            raw = str(os.getenv("ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES", "") or "").strip()
-            if raw:
-                try:
-                    v = int(raw)
-                    if v > 0:
-                        return v
-                except Exception:
-                    pass
+            parsed = _coerce_positive_int(payload.get("max_attachment_bytes"))
+            if parsed is not None:
+                return parsed
+            vars0 = getattr(run, "vars", None)
+            runtime_ns = vars0.get("_runtime") if isinstance(vars0, dict) else None
+            if isinstance(runtime_ns, dict):
+                parsed = _coerce_positive_int(runtime_ns.get("max_attachment_bytes"))
+                if parsed is not None:
+                    return parsed
+            parsed = _coerce_positive_int(os.getenv("ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES"))
+            if parsed is not None:
+                return parsed
             return 25 * 1024 * 1024
 
         def _enqueue_pending_media(media_items: Any) -> None:

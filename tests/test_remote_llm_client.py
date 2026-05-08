@@ -97,6 +97,28 @@ def test_remote_llm_client_default_timeout_is_long_running() -> None:
     assert call["timeout"] == 7200.0
 
 
+def test_remote_llm_client_does_not_inherit_gateway_auth_env(monkeypatch) -> None:
+    monkeypatch.setenv("ABSTRACTGATEWAY_API_KEY", "gateway-secret")
+    monkeypatch.setenv("ABSTRACTGATEWAY_AUTH_TOKEN", "gateway-secret")
+    monkeypatch.setenv("ABSTRACTGATEWAY_BEARER_TOKEN", "gateway-secret")
+    monkeypatch.setenv("ABSTRACTGATEWAY_PROVIDER_API_KEY", "provider-secret")
+
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+    )
+
+    client.generate(prompt="hello", params={"max_tokens": 5})
+
+    headers = sender.calls[0]["headers"]
+    assert "Authorization" not in headers
+    assert "X-AbstractCore-Provider-API-Key" not in headers
+    assert all("gateway-secret" not in str(value) for value in headers.values())
+    assert all("provider-secret" not in str(value) for value in headers.values())
+
+
 def test_remote_prompt_cache_control_plane_forwards_proxy_context() -> None:
     sender = StubSender()
     client = RemoteAbstractCoreLLMClient(

@@ -74,15 +74,13 @@ def default_workflow_bundles_dir() -> Path:
 
     Priority:
     1) `ABSTRACTFRAMEWORK_WORKFLOWS_DIR` (shared/cross-package)
-    2) `ABSTRACTGATEWAY_FLOWS_DIR` (gateway bundle host)
-    3) `ABSTRACTFLOW_PUBLISH_DIR` (authoring host publish)
-    4) `ABSTRACTFLOW_FLOWS_DIR` (legacy)
-    5) repo/dev fallback: `./flows/bundles/` if it exists
-    6) user default: `~/.abstractframework/workflows/`
+    2) `ABSTRACTFLOW_PUBLISH_DIR` (authoring host publish)
+    3) `ABSTRACTFLOW_FLOWS_DIR` (legacy)
+    4) repo/dev fallback: `./flows/bundles/` if it exists
+    5) user default: `~/.abstractframework/workflows/`
     """
     env_candidates = (
         "ABSTRACTFRAMEWORK_WORKFLOWS_DIR",
-        "ABSTRACTGATEWAY_FLOWS_DIR",
         "ABSTRACTFLOW_PUBLISH_DIR",
         "ABSTRACTFLOW_FLOWS_DIR",
     )

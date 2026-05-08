@@ -58,6 +58,8 @@ print([ep.flow_id for ep in b.manifest.entrypoints])
 - default directory resolution: `default_workflow_bundles_dir()` (`src/abstractruntime/workflow_bundle/registry.py`)
 - resolve `bundle_id[@version]` and entrypoints (`resolve_bundle`, `resolve_entrypoint`)
 
+Default directory resolution checks `ABSTRACTFRAMEWORK_WORKFLOWS_DIR`, then AbstractFlow authoring env names, then `./flows/bundles/`, then `~/.abstractframework/workflows/`. Hosts with Gateway-specific flow settings should pass `bundles_dir` explicitly or translate them to the shared framework env name before constructing the registry.
+
 ## VisualFlow multi-entry fan-in
 
 Visual authoring tools may connect more than one execution edge into the same target `exec-in` pin. For example, a first prompt can enter a node from `on_flow_start`, while a later loop can re-enter the same node with a different prompt produced by the previous turn.

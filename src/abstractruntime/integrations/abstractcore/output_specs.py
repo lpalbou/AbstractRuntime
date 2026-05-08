@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-_MIN_ABSTRACTCORE_VERSION = (2, 13, 10)
-_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.10"
+_MIN_ABSTRACTCORE_VERSION = (2, 13, 11)
+_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.11"
 
 
 def _version_tuple(value: str) -> tuple[int, int, int]:
@@ -41,7 +41,8 @@ except ImportError as exc:  # pragma: no cover - import-time dependency guard
 if _version_tuple(_abstractcore_version) < _MIN_ABSTRACTCORE_VERSION:  # pragma: no cover - environment guard
     raise ImportError(
         f"abstractruntime.integrations.abstractcore requires abstractcore>={_MIN_ABSTRACTCORE_VERSION_TEXT} "
-        f"for async/sync output-selector parity; found abstractcore {_abstractcore_version}."
+        f"for the current server-auth, provider-key, generated-media, and capability-catalog contracts; "
+        f"found abstractcore {_abstractcore_version}."
     )
 
 

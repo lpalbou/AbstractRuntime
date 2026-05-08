@@ -176,7 +176,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.10 or newer).
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.11 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -198,11 +198,15 @@ Multimodal support:
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/voice/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
-- `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]`
+- `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
 - provider cache/session handles are not durable runtime state and should not be stored in `RunState.vars`
+
+Attachment registration limits:
+- `TOOL_CALLS.payload.max_attachment_bytes`, `run.vars["_runtime"]["max_attachment_bytes"]`, or `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES` bound the bytes Runtime stores when local `read_file` outputs are captured as session attachments
 
 Docs: `integrations/abstractcore.md`.
 

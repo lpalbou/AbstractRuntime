@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.10 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), prompt-cache control-plane endpoints, current tool catalog, the unified multimodal `generate(..., output=...)` response types, AbstractCore's public output-selector contract, and async/sync text-generation output-selector parity.
+This extra installs AbstractCore 2.13.11 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, and async/sync text-generation output-selector parity.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.10`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
+This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.11`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -43,6 +43,8 @@ Factory functions (exported from `abstractruntime.integrations.abstractcore`):
 - `create_local_runtime(...)`
 - `create_remote_runtime(...)`
 - `create_hybrid_runtime(...)`
+
+Runtime stays explicit at the boundary: Gateway/hosts construct these clients with the Core server URL, Core server auth headers, provider/model defaults, retry policy, tool executor, and artifact store they intend to use. Runtime does not read `ABSTRACTGATEWAY_*` environment variables directly and does not reinterpret Gateway bearer tokens as Core server tokens or provider keys. Gateway-owned config should be consumed by Gateway, then passed to Runtime through explicit run state, effect payloads, constructor arguments, or Runtime-owned environment variables.
 
 ## Minimal LLM workflow
 
@@ -111,6 +113,7 @@ Notes:
 - `media` accepts one item or a list. Durable artifact refs such as `{"$artifact": "...", "filename": "speech.wav"}` are materialized to temporary files for AbstractCore and never stored as raw bytes in `RunState`.
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
+- Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
 
 ## Multimodal generation
 
@@ -282,6 +285,7 @@ Contract notes:
 - When a provider reports `mode=local_control_plane` (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized `system | tools | history` cache path automatically.
 - When a provider reports `mode=keyed`, the runtime still forwards stable `prompt_cache_key`s but skips module preparation/fork/update orchestration.
 - This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches without reaching through to provider internals.
+- Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 
 Host-side prompt-cache example:
 
@@ -299,6 +303,17 @@ if caps.get("capabilities", {}).get("supports_prepare_modules"):
         ],
     )
 ```
+
+## Attachment registration limits
+
+When local `read_file` tool outputs are captured as session attachments, Runtime bounds the file bytes it stores. The limit is resolved in this order:
+
+- `TOOL_CALLS.payload.max_attachment_bytes`
+- `run.vars["_runtime"]["max_attachment_bytes"]`
+- `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`
+- the default of 25 MiB
+
+Gateway-specific attachment env vars should be translated by Gateway into one of the explicit Runtime inputs above.
 
 ## Default toolsets (incl. comms)
 

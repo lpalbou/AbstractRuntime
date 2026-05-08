@@ -80,3 +80,21 @@ def test_workflow_bundle_registry_install_bytes(tmp_path) -> None:
 
     installed2 = reg.install_bytes(src.read_bytes(), filename_hint=src.name, overwrite=True)
     assert installed2.bundle_ref == "demo-bundle@0.0.1"
+
+
+@pytest.mark.basic
+def test_default_workflow_bundles_dir_ignores_gateway_env(tmp_path, monkeypatch) -> None:
+    from abstractruntime.workflow_bundle.registry import default_workflow_bundles_dir
+
+    gateway_dir = tmp_path / "gateway-flows"
+    framework_dir = tmp_path / "framework-workflows"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ABSTRACTGATEWAY_FLOWS_DIR", str(gateway_dir))
+    monkeypatch.delenv("ABSTRACTFRAMEWORK_WORKFLOWS_DIR", raising=False)
+    monkeypatch.delenv("ABSTRACTFLOW_PUBLISH_DIR", raising=False)
+    monkeypatch.delenv("ABSTRACTFLOW_FLOWS_DIR", raising=False)
+
+    assert default_workflow_bundles_dir() != gateway_dir.resolve()
+
+    monkeypatch.setenv("ABSTRACTFRAMEWORK_WORKFLOWS_DIR", str(framework_dir))
+    assert default_workflow_bundles_dir() == framework_dir.resolve()

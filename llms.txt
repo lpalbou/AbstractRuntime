@@ -3,11 +3,12 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.6
+- Version: 0.4.7
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.10`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.10`
+- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.11`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.11`
+- Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned config should be translated into explicit Runtime inputs or Runtime-owned env names.
 
 ## Start here
 
@@ -34,6 +35,7 @@
 ## Integrations
 
 - [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS`, local/remote/hybrid, cached sessions/prompt cache, media inputs, generated media outputs, provider-key headers, tool approval waits
+- Prompt-cache keys: use `LLM_CALL.params.prompt_cache_key`, `run.vars["_runtime"]["prompt_cache"]`, or `ABSTRACTRUNTIME_PROMPT_CACHE`; Gateway prompt-cache env belongs in Gateway.
 - [Artifacts](docs/api.md#artifacts-store-by-reference): JSON-safe refs for large payloads; generated images/audio/voice are stored here rather than embedded in `RunState.vars`
 - Remote multimodal guardrail: remote/hybrid media generation uses AbstractCore Server endpoints, does not inherit the chat model for media endpoints, rejects unsupported input media and non-file STT inputs instead of ignoring them, and redacts data URLs from persisted provider-request metadata
 - [MCP worker](docs/mcp-worker.md): `abstractruntime-mcp-worker` CLI (stdio/HTTP)
@@ -47,7 +49,7 @@
 
 ## Distribution
 
-- [WorkflowBundles](docs/workflow-bundles.md): `.flow` bundle format, VisualFlow compilation, and concrete multi-entry fan-in metadata
+- [WorkflowBundles](docs/workflow-bundles.md): `.flow` bundle format, VisualFlow compilation, concrete multi-entry fan-in metadata, and shared/framework registry directory resolution
 - [VisualFlow compiler](docs/architecture.md): lowers multi-entry `entryRoutes` / `inputRouteOverrides` into internal `join_exec` / `path_mux` nodes
 
 ## Maintainers

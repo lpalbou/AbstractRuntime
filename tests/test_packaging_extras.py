@@ -43,6 +43,9 @@ def test_runtime_exposes_abstractcore_and_worker_extras_with_gateway_aligned_flo
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     text = pyproject.read_text(encoding="utf-8")
 
+    assert '"abstractsemantics>=0.0.3"' in text
+    assert '"AbstractMemory>=0.2.6"' in text
+    assert '"AbstractMemory[lancedb]' not in text
     assert "[project.optional-dependencies]" in text
     assert "abstractcore = [" in text
     assert "mcp-worker = [" in text

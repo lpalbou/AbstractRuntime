@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-05-09
+
+### Changed
+- Added `AbstractMemory>=0.2.6` as a base dependency so Runtime's
+  `MEMORY_KG_*` effect contract always has the AbstractMemory TripleStore
+  models available.
+
+### Notes
+- Runtime still does not depend on `AbstractMemory[lancedb]`. Hosts such as
+  AbstractGateway choose the durable/vector memory backend, path, embeddings,
+  and readiness policy.
+
 ## [0.4.8] - 2026-05-08
 
 ### Changed

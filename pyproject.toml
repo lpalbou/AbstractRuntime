@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.8"
+version = "0.4.9"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,10 @@ dependencies = [
   # Required to resolve stable structured-output schema refs like:
   # {"$ref":"abstractsemantics:kg_assertion_schema_v0"}
   "abstractsemantics>=0.0.3",
+  # Required for the Runtime-owned MEMORY_KG_* effect contract and TripleStore
+  # model types. Durable/vector backend dependencies such as LanceDB remain
+  # package extras owned by AbstractMemory and selected by hosts such as Gateway.
+  "AbstractMemory>=0.2.6",
 ]
 
 [project.optional-dependencies]

@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.8 • **Python:** 3.10+
+**Version:** 0.4.9 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.8)
+## What’s included (v0.4.9)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -117,6 +117,9 @@ Drivers + distribution:
 
 Optional integrations:
 - AbstractCore (LLM + tools, cached sessions/prompt cache, media inputs, generated media, tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
+  depends on the light AbstractMemory contract; hosts choose storage backends
+  such as LanceDB, SQLite, or in-memory stores.
 - comms toolset gating (email/WhatsApp/Telegram): `docs/tools-comms.md`
 
 ## Built-in scheduler (zero-config)

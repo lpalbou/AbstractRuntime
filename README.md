@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.9 • **Python:** 3.10+
+**Version:** 0.4.10 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.12 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, current tool catalog, public output-selector contract, and async/sync text-generation output-selector parity are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, and audio dependencies.
+The `abstractcore` extra installs AbstractCore 2.13.13 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, current tool catalog, public output-selector contract, and async/sync text-generation output-selector parity are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, and audio dependencies.
 
 Hardware profile cascades are available for native Python installs:
 `abstractruntime[apple]`, `abstractruntime[gpu]`, `abstractruntime[all-apple]`,
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.9)
+## What’s included (v0.4.10)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)

@@ -169,7 +169,7 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
         )
-    elif effect_type == "llm_call":
+    elif effect_type in {"llm_call", "generate_image", "generate_voice", "transcribe_audio"}:
         base_handler = create_llm_call_handler(
             node_id=node_id,
             next_node=next_node,
@@ -179,6 +179,13 @@ def _create_effect_node_handler(
             model=effect_config.get("model"),
             temperature=effect_config.get("temperature", 0.7),
             seed=effect_config.get("seed", -1),
+        )
+    elif effect_type == "listen_voice":
+        base_handler = create_wait_event_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
         )
     elif effect_type == "tool_calls":
         base_handler = create_tool_calls_handler(
@@ -2571,6 +2578,71 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 if (node_id, "ttft_ms") in referenced_source_pins:
                     current["ttft_ms"] = ttft_ms
                 mapped_value = response_text
+        elif effect_type in {"generate_image", "generate_voice"}:
+            if isinstance(raw, dict):
+                modality = "image" if effect_type == "generate_image" else "voice"
+                outputs = raw.get("outputs")
+                current["outputs"] = outputs if isinstance(outputs, dict) else {}
+                resources = raw.get("resources")
+                if isinstance(resources, dict):
+                    current["resources"] = resources
+                artifact_id, artifact_ref = _first_generated_artifact(raw)
+                if artifact_ref:
+                    current["artifact_ref"] = artifact_ref
+                    current["image_artifact" if modality == "image" else "audio_artifact"] = artifact_ref
+                    ct = artifact_ref.get("content_type")
+                    if isinstance(ct, str) and ct.strip():
+                        current["content_type"] = ct.strip()
+                if artifact_id:
+                    current["artifact_id"] = artifact_id
+                current["success"] = bool(artifact_id or artifact_ref)
+                meta = {
+                    "schema": f"abstractflow.{effect_type}.v1.meta",
+                    "version": 1,
+                    "modality": modality,
+                    "provider": raw.get("provider"),
+                    "model": raw.get("model"),
+                }
+                current["meta"] = {k: v for k, v in meta.items() if v is not None}
+                current["raw"] = raw
+                mapped_value = artifact_ref or artifact_id
+        elif effect_type == "transcribe_audio":
+            if isinstance(raw, dict):
+                text_value = ""
+                text_obj = raw.get("text")
+                if isinstance(text_obj, dict):
+                    content = text_obj.get("content")
+                    if content is not None:
+                        text_value = str(content)
+                if not text_value:
+                    content = raw.get("content")
+                    if content is not None:
+                        text_value = str(content)
+                current["text"] = text_value
+                artifact_id, artifact_ref = _first_generated_artifact(raw)
+                if artifact_ref:
+                    current["artifact_ref"] = artifact_ref
+                    current["transcript_artifact"] = artifact_ref
+                if artifact_id:
+                    current["artifact_id"] = artifact_id
+                current["success"] = True
+                current["meta"] = {"schema": "abstractflow.transcribe_audio.v1.meta", "version": 1, "modality": "text", "task": "transcription"}
+                current["raw"] = raw
+                mapped_value = text_value
+        elif effect_type == "listen_voice":
+            if isinstance(raw, dict):
+                current.update(raw)
+                audio_ref = raw.get("audio_artifact") or raw.get("artifact") or raw.get("artifact_ref")
+                if isinstance(audio_ref, dict):
+                    current["audio_artifact"] = audio_ref
+                    current["artifact_ref"] = audio_ref
+                    aid = audio_ref.get("$artifact") or audio_ref.get("artifact_id")
+                    if isinstance(aid, str) and aid.strip():
+                        current["artifact_id"] = aid.strip()
+                mapped_value = current.get("audio_artifact") or raw
+            else:
+                current["event_data"] = raw
+                mapped_value = raw
         elif effect_type == "tool_calls":
             # Effect outcome is produced by AbstractRuntime TOOL_CALLS handler:
             # - executed: {"mode":"executed","results":[{call_id,name,success,output,error}, ...]}

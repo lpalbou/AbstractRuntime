@@ -196,6 +196,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "ask_user",
         "answer_user",
         "llm_call",
+        "generate_image",
+        "generate_voice",
+        "transcribe_audio",
+        "listen_voice",
         "tool_calls",
         "call_tool",
         "wait_until",
@@ -1356,6 +1360,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_answer_user_handler(data, effect_config)
         if effect_type == "llm_call":
             return _create_llm_call_handler(data, effect_config)
+        if effect_type == "generate_image":
+            return _create_generate_image_handler(data, effect_config)
+        if effect_type == "generate_voice":
+            return _create_generate_voice_handler(data, effect_config)
+        if effect_type == "transcribe_audio":
+            return _create_transcribe_audio_handler(data, effect_config)
+        if effect_type == "listen_voice":
+            return _create_listen_voice_handler(data, effect_config)
         if effect_type == "tool_calls":
             return _create_tool_calls_handler(data, effect_config)
         if effect_type == "call_tool":
@@ -1509,6 +1521,207 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "result": None,
                 "success": None,
                 "_pending_effect": pending,
+            }
+
+        return handler
+
+    def _nonempty_str(value: Any) -> str:
+        return value.strip() if isinstance(value, str) and value.strip() else ""
+
+    def _coerce_int(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(float(value))
+        except Exception:
+            return None
+
+    def _coerce_float(value: Any) -> Optional[float]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            out = float(value)
+        except Exception:
+            return None
+        return out if out == out else None
+
+    def _dict_input(input_data: Any) -> Dict[str, Any]:
+        return input_data if isinstance(input_data, dict) else {}
+
+    def _input_or_config(input_data: Any, config: Dict[str, Any], *keys: str, default: Any = None) -> Any:
+        payload = _dict_input(input_data)
+        for key in keys:
+            if key in payload and payload.get(key) not in (None, ""):
+                return payload.get(key)
+        for key in keys:
+            if isinstance(config, dict) and key in config and config.get(key) not in (None, ""):
+                return config.get(key)
+        return default
+
+    def _create_generate_image_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", default="") or "")
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="png") or "png").strip().lower() or "png"
+            output_spec: Dict[str, Any] = {"modality": "image", "task": "image_generation", "format": fmt}
+            for key in ("size", "negative_prompt", "quality", "style"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            for key in ("width", "height", "seed", "steps"):
+                value = _coerce_int(_input_or_config(payload, config, key))
+                if value is not None:
+                    output_spec[key] = value
+            guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
+            if guidance is not None:
+                output_spec["guidance_scale"] = guidance
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            image_provider = _nonempty_str(_input_or_config(payload, config, "image_provider", "imageProvider"))
+            image_model = _nonempty_str(_input_or_config(payload, config, "image_model", "imageModel"))
+            legacy_provider = _nonempty_str(_input_or_config(payload, config, "provider"))
+            legacy_model = _nonempty_str(_input_or_config(payload, config, "model"))
+            runtime_provider = _nonempty_str(
+                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            )
+            runtime_model = _nonempty_str(
+                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            )
+            if not image_provider:
+                image_provider = legacy_provider
+            if not image_model:
+                image_model = legacy_model
+            if image_provider:
+                output_spec["provider"] = image_provider
+            if image_model:
+                output_spec["model"] = image_model
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": prompt,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "output": output_spec,
+            }
+            if runtime_provider:
+                pending["provider"] = runtime_provider
+            if runtime_model:
+                pending["model"] = runtime_model
+            return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_generate_voice_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            text = str(_input_or_config(payload, config, "text", "prompt", default="") or "")
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="wav") or "wav").strip().lower() or "wav"
+            output_spec: Dict[str, Any] = {"modality": "voice", "task": "tts", "format": fmt}
+            for key in ("voice", "profile", "instructions"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            tts_provider = _nonempty_str(_input_or_config(payload, config, "tts_provider", "ttsProvider", "provider"))
+            tts_model = _nonempty_str(_input_or_config(payload, config, "tts_model", "ttsModel", "model"))
+            runtime_provider = _nonempty_str(
+                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            )
+            runtime_model = _nonempty_str(
+                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            )
+            if tts_provider:
+                output_spec["provider"] = tts_provider
+            if tts_model:
+                output_spec["model"] = tts_model
+            speed = _coerce_float(_input_or_config(payload, config, "speed"))
+            if speed is not None:
+                output_spec["speed"] = speed
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": text,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "output": output_spec,
+            }
+            if runtime_provider:
+                pending["provider"] = runtime_provider
+            if runtime_model:
+                pending["model"] = runtime_model
+            return {"audio_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_transcribe_audio_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            audio_ref = _input_or_config(payload, config, "audio_artifact", "artifact", "audio")
+            output_spec: Dict[str, Any] = {"modality": "text", "task": "transcription"}
+            for key in ("language", "prompt", "response_format", "format"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            stt_provider = _nonempty_str(_input_or_config(payload, config, "stt_provider", "sttProvider", "provider"))
+            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel", "model"))
+            runtime_provider = _nonempty_str(
+                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            )
+            runtime_model = _nonempty_str(
+                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            )
+            if stt_provider:
+                output_spec["provider"] = stt_provider
+            if stt_model:
+                output_spec["model"] = stt_model
+            temp = _coerce_float(_input_or_config(payload, config, "temperature"))
+            if temp is not None:
+                output_spec["temperature"] = temp
+            media_item: Any = audio_ref
+            if isinstance(audio_ref, str) and audio_ref.strip() and not audio_ref.startswith(("/", "~")):
+                media_item = {"$artifact": audio_ref.strip(), "type": "audio"}
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": str(output_spec.get("prompt") or "Transcribe this audio."),
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "media": [media_item] if media_item else [],
+                "output": output_spec,
+            }
+            if runtime_provider:
+                pending["provider"] = runtime_provider
+            if runtime_model:
+                pending["model"] = runtime_model
+            return {"text": "", "transcript_artifact": None, "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_listen_voice_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", default="Speak now.") or "Speak now.")
+            wait_key = str(_input_or_config(payload, config, "wait_key", "event_key", default="voice_input") or "voice_input")
+            details: Dict[str, Any] = {"input_mode": "voice", "content_types": ["audio/wav", "audio/mpeg", "audio/webm"]}
+            language = _input_or_config(payload, config, "language")
+            if isinstance(language, str) and language.strip():
+                details["language"] = language.strip()
+            max_duration_s = _coerce_float(_input_or_config(payload, config, "max_duration_s", "maxDurationS"))
+            if max_duration_s is not None:
+                details["max_duration_s"] = max_duration_s
+            return {
+                "audio_artifact": None,
+                "text": "",
+                "_pending_effect": {
+                    "type": "wait_event",
+                    "wait_key": wait_key,
+                    "prompt": prompt,
+                    "allow_free_text": True,
+                    "details": details,
+                },
             }
 
         return handler

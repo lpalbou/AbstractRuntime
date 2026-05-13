@@ -1580,8 +1580,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 output_spec["extra"] = dict(extra)
             image_provider = _nonempty_str(_input_or_config(payload, config, "image_provider", "imageProvider"))
             image_model = _nonempty_str(_input_or_config(payload, config, "image_model", "imageModel"))
-            legacy_provider = _nonempty_str(_input_or_config(payload, config, "provider"))
-            legacy_model = _nonempty_str(_input_or_config(payload, config, "model"))
+            legacy_provider = _nonempty_str(config.get("provider"))
+            legacy_model = _nonempty_str(config.get("model"))
             runtime_provider = _nonempty_str(
                 _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
             )
@@ -1622,8 +1622,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 value = _input_or_config(payload, config, key)
                 if isinstance(value, str) and value.strip():
                     output_spec[key] = value.strip()
-            tts_provider = _nonempty_str(_input_or_config(payload, config, "tts_provider", "ttsProvider", "provider"))
-            tts_model = _nonempty_str(_input_or_config(payload, config, "tts_model", "ttsModel", "model"))
+            tts_provider = _nonempty_str(_input_or_config(payload, config, "tts_provider", "ttsProvider"))
+            tts_model = _nonempty_str(_input_or_config(payload, config, "tts_model", "ttsModel"))
+            if not tts_provider:
+                tts_provider = _nonempty_str(config.get("provider"))
+            if not tts_model:
+                tts_model = _nonempty_str(config.get("model"))
             runtime_provider = _nonempty_str(
                 _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
             )
@@ -1665,8 +1669,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 value = _input_or_config(payload, config, key)
                 if isinstance(value, str) and value.strip():
                     output_spec[key] = value.strip()
-            stt_provider = _nonempty_str(_input_or_config(payload, config, "stt_provider", "sttProvider", "provider"))
-            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel", "model"))
+            stt_provider = _nonempty_str(_input_or_config(payload, config, "stt_provider", "sttProvider"))
+            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel"))
+            if not stt_provider:
+                stt_provider = _nonempty_str(config.get("provider"))
+            if not stt_model:
+                stt_model = _nonempty_str(config.get("model"))
             runtime_provider = _nonempty_str(
                 _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
             )
@@ -1709,6 +1717,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             language = _input_or_config(payload, config, "language")
             if isinstance(language, str) and language.strip():
                 details["language"] = language.strip()
+            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel", "model"))
+            if stt_model:
+                details["model"] = stt_model
             max_duration_s = _coerce_float(_input_or_config(payload, config, "max_duration_s", "maxDurationS"))
             if max_duration_s is not None:
                 details["max_duration_s"] = max_duration_s

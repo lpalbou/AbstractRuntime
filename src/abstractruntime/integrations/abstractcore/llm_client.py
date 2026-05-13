@@ -842,8 +842,24 @@ def _resolve_media_artifacts(
                     file_path = ""
 
         if file_path:
-            # Return a raw file path to trigger AutoMediaHandler processing.
-            out.append(str(file_path))
+            # Preserve content type alongside the resolved path. Artifact stores
+            # often use extensionless content paths, so a raw path can lose the
+            # modality and make downstream transcription reject valid audio.
+            resolved: Dict[str, Any] = {"file_path": str(file_path)}
+            if content_type:
+                resolved["content_type"] = str(content_type)
+                base_type = str(content_type).split(";", 1)[0].strip().lower()
+                if base_type.startswith("audio/"):
+                    resolved["type"] = "audio"
+                elif base_type.startswith("image/"):
+                    resolved["type"] = "image"
+                elif base_type.startswith("video/"):
+                    resolved["type"] = "video"
+                elif base_type.startswith("text/"):
+                    resolved["type"] = "text"
+            resolved["artifact_id"] = str(aid)
+            resolved["$artifact"] = str(aid)
+            out.append(resolved)
             continue
 
         raise ValueError(f"Unable to resolve artifact '{aid}' to provider-ready media content.")

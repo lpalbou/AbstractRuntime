@@ -63,6 +63,23 @@ def _guess_ext_from_content_type(content_type: str) -> str:
     ct = str(content_type or "").strip().lower()
     if not ct:
         return ""
+    explicit = {
+        "audio/wav": ".wav",
+        "audio/wave": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/ogg": ".ogg",
+        "audio/flac": ".flac",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+    }
+    if ct in explicit:
+        return explicit[ct]
     ext = mimetypes.guess_extension(ct) or ""
     if ext == ".jpe":
         return ".jpg"
@@ -679,9 +696,21 @@ def _resolve_llm_call_media(
             raw_name = source_path or item.get("filename") or item.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
                 filename = raw_name.strip()
+        content_type = ""
+        if isinstance(item, dict):
+            for key in ("content_type", "mime_type", "mimeType", "mime"):
+                raw_ct = item.get(key)
+                if isinstance(raw_ct, str) and raw_ct.strip():
+                    content_type = raw_ct.strip()
+                    break
+        if not content_type:
+            raw_artifact_ct = getattr(artifact, "content_type", None)
+            if isinstance(raw_artifact_ct, str) and raw_artifact_ct.strip():
+                content_type = raw_artifact_ct.strip()
+
         ext = Path(filename).suffix if filename else ""
         if not ext:
-            ct = str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
+            ct = content_type or str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
             ext = _guess_ext_from_content_type(ct)
 
         desired = source_path or filename or artifact_id
@@ -691,7 +720,19 @@ def _resolve_llm_call_media(
             p.write_bytes(bytes(content))
         except Exception as e:
             return None, f"Failed to materialize artifact '{artifact_id}': {e}"
-        out.append(str(p))
+        resolved: Dict[str, Any] = {"file_path": str(p), "$artifact": str(artifact_id), "artifact_id": str(artifact_id)}
+        if content_type:
+            resolved["content_type"] = content_type
+            base_type = content_type.split(";", 1)[0].strip().lower()
+            if base_type.startswith("audio/"):
+                resolved["type"] = "audio"
+            elif base_type.startswith("image/"):
+                resolved["type"] = "image"
+            elif base_type.startswith("video/"):
+                resolved["type"] = "video"
+            elif base_type.startswith("text/"):
+                resolved["type"] = "text"
+        out.append(resolved)
 
     return (out or None), None
 

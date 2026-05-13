@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_resolved_audio_artifact_preserves_content_type_for_transcription(tmp_path: Path) -> None:
+    from abstractcore.providers.base import BaseProvider
+    from abstractruntime.integrations.abstractcore.llm_client import _is_audio_media_item, _resolve_media_artifacts
+
+    content_path = tmp_path / "artifact-content-without-extension"
+    content_path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+
+    class Store:
+        def _content_path(self, artifact_id: str) -> Path:
+            assert artifact_id == "audio-1"
+            return content_path
+
+    resolved = _resolve_media_artifacts(
+        [{"$artifact": "audio-1", "content_type": "audio/wav"}],
+        artifact_store=Store(),
+    )
+
+    assert isinstance(resolved, list)
+    assert resolved == [
+        {
+            "$artifact": "audio-1",
+            "artifact_id": "audio-1",
+            "content_type": "audio/wav",
+            "file_path": str(content_path),
+            "type": "audio",
+        }
+    ]
+    assert _is_audio_media_item(resolved[0]) is True
+    assert BaseProvider._media_type(resolved[0]) == "audio"
+
+
+def test_effect_handler_materialized_audio_artifact_preserves_content_type(tmp_path: Path) -> None:
+    from abstractcore.providers.base import BaseProvider
+    from abstractruntime.integrations.abstractcore.effect_handlers import _resolve_llm_call_media
+
+    class Artifact:
+        content = b"RIFF\x00\x00\x00\x00WAVE"
+        content_type = None
+        metadata = None
+
+    class Store:
+        def load(self, artifact_id: str) -> Artifact:
+            assert artifact_id == "audio-1"
+            return Artifact()
+
+    resolved, error = _resolve_llm_call_media(
+        [{"$artifact": "audio-1", "content_type": "audio/wav"}],
+        artifact_store=Store(),
+        temp_dir=tmp_path,
+    )
+
+    assert error is None
+    assert isinstance(resolved, list)
+    assert len(resolved) == 1
+    item = resolved[0]
+    assert item["$artifact"] == "audio-1"
+    assert item["artifact_id"] == "audio-1"
+    assert item["content_type"] == "audio/wav"
+    assert item["type"] == "audio"
+    assert Path(item["file_path"]).suffix == ".wav"
+    assert BaseProvider._media_type(item) == "audio"

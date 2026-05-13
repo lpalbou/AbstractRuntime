@@ -4,7 +4,7 @@ from abstractruntime.core.models import EffectType, RunState, RunStatus
 from abstractruntime.visualflow_compiler import compile_visualflow
 
 
-def _plan_for_node(node_type: str, effect_config: dict) -> object:
+def _plan_for_node(node_type: str, effect_config: dict, input_data: dict | None = None) -> object:
     spec = compile_visualflow(
         {
             "id": f"vf_{node_type}",
@@ -27,7 +27,7 @@ def _plan_for_node(node_type: str, effect_config: dict) -> object:
         current_node="node",
         vars={"_temp": {}},
     )
-    return spec.nodes["node"](run, None)
+    return spec.nodes["node"](run, input_data)
 
 
 def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
@@ -80,6 +80,20 @@ def test_generate_image_legacy_provider_model_stay_in_output_spec() -> None:
     assert "model" not in payload
     assert output["provider"] == "abstractvision"
     assert output["model"] == "flux-test"
+
+
+def test_generate_image_does_not_treat_runtime_provider_input_as_image_provider() -> None:
+    plan = _plan_for_node(
+        "generate_image",
+        {"prompt": "a horse", "image_model": "gpt-image-1-mini"},
+        {"provider": "lmstudio", "model": "chat-model"},
+    )
+
+    assert plan.effect is not None
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert "provider" not in output
+    assert output["model"] == "gpt-image-1-mini"
 
 
 def test_generate_voice_node_compiles_to_llm_call_tts_selector() -> None:
@@ -143,6 +157,7 @@ def test_listen_voice_node_compiles_to_voice_wait_event() -> None:
             "prompt": "Say your answer",
             "wait_key": "voice_answer",
             "language": "fr",
+            "stt_model": "whisper-test",
             "max_duration_s": 12,
         },
     )
@@ -156,4 +171,5 @@ def test_listen_voice_node_compiles_to_voice_wait_event() -> None:
     assert payload["allow_free_text"] is True
     assert details["input_mode"] == "voice"
     assert details["language"] == "fr"
+    assert details["model"] == "whisper-test"
     assert details["max_duration_s"] == 12.0

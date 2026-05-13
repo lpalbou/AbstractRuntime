@@ -434,7 +434,15 @@ def test_tool_calls_open_attachment_binary_enqueues_pending_media_and_llm_call_c
             # Validate that the resolved media file exists during the call.
             media = kwargs.get("media")
             assert isinstance(media, list) and len(media) == 1
-            p = Path(str(media[0]))
+            item = media[0]
+            if isinstance(item, dict):
+                assert item.get("$artifact") == meta.artifact_id
+                assert item.get("artifact_id") == meta.artifact_id
+                assert item.get("content_type") == "image/jpeg"
+                assert item.get("type") == "image"
+                p = Path(str(item.get("file_path") or ""))
+            else:
+                p = Path(str(item))
             assert p.exists()
             assert p.read_bytes() == content
             return {"content": "ok", "metadata": {}}

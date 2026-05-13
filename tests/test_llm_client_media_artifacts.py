@@ -21,6 +21,11 @@ def test_resolve_media_artifact_creates_file_path() -> None:
     assert isinstance(resolved, list)
     assert resolved
     item = resolved[0]
-    assert isinstance(item, str)
-    assert os.path.exists(item)
-    os.remove(item)
+    assert isinstance(item, dict)
+    assert item.get("$artifact") == meta.artifact_id
+    assert item.get("artifact_id") == meta.artifact_id
+    assert item.get("content_type") == "image/png"
+    assert item.get("type") == "image"
+    path = str(item.get("file_path") or "")
+    assert os.path.exists(path)
+    os.remove(path)

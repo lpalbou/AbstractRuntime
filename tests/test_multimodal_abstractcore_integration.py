@@ -205,7 +205,14 @@ def test_llm_call_allows_media_only_transcription_output_and_augments_output_spe
 
     assert state.output["llm"]["content"] == "transcribed text"
     assert seen["prompt"] == ""
-    assert isinstance(seen["media"], list) and seen["media"][0].endswith(".wav")
+    assert isinstance(seen["media"], list)
+    media_item = seen["media"][0]
+    assert isinstance(media_item, dict)
+    assert media_item.get("$artifact") == meta.artifact_id
+    assert media_item.get("artifact_id") == meta.artifact_id
+    assert media_item.get("content_type") == "audio/wav"
+    assert media_item.get("type") == "audio"
+    assert str(media_item.get("file_path") or "").endswith(".wav")
     output = seen["params"]["output"]
     assert output["modality"] == "text"
     assert output["run_id"] == run_id

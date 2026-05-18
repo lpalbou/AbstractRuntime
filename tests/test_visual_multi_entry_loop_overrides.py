@@ -385,3 +385,35 @@ def test_visual_multi_entry_without_overrides_uses_join_only() -> None:
     run_id = rt.start(workflow=wf, vars={})
     state = rt.tick(workflow=wf, run_id=run_id, max_steps=200)
     assert state.status.value == "completed"
+
+
+@pytest.mark.basic
+def test_visual_multi_entry_rejects_duplicate_data_edges_to_same_pin() -> None:
+    vf = load_visualflow_json(
+        {
+            "id": "test-duplicate-data-edge",
+            "name": "test-duplicate-data-edge",
+            "nodes": [
+                {"id": "node-start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+                {"id": "node-a", "type": "literal_string", "data": {"nodeType": "literal_string", "literalValue": "a"}},
+                {"id": "node-b", "type": "literal_string", "data": {"nodeType": "literal_string", "literalValue": "b"}},
+                {
+                    "id": "node-ask",
+                    "type": "ask_user",
+                    "data": {
+                        "nodeType": "ask_user",
+                        "effectConfig": {"allowFreeText": True},
+                    },
+                },
+            ],
+            "edges": [
+                {"source": "node-start", "sourceHandle": "exec-out", "target": "node-ask", "targetHandle": "exec-in"},
+                {"source": "node-a", "sourceHandle": "value", "target": "node-ask", "targetHandle": "prompt"},
+                {"source": "node-b", "sourceHandle": "value", "target": "node-ask", "targetHandle": "prompt"},
+            ],
+            "entryNode": "node-start",
+        }
+    )
+
+    with pytest.raises(ValueError, match="Multiple data edges target the same input pin"):
+        visual_to_flow(vf)

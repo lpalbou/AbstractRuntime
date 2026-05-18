@@ -1238,8 +1238,15 @@ def _create_visual_agent_effect_handler(
             schema_enabled = True
 
         # Provider/model can come from Agent node config or from data-edge inputs (pins).
-        provider_raw = resolved_inputs.get("provider") if isinstance(resolved_inputs, dict) else None
-        model_raw = resolved_inputs.get("model") if isinstance(resolved_inputs, dict) else None
+        provider_raw = None
+        model_raw = None
+        if isinstance(resolved_inputs, dict):
+            provider_raw = resolved_inputs.get("provider")
+            if not isinstance(provider_raw, str) or not provider_raw.strip():
+                provider_raw = resolved_inputs.get("provider_text")
+            model_raw = resolved_inputs.get("model")
+            if not isinstance(model_raw, str) or not model_raw.strip():
+                model_raw = resolved_inputs.get("model_text")
         if not isinstance(provider_raw, str) or not provider_raw.strip():
             provider_raw = agent_config.get("provider")
         if not isinstance(model_raw, str) or not model_raw.strip():
@@ -3426,9 +3433,10 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
         from abstractruntime.core.models import StepPlan
 
         try:
-            from .adapters.control_adapter import get_active_control_node_id
+            from .adapters.control_adapter import get_active_control_node_id, _mark_control_return
         except Exception:  # pragma: no cover
             get_active_control_node_id = None  # type: ignore[assignment]
+            _mark_control_return = None  # type: ignore[assignment]
 
         def wrapped(run: Any, ctx: Any) -> "StepPlan":
             plan: StepPlan = handler(run, ctx)
@@ -3445,17 +3453,25 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
             if visual_type == "on_flow_end":
                 return plan
 
+            def _return_to_active(*, effect: Any = None) -> StepPlan:
+                if callable(_mark_control_return):
+                    try:
+                        _mark_control_return(run.vars, active)
+                    except Exception:
+                        pass
+                return StepPlan(node_id=plan.node_id, effect=effect, next_node=active)
+
             # If the node is about to complete the run, treat it as "branch complete" instead.
             if plan.complete_output is not None:
-                return StepPlan(node_id=plan.node_id, next_node=active)
+                return _return_to_active()
 
             # Terminal effect node: runtime would auto-complete if next_node is missing.
             if plan.effect is not None and not plan.next_node:
-                return StepPlan(node_id=plan.node_id, effect=plan.effect, next_node=active)
+                return _return_to_active(effect=plan.effect)
 
             # Defensive fallback.
             if plan.effect is None and not plan.next_node and plan.complete_output is None:
-                return StepPlan(node_id=plan.node_id, next_node=active)
+                return _return_to_active()
 
             return plan
 

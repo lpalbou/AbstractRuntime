@@ -35,7 +35,18 @@ def _build_data_edge_map(edges: List[VisualEdge]) -> DataEdgeMap:
         if edge.target not in data_edges:
             data_edges[edge.target] = {}
 
-        data_edges[edge.target][edge.targetHandle] = (edge.source, edge.sourceHandle)
+        target_handle = str(edge.targetHandle or "")
+        if target_handle in data_edges[edge.target]:
+            prev_source, prev_handle = data_edges[edge.target][target_handle]
+            raise ValueError(
+                "Multiple data edges target the same input pin. "
+                f"Target '{edge.target}.{target_handle}' is already wired from "
+                f"'{prev_source}.{prev_handle}' and cannot also be wired from "
+                f"'{edge.source}.{edge.sourceHandle}'. Use multi-entry route overrides "
+                "for per-execution-path values instead of wiring duplicate data inputs."
+            )
+
+        data_edges[edge.target][target_handle] = (edge.source, edge.sourceHandle)
 
     return data_edges
 
@@ -1578,20 +1589,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:
                 output_spec["extra"] = dict(extra)
-            image_provider = _nonempty_str(_input_or_config(payload, config, "image_provider", "imageProvider"))
-            image_model = _nonempty_str(_input_or_config(payload, config, "image_model", "imageModel"))
-            legacy_provider = _nonempty_str(config.get("provider"))
-            legacy_model = _nonempty_str(config.get("model"))
-            runtime_provider = _nonempty_str(
-                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            image_provider = _nonempty_str(
+                _input_or_config(payload, config, "image_provider", "imageProvider", "provider_image")
             )
-            runtime_model = _nonempty_str(
-                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            image_model = _nonempty_str(
+                _input_or_config(payload, config, "image_model", "imageModel", "model_image")
             )
-            if not image_provider:
-                image_provider = legacy_provider
-            if not image_model:
-                image_model = legacy_model
             if image_provider:
                 output_spec["provider"] = image_provider
             if image_model:
@@ -1604,10 +1607,6 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "params": {},
                 "output": output_spec,
             }
-            if runtime_provider:
-                pending["provider"] = runtime_provider
-            if runtime_model:
-                pending["model"] = runtime_model
             return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
 
         return handler
@@ -1622,17 +1621,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 value = _input_or_config(payload, config, key)
                 if isinstance(value, str) and value.strip():
                     output_spec[key] = value.strip()
-            tts_provider = _nonempty_str(_input_or_config(payload, config, "tts_provider", "ttsProvider"))
-            tts_model = _nonempty_str(_input_or_config(payload, config, "tts_model", "ttsModel"))
-            if not tts_provider:
-                tts_provider = _nonempty_str(config.get("provider"))
-            if not tts_model:
-                tts_model = _nonempty_str(config.get("model"))
-            runtime_provider = _nonempty_str(
-                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            quality_preset = _nonempty_str(_input_or_config(payload, config, "quality_preset", "qualityPreset", "quality"))
+            if quality_preset:
+                output_spec["quality_preset"] = quality_preset
+            tts_provider = _nonempty_str(
+                _input_or_config(payload, config, "tts_provider", "ttsProvider", "provider_voice")
             )
-            runtime_model = _nonempty_str(
-                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            tts_model = _nonempty_str(
+                _input_or_config(payload, config, "tts_model", "ttsModel", "model_voice")
             )
             if tts_provider:
                 output_spec["provider"] = tts_provider
@@ -1652,10 +1648,6 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "params": {},
                 "output": output_spec,
             }
-            if runtime_provider:
-                pending["provider"] = runtime_provider
-            if runtime_model:
-                pending["model"] = runtime_model
             return {"audio_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
 
         return handler
@@ -1669,17 +1661,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 value = _input_or_config(payload, config, key)
                 if isinstance(value, str) and value.strip():
                     output_spec[key] = value.strip()
-            stt_provider = _nonempty_str(_input_or_config(payload, config, "stt_provider", "sttProvider"))
-            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel"))
-            if not stt_provider:
-                stt_provider = _nonempty_str(config.get("provider"))
-            if not stt_model:
-                stt_model = _nonempty_str(config.get("model"))
-            runtime_provider = _nonempty_str(
-                _input_or_config(payload, config, "runtime_provider", "runtimeProvider", "llm_provider", "llmProvider")
+            stt_provider = _nonempty_str(
+                _input_or_config(payload, config, "stt_provider", "sttProvider", "provider_voice")
             )
-            runtime_model = _nonempty_str(
-                _input_or_config(payload, config, "runtime_model", "runtimeModel", "llm_model", "llmModel")
+            stt_model = _nonempty_str(
+                _input_or_config(payload, config, "stt_model", "sttModel", "model_voice")
             )
             if stt_provider:
                 output_spec["provider"] = stt_provider
@@ -1700,10 +1686,6 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "media": [media_item] if media_item else [],
                 "output": output_spec,
             }
-            if runtime_provider:
-                pending["provider"] = runtime_provider
-            if runtime_model:
-                pending["model"] = runtime_model
             return {"text": "", "transcript_artifact": None, "success": None, "_pending_effect": pending}
 
         return handler
@@ -1717,7 +1699,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             language = _input_or_config(payload, config, "language")
             if isinstance(language, str) and language.strip():
                 details["language"] = language.strip()
-            stt_model = _nonempty_str(_input_or_config(payload, config, "stt_model", "sttModel", "model"))
+            stt_provider = _nonempty_str(
+                _input_or_config(payload, config, "stt_provider", "sttProvider", "provider_voice")
+            )
+            if stt_provider:
+                details["provider"] = stt_provider
+            stt_model = _nonempty_str(
+                _input_or_config(payload, config, "stt_model", "sttModel", "model_voice")
+            )
             if stt_model:
                 details["model"] = stt_model
             max_duration_s = _coerce_float(_input_or_config(payload, config, "max_duration_s", "maxDurationS"))
@@ -2000,11 +1989,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             provider = (
                 input_data.get("provider")
                 if isinstance(input_data, dict) and isinstance(input_data.get("provider"), str)
+                else input_data.get("provider_text")
+                if isinstance(input_data, dict) and isinstance(input_data.get("provider_text"), str)
                 else provider_default
             )
             model = (
                 input_data.get("model")
                 if isinstance(input_data, dict) and isinstance(input_data.get("model"), str)
+                else input_data.get("model_text")
+                if isinstance(input_data, dict) and isinstance(input_data.get("model_text"), str)
                 else model_default
             )
 
@@ -2872,8 +2865,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if not _has_execution_pins(type_str, node.data):
             pure_base_handlers[node.id] = base_handler
             pure_node_ids.add(node.id)
-            if type_str in {"get_var", "get_context", "bool_var", "var_decl", "path_mux"}:
-                volatile_pure_node_ids.add(node.id)
+            # Pure nodes are deterministic, but their upstream inputs can change on
+            # recursive / multi-entry workflow iterations. Treat all pure nodes as
+            # volatile so data-edge resolution recomputes from the latest upstream
+            # node outputs instead of reusing a stale cached value from a prior pass.
+            volatile_pure_node_ids.add(node.id)
             continue
 
         # Ignore disconnected/unreachable execution nodes.

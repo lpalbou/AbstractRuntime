@@ -115,6 +115,21 @@ Notes:
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
 
+## Runtime grounding
+
+AbstractRuntime records per-call grounding as structured response metadata under `metadata.runtime_grounding`. The current fields include local datetime, timezone when detectable, country, source, whether prompt injection occurred, and an optional user identity when supplied by trace metadata or local environment.
+
+For text/chat LLM calls only, the same grounding is rendered into the current user turn as a tagged runtime envelope:
+
+```text
+<runtime_metadata>{"country":"FR","local_datetime":"2026-05-13T18:00:00+02:00"}</runtime_metadata>
+hello
+```
+
+This makes time/location/user context visible to the LLM without mutating the durable human message into a natural-language prefix. If a model echoes the runtime-owned envelope, AbstractRuntime removes that envelope from user-facing response text while preserving `metadata.runtime_grounding` for audit.
+
+Direct media requests, including image generation, TTS, and transcription, do not receive prompt-injected grounding. They still receive trace headers/tags for observability and artifact ownership, but TTS `input` and image prompts remain the literal text supplied by the workflow.
+
 ## Multimodal generation
 
 AbstractRuntime forwards AbstractCore's unified `generate(..., output=...)` selector and normalizes multimodal responses into JSON-safe, artifact-backed results.

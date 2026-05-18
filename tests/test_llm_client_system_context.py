@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -10,13 +11,21 @@ from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCo
 pytestmark = pytest.mark.basic
 
 
-_HEADER_RE = re.compile(
-    r"^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+[A-Z]{2}\]",
-    re.IGNORECASE,
+_RUNTIME_METADATA_RE = re.compile(
+    r"^\s*<runtime_metadata>\s*(?P<payload>.*?)\s*</runtime_metadata>\s*",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
-def test_local_llm_client_injects_date_and_country_into_user_prompt(monkeypatch) -> None:
+def _runtime_metadata_from_text(value: str) -> dict:
+    match = _RUNTIME_METADATA_RE.match(value)
+    assert match
+    payload = json.loads(match.group("payload"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def test_local_llm_client_surfaces_runtime_metadata_to_user_turn(monkeypatch) -> None:
     from abstractcore.core.types import GenerateResponse
     from abstractcore.tools.handler import UniversalToolHandler
 
@@ -44,16 +53,17 @@ def test_local_llm_client_injects_date_and_country_into_user_prompt(monkeypatch)
 
     assert client._llm.calls, "expected a provider call"
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
-    first = prompt_sent.splitlines()[0].strip()
-    m = _HEADER_RE.match(first)
-    assert m
-    assert m.group(0).endswith(" FR]")
+    runtime_meta = _runtime_metadata_from_text(prompt_sent)
+    assert runtime_meta["country"] == "FR"
+    assert "local_datetime" in runtime_meta
+    assert prompt_sent.rstrip().endswith("hello")
     assert isinstance(result.get("metadata"), dict)
+    assert result["metadata"]["runtime_grounding"]["country"] == "FR"
+    assert result["metadata"]["runtime_grounding"]["prompt_injected"] is True
     payload = result["metadata"]["_provider_request"]["payload"]
     assert payload["messages"][0]["role"] == "user"
-    m2 = _HEADER_RE.match(str(payload["messages"][0]["content"] or ""))
-    assert m2
-    assert m2.group(0).endswith(" FR]")
+    request_meta = _runtime_metadata_from_text(str(payload["messages"][0]["content"] or ""))
+    assert request_meta["country"] == "FR"
 
 
 def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch) -> None:
@@ -87,10 +97,8 @@ def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch
     assert not sys.startswith("Grounding:")
     assert sys.strip() == "Base system prompt."
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
-    first = prompt_sent.splitlines()[0].strip()
-    m = _HEADER_RE.match(first)
-    assert m
-    assert m.group(0).endswith(" FR]")
+    runtime_meta = _runtime_metadata_from_text(prompt_sent)
+    assert runtime_meta["country"] == "FR"
 
 
 def test_local_llm_client_drops_recent_tool_activity_system_messages(monkeypatch) -> None:
@@ -132,7 +140,7 @@ def test_local_llm_client_drops_recent_tool_activity_system_messages(monkeypatch
     )
 
 
-def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) -> None:
+def test_remote_llm_client_surfaces_runtime_metadata_to_user_turn(monkeypatch) -> None:
     monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
 
     class StubSender:
@@ -159,33 +167,63 @@ def test_remote_llm_client_injects_system_context_into_user_prompt(monkeypatch) 
 
     body = sender.calls[0]["json"]
     assert body["messages"][0]["role"] == "user"
-    first = str(body["messages"][0]["content"] or "").splitlines()[0].strip()
-    m = _HEADER_RE.match(first)
-    assert m
-    assert m.group(0).endswith(" FR]")
+    runtime_meta = _runtime_metadata_from_text(str(body["messages"][0]["content"] or ""))
+    assert runtime_meta["country"] == "FR"
 
 
-def test_system_context_header_is_per_call(monkeypatch) -> None:
+def test_runtime_metadata_envelope_is_per_call() -> None:
     import abstractruntime.integrations.abstractcore.llm_client as llm_client
 
-    counter = {"n": 0}
+    g1 = llm_client._mark_grounding_prompt_injected(
+        {
+            "local_datetime": "2000-01-01T00:00:01+01:00",
+            "country": "FR",
+            "display": "[2000-01-01 00:00:01 FR]",
+        },
+        True,
+    )
+    g2 = llm_client._mark_grounding_prompt_injected(
+        {
+            "local_datetime": "2000-01-01T00:00:02+01:00",
+            "country": "FR",
+            "display": "[2000-01-01 00:00:02 FR]",
+        },
+        True,
+    )
 
-    def _fake_header() -> str:
-        counter["n"] += 1
-        # keep the same format so other consumers remain compatible
-        return f"[2000-01-01 00:00:0{counter['n']} FR]"
+    a, _ = llm_client._normalize_turn_grounding(prompt="hello", messages=None, grounding=g1)
+    b, _ = llm_client._normalize_turn_grounding(prompt="hello", messages=None, grounding=g2)
 
-    monkeypatch.setattr(llm_client, "_system_context_header", _fake_header)
+    assert _runtime_metadata_from_text(a)["local_datetime"].endswith("00:00:01+01:00")
+    assert _runtime_metadata_from_text(b)["local_datetime"].endswith("00:00:02+01:00")
+    assert a != b
 
-    a, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
-    b, _ = llm_client._inject_turn_grounding(prompt="hello", messages=None)
 
-    header_re = re.compile(r"^\[[^\]]+\]")
-    ha = header_re.match(a)
-    hb = header_re.match(b)
-    assert ha and hb
-    assert ha.group(0) != hb.group(0)
-    assert counter["n"] == 2
+def test_media_only_turn_grounding_does_not_inject_prompt_text() -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    prompt, messages = llm_client._normalize_turn_grounding(
+        prompt="hello",
+        messages=None,
+        grounding=None,
+    )
+
+    assert prompt == "hello"
+    assert messages is None
+
+
+def test_runtime_metadata_echo_is_sanitized_from_response_text() -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    result = {
+        "content": '<runtime_metadata>{"country":"FR"}</runtime_metadata>\nhello',
+        "text": {"content": '<runtime_metadata>{"country":"FR"}</runtime_metadata>\nhello'},
+    }
+
+    llm_client._sanitize_runtime_grounding_echoes(result)
+
+    assert result["content"] == "hello"
+    assert result["text"]["content"] == "hello"
 
 
 def test_country_detection_ignores_encoding_only_locale_values(monkeypatch) -> None:

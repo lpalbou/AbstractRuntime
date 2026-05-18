@@ -26,7 +26,7 @@ import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from .logging import get_logger
 from .output_specs import (
@@ -143,6 +143,11 @@ _LEGACY_SYSTEM_CONTEXT_HEADER_RE = re.compile(
 _LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE = re.compile(
     r"^Grounding:\s*(\d{4}/\d{2}/\d{2})\|(\d{2}:\d{2})\|([A-Z]{2})$",
     re.IGNORECASE,
+)
+
+_RUNTIME_METADATA_ENVELOPE_RE = re.compile(
+    r"^\s*<runtime_metadata>\s*.*?\s*</runtime_metadata>\s*",
+    re.IGNORECASE | re.DOTALL,
 )
 
 _ZONEINFO_TAB_CANDIDATES = [
@@ -373,52 +378,158 @@ def _coalesce_leading_system_messages(
     return (merged_system or None), (remaining or None)
 
 
-def _inject_turn_grounding(
+def _detect_runtime_user(trace_metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    if isinstance(trace_metadata, dict):
+        for key in ("user", "user_id", "username", "owner_id", "actor_id"):
+            value = trace_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if value is not None and str(value).strip():
+                return str(value).strip()
+
+    for key in ("ABSTRACT_USER", "ABSTRACTFRAMEWORK_USER", "USER", "LOGNAME"):
+        value = os.environ.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _runtime_grounding_metadata(trace_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    country = _detect_country()
+    timezone_name = _detect_timezone_name()
+    user = _detect_runtime_user(trace_metadata)
+    metadata: Dict[str, Any] = {
+        "local_datetime": now.isoformat(timespec="seconds"),
+        "country": country,
+        "display": f"[{now.strftime('%Y-%m-%d %H:%M:%S')} {country}]",
+        "source": "abstractruntime",
+        "prompt_injected": False,
+    }
+    if timezone_name:
+        metadata["timezone"] = timezone_name
+    if user:
+        metadata["user"] = user
+    return metadata
+
+
+def _runtime_grounding_prompt_envelope(grounding: Dict[str, Any]) -> str:
+    prompt_payload: Dict[str, Any] = {}
+    for key in ("local_datetime", "timezone", "country", "user", "display"):
+        value = grounding.get(key)
+        if value is not None and str(value).strip():
+            prompt_payload[key] = value
+    return "<runtime_metadata>" + json.dumps(
+        prompt_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "</runtime_metadata>"
+
+
+def _strip_runtime_grounding_prefix(text: str) -> str:
+    """Remove runtime-owned grounding prefixes while preserving user text."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    raw = str(text)
+    while raw.strip():
+        stripped = raw.lstrip()
+        meta_match = _RUNTIME_METADATA_ENVELOPE_RE.match(stripped)
+        if meta_match:
+            raw = stripped[meta_match.end() :].lstrip()
+            continue
+
+        header_match = _SYSTEM_CONTEXT_HEADER_RE.match(stripped)
+        if header_match:
+            raw = stripped[header_match.end() :].lstrip()
+            continue
+
+        first_line = stripped.splitlines()[0].strip()
+        if _LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE.match(first_line):
+            raw = "\n".join(stripped.splitlines()[1:]).lstrip()
+            continue
+
+        return stripped
+    return ""
+
+
+def _inject_runtime_grounding_into_text(text: str, grounding: Dict[str, Any]) -> str:
+    cleaned = _strip_runtime_grounding_prefix(text)
+    envelope = _runtime_grounding_prompt_envelope(grounding)
+    return f"{envelope}\n{cleaned}" if cleaned else envelope
+
+
+def _strip_runtime_grounding_echo(text: Any) -> Any:
+    if not isinstance(text, str) or not text.strip():
+        return text
+    return _strip_runtime_grounding_prefix(text)
+
+
+def _sanitize_runtime_grounding_echoes(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove only runtime-owned metadata envelopes from user-facing response text."""
+    if not isinstance(result, dict):
+        return result
+    for key in ("content", "response"):
+        value = result.get(key)
+        if isinstance(value, str):
+            result[key] = _strip_runtime_grounding_echo(value)
+    text_value = result.get("text")
+    if isinstance(text_value, str):
+        result["text"] = _strip_runtime_grounding_echo(text_value)
+    elif isinstance(text_value, dict):
+        text_dict = dict(text_value)
+        for key in ("content", "response"):
+            value = text_dict.get(key)
+            if isinstance(value, str):
+                text_dict[key] = _strip_runtime_grounding_echo(value)
+        result["text"] = text_dict
+    return result
+
+
+def _normalize_turn_grounding(
     *,
     prompt: str,
     messages: Optional[List[Dict[str, Any]]],
+    grounding: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, Optional[List[Dict[str, Any]]]]:
-    """Inject date/time/country into the *current user turn* (not the system prompt)."""
-    header = _system_context_header()
+    """Inject runtime context into the current user turn for LLM calls only.
 
-    def _prefix_with_header(text: str) -> str:
-        """Prefix with the current header, or rewrite a legacy `Grounding:` prefix into bracket form."""
-        if not isinstance(text, str) or not text.strip():
-            return header
-        raw = str(text)
-        first = raw.lstrip().splitlines()[0].strip()
-        if _SYSTEM_CONTEXT_HEADER_RE.match(first):
-            return raw
-        legacy = _LEGACY_SYSTEM_CONTEXT_HEADER_PARSE_RE.match(first)
-        if legacy:
-            date_part, time_part, cc = legacy.group(1), legacy.group(2), legacy.group(3).upper()
-            date_part = date_part.replace("/", "-")
-            time_part = f"{time_part}:00" if len(time_part) == 5 else time_part
-            bracket = f"[{date_part} {time_part} {cc}]"
-            rest = "\n".join(raw.lstrip().splitlines()[1:]).lstrip()
-            return f"{bracket} {rest}" if rest else bracket
-        return f"{header} {raw}"
+    The envelope is deliberately tagged and machine-owned:
+      <runtime_metadata>{...}</runtime_metadata>
 
-    def _prefix_content(content: Any) -> Any:
+    That keeps date/location/user context visible to the model without mutating
+    the durable human text field into a natural-language prefix that downstream
+    TTS may speak. Media-only requests call this function with `grounding=None`,
+    which strips legacy prefixes but does not inject new prompt text.
+    """
+
+    def _clean_or_inject_text(value: str) -> str:
+        if grounding:
+            return _inject_runtime_grounding_into_text(value, grounding)
+        return _strip_runtime_grounding_prefix(value)
+
+    def _clean_content(content: Any) -> Any:
         if isinstance(content, str):
-            return _prefix_with_header(content)
+            return _clean_or_inject_text(content)
         if isinstance(content, list):
             items: List[Any] = [dict(item) if isinstance(item, dict) else item for item in content]
-            for item in items:
+            for idx, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
                 if str(item.get("type") or "").strip().lower() != "text":
                     continue
                 text_value = item.get("text")
-                if isinstance(text_value, str):
-                    item["text"] = _prefix_with_header(text_value)
-                    return items
-            return [{"type": "text", "text": header}, *items]
-        return _prefix_with_header(str(content or ""))
+                item["text"] = _clean_or_inject_text(text_value if isinstance(text_value, str) else str(text_value or ""))
+                items[idx] = item
+                return items
+            if grounding:
+                items.insert(0, {"type": "text", "text": _runtime_grounding_prompt_envelope(grounding)})
+            return items
+        return _clean_or_inject_text(str(content or ""))
 
     prompt_str = str(prompt or "")
     if prompt_str.strip():
-        return _prefix_with_header(prompt_str), messages
+        return _clean_or_inject_text(prompt_str), messages
 
     if isinstance(messages, list) and messages:
         out: List[Dict[str, Any]] = []
@@ -429,16 +540,33 @@ def _inject_turn_grounding(
             role = str(out[i].get("role") or "").strip().lower()
             if role != "user":
                 continue
-            content = out[i].get("content")
-            out[i]["content"] = _prefix_content(content)
+            out[i]["content"] = _clean_content(out[i].get("content"))
             return prompt_str, out
 
-        # No user message found; append a synthetic user turn.
-        out.append({"role": "user", "content": header})
+        if grounding:
+            out.append({"role": "user", "content": _runtime_grounding_prompt_envelope(grounding)})
         return prompt_str, out
 
-    # No place to inject; best-effort no-op.
     return prompt_str, messages
+
+
+def _mark_grounding_prompt_injected(grounding: Dict[str, Any], injected: bool) -> Dict[str, Any]:
+    out = dict(grounding)
+    out["prompt_injected"] = bool(injected)
+    return {
+        **out,
+    }
+
+
+def _attach_runtime_grounding(result: Dict[str, Any], grounding: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not grounding:
+        return result
+    meta = result.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+        result["metadata"] = meta
+    meta["runtime_grounding"] = dict(grounding)
+    return result
 
 
 def _maybe_parse_tool_calls_from_text(
@@ -1712,10 +1840,15 @@ class LocalAbstractCoreLLMClient:
                 default_artifact_tags.update(output_tags)
 
             system_prompt = _strip_system_context_header(system_prompt)
-            if not skip_turn_grounding:
-                prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
-            else:
-                prompt = str(prompt or "")
+            runtime_grounding = _mark_grounding_prompt_injected(
+                _runtime_grounding_metadata(trace_metadata),
+                not skip_turn_grounding,
+            )
+            prompt, messages = _normalize_turn_grounding(
+                prompt=str(prompt or ""),
+                messages=messages,
+                grounding=runtime_grounding if not skip_turn_grounding else None,
+            )
             messages = _strip_internal_system_messages(messages)
             system_prompt, messages = _coalesce_leading_system_messages(
                 system_prompt=system_prompt,
@@ -1739,6 +1872,43 @@ class LocalAbstractCoreLLMClient:
 
             if acore_output_request and "output" in params:
                 params["output"] = _strip_runtime_output_metadata_for_core(params.get("output"))
+
+            if acore_output_request and not tools:
+                specs = _normalize_output_specs_for_runtime(output_request)
+                media_only = bool(specs) and all(
+                    isinstance(spec, dict)
+                    and (
+                        str(spec.get("modality") or "").strip().lower() in {"image", "voice"}
+                        or (
+                            str(spec.get("modality") or "").strip().lower() == "text"
+                            and str(spec.get("task") or "").strip().lower() == "transcription"
+                        )
+                    )
+                    for spec in specs
+                )
+                run_spec = getattr(self._llm, "_run_multimodal_spec", None)
+                if media_only and callable(run_spec):
+                    from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
+
+                    result_obj = MultimodalGenerateResponse(metadata={"media_only": True})
+                    for spec in specs:
+                        run_spec(
+                            result=result_obj,
+                            spec=dict(spec),
+                            prompt=str(prompt or ""),
+                            media=media,
+                            artifact_store=self._artifact_store,
+                        )
+                    result = _normalize_local_response(
+                        result_obj,
+                        artifact_store=self._artifact_store,
+                        run_id=run_id,
+                        default_tags=default_artifact_tags,
+                    )
+                    _sanitize_runtime_grounding_echoes(result)
+                    _attach_runtime_grounding(result, runtime_grounding)
+                    result["tool_calls"] = []
+                    return result
 
             lock = getattr(self, "_generate_lock", None)
             if lock is None:
@@ -1766,6 +1936,8 @@ class LocalAbstractCoreLLMClient:
                         run_id=run_id,
                         default_tags=default_artifact_tags,
                     )
+                _sanitize_runtime_grounding_echoes(result)
+                _attach_runtime_grounding(result, runtime_grounding)
                 result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
             else:
                 # Serialize generation for non-thread-safe providers (e.g. MLX).
@@ -1794,6 +1966,8 @@ class LocalAbstractCoreLLMClient:
                             run_id=run_id,
                             default_tags=default_artifact_tags,
                         )
+                    _sanitize_runtime_grounding_echoes(result)
+                    _attach_runtime_grounding(result, runtime_grounding)
                     result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
             # Durable observability: ensure a provider request payload exists even when the
@@ -1829,6 +2003,8 @@ class LocalAbstractCoreLLMClient:
                         "messages": out_messages,
                         "stream": bool(stream),
                     }
+                    if runtime_grounding:
+                        payload["runtime_grounding"] = dict(runtime_grounding)
                     if tools is not None:
                         payload["tools"] = tools
 
@@ -2904,10 +3080,28 @@ class RemoteAbstractCoreLLMClient:
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
         endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        if endpoint_model and "/" in endpoint_model:
+            head = endpoint_model.split("/", 1)[0].strip().lower()
+        else:
+            head = ""
+        if (
+            endpoint_model
+            and not endpoint_provider
+            and head == ""
+            and endpoint_model.lower().startswith(("gpt-image", "dall-e"))
+        ):
+            endpoint_model = f"openai-compatible/{endpoint_model}"
+        elif endpoint_model.lower().startswith(("openai/openai-compatible/", "openai/openai_compatible/")):
+            endpoint_model = endpoint_model.split("/", 1)[1]
+        elif endpoint_model and endpoint_provider in {"openai", "openai-compatible"} and head not in {"openai-compatible"}:
+            endpoint_model = f"openai-compatible/{endpoint_model}"
         body: Dict[str, Any] = {
             "prompt": prompt,
             "response_format": "b64_json",
         }
+        if endpoint_provider:
+            body["provider"] = endpoint_provider
         if endpoint_model:
             body["model"] = endpoint_model
         for key in (
@@ -2930,6 +3124,23 @@ class RemoteAbstractCoreLLMClient:
         ):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
+        endpoint_model_lower = endpoint_model.lower()
+        official_openai_gpt_image = (
+            endpoint_model_lower.startswith("openai-compatible/gpt-image")
+            or endpoint_model_lower.startswith("openai/gpt-image")
+            or endpoint_model_lower.startswith("gpt-image")
+        )
+        if official_openai_gpt_image:
+            allowed_sizes = {"1024x1024", "1024x1536", "1536x1024", "auto"}
+            requested_size = str(body.get("size") or "").strip().lower()
+            if requested_size not in allowed_sizes:
+                width = body.get("width")
+                height = body.get("height")
+                derived = f"{int(width)}x{int(height)}" if isinstance(width, int) and isinstance(height, int) else ""
+                body["size"] = derived if derived in allowed_sizes else "auto"
+            body.pop("response_format", None)
+            for local_only_key in ("width", "height", "seed", "steps", "guidance_scale", "negative_prompt"):
+                body.pop(local_only_key, None)
         base_url = params.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             body["base_url"] = base_url.strip()
@@ -2989,21 +3200,30 @@ class RemoteAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
         endpoint_model = str(spec.get("model") or "").strip()
+        voice = spec.get("voice") or spec.get("voice_id")
         body: Dict[str, Any] = {
             "input": str(text or ""),
-            "voice": spec.get("voice") or spec.get("voice_id") or "alloy",
             "response_format": fmt,
         }
+        if voice is not None:
+            body["voice"] = voice
         if endpoint_model:
             body["model"] = endpoint_model
-        for key in ("speed", "instructions", "provider"):
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        for key in ("speed", "instructions", "provider", "profile", "quality_preset"):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
+        if "quality" in spec and "quality_preset" not in body and spec.get("quality") is not None:
+            body["quality_preset"] = spec.get("quality")
         base_url = params.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             body["base_url"] = base_url.strip()
 
-        url = f"{self._server_base_url}/v1/audio/speech"
+        if endpoint_provider:
+            body.pop("provider", None)
+            url = f"{self._server_base_url}/{quote(endpoint_provider, safe='')}/v1/audio/speech"
+        else:
+            url = f"{self._server_base_url}/v1/audio/speech"
         audio_bytes, resp_headers = self._post_bytes(url, headers=headers, json_body=body)
         content_type = str(resp_headers.get("content-type") or f"audio/{fmt}").split(";", 1)[0].strip() or f"audio/{fmt}"
         run_id, tags = self._trace_run_id_and_tags(
@@ -3056,16 +3276,21 @@ class RemoteAbstractCoreLLMClient:
                 raise ValueError("Remote transcription audio media must resolve to a local file path.")
             raise ValueError("Remote transcription requires exactly one audio media item.")
         endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
         data: Dict[str, Any] = {}
         if endpoint_model:
             data["model"] = endpoint_model
-        for key in ("language", "prompt", "response_format", "temperature", "format"):
+        for key in ("language", "prompt", "response_format", "temperature", "format", "provider"):
             if key in spec and spec.get(key) is not None:
                 data[key] = spec.get(key)
         base_url = params.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             data["base_url"] = base_url.strip()
-        url = f"{self._server_base_url}/v1/audio/transcriptions"
+        if endpoint_provider:
+            data.pop("provider", None)
+            url = f"{self._server_base_url}/{quote(endpoint_provider, safe='')}/v1/audio/transcriptions"
+        else:
+            url = f"{self._server_base_url}/v1/audio/transcriptions"
         resp, _resp_headers = self._post_multipart(url, headers=headers, data=data, file_path=media_paths[0])
         text = resp.get("text") if isinstance(resp, dict) else None
         if text is None and isinstance(resp, dict):
@@ -3210,10 +3435,15 @@ class RemoteAbstractCoreLLMClient:
         if _output_request_has_generated_media(output_request) and self._artifact_store is None:
             raise ValueError("Generated media outputs require an ArtifactStore.")
         skip_turn_grounding = _output_request_has_non_text_result(output_request)
-        if not skip_turn_grounding:
-            prompt, messages = _inject_turn_grounding(prompt=str(prompt or ""), messages=messages)
-        else:
-            prompt = str(prompt or "")
+        runtime_grounding = _mark_grounding_prompt_injected(
+            _runtime_grounding_metadata(trace_metadata if isinstance(trace_metadata, dict) else None),
+            not skip_turn_grounding,
+        )
+        prompt, messages = _normalize_turn_grounding(
+            prompt=str(prompt or ""),
+            messages=messages,
+            grounding=runtime_grounding if not skip_turn_grounding else None,
+        )
         messages = _strip_internal_system_messages(messages)
         system_prompt, messages = _coalesce_leading_system_messages(
             system_prompt=system_prompt,
@@ -3239,13 +3469,16 @@ class RemoteAbstractCoreLLMClient:
             params_for_mm = dict(params)
             if isinstance(trace_metadata, dict):
                 params_for_mm["trace_metadata"] = trace_metadata
-            return self._generate_remote_multimodal(
+            result = self._generate_remote_multimodal(
                 prompt=str(prompt or ""),
                 messages=messages,  # type: ignore[arg-type]
                 media=media,
                 params=params_for_mm,
                 headers=req_headers,
             )
+            _sanitize_runtime_grounding_echoes(result)
+            _attach_runtime_grounding(result, runtime_grounding)
+            return result
 
         # Build OpenAI-like messages for AbstractCore server.
         out_messages: List[Dict[str, Any]] = []
@@ -3334,6 +3567,8 @@ class RemoteAbstractCoreLLMClient:
             meta: Dict[str, Any] = {
                 "_provider_request": {"url": url, "payload": observable_body}
             }
+            if runtime_grounding:
+                meta["runtime_grounding"] = dict(runtime_grounding)
             if trace_id:
                 meta["trace_id"] = trace_id
             reasoning = msg.get("reasoning")
@@ -3355,6 +3590,7 @@ class RemoteAbstractCoreLLMClient:
                 "metadata": meta,
                 "trace_id": trace_id,
             }
+            _sanitize_runtime_grounding_echoes(result)
             result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
 
             return result
@@ -3370,10 +3606,14 @@ class RemoteAbstractCoreLLMClient:
                 "finish_reason": None,
                 "metadata": {
                     "_provider_request": {"url": url, "payload": _redact_data_urls_for_observability(body)},
+                    "runtime_grounding": dict(runtime_grounding) if runtime_grounding else None,
                     "trace_id": trace_id,
                 }
                 if trace_id
-                else {"_provider_request": {"url": url, "payload": _redact_data_urls_for_observability(body)}},
+                else {
+                    "_provider_request": {"url": url, "payload": _redact_data_urls_for_observability(body)},
+                    "runtime_grounding": dict(runtime_grounding) if runtime_grounding else None,
+                },
                 "trace_id": trace_id,
                 "raw_response": _jsonable(resp) if resp is not None else None,
             }

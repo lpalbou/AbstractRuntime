@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-05-19
+
+### Fixed
+- Remote AbstractCore transcription now uses provider-scoped audio routes such as `/{provider}/v1/audio/transcriptions` when an STT provider is selected.
+- VisualFlow generated media nodes now keep LLM `provider`/`model` routing separate from image, TTS, and STT provider/model pins.
+
+### Changed
+- Minimum AbstractCore optional dependency floor is now `abstractcore>=2.13.15`.
+
 ## [0.4.11] - 2026-05-13
 
 ### Fixed

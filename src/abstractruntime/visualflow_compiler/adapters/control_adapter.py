@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 CONTROL_NS_KEY = "_control"
 CONTROL_STACK_KEY = "stack"
 CONTROL_FRAMES_KEY = "frames"
+CONTROL_RETURN_TO_KEY = "return_to"
 
 
 def _ensure_control(run_vars: Dict[str, Any]) -> tuple[Dict[str, Any], List[str], Dict[str, Any]]:
@@ -58,6 +59,34 @@ def get_active_control_node_id(run_vars: Dict[str, Any]) -> Optional[str]:
     return top if isinstance(top, str) and top else None
 
 
+def _mark_control_return(run_vars: Dict[str, Any], node_id: str) -> None:
+    """Mark that the next visit to `node_id` is an implicit branch return.
+
+    This distinguishes scheduler resumption from an explicit edge that re-enters
+    the same control node from inside one of its branches. The latter is a valid
+    authoring pattern for conversational/recursive loops and must start a fresh
+    Sequence/Parallel pass instead of consuming the stale active frame.
+    """
+    if not isinstance(node_id, str) or not node_id:
+        return
+    ctrl, _stack, _frames = _ensure_control(run_vars)
+    ctrl[CONTROL_RETURN_TO_KEY] = node_id
+
+
+def _consume_control_return(run_vars: Dict[str, Any], node_id: str) -> bool:
+    if not isinstance(node_id, str) or not node_id:
+        return False
+    ctrl, _stack, _frames = _ensure_control(run_vars)
+    if ctrl.get(CONTROL_RETURN_TO_KEY) != node_id:
+        return False
+    ctrl.pop(CONTROL_RETURN_TO_KEY, None)
+    return True
+
+
+def _is_existing_frame_for_kind(frame: Any, kind: str) -> bool:
+    return isinstance(frame, dict) and frame.get("kind") == kind
+
+
 def _set_prev_exec_handle(run_vars: Dict[str, Any], handle: str) -> None:
     """Persist the outgoing execution handle taken for the last transition.
 
@@ -90,9 +119,13 @@ def create_sequence_node_handler(
     def handler(run: Any, ctx: Any) -> "StepPlan":
         # ctx unused (runtime-owned effects happen in other nodes)
         _ctrl, stack, frames = _ensure_control(run.vars)
+        is_control_return = _consume_control_return(run.vars, node_id)
 
         frame = frames.get(node_id)
-        if not isinstance(frame, dict):
+        if _is_existing_frame_for_kind(frame, "sequence") and not is_control_return:
+            frame = {"kind": "sequence", "idx": 0, "then": list(ordered)}
+            frames[node_id] = frame
+        elif not _is_existing_frame_for_kind(frame, "sequence"):
             frame = {"kind": "sequence", "idx": 0, "then": list(ordered)}
             frames[node_id] = frame
             stack.append(node_id)
@@ -134,6 +167,7 @@ def create_sequence_node_handler(
 
         parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
         if parent:
+            _mark_control_return(run.vars, parent)
             return StepPlan(node_id=node_id, next_node=parent)
         return StepPlan(
             node_id=node_id,
@@ -163,9 +197,15 @@ def create_parallel_node_handler(
 
     def handler(run: Any, ctx: Any) -> "StepPlan":
         _ctrl, stack, frames = _ensure_control(run.vars)
+        is_control_return = _consume_control_return(run.vars, node_id)
 
         frame = frames.get(node_id)
-        if not isinstance(frame, dict):
+        if _is_existing_frame_for_kind(frame, "parallel") and not is_control_return:
+            frame = {"kind": "parallel", "phase": "branches", "idx": 0, "then": list(ordered)}
+            if completed:
+                frame["completed_target"] = completed
+            frames[node_id] = frame
+        elif not _is_existing_frame_for_kind(frame, "parallel"):
             frame = {"kind": "parallel", "phase": "branches", "idx": 0, "then": list(ordered)}
             if completed:
                 frame["completed_target"] = completed
@@ -219,6 +259,7 @@ def create_parallel_node_handler(
 
         parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
         if parent:
+            _mark_control_return(run.vars, parent)
             return StepPlan(node_id=node_id, next_node=parent)
         return StepPlan(
             node_id=node_id,
@@ -386,9 +427,14 @@ def create_loop_node_handler(
     def handler(run: Any, ctx: Any) -> "StepPlan":
         del ctx
         _ctrl, stack, frames = _ensure_control(run.vars)
+        is_control_return = _consume_control_return(run.vars, node_id)
 
         frame = frames.get(node_id)
-        if not isinstance(frame, dict):
+        if _is_existing_frame_for_kind(frame, "loop") and not is_control_return:
+            items = list(resolve_items(run))
+            frame = {"kind": "loop", "idx": 0, "items": items}
+            frames[node_id] = frame
+        elif not _is_existing_frame_for_kind(frame, "loop"):
             items = list(resolve_items(run))
             frame = {"kind": "loop", "idx": 0, "items": items}
             frames[node_id] = frame
@@ -422,6 +468,7 @@ def create_loop_node_handler(
 
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
+                _mark_control_return(run.vars, parent)
                 return StepPlan(node_id=node_id, next_node=parent)
             return StepPlan(node_id=node_id, complete_output={"success": True, "result": run.vars.get("_last_output")})
 
@@ -526,9 +573,39 @@ def create_for_node_handler(
     def handler(run: Any, ctx: Any) -> "StepPlan":
         del ctx
         _ctrl, stack, frames = _ensure_control(run.vars)
+        is_control_return = _consume_control_return(run.vars, node_id)
 
         frame = frames.get(node_id)
-        if not isinstance(frame, dict):
+        if _is_existing_frame_for_kind(frame, "for") and not is_control_return:
+            resolved = resolve_range(run) if callable(resolve_range) else {}
+            resolved = resolved if isinstance(resolved, dict) else {}
+
+            start = _to_number(resolved.get("start"))
+            end = _to_number(resolved.get("end"))
+            step = _to_number(resolved.get("step"))
+            if step is None:
+                step = 1.0
+
+            if start is None or end is None:
+                run.vars["_flow_error"] = "For loop requires numeric 'start' and 'end'."
+                run.vars["_flow_error_node"] = node_id
+                return StepPlan(
+                    node_id=node_id,
+                    complete_output={"success": False, "error": run.vars["_flow_error"], "node": node_id},
+                )
+
+            if step == 0:
+                run.vars["_flow_error"] = "For loop requires a non-zero 'step'."
+                run.vars["_flow_error_node"] = node_id
+                return StepPlan(
+                    node_id=node_id,
+                    complete_output={"success": False, "error": run.vars["_flow_error"], "node": node_id},
+                )
+
+            total = _compute_total(start, end, step)
+            frame = {"kind": "for", "start": start, "end": end, "step": step, "i": start, "index": 0, "total": total}
+            frames[node_id] = frame
+        elif not _is_existing_frame_for_kind(frame, "for"):
             resolved = resolve_range(run) if callable(resolve_range) else {}
             resolved = resolved if isinstance(resolved, dict) else {}
 
@@ -576,6 +653,7 @@ def create_for_node_handler(
                 return StepPlan(node_id=node_id, next_node=done_next)
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
+                _mark_control_return(run.vars, parent)
                 return StepPlan(node_id=node_id, next_node=parent)
             return StepPlan(node_id=node_id, complete_output={"success": True, "result": run.vars.get("_last_output")})
 
@@ -621,6 +699,7 @@ def create_for_node_handler(
                 return StepPlan(node_id=node_id, next_node=done_next)
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
+                _mark_control_return(run.vars, parent)
                 return StepPlan(node_id=node_id, next_node=parent)
             return StepPlan(node_id=node_id, complete_output={"success": True, "result": run.vars.get("_last_output")})
 
@@ -688,9 +767,13 @@ def create_while_node_handler(
     def handler(run: Any, ctx: Any) -> "StepPlan":
         del ctx
         _ctrl, stack, frames = _ensure_control(run.vars)
+        is_control_return = _consume_control_return(run.vars, node_id)
 
         frame = frames.get(node_id)
-        if not isinstance(frame, dict):
+        if _is_existing_frame_for_kind(frame, "while") and not is_control_return:
+            frame = {"kind": "while", "iters": 0}
+            frames[node_id] = frame
+        elif not _is_existing_frame_for_kind(frame, "while"):
             frame = {"kind": "while", "iters": 0}
             frames[node_id] = frame
             stack.append(node_id)
@@ -728,6 +811,7 @@ def create_while_node_handler(
 
             parent = stack[-1] if stack and isinstance(stack[-1], str) and stack[-1] else None
             if parent:
+                _mark_control_return(run.vars, parent)
                 return StepPlan(node_id=node_id, next_node=parent)
             return StepPlan(
                 node_id=node_id,

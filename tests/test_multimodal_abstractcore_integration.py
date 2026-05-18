@@ -379,6 +379,34 @@ def test_remote_image_output_does_not_reuse_chat_model_as_generation_model() -> 
     assert "model" not in sender.calls[0]["json"]
 
 
+def test_remote_image_output_preserves_mflux_provider_and_model_separately() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    client.generate(
+        prompt="A red cube.",
+        params={
+            "output": {
+                "modality": "image",
+                "provider": "mflux",
+                "model": "flux2-klein-4b",
+                "format": "png",
+            }
+        },
+    )
+
+    assert sender.calls[0]["url"] == "http://core.test/v1/images/generations"
+    assert sender.calls[0]["json"]["provider"] == "mflux"
+    assert sender.calls[0]["json"]["model"] == "flux2-klein-4b"
+    assert not str(sender.calls[0]["json"]["model"]).startswith("diffusers/")
+
+
 def test_remote_image_output_rejects_input_media_instead_of_ignoring_it(tmp_path: Path) -> None:
     image_path = tmp_path / "source.png"
     image_path.write_bytes(b"png-input")
@@ -524,6 +552,50 @@ def test_remote_voice_output_does_not_reuse_chat_model_as_tts_model() -> None:
     assert "model" not in sender.calls[0]["json"]
 
 
+def test_remote_voice_output_uses_provider_scoped_speech_endpoint() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteTtsSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    client.generate(
+        prompt="Hello.",
+        params={
+            "output": {
+                "modality": "voice",
+                "provider": "supertonic",
+                "model": "supertonic-3",
+                "voice": "M1",
+                "format": "wav",
+            }
+        },
+    )
+
+    assert sender.calls[0]["url"] == "http://core.test/supertonic/v1/audio/speech"
+    assert sender.calls[0]["json"]["model"] == "supertonic-3"
+    assert sender.calls[0]["json"]["voice"] == "M1"
+    assert "provider" not in sender.calls[0]["json"]
+
+
+def test_remote_voice_output_does_not_inject_default_voice_for_local_core() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteTtsSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    client.generate(prompt="Hello.", params={"output": {"modality": "voice", "format": "wav"}})
+
+    assert "voice" not in sender.calls[0]["json"]
+
+
 def test_remote_voice_output_rejects_input_audio_instead_of_ignoring_it(tmp_path: Path) -> None:
     audio_path = tmp_path / "reference.wav"
     audio_path.write_bytes(b"wav-input")
@@ -607,6 +679,35 @@ def test_remote_transcription_does_not_reuse_chat_model_as_stt_model() -> None:
     )
 
     assert "model" not in sender.calls[0]["data"]
+
+
+def test_remote_transcription_uses_provider_scoped_endpoint() -> None:
+    store = InMemoryArtifactStore()
+    meta = store.store(b"wav-input", content_type="audio/wav", tags={"filename": "speech.wav"})
+    sender = _RemoteTranscriptionSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    client.generate(
+        prompt="",
+        media=[{"$artifact": meta.artifact_id, "filename": "speech.wav"}],
+        params={
+            "output": {
+                "modality": "text",
+                "task": "transcription",
+                "provider": "faster-whisper",
+                "model": "base",
+            }
+        },
+    )
+
+    assert sender.calls[0]["url"] == "http://core.test/faster-whisper/v1/audio/transcriptions"
+    assert sender.calls[0]["data"]["model"] == "base"
+    assert "provider" not in sender.calls[0]["data"]
 
 
 def test_remote_transcription_rejects_non_audio_media(tmp_path: Path) -> None:

@@ -51,8 +51,8 @@ def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
     payload = dict(plan.effect.payload or {})
     output = dict(payload.get("output") or {})
     assert payload["prompt"] == "a horse"
-    assert payload["provider"] == "openai"
-    assert payload["model"] == "gpt-4.1-mini"
+    assert "provider" not in payload
+    assert "model" not in payload
     assert output["modality"] == "image"
     assert output["task"] == "image_generation"
     assert output["format"] == "png"
@@ -63,7 +63,7 @@ def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
     assert output["steps"] == 8
 
 
-def test_generate_image_legacy_provider_model_stay_in_output_spec() -> None:
+def test_generate_image_legacy_provider_model_are_not_media_fallbacks() -> None:
     plan = _plan_for_node(
         "generate_image",
         {
@@ -78,8 +78,8 @@ def test_generate_image_legacy_provider_model_stay_in_output_spec() -> None:
     output = dict(payload.get("output") or {})
     assert "provider" not in payload
     assert "model" not in payload
-    assert output["provider"] == "abstractvision"
-    assert output["model"] == "flux-test"
+    assert "provider" not in output
+    assert "model" not in output
 
 
 def test_generate_image_does_not_treat_runtime_provider_input_as_image_provider() -> None:
@@ -157,6 +157,7 @@ def test_listen_voice_node_compiles_to_voice_wait_event() -> None:
             "prompt": "Say your answer",
             "wait_key": "voice_answer",
             "language": "fr",
+            "stt_provider": "openai",
             "stt_model": "whisper-test",
             "max_duration_s": 12,
         },
@@ -171,5 +172,6 @@ def test_listen_voice_node_compiles_to_voice_wait_event() -> None:
     assert payload["allow_free_text"] is True
     assert details["input_mode"] == "voice"
     assert details["language"] == "fr"
+    assert details["provider"] == "openai"
     assert details["model"] == "whisper-test"
     assert details["max_duration_s"] == 12.0

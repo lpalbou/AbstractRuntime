@@ -436,6 +436,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#runtime-grounding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime grounding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multimodal-generation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1028,6 +1039,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#runtime-grounding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime grounding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multimodal-generation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1215,6 +1237,14 @@
 - <code>output</code> may be top-level or inside <code>params</code>; top-level <code>outputs</code> is accepted as a runtime alias for AbstractCore's <code>output</code>.
 - <code>output.tags</code>, when present, are merged into the generated artifact metadata. Runtime metadata such as <code>run_id</code> and <code>tags</code> is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as <code>run.vars["_runtime"]["provider"]</code> and <code>run.vars["_runtime"]["model"]</code> are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.</p>
+<h2 id="runtime-grounding">Runtime grounding<a class="headerlink" href="#runtime-grounding" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime records per-call grounding as structured response metadata under <code>metadata.runtime_grounding</code>. The current fields include local datetime, timezone when detectable, country, source, whether prompt injection occurred, and an optional user identity when supplied by trace metadata or local environment.</p>
+<p>For text/chat LLM calls only, the same grounding is rendered into the current user turn as a tagged runtime envelope:</p>
+<div class="highlight"><pre><span></span><code>&lt;runtime_metadata&gt;{&quot;country&quot;:&quot;FR&quot;,&quot;local_datetime&quot;:&quot;2026-05-13T18:00:00+02:00&quot;}&lt;/runtime_metadata&gt;
+hello
+</code></pre></div>
+<p>This makes time/location/user context visible to the LLM without mutating the durable human message into a natural-language prefix. If a model echoes the runtime-owned envelope, AbstractRuntime removes that envelope from user-facing response text while preserving <code>metadata.runtime_grounding</code> for audit.</p>
+<p>Direct media requests, including image generation, TTS, and transcription, do not receive prompt-injected grounding. They still receive trace headers/tags for observability and artifact ownership, but TTS <code>input</code> and image prompts remain the literal text supplied by the workflow.</p>
 <h2 id="multimodal-generation">Multimodal generation<a class="headerlink" href="#multimodal-generation" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime forwards AbstractCore's unified <code>generate(..., output=...)</code> selector and normalizes multimodal responses into JSON-safe, artifact-backed results.</p>
 <p>Generate an image:</p>

@@ -291,12 +291,30 @@ def _maybe_inject_llm_call_grounding_for_ledger(*, effect: Effect) -> Effect:
     prompt_str = str(prompt or "")
     messages_list = messages if isinstance(messages, list) else None
 
+    output_request = payload.get("output")
+    if output_request is None:
+        output_request = payload.get("outputs")
+
     try:
-        from abstractruntime.integrations.abstractcore.llm_client import _inject_turn_grounding
+        from abstractruntime.integrations.abstractcore.llm_client import (
+            _mark_grounding_prompt_injected,
+            _normalize_turn_grounding,
+            _output_request_has_non_text_result,
+            _runtime_grounding_metadata,
+        )
     except Exception:
         return effect
 
-    updated_prompt, updated_messages = _inject_turn_grounding(prompt=prompt_str, messages=messages_list)
+    skip_turn_grounding = _output_request_has_non_text_result(output_request)
+    grounding = None
+    if not skip_turn_grounding:
+        grounding = _mark_grounding_prompt_injected(_runtime_grounding_metadata(), True)
+
+    updated_prompt, updated_messages = _normalize_turn_grounding(
+        prompt=prompt_str,
+        messages=messages_list,
+        grounding=grounding,
+    )
 
     changed = False
     if updated_prompt != prompt_str:

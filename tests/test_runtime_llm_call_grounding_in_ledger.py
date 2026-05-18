@@ -16,7 +16,17 @@ pytestmark = pytest.mark.basic
 def test_llm_call_grounding_is_visible_in_ledger_without_affecting_idempotency_key(monkeypatch) -> None:
     import abstractruntime.integrations.abstractcore.llm_client as llm_client
 
-    monkeypatch.setattr(llm_client, "_system_context_header", lambda: "[2000-01-01 00:00:00 FR]")
+    monkeypatch.setattr(
+        llm_client,
+        "_runtime_grounding_metadata",
+        lambda trace_metadata=None: {
+            "local_datetime": "2000-01-01T00:00:00+00:00",
+            "country": "FR",
+            "display": "[2000-01-01 00:00:00 FR]",
+            "source": "abstractruntime",
+            "prompt_injected": False,
+        },
+    )
 
     run_store = InMemoryRunStore()
     ledger_store = InMemoryLedgerStore()
@@ -59,5 +69,8 @@ def test_llm_call_grounding_is_visible_in_ledger_without_affecting_idempotency_k
 
     payload = (first.get("effect") or {}).get("payload") or {}
     prompt_sent = str(payload.get("prompt") or "")
-    assert prompt_sent.startswith("[2000-01-01 00:00:00 FR] ")
-    assert re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z]{2}\]", prompt_sent)
+    assert prompt_sent.startswith("<runtime_metadata>")
+    assert '"display":"[2000-01-01 00:00:00 FR]"' in prompt_sent
+    assert '"country":"FR"' in prompt_sent
+    assert prompt_sent.endswith("</runtime_metadata>\nhello")
+    assert re.match(r"^<runtime_metadata>.*</runtime_metadata>\nhello$", prompt_sent)

@@ -157,14 +157,19 @@ jobs:
 
               if event_name == "workflow_dispatch":
                   tag_check = subprocess.run(
-                      ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
+                      ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}^{{}}"],
                       check=False,
-                      stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL,
+                      capture_output=True,
+                      text=True,
                   )
                   if tag_check.returncode == 0:
-                      raise SystemExit(f"Remote tag {tag} already exists.")
-                  if tag_check.returncode not in (0, 2):
+                      remote_sha = tag_check.stdout.split()[0].strip() if tag_check.stdout.split() else ""
+                      local_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+                      if remote_sha != local_sha:
+                          raise SystemExit(
+                              f"Remote tag {tag} already exists at {remote_sha}, but current commit is {local_sha}."
+                          )
+                  elif tag_check.returncode != 2:
                       raise SystemExit(f"Could not check remote tag {tag}.")
 
               try:
@@ -213,8 +218,14 @@ jobs:
         run: |
           tag="${{ needs.build.outputs.tag }}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "Tag ${tag} already exists on origin."
-            exit 1
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}^{}" | awk '{print $1}')"
+            local_sha="$(git rev-parse HEAD)"
+            if [ "${remote_sha}" != "${local_sha}" ]; then
+              echo "Tag ${tag} already exists at ${remote_sha}, but current commit is ${local_sha}."
+              exit 1
+            fi
+            echo "Tag ${tag} already exists on origin for the same commit. Reusing it."
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -51,6 +51,9 @@ def test_runtime_exposes_abstractcore_and_worker_extras_with_gateway_aligned_flo
     assert "mcp-worker = [" in text
     assert '"abstractcore>=2.13.15"' in text
     assert '"abstractcore[remote,vision,voice,audio]>=2.13.15"' in text
+    assert '"openai<2.0.0,>=1.109.1"' in text
+    assert '"httpx<1.0.0,>=0.28.1"' in text
+    assert '"anyio<5.0.0,>=4.12.1"' in text
     assert '"Pillow<13.0.0,>=10.0.0"' in text
     assert '"unstructured[docx,odt,pptx,rtf,xlsx]<0.19.0,>=0.18.32"' in text
     assert '"python-pptx<2.0.0,>=1.0.2"' in text

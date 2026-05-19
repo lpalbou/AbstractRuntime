@@ -9,8 +9,13 @@ class _StubLLM:
     def generate(self, *, prompt, messages, system_prompt, media, tools, params):
         self.calls += 1
         assert isinstance(media, list) and media, "expected media list"
-        p = media[0]
-        assert isinstance(p, str) and p, "expected media to be a temp file path"
+        item = media[0]
+        assert isinstance(item, dict), "expected media to preserve artifact metadata"
+        p = str(item.get("file_path") or "")
+        assert p, "expected media to include a temp file path"
+        assert item.get("$artifact")
+        assert item.get("artifact_id")
+        assert item.get("content_type") == "text/plain"
         with open(p, "rb") as f:
             assert f.read() == b"hello world"
         return {"content": "OK", "metadata": {}}
@@ -109,4 +114,3 @@ def test_llm_call_media_artifact_refs_persist_across_restart():
         kwargs = obs.get("llm_generate_kwargs")
         assert isinstance(kwargs, dict)
         assert kwargs.get("media") == attachments
-

@@ -24,8 +24,13 @@ def test_llm_call_media_materializes_artifact_using_source_path_label(tmp_path: 
     assert err is None
     assert isinstance(resolved, list) and len(resolved) == 1
 
-    out_path = Path(str(resolved[0]))
+    item = resolved[0]
+    assert isinstance(item, dict)
+    out_path = Path(str(item.get("file_path") or ""))
     assert out_path.is_file()
     assert out_path.read_bytes() == b"hello\n"
     short = str(meta.artifact_id)[:8]
     assert out_path.name == f"Values__{short}.md"
+    assert item.get("$artifact") == str(meta.artifact_id)
+    assert item.get("artifact_id") == str(meta.artifact_id)
+    assert item.get("content_type") == "text/plain"

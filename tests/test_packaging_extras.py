@@ -49,11 +49,14 @@ def test_runtime_exposes_abstractcore_and_worker_extras_with_gateway_aligned_flo
     assert "[project.optional-dependencies]" in text
     assert "abstractcore = [" in text
     assert "mcp-worker = [" in text
-    assert '"abstractcore>=2.13.12"' in text
-    assert '"abstractcore[media,openai,vision,voice,audio]>=2.13.12"' in text
+    assert '"abstractcore>=2.13.15"' in text
+    assert '"abstractcore[remote,vision,voice,audio]>=2.13.15"' in text
+    assert '"Pillow<13.0.0,>=10.0.0"' in text
+    assert '"unstructured[docx,odt,pptx,rtf,xlsx]<0.19.0,>=0.18.32"' in text
+    assert '"python-pptx<2.0.0,>=1.0.2"' in text
 
     worker_block = _extract_optional_dependency_block(text, key="mcp-worker")
-    assert '"abstractcore[tools]>=2.13.12"' in worker_block
+    assert '"abstractcore[tools]>=2.13.15"' in worker_block
 
 
 def test_runtime_exposes_python_install_hardware_profile_cascades() -> None:
@@ -72,7 +75,11 @@ def test_runtime_exposes_python_install_hardware_profile_cascades() -> None:
     all_apple_block = _extract_optional_dependency_block(text, key="all-apple")
     all_gpu_block = _extract_optional_dependency_block(text, key="all-gpu")
 
-    assert '"abstractcore[apple]>=2.13.12"' in apple_block
-    assert '"abstractcore[gpu]>=2.13.12"' in gpu_block
-    assert '"abstractcore[all-apple]>=2.13.12"' in all_apple_block
-    assert '"abstractcore[all-gpu]>=2.13.12"' in all_gpu_block
+    assert '"abstractcore[apple]>=2.13.15"' in apple_block
+    assert '"abstractcore[gpu]>=2.13.15"' in gpu_block
+    assert '"abstractcore[all-apple]>=2.13.15"' in all_apple_block
+    assert '"abstractcore[all-gpu]>=2.13.15"' in all_gpu_block
+    assert '"setuptools<82.0.0,>=80.10.2"' in apple_block
+    assert '"setuptools<82.0.0,>=80.10.2"' in gpu_block
+    assert '"setuptools<82.0.0,>=80.10.2"' in all_apple_block
+    assert '"setuptools<82.0.0,>=80.10.2"' in all_gpu_block

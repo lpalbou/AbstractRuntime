@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.12"
+version = "0.4.13"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,24 +51,34 @@ abstractcore = [
 
 apple = [
   "abstractcore[apple]>=2.13.15",
+  "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
   "abstractcore[gpu]>=2.13.15",
+  "setuptools<82.0.0,>=80.10.2",
 ]
 
 all-apple = [
   "abstractcore[all-apple]>=2.13.15",
+  "setuptools<82.0.0,>=80.10.2",
 ]
 
 all-gpu = [
   "abstractcore[all-gpu]>=2.13.15",
+  "setuptools<82.0.0,>=80.10.2",
 ]
 
 # Enables AbstractCore multimodal generation helpers with common OpenAI-backed
 # image/voice capability packages.
 multimodal = [
-  "abstractcore[media,openai,vision,voice,audio]>=2.13.15",
+  "abstractcore[remote,vision,voice,audio]>=2.13.15",
+  "Pillow<13.0.0,>=10.0.0",
+  "pymupdf4llm<1.0.0,>=0.0.20",
+  "pymupdf-layout<2.0.0,>=1.26.6",
+  "unstructured[docx,odt,pptx,rtf,xlsx]<0.19.0,>=0.18.32",
+  "python-pptx<2.0.0,>=1.0.2",
+  "pandas<3.0.0,>=1.0.0",
 ]
 
 # Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).

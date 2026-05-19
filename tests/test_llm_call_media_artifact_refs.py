@@ -38,8 +38,13 @@ def test_llm_call_media_resolves_artifact_refs_to_temp_files() -> None:
             assert isinstance(params, dict)
             assert params.get("glyph_compression") == "never"
             assert isinstance(media, list) and media, "Expected media to be passed"
-            p = media[0]
-            assert isinstance(p, str) and p, "Expected media item to be a temp file path"
+            item = media[0]
+            assert isinstance(item, dict), "Expected media item to preserve artifact metadata"
+            p = str(item.get("file_path") or "")
+            assert p, "Expected media item to include a temp file path"
+            assert item.get("$artifact") == meta.artifact_id
+            assert item.get("artifact_id") == meta.artifact_id
+            assert item.get("content_type") == "text/plain"
             with open(p, "rb") as f:
                 assert f.read() == b"hello world"
             return {"content": "OK", "metadata": {}}

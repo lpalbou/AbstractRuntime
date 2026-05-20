@@ -818,10 +818,9 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="008_signatures_and_keys (planned)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
   <a href="#goal" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -831,53 +830,81 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#constraints" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Constraints
+        Current code reality
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#non-goals-v01" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#why-this-is-still-open" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Non-goals (v0.1)
+        Why this is still open
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#related-adrs" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#planned-scope" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Related ADRs
+        Planned scope
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Acceptance criteria
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#priority-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority note
+      
+    </span>
+  </a>
   
 </li>
       
@@ -904,28 +931,65 @@
   <h1>008 signatures and keys</h1>
 
 <h2 id="008_signatures_and_keys-planned">008_signatures_and_keys (planned)<a class="headerlink" href="#008_signatures_and_keys-planned" title="Permanent link">&para;</a></h2>
-<h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
-<p>Upgrade provenance from tamper-evident to cryptographically signed:
-- bind <code>actor_id</code> to a public key
-- sign <code>record_hash</code> (Ed25519)
-- verify signatures in verification reports</p>
-<h3 id="constraints">Constraints<a class="headerlink" href="#constraints" title="Permanent link">&para;</a></h3>
+<p><strong>Status</strong>: Planned
+<strong>Priority</strong>: Low
+<strong>Depends on</strong>: 007_provenance_hash_chain (completed)
+<strong>Related ADRs</strong>: 0003_provenance_tamper_evident_hash_chain</p>
+<hr />
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>Extend the current tamper-evident provenance model with optional cryptographic signatures so ledger verification can answer not only "was this chain modified?" but also "which key signed these records?"</p>
+<hr />
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li>keep as an optional extra dependency (<code>abstractruntime[crypto]</code>)</li>
-<li>define key storage approach (file, OS keychain, Vault, etc.)</li>
+<li><code>StepRecord</code> already has a <code>signature</code> field.</li>
+<li>Hash-chained ledgers and verification already ship today.</li>
+<li>Provenance docs explicitly say signatures and key management are deferred.</li>
+<li>Runtime currently relies on actor fingerprints and actor metadata, not public-key-backed non-forgeability.</li>
 </ul>
-<h3 id="non-goals-v01">Non-goals (v0.1)<a class="headerlink" href="#non-goals-v01" title="Permanent link">&para;</a></h3>
+<hr />
+<h2 id="why-this-is-still-open">Why this is still open<a class="headerlink" href="#why-this-is-still-open" title="Permanent link">&para;</a></h2>
+<p>The current hash chain is useful for tamper evidence inside a ledger, but it does not provide:</p>
 <ul>
-<li>global enforcement or discovery</li>
+<li>non-forgeable authorship</li>
+<li>signer delegation or rotation</li>
+<li>trust decisions based on known public keys</li>
 </ul>
-<h3 id="related-adrs">Related ADRs<a class="headerlink" href="#related-adrs" title="Permanent link">&para;</a></h3>
+<p>This matters only once consumers need stronger audit guarantees than "the stored chain is internally consistent."</p>
+<hr />
+<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Define an optional signing interface around <code>record_hash</code> signing and verification.</li>
+<li>Bind <code>actor_id</code> / actor metadata to signer metadata in a documented way.</li>
+<li>Extend verification reports to surface signature validity and signer identity.</li>
+<li>Keep crypto support as an optional extra dependency such as <code>abstractruntime[crypto]</code>.</li>
+<li>Document acceptable key-loading strategies without making Runtime own a global PKI.</li>
+</ol>
+<hr />
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../../../adr/0003_provenance_tamper_evident_hash_chain/">ADR 0003: Provenance Hash Chain</a> — Why signatures are deferred</li>
+<li>[ ] A documented signing model exists for ledger records.</li>
+<li>[ ] Signature generation and verification can be enabled without changing the unsigned default path.</li>
+<li>[ ] Verification reports distinguish hash-chain integrity from signature validity.</li>
+<li>[ ] The design documents how signer metadata is attached to records.</li>
+<li>[ ] The feature remains optional and does not force crypto dependencies on all users.</li>
 </ul>
-<h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h3>
+<hr />
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Unit tests for signed append + verification.</li>
+<li>Negative tests for tampered payloads, wrong keys, and missing signatures.</li>
+<li>Docs review for key-loading and rotation guidance.</li>
+</ol>
+<hr />
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../../completed/007_provenance_hash_chain/">007_provenance_hash_chain.md</a> — Hash chain implementation (completed)</li>
+<li>mandatory signing for all runtimes</li>
+<li>centralized key discovery or global trust distribution</li>
+<li>UI trust policy or certificate management</li>
 </ul>
+<hr />
+<h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
+<p>Keep this low priority unless non-forgeable provenance becomes a concrete product or compliance requirement.</p>
 
 
 

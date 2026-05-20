@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/014_remote_tool_worker_executor/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/025_runtime_retention_and_purge_contract/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>014 remote tool worker executor - AbstractRuntime</title>
+        <title>025 runtime retention and purge contract - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#014_remote_tool_worker_executor-planned" class="md-skip">
+        <a href="#025_runtime_retention_and_purge_contract-planned" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              014 remote tool worker executor
+              025 runtime retention and purge contract
             
           </span>
         </div>
@@ -810,10 +810,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#014_remote_tool_worker_executor-planned" class="md-nav__link">
+  <a href="#025_runtime_retention_and_purge_contract-planned" class="md-nav__link">
     <span class="md-ellipsis">
       
-        014_remote_tool_worker_executor (planned)
+        025_runtime_retention_and_purge_contract (planned)
       
     </span>
   </a>
@@ -862,6 +862,67 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Planned scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-minimal-durable-retention-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Minimal durable retention metadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-optional-storage-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Optional storage capabilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-host-facing-purge-helper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Host-facing purge helper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-explicit-v1-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Explicit v1 boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-provenance-and-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Provenance and documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -880,6 +941,17 @@
     <span class="md-ellipsis">
       
         Validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adr-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ADR note
       
     </span>
   </a>
@@ -928,66 +1000,122 @@
   
 
 
-  <h1>014 remote tool worker executor</h1>
+  <h1>025 runtime retention and purge contract</h1>
 
-<h2 id="014_remote_tool_worker_executor-planned">014_remote_tool_worker_executor (planned)<a class="headerlink" href="#014_remote_tool_worker_executor-planned" title="Permanent link">&para;</a></h2>
+<h2 id="025_runtime_retention_and_purge_contract-planned">025_runtime_retention_and_purge_contract (planned)<a class="headerlink" href="#025_runtime_retention_and_purge_contract-planned" title="Permanent link">&para;</a></h2>
 <p><strong>Status</strong>: Planned
-<strong>Priority</strong>: Low
-<strong>Depends on</strong>: 005_abstractcore_integration (completed)</p>
+<strong>Priority</strong>: Medium
+<strong>Depends on</strong>: 009_artifact_store (completed), 011_subworkflow_support (completed), 012_run_store_query_and_scheduler_support (completed), 024_runtime_owned_run_scoped_media_execution (completed)
+<strong>Related ADRs</strong>: 0003_provenance_tamper_evident_hash_chain, 0004_runtime_owns_run_scoped_media_execution_truth</p>
 <hr />
 <h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Decide whether Runtime still needs a generic non-MCP remote tool-job client beyond the delegated MCP support that already ships today.</p>
+<p>Define capability-detected runtime purge mechanics for explicitly ephemeral run trees without weakening the default durable, append-only posture of AbstractRuntime.</p>
 <hr />
 <h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>WaitReason.JOB</code> already exists.</li>
-<li>The <code>TOOL_CALLS</code> effect handler already turns delegated executor results into durable waits.</li>
-<li><code>DelegatingMcpToolExecutor</code> already provides a real job-style delegation path.</li>
-<li><code>McpToolExecutor</code> and <code>abstractruntime-mcp-worker</code> already cover a concrete remote-worker story.</li>
+<li><code>RunStore</code> still exposes only <code>save()</code> / <code>load()</code>.</li>
+<li><code>QueryableRunStore</code> already exposes <code>list_runs()</code>, <code>list_due_wait_until()</code>, and <code>list_children()</code>.</li>
+<li><code>QueryableRunIndexStore</code> already exposes <code>list_run_index(...)</code>, including <code>session_id</code> and <code>root_only</code>, so hosts can already hide child runs from top-level listings without inventing purge semantics first.</li>
+<li><code>LedgerStore</code> is still append-only with <code>append()</code> / <code>list()</code>.</li>
+<li><code>ArtifactStore</code> already supports <code>delete()</code> and <code>delete_by_run()</code>.</li>
+<li>Runtime already has private tree-walk precedents via <code>history_bundle._list_descendant_run_ids(...)</code> and scheduler child-run traversal, but no public host-facing purge helper.</li>
+<li>Runtime-owned child runs now include both classic subworkflows and media child runs, so cleanup is no longer only a Flow/Gateway concern.</li>
+<li>Provenance hash chains are implemented, which makes purge/archive semantics an explicit audit decision, not just a storage API detail.</li>
 </ul>
-<p>So the broad "add remote worker execution" item is no longer accurate. The remaining question is narrower: should Runtime also ship a generic HTTP tool-job client for deployments that do not want MCP?</p>
 <hr />
 <h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>Some thin-client or centralized-execution deployments may still want:</p>
+<p>Hosts need consistent cleanup mechanics for draft/private/ephemeral runs. If each host invents its own run-tree deletion logic, child runs, artifacts, and ledger retention behavior will drift.</p>
+<p>At the same time, Runtime should not silently become a policy engine that decides which runs are purgeable. The durable boundary should stay:</p>
 <ul>
-<li>a simple HTTP job queue instead of MCP</li>
-<li>runtime-owned packaging of tool batches into a documented remote job contract</li>
+<li>Runtime defines reusable mechanics and capability detection.</li>
+<li>Hosts decide policy defaults and when purge is allowed.</li>
 </ul>
-<p>But this only matters if MCP delegation is not sufficient for real adopters.</p>
 <hr />
 <h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Document the existing delegated MCP path as the preferred shipped solution.</li>
-<li>Evaluate whether a generic non-MCP job protocol still has real consumers.</li>
-<li>If yes, add a small <code>RemoteToolExecutor</code> / client abstraction that:</li>
-<li>submits tool batches to a remote service</li>
-<li>returns a durable <code>JOB</code> wait payload</li>
-<li>stays compatible with existing host resume flows</li>
-<li>Keep the contract intentionally minimal and host-agnostic.</li>
-</ol>
+<h3 id="1-minimal-durable-retention-metadata">1. Minimal durable retention metadata<a class="headerlink" href="#1-minimal-durable-retention-metadata" title="Permanent link">&para;</a></h3>
+<p>Define a small runtime-owned metadata contract instead of a broad taxonomy:</p>
+<ul>
+<li><code>run.vars["_runtime"]["retention_class"]</code> with values like <code>durable</code> or <code>ephemeral</code></li>
+<li>optional <code>run.vars["_runtime"]["expires_at"]</code></li>
+</ul>
+<p>Do not introduce broader fields like <code>purpose</code> or <code>visibility</code> unless a real host consumer proves they are needed.</p>
+<h3 id="2-optional-storage-capabilities">2. Optional storage capabilities<a class="headerlink" href="#2-optional-storage-capabilities" title="Permanent link">&para;</a></h3>
+<p>Add explicit optional protocols rather than widening every base interface:</p>
+<ul>
+<li><code>DeletableRunStore.delete(run_id)</code></li>
+<li><code>DeletableLedgerStore.delete_by_run(run_id)</code> or equivalent</li>
+<li>optional artifact-GC capability for stores that dedupe blobs and need a separate reclamation pass</li>
+</ul>
+<p>Deletion support must remain capability-detected. Not every backend needs to implement it immediately.</p>
+<h3 id="3-host-facing-purge-helper">3. Host-facing purge helper<a class="headerlink" href="#3-host-facing-purge-helper" title="Permanent link">&para;</a></h3>
+<p>Add a runtime helper or utility for:</p>
+<ul>
+<li>collecting a root run plus descendants</li>
+<li>refusing <code>RUNNING</code> / <code>WAITING</code> runs by default</li>
+<li>refusing <code>durable</code> runs unless forced</li>
+<li>deleting run checkpoints, run-owned ledgers, and run-owned artifacts when supported</li>
+<li>reporting unsupported capabilities explicitly</li>
+<li>returning a structured dry-run / execute report</li>
+</ul>
+<p>This should be a host-facing utility, not a new always-on <code>Runtime.tick(...)</code> behavior.</p>
+<h3 id="4-explicit-v1-boundary">4. Explicit v1 boundary<a class="headerlink" href="#4-explicit-v1-boundary" title="Permanent link">&para;</a></h3>
+<p>Version 1 should cover:</p>
+<ul>
+<li>root run</li>
+<li>descendant runs</li>
+<li>run checkpoints</li>
+<li>run-owned ledgers</li>
+<li>run-owned artifacts</li>
+</ul>
+<p>Version 1 should explicitly exclude:</p>
+<ul>
+<li>session attachment pseudo-runs / session-memory artifacts</li>
+<li>archive-to-artifact behavior</li>
+<li>automatic expiry schedulers</li>
+</ul>
+<h3 id="5-provenance-and-documentation">5. Provenance and documentation<a class="headerlink" href="#5-provenance-and-documentation" title="Permanent link">&para;</a></h3>
+<p>Document the consequences clearly:</p>
+<ul>
+<li>durability remains the default</li>
+<li>append-only ledgers remain the normal production posture</li>
+<li>purge is for explicitly ephemeral runs or explicit operator force paths</li>
+<li>artifact deletion may not reclaim deduped blob bytes until store-specific GC runs</li>
+</ul>
 <hr />
 <h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[ ] The backlog clearly distinguishes existing MCP delegation from any still-missing generic worker client.</li>
-<li>[ ] If implemented, a generic executor produces durable <code>JOB</code> waits without keeping in-flight tool work in RAM.</li>
-<li>[ ] Documentation explains when to use passthrough, delegated MCP, or a generic HTTP job path.</li>
+<li>[ ] Runtime documents a minimal retention metadata contract centered on <code>retention_class</code> and optional <code>expires_at</code>.</li>
+<li>[ ] Optional delete capabilities are defined without widening every storage base class.</li>
+<li>[ ] A host-facing purge helper can dry-run and execute run-tree cleanup when the configured stores support it.</li>
+<li>[ ] The helper refuses active runs by default and refuses durable runs unless explicitly forced.</li>
+<li>[ ] The helper reports descendant runs, deleted checkpoints, deleted ledgers, deleted artifacts, unsupported capabilities, and GC caveats in a structured result.</li>
+<li>[ ] Session attachment cleanup is either explicitly excluded from v1 or tracked as a separate follow-up.</li>
+<li>[ ] Provenance docs explain the interaction between purge and hash-chained ledgers.</li>
 </ul>
 <hr />
 <h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Documentation review against the current MCP worker and delegated executor behavior.</li>
-<li>If a generic client is added, unit tests with a stub transport covering submit, wait details, and resume semantics.</li>
+<li>Contract tests for in-memory, JSON-file, and SQLite stores covering supported and unsupported delete capabilities.</li>
+<li>Run-tree tests covering root + descendant cleanup, including media child runs and subworkflow child runs.</li>
+<li>Refusal tests for <code>RUNNING</code>, <code>WAITING</code>, and <code>durable</code> runs.</li>
+<li>Artifact tests covering per-run deletion vs deduped blob GC behavior.</li>
+<li>Documentation review to ensure hosts understand the policy/mechanics boundary.</li>
 </ol>
+<hr />
+<h2 id="adr-note">ADR note<a class="headerlink" href="#adr-note" title="Permanent link">&para;</a></h2>
+<p>No new ADR is required yet. If this item graduates into an accepted retention taxonomy or a durable archive policy, capture that boundary in an ADR at implementation time.</p>
 <hr />
 <h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>replacing the existing MCP path</li>
-<li>mandatory worker infrastructure</li>
-<li>cluster scheduling or leasing semantics</li>
+<li>Runtime-owned retention policy defaults for Gateway, Flow, or other hosts</li>
+<li>mandatory delete support for every storage backend</li>
+<li>changing normal production ledgers from append-only to purge-first</li>
+<li>automatic cleanup of session attachment registries in v1</li>
+<li>background expiry daemons or scheduler behavior in this first item</li>
 </ul>
 <hr />
 <h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
-<p>Keep this low priority unless a concrete non-MCP deployment requirement appears. The durable job-wait foundation is already in place.</p>
+<p>This matters more now that Runtime owns more child-run patterns, but it is still a medium-priority mechanics item, not the highest-priority runtime correctness gap.</p>
 
 
 

@@ -491,6 +491,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#discovery-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovery snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-run-scoped-media-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable run-scoped media execution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#attachment-registration-limits" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1094,6 +1116,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#discovery-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovery snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durable-run-scoped-media-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable run-scoped media execution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#attachment-registration-limits" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1158,11 +1202,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.12 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, and async/sync text-generation output-selector parity.</p>
+<p>This extra installs AbstractCore 2.13.20 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.</p>
 <p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.12</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
+<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.20</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>
@@ -1171,6 +1215,10 @@
 - <strong>Local</strong>: in-process AbstractCore providers + local tool execution
 - <strong>Remote</strong>: HTTP to an AbstractCore server (<code>/v1/chat/completions</code>) + tool passthrough
 - <strong>Hybrid</strong>: remote LLM + local tool execution</p>
+<p>Local mode currently uses <code>MultiLocalAbstractCoreLLMClient</code> as the built-in LLM router. Despite the name, it is not a
+local+remote combo client: it routes among multiple in-process local <code>(provider, model)</code> clients and keeps them warm in
+the current process. Remote model execution is a separate topology exposed through <code>create_remote_runtime(...)</code> and
+<code>create_hybrid_runtime(...)</code>.</p>
 <p>Factory functions (exported from <code>abstractruntime.integrations.abstractcore</code>):
 - <code>create_local_runtime(...)</code>
 - <code>create_remote_runtime(...)</code>
@@ -1291,8 +1339,22 @@ hello
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>Media-only normalized results now distinguish orchestration identity from the actual media backend:</p>
+<ul>
+<li><code>runtime_provider</code> / <code>runtime_model</code>: the runtime-side orchestration identity, when relevant</li>
+<li><code>media_provider</code> / <code>media_model</code>: the actual image/voice backend identity surfaced from the generated output</li>
+</ul>
+<p>For local one-shot subprocess image generation, runtime metadata also records <code>execution_mode="local_one_shot_subprocess"</code>.</p>
 <p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), TTS (<code>/v1/audio/speech</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
+<p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>tts</code>, and <code>stt</code> return:</p>
+<ul>
+<li><code>code="model_residency_unsupported"</code></li>
+<li><code>execution_mode="local_one_shot_subprocess"</code></li>
+<li><code>requires_long_lived_server=true</code></li>
+<li><code>config_hint</code> pointing to <code>ABSTRACTCORE_SERVER_BASE_URL</code></li>
+</ul>
+<p>When the workflow marks residency as optional (<code>required=false</code>), the effect still completes durably but includes <code>status_hint="warning"</code> and <code>degraded=true</code> so hosts can render the no-op honestly.</p>
 <p>Remote auth example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_remote_runtime</span>
 
@@ -1361,8 +1423,10 @@ hello
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="prompt-cache-control-plane">Prompt-cache control plane<a class="headerlink" href="#prompt-cache-control-plane" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime's AbstractCore LLM clients now expose a unified prompt-cache control-plane surface for host code:</p>
+<p>AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache and model-residency operations:</p>
 <ul>
+<li><code>get_abstractcore_host_facade(runtime)</code></li>
+<li><code>AbstractCoreHostFacade</code></li>
 <li><code>get_prompt_cache_capabilities(...)</code></li>
 <li><code>get_prompt_cache_stats(...)</code></li>
 <li><code>prompt_cache_set(...)</code></li>
@@ -1370,6 +1434,9 @@ hello
 <li><code>prompt_cache_fork(...)</code></li>
 <li><code>prompt_cache_clear(...)</code></li>
 <li><code>prompt_cache_prepare_modules(...)</code></li>
+<li><code>list_model_residency(...)</code></li>
+<li><code>load_model_residency(...)</code></li>
+<li><code>unload_model_residency(...)</code></li>
 </ul>
 <p>Behavior by execution mode:</p>
 <ul>
@@ -1383,22 +1450,109 @@ hello
 <li>Unsupported operations return structured payloads with <code>supported=false</code>, <code>operation</code>, <code>code</code>, and <code>capabilities</code>.</li>
 <li>When a provider reports <code>mode=local_control_plane</code> (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized <code>system | tools | history</code> cache path automatically.</li>
 <li>When a provider reports <code>mode=keyed</code>, the runtime still forwards stable <code>prompt_cache_key</code>s but skips module preparation/fork/update orchestration.</li>
-<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches without reaching through to provider internals.</li>
+<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches through the public facade instead of reaching through to provider internals.</li>
 <li>Automatic per-session prompt-cache keys are enabled by <code>run.vars["_runtime"]["prompt_cache"]</code>, <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default. Gateway-specific prompt-cache env vars should be translated by Gateway into <code>_runtime.prompt_cache</code>.</li>
 </ul>
 <p>Host-side prompt-cache example:</p>
-<div class="highlight"><pre><span></span><code><span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">)</span>
-<span class="n">client</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">rt</span><span class="p">,</span> <span class="s2">&quot;_abstractcore_llm_client&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">create_local_runtime</span><span class="p">,</span>
+    <span class="n">get_abstractcore_host_facade</span><span class="p">,</span>
+<span class="p">)</span>
 
-<span class="n">caps</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get_prompt_cache_capabilities</span><span class="p">()</span> <span class="k">if</span> <span class="n">client</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">{}</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">)</span>
+<span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">caps</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_prompt_cache_capabilities</span><span class="p">()</span>
 <span class="k">if</span> <span class="n">caps</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;capabilities&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;supports_prepare_modules&quot;</span><span class="p">):</span>
-    <span class="n">client</span><span class="o">.</span><span class="n">prompt_cache_prepare_modules</span><span class="p">(</span>
+    <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_prepare_modules</span><span class="p">(</span>
         <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
         <span class="n">modules</span><span class="o">=</span><span class="p">[</span>
             <span class="p">{</span><span class="s2">&quot;module_id&quot;</span><span class="p">:</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="s2">&quot;system_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;You are concise.&quot;</span><span class="p">},</span>
             <span class="p">{</span><span class="s2">&quot;module_id&quot;</span><span class="p">:</span> <span class="s2">&quot;tools&quot;</span><span class="p">,</span> <span class="s2">&quot;tools&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;read_file&quot;</span><span class="p">,</span> <span class="s2">&quot;parameters&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">}}]},</span>
         <span class="p">],</span>
     <span class="p">)</span>
+</code></pre></div>
+<h2 id="discovery-snapshots">Discovery snapshots<a class="headerlink" href="#discovery-snapshots" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:</p>
+<ul>
+<li><code>get_abstractcore_discovery_facade(runtime)</code></li>
+<li><code>AbstractCoreDiscoveryFacade</code></li>
+<li><code>list_providers(...)</code></li>
+<li><code>list_provider_models(...)</code></li>
+<li><code>get_model_capabilities(...)</code></li>
+<li><code>get_voice_catalog(...)</code></li>
+<li><code>list_tts_models(...)</code></li>
+<li><code>list_stt_models(...)</code></li>
+<li><code>list_vision_provider_models(...)</code></li>
+<li><code>list_cached_vision_models(...)</code></li>
+</ul>
+<p>Behavior by execution mode:</p>
+<ul>
+<li><strong>Local</strong> (<code>MultiLocalAbstractCoreLLMClient</code> / <code>LocalAbstractCoreLLMClient</code>): uses public AbstractCore registries,
+  capability facades, and local vision cache inspection to return JSON-safe snapshot payloads.</li>
+<li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/providers</code>, <code>/v1/models</code>, <code>/v1/audio/*</code>, and
+  <code>/v1/vision/*</code> on the configured AbstractCore server. Per-request provider key overrides supplied as <code>api_key</code> /
+  <code>provider_api_key</code> become <code>X-AbstractCore-Provider-API-Key</code> headers.</li>
+</ul>
+<p>Contract notes:</p>
+<ul>
+<li>This surface is query-oriented. It does not create durable Runtime history on its own.</li>
+<li>Hosts should still ask Runtime for these reads instead of rebuilding Core catalog logic or importing Core server
+  helpers directly.</li>
+<li>Model capability lookup is static metadata, not a live server probe. Replay should treat it as a recorded snapshot,
+  not as a query to re-run.</li>
+<li><code>list_cached_vision_models(...)</code> may still depend on the current local machine state. It is a Runtime-owned snapshot
+  query, not durable run truth.</li>
+<li>Remote discovery methods accept <code>timeout_s=...</code> through facade kwargs. Local discovery remains synchronous helper
+  code; async hosts should offload it to a worker thread if they do not want to block their event loop.</li>
+</ul>
+<p>Host-side discovery example:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">create_remote_runtime</span><span class="p">,</span>
+    <span class="n">get_abstractcore_discovery_facade</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_remote_runtime</span><span class="p">(</span>
+    <span class="n">server_base_url</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8000&quot;</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o-mini&quot;</span><span class="p">,</span>
+    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer server-master-key&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+<span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_discovery_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">providers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_providers</span><span class="p">(</span><span class="n">include_models</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">voices</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_voice_catalog</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_image&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="durable-run-scoped-media-execution">Durable run-scoped media execution<a class="headerlink" href="#durable-run-scoped-media-execution" title="Permanent link">&para;</a></h2>
+<p>Hosts sometimes need to trigger image/TTS/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
+<p>Public durable entry points:</p>
+<ul>
+<li><code>get_abstractcore_run_facade(runtime)</code></li>
+<li><code>AbstractCoreRunFacade</code></li>
+<li><code>execute_llm_call(...)</code></li>
+<li><code>generate_image(...)</code></li>
+<li><code>generate_voice(...)</code></li>
+<li><code>transcribe_audio(...)</code></li>
+</ul>
+<p>These helpers create child runs under an existing parent run and execute the real <code>LLM_CALL</code> through Runtime rather than doing media work in host/controller code.</p>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">create_local_runtime</span><span class="p">,</span>
+    <span class="n">get_abstractcore_run_facade</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen-chat&quot;</span><span class="p">)</span>
+<span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_run_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">generate_image</span><span class="p">(</span>
+    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
+    <span class="n">prompt</span><span class="o">=</span><span class="s2">&quot;A red mug on a white table.&quot;</span><span class="p">,</span>
+    <span class="n">output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mflux&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;flux-dev&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+
+<span class="k">assert</span> <span class="n">child</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;media_model&quot;</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
 </code></pre></div>
 <h2 id="attachment-registration-limits">Attachment registration limits<a class="headerlink" href="#attachment-registration-limits" title="Permanent link">&para;</a></h2>
 <p>When local <code>read_file</code> tool outputs are captured as session attachments, Runtime bounds the file bytes it stores. The limit is resolved in this order:</p>

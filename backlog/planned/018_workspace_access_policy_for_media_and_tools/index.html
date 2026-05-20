@@ -832,10 +832,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#context-problem" class="md-nav__link">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Context / Problem
+        Current code reality
       
     </span>
   </a>
@@ -843,10 +843,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#proposed-investigation" class="md-nav__link">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proposed Investigation
+        Problem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#planned-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Planned scope
       
     </span>
   </a>
@@ -900,63 +911,57 @@
 <h2 id="018_workspace_access_policy_for_media_and_tools-planned">018_workspace_access_policy_for_media_and_tools (planned)<a class="headerlink" href="#018_workspace_access_policy_for_media_and_tools-planned" title="Permanent link">&para;</a></h2>
 <p><strong>Status</strong>: Planned
 <strong>Priority</strong>: High
-<strong>Depends on</strong>: 005_abstractcore_integration (completed), 009_artifact_store (completed)</p>
+<strong>Depends on</strong>: 005_abstractcore_integration (completed), 009_artifact_store (completed), 023_truthful_local_media_residency_boundaries (completed), 024_runtime_owned_run_scoped_media_execution (completed)</p>
 <hr />
 <h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Define and verify the runtime policy for local filesystem access used by LLMs,
-agents, media inputs, generated outputs, and tool execution.</p>
-<p>This item should determine which checks belong in AbstractRuntime, which checks
-belong in host applications, and how the effective policy is represented in
-durable run state and effect payloads.</p>
+<p>Close the remaining filesystem-policy gap so raw local media inputs follow the same runtime-visible path rules as tool calls, while documenting the tool/workspace policy Runtime already ships today.</p>
 <hr />
-<h2 id="context-problem">Context / Problem<a class="headerlink" href="#context-problem" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime can pass local media paths to AbstractCore and can execute tools
-that read and write files. That is expected for local agency, but it must be
-controlled consistently.</p>
-<p>The default posture should be deny by default:
-- all filesystem paths are blacklisted unless explicitly allowed
-- the active local workspace folder is whitelisted by default
-- callers may consciously add whitelist or blacklist entries
-- a separate risky mode may allow access to the whole machine, limited only by
-  the OS permissions of the user/group running the runtime process</p>
-<p>This matters especially for remote AbstractCore execution, where a local media
-path may be read by the runtime and sent to a remote server as request content.</p>
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>WorkspaceScope</code> already defines <code>workspace_root</code>, access modes, allowlists, and denylists.</li>
+<li>Tool-call handling already rewrites and blocks filesystem-style tool arguments under that policy.</li>
+<li>Subworkflows already inherit workspace policy durably.</li>
+<li>There are already tests for restart persistence, allowlist mode, and mount-style allowed roots.</li>
+<li>The remaining gap is that raw <code>LLM_CALL</code> media strings are still treated as local file paths, and remote media docs still describe flows where local paths can be forwarded.</li>
+<li><code>execute_command</code> is still explicitly not an OS sandbox, so policy must stay honest about what Runtime can and cannot guarantee.</li>
+</ul>
+<p>This means the old item framing is stale: Runtime does not need a greenfield workspace policy design for tools, but it still needs to close the raw-media path hole and document the shipped policy truthfully.</p>
 <hr />
-<h2 id="proposed-investigation">Proposed Investigation<a class="headerlink" href="#proposed-investigation" title="Permanent link">&para;</a></h2>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>Tool calls and some attachment flows already honor a durable workspace policy. Raw media paths in <code>LLM_CALL</code> do not yet clearly do the same. That creates a boundary mismatch:</p>
+<ul>
+<li>a tool read may be blocked by workspace policy</li>
+<li>the same file may still be read and forwarded as media if passed as a bare string path</li>
+</ul>
+<p>That inconsistency is the real high-priority gap.</p>
+<hr />
+<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Inventory every runtime path where filesystem content can be read or written:
-   LLM media inputs, artifact materialization, generated media storage, tool
-   calls, workspace-scoped tools, and attachment/session helpers.</li>
-<li>Identify the current source of truth for workspace roots, allowlists,
-   denylists, and risky full-machine access.</li>
-<li>Decide whether raw path authorization should be enforced before effect
-   handlers call providers, inside shared path helpers, or entirely by hosts
-   before they submit workflows.</li>
-<li>Define durable policy metadata for a run so replay, resume, and audit can
-   explain why a path was allowed.</li>
-<li>Make artifact refs the preferred boundary for externally supplied media;
-   raw local paths should be trusted only after policy validation.</li>
+<li>Reuse or extend the shared workspace policy helpers for raw media-path authorization.</li>
+<li>Decide and document the preferred boundary:</li>
+<li>artifact refs for externally supplied media</li>
+<li>bare local paths only after workspace-policy validation</li>
+<li>Ensure remote media forwarding cannot read files outside authorized roots.</li>
+<li>Document the already-shipped tool/workspace behavior honestly, including risky modes and <code>execute_command</code> limitations.</li>
+<li>Add conformance tests that cover tool paths and media paths under the same policy vocabulary.</li>
 </ol>
 <hr />
 <h2 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[ ] Document the effective default policy: deny all paths except the active workspace.</li>
-<li>[ ] Document how users consciously add whitelist and blacklist paths.</li>
-<li>[ ] Document the semantics and warning requirements for risky full-machine access.</li>
-<li>[ ] Determine the enforcement layer for raw path media passed to AbstractCore.</li>
-<li>[ ] Determine the enforcement layer for tool read/write access.</li>
-<li>[ ] Add tests or conformance fixtures for allowed workspace paths, denied external paths, explicit allowlist paths, explicit blacklist overrides, and full-machine mode.</li>
-<li>[ ] Ensure remote media forwarding cannot bypass the chosen path policy.</li>
+<li>[ ] Document the effective default policy Runtime already enforces for tool paths.</li>
+<li>[ ] Document how users consciously add allowlist and denylist paths.</li>
+<li>[ ] Document the semantics and warnings for risky broader-access modes.</li>
+<li>[ ] Raw local media paths are either validated under the same policy or explicitly rejected in favor of artifact refs.</li>
+<li>[ ] Remote media forwarding cannot bypass the chosen path policy.</li>
+<li>[ ] Add tests or conformance fixtures for allowed workspace paths, denied external paths, explicit allowlist paths, explicit denylist overrides, and media-path validation.</li>
 </ul>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Policy should be expressed in terms of canonical resolved paths where possible.</li>
-<li>Blacklist entries should override broad whitelist entries.</li>
-<li>The active workspace should be explicit in runtime-visible configuration, not
-  inferred from process current working directory alone.</li>
-<li>Full-machine access is intentionally risky and should require an explicit mode
-  or consent signal.</li>
+<li>Denylist entries should override broad allowlist entries.</li>
+<li>The active workspace should be explicit in runtime-visible configuration, not inferred from process current working directory alone.</li>
+<li><code>execute_command</code> remains a risky capability even under path rewriting; this item is about boundary truthfulness, not full sandboxing.</li>
 </ul>
 
 

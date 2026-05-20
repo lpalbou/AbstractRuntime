@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-09_runtime_retention_and_purge_contract/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/adr/0004_runtime_owns_run_scoped_media_execution_truth/">
       
       
       
@@ -18,16 +18,16 @@
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Proposed: Runtime Retention And Purge Contract - AbstractRuntime</title>
+        <title>0004 runtime owns run scoped media execution truth - AbstractRuntime</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -46,7 +46,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#proposed-runtime-retention-and-purge-contract" class="md-skip">
+        <a href="#adr-0004-runtime-owns-run-scoped-media-execution-truth" class="md-skip">
           Skip to content
         </a>
       
@@ -80,7 +80,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Proposed: Runtime Retention And Purge Contract
+              0004 runtime owns run scoped media execution truth
             
           </span>
         </div>
@@ -190,7 +190,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -220,7 +220,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -247,7 +247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/" class="md-nav__link">
+      <a href="../../getting-started/" class="md-nav__link">
         
   
   
@@ -274,7 +274,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../api/" class="md-nav__link">
+      <a href="../../api/" class="md-nav__link">
         
   
   
@@ -301,7 +301,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../architecture/" class="md-nav__link">
+      <a href="../../architecture/" class="md-nav__link">
         
   
   
@@ -328,7 +328,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+      <a href="../../integrations/abstractcore/" class="md-nav__link">
         
   
   
@@ -355,7 +355,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../tools-comms/" class="md-nav__link">
+      <a href="../../tools-comms/" class="md-nav__link">
         
   
   
@@ -382,7 +382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../mcp-worker/" class="md-nav__link">
+      <a href="../../mcp-worker/" class="md-nav__link">
         
   
   
@@ -409,7 +409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../workflow-bundles/" class="md-nav__link">
+      <a href="../../workflow-bundles/" class="md-nav__link">
         
   
   
@@ -436,7 +436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../snapshots/" class="md-nav__link">
+      <a href="../../snapshots/" class="md-nav__link">
         
   
   
@@ -463,7 +463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../provenance/" class="md-nav__link">
+      <a href="../../provenance/" class="md-nav__link">
         
   
   
@@ -490,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evidence/" class="md-nav__link">
+      <a href="../../evidence/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../limits/" class="md-nav__link">
+      <a href="../../limits/" class="md-nav__link">
         
   
   
@@ -544,7 +544,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../faq/" class="md-nav__link">
+      <a href="../../faq/" class="md-nav__link">
         
   
   
@@ -571,7 +571,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../manual_testing/" class="md-nav__link">
+      <a href="../../manual_testing/" class="md-nav__link">
         
   
   
@@ -645,7 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../proposal/" class="md-nav__link">
+      <a href="../../proposal/" class="md-nav__link">
         
   
   
@@ -673,7 +673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -701,7 +701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+      <a href="../0001_layered_coupling_with_abstractcore/" class="md-nav__link">
         
   
   
@@ -729,7 +729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+      <a href="../0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
         
   
   
@@ -757,7 +757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+      <a href="../0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
         
   
   
@@ -802,8 +802,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -812,17 +810,29 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#metadata" class="md-nav__link">
+  <a href="#adr-0004-runtime-owns-run-scoped-media-execution-truth" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Metadata
+        ADR 0004: Runtime owns run-scoped media execution truth
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ADR 0004: Runtime owns run-scoped media execution truth">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -832,70 +842,42 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#why-this-might-matter" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why this might matter
+        Decision
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#proposed-direction" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proposed direction
+        Consequences
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#evidence-to-gather-before-promotion" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Evidence to gather before promotion
+        See Also
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-ideas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Validation ideas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Non-goals
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#guidance-for-future-agents" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Guidance for future agents
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -919,82 +901,50 @@
   
 
 
-<h1 id="proposed-runtime-retention-and-purge-contract">Proposed: Runtime Retention And Purge Contract<a class="headerlink" href="#proposed-runtime-retention-and-purge-contract" title="Permanent link">&para;</a></h1>
-<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
+  <h1>0004 runtime owns run scoped media execution truth</h1>
+
+<h2 id="adr-0004-runtime-owns-run-scoped-media-execution-truth">ADR 0004: Runtime owns run-scoped media execution truth<a class="headerlink" href="#adr-0004-runtime-owns-run-scoped-media-execution-truth" title="Permanent link">&para;</a></h2>
+<h3 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h3>
+<p>Accepted (2026-05-20)</p>
+<h3 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h3>
+<p>Hosts sometimes need to trigger image generation, TTS, or STT for an existing run after the main workflow was already created.</p>
+<p>If a host executes that media work directly and only appends ledger-like records afterward, Runtime is no longer the
+source of truth for:</p>
 <ul>
-<li>Created: 2026-05-09</li>
-<li>Status: Proposed</li>
-<li>Completed: N/A</li>
+<li>what was requested;</li>
+<li>what provider/model path actually executed;</li>
+<li>which artifacts were produced;</li>
+<li>how replay should represent the step.</li>
 </ul>
-<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime is the durable graph ledger. Durability is still the default, but hosts such as
-AbstractGateway need a principled way to handle temporary/private runs created by authoring tools
-like AbstractFlow.</p>
-<p>Current Runtime reality:</p>
+<p>We also observed that local media residency can be misunderstood as successful warmup even when the local execution mode
+is a one-shot subprocess boundary that cannot reuse the previous warm state.</p>
+<h3 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h3>
+<p>AbstractRuntime owns run-scoped media execution truth.</p>
+<p>Specifically:</p>
 <ul>
-<li><code>RunStore</code> exposes <code>save()</code> and <code>load()</code>.</li>
-<li><code>QueryableRunStore</code> exposes listing and child traversal.</li>
-<li><code>LedgerStore</code> is append-only with <code>append()</code> and <code>list()</code>.</li>
-<li><code>ArtifactStore</code> implementations already have delete helpers such as <code>delete_by_run()</code>.</li>
-<li>There is no generic retention class, purge protocol, or host-neutral cleanup helper for a run tree.</li>
+<li>Hosts must route run-scoped image/TTS/STT work through Runtime, not execute it out-of-band.</li>
+<li>The integration provides a public durable run facade that creates Runtime-owned child runs for these operations.</li>
+<li>Operator/control-plane prompt-cache and model-residency controls remain separate host-oriented helpers and do not
+  create durable run history by themselves.</li>
+<li>Local unsupported media residency must be reported explicitly with machine-readable fields such as
+  <code>execution_mode</code>, <code>requires_long_lived_server</code>, and <code>config_hint</code>.</li>
+<li>Media-only normalized results must separate orchestration identity from actual media backend identity via
+  <code>runtime_provider</code> / <code>runtime_model</code> and <code>media_provider</code> / <code>media_model</code>.</li>
 </ul>
-<h2 id="why-this-might-matter">Why this might matter<a class="headerlink" href="#why-this-might-matter" title="Permanent link">&para;</a></h2>
-<p>Gateway can implement cleanup itself, but the concepts are generic:</p>
+<h3 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h3>
 <ul>
-<li>deleting or archiving a root run and all child/subworkflow runs;</li>
-<li>deleting ledgers and artifacts for a run tree;</li>
-<li>preserving append-only production ledgers while allowing explicitly temporary authoring runs to
-  expire;</li>
-<li>hiding private runs from default indexes.</li>
+<li>Gateway/other hosts have a clean migration target for run-scoped media routes without synthesizing history after the
+  fact.</li>
+<li>Ledger and artifact truth stay Runtime-authored and replay-friendly.</li>
+<li>Optional local media warmup can remain non-fatal while still rendering honestly as a warning/no-op.</li>
+<li>Consumers can distinguish the runtime orchestration model from the media backend that produced the output.</li>
 </ul>
-<p>If every host invents its own cleanup behavior, run history, artifacts, and child runs can drift.</p>
-<h2 id="proposed-direction">Proposed direction<a class="headerlink" href="#proposed-direction" title="Permanent link">&para;</a></h2>
-<p>Add optional runtime-level retention/purge contracts:</p>
+<h3 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Run metadata convention:</li>
-<li><code>run.vars["_runtime"]["purpose"]</code>;</li>
-<li><code>run.vars["_runtime"]["visibility"]</code>;</li>
-<li><code>run.vars["_runtime"]["retention"]</code>;</li>
-<li><code>expires_at</code> or <code>ttl_s</code> where appropriate.</li>
-<li>Optional storage protocols:</li>
-<li><code>DeletableRunStore.delete(run_id)</code>;</li>
-<li><code>DeletableLedgerStore.delete(run_id)</code> or <code>delete_by_run(run_id)</code>;</li>
-<li>query helpers for expired/private/draft runs.</li>
-<li>Runtime helper:</li>
-<li>collect a run tree from a root;</li>
-<li>purge or archive run checkpoints, ledgers, and artifacts;</li>
-<li>return a structured cleanup report.</li>
-<li>Documentation:</li>
-<li>durability remains default;</li>
-<li>purge is allowed only for explicitly temporary/private runs unless a host chooses otherwise.</li>
+<li>Implementation: <a href="../../backlog/completed/023_truthful_local_media_residency_boundaries/"><code>../backlog/completed/023_truthful_local_media_residency_boundaries.md</code></a></li>
+<li>Implementation: <a href="../../backlog/completed/024_runtime_owned_run_scoped_media_execution/"><code>../backlog/completed/024_runtime_owned_run_scoped_media_execution.md</code></a></li>
+<li>Integration guide: <a href="../../integrations/abstractcore/"><code>../integrations/abstractcore.md</code></a></li>
 </ul>
-<h2 id="evidence-to-gather-before-promotion">Evidence to gather before promotion<a class="headerlink" href="#evidence-to-gather-before-promotion" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Determine whether JSON file and SQLite stores can implement deletion safely without weakening
-  provenance guarantees for production runs.</li>
-<li>Decide whether "private" means hidden, encrypted, or merely excluded from default listings in v0.</li>
-<li>Decide whether purge should be hard-delete or archive-to-artifact for auditability.</li>
-<li>Check Gateway's needs for draft Flow tests and backlog/UAT workspaces before finalizing fields.</li>
-</ul>
-<h2 id="validation-ideas">Validation ideas<a class="headerlink" href="#validation-ideas" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Store contract tests for JSON, SQLite, and in-memory implementations.</li>
-<li>Runtime helper tests:</li>
-<li>root + child run tree cleanup;</li>
-<li>artifact cleanup;</li>
-<li>no accidental cleanup of non-temporary runs unless explicitly forced.</li>
-<li>Gateway integration tests once promoted.</li>
-</ul>
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Do not make Runtime responsible for Gateway's retention policy defaults.</li>
-<li>Do not remove append-only ledger semantics for normal production runs.</li>
-<li>Do not require every store backend to implement deletion immediately; keep protocols optional and
-  capability-detected.</li>
-</ul>
-<h2 id="guidance-for-future-agents">Guidance for future agents<a class="headerlink" href="#guidance-for-future-agents" title="Permanent link">&para;</a></h2>
-<p>Promote this only when Gateway starts implementing first-class draft/private run cleanup. Keep the
-boundary clean: Runtime defines reusable storage mechanics; Gateway decides policy; Flow decides UX.</p>
 
 
 
@@ -1050,10 +1000,10 @@ boundary clean: Runtime defines reusable storage mechanics; Gateway decides poli
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

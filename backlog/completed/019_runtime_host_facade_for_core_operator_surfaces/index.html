@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/014_remote_tool_worker_executor/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/019_runtime_host_facade_for_core_operator_surfaces/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>014 remote tool worker executor - AbstractRuntime</title>
+        <title>Runtime Host Facade For Core Operator Surfaces - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#014_remote_tool_worker_executor-planned" class="md-skip">
+        <a href="#runtime-host-facade-for-core-operator-surfaces" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              014 remote tool worker executor
+              Runtime Host Facade For Core Operator Surfaces
             
           </span>
         </div>
@@ -802,6 +802,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -810,10 +812,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#014_remote_tool_worker_executor-planned" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        014_remote_tool_worker_executor (planned)
+        Metadata
       
     </span>
   </a>
@@ -821,10 +823,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
+  <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Goal
+        Context
       
     </span>
   </a>
@@ -832,10 +834,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
+  <a href="#current-code-reality-at-implementation-time" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current code reality
+        Current Code Reality At Implementation Time
       
     </span>
   </a>
@@ -854,10 +856,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-scope" class="md-nav__link">
+  <a href="#what-we-implemented" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Planned scope
+        What We Implemented
       
     </span>
   </a>
@@ -865,10 +867,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#acceptance-criteria" class="md-nav__link">
+  <a href="#files-and-symbols-touched" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Acceptance criteria
+        Files And Symbols Touched
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#expected-outcomes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Outcomes
       
     </span>
   </a>
@@ -887,24 +900,118 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
+  <a href="#completion-report" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Non-goals
+        Completion Report
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Completion Report">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#priority-note" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Priority note
+        Summary
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Evidence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs-updated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs Updated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residual Risks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backlog-code-drift-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backlog / Code Drift Found
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#follow-up-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-Up Impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -928,66 +1035,173 @@
   
 
 
-  <h1>014 remote tool worker executor</h1>
-
-<h2 id="014_remote_tool_worker_executor-planned">014_remote_tool_worker_executor (planned)<a class="headerlink" href="#014_remote_tool_worker_executor-planned" title="Permanent link">&para;</a></h2>
-<p><strong>Status</strong>: Planned
-<strong>Priority</strong>: Low
-<strong>Depends on</strong>: 005_abstractcore_integration (completed)</p>
-<hr />
-<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Decide whether Runtime still needs a generic non-MCP remote tool-job client beyond the delegated MCP support that already ships today.</p>
-<hr />
-<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<h1 id="runtime-host-facade-for-core-operator-surfaces">Runtime Host Facade For Core Operator Surfaces<a class="headerlink" href="#runtime-host-facade-for-core-operator-surfaces" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>WaitReason.JOB</code> already exists.</li>
-<li>The <code>TOOL_CALLS</code> effect handler already turns delegated executor results into durable waits.</li>
-<li><code>DelegatingMcpToolExecutor</code> already provides a real job-style delegation path.</li>
-<li><code>McpToolExecutor</code> and <code>abstractruntime-mcp-worker</code> already cover a concrete remote-worker story.</li>
+<li>Created: 2026-05-20</li>
+<li>Status: Completed</li>
+<li>Completed: 2026-05-20</li>
+<li>Origin: promoted directly from <code>docs/backlog/proposed/2026-05-20_runtime_host_facade_for_core_operator_surfaces.md</code></li>
 </ul>
-<p>So the broad "add remote worker execution" item is no longer accurate. The remaining question is narrower: should Runtime also ship a generic HTTP tool-job client for deployments that do not want MCP?</p>
-<hr />
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p><code>abstractruntime.integrations.abstractcore</code> already owned the real control-plane behavior for:</p>
+<ul>
+<li>prompt-cache operations</li>
+<li>model-residency operations</li>
+<li>local/remote/hybrid runtime topology normalization</li>
+</ul>
+<p>But hosts had no stable public Runtime-facing contract for those surfaces. In practice, they either:</p>
+<ol>
+<li>reached through <code>runtime._abstractcore_llm_client</code>, or</li>
+<li>rebuilt control-plane behavior outside Runtime</li>
+</ol>
+<p>That was inconsistent with the broader Runtime mission: keep execution topology and control semantics inside Runtime so
+hosts request work from Runtime rather than re-deriving integration behavior themselves.</p>
+<h2 id="current-code-reality-at-implementation-time">Current Code Reality At Implementation Time<a class="headerlink" href="#current-code-reality-at-implementation-time" title="Permanent link">&para;</a></h2>
+<p>Already implemented before this item was completed:</p>
+<ul>
+<li>prompt-cache control methods on local, multi-local, and remote AbstractCore clients</li>
+<li><code>MODEL_RESIDENCY</code> as a Runtime effect</li>
+<li>truthful local media-residency constraints</li>
+</ul>
+<p>Missing or incomplete before this item:</p>
+<ul>
+<li>a public facade/export path for host code</li>
+<li>documentation telling hosts to use that public path</li>
+<li>tests proving the public facade works across local, remote, and hybrid runtime factories</li>
+</ul>
 <h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>Some thin-client or centralized-execution deployments may still want:</p>
+<p>Hosts needed a narrow, documented control-plane surface for prompt-cache and model-residency operations without:</p>
 <ul>
-<li>a simple HTTP job queue instead of MCP</li>
-<li>runtime-owned packaging of tool batches into a documented remote job contract</li>
+<li>hard-coupling <code>Runtime</code> itself to an AbstractCore-specific public accessor</li>
+<li>normalizing too much Gateway/product-level readiness logic into Runtime</li>
+<li>implying that operator actions are durable run truth</li>
 </ul>
-<p>But this only matters if MCP delegation is not sufficient for real adopters.</p>
-<hr />
-<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Document the existing delegated MCP path as the preferred shipped solution.</li>
-<li>Evaluate whether a generic non-MCP job protocol still has real consumers.</li>
-<li>If yes, add a small <code>RemoteToolExecutor</code> / client abstraction that:</li>
-<li>submits tool batches to a remote service</li>
-<li>returns a durable <code>JOB</code> wait payload</li>
-<li>stays compatible with existing host resume flows</li>
-<li>Keep the contract intentionally minimal and host-agnostic.</li>
-</ol>
-<hr />
-<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<h2 id="what-we-implemented">What We Implemented<a class="headerlink" href="#what-we-implemented" title="Permanent link">&para;</a></h2>
+<p>Phase 1 shipped the narrow public host facade proposed in the backlog review:</p>
 <ul>
-<li>[ ] The backlog clearly distinguishes existing MCP delegation from any still-missing generic worker client.</li>
-<li>[ ] If implemented, a generic executor produces durable <code>JOB</code> waits without keeping in-flight tool work in RAM.</li>
-<li>[ ] Documentation explains when to use passthrough, delegated MCP, or a generic HTTP job path.</li>
+<li><code>AbstractCoreHostFacade</code></li>
+<li><code>get_abstractcore_host_facade(...)</code></li>
 </ul>
-<hr />
+<p>Scope kept intentionally narrow:</p>
+<ul>
+<li>prompt-cache operations</li>
+<li>model-residency operations</li>
+</ul>
+<p>Explicit non-goals preserved:</p>
+<ul>
+<li>no media/TTS/STT helper methods in this item</li>
+<li>no discovery/catalog/readiness aggregation in this item</li>
+<li>no provider-private prompt-cache save/load promotion in this item</li>
+<li>no change to the rule that durable run truth must still flow through Runtime effects/commands</li>
+</ul>
+<h2 id="files-and-symbols-touched">Files And Symbols Touched<a class="headerlink" href="#files-and-symbols-touched" title="Permanent link">&para;</a></h2>
+<p>Implementation:</p>
+<ul>
+<li><code>src/abstractruntime/integrations/abstractcore/host_facade.py</code></li>
+<li><code>src/abstractruntime/integrations/abstractcore/__init__.py</code></li>
+<li><code>src/abstractruntime/integrations/abstractcore/factory.py</code></li>
+</ul>
+<p>Tests:</p>
+<ul>
+<li><code>tests/test_abstractcore_host_facade.py</code></li>
+</ul>
+<p>Docs:</p>
+<ul>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/api.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>llms-full.txt</code></li>
+<li><code>docs/backlog/README.md</code></li>
+</ul>
+<h2 id="expected-outcomes">Expected Outcomes<a class="headerlink" href="#expected-outcomes" title="Permanent link">&para;</a></h2>
+<p>The following are now true:</p>
+<ul>
+<li>hosts have a documented public facade for prompt-cache and model-residency controls</li>
+<li>the facade delegates to the real AbstractCore-backed Runtime topology instead of duplicating logic</li>
+<li>local, remote, and hybrid runtime factories all expose the same host-facade entrypoint</li>
+<li>docs now point hosts at the public facade instead of instructing them to use the private runtime attachment directly</li>
+<li>factory attachment failures fail fast instead of surfacing as a later opaque facade error</li>
+</ul>
 <h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Documentation review against the current MCP worker and delegated executor behavior.</li>
-<li>If a generic client is added, unit tests with a stub transport covering submit, wait details, and resume semantics.</li>
-</ol>
-<hr />
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<p>Primary validation:</p>
 <ul>
-<li>replacing the existing MCP path</li>
-<li>mandatory worker infrastructure</li>
-<li>cluster scheduling or leasing semantics</li>
+<li><code>pytest -q tests/test_abstractcore_host_facade.py</code></li>
+<li><code>pytest -q tests/test_abstractcore_host_facade.py tests/test_prompt_cache_modules.py tests/test_model_residency_control_plane.py</code></li>
 </ul>
-<hr />
-<h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
-<p>Keep this low priority unless a concrete non-MCP deployment requirement appears. The durable job-wait foundation is already in place.</p>
+<p>Example proof run:</p>
+<ul>
+<li><code>PYTHONPATH=src python</code> example using <code>create_remote_runtime(...)</code> + <code>get_abstractcore_host_facade(...)</code> with a stub request sender</li>
+</ul>
+<h2 id="completion-report">Completion Report<a class="headerlink" href="#completion-report" title="Permanent link">&para;</a></h2>
+<h3 id="date">Date<a class="headerlink" href="#date" title="Permanent link">&para;</a></h3>
+<p>2026-05-20</p>
+<h3 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h3>
+<p>Implemented a public, integration-scoped host facade for AbstractCore prompt-cache and model-residency control
+operations. The facade is exported from <code>abstractruntime.integrations.abstractcore</code>, documented as the host entrypoint,
+and validated across local, remote, and hybrid runtime construction paths.</p>
+<h3 id="behavior-changes">Behavior Changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Added <code>AbstractCoreHostFacade</code> as the public host-control surface for prompt-cache and model-residency operations.</li>
+<li>Added <code>get_abstractcore_host_facade(runtime)</code> as the documented integration-scoped helper.</li>
+<li>Exported the facade from <code>abstractruntime.integrations.abstractcore</code>.</li>
+<li>Kept the underlying runtime attachment private, but made factory attachment fail fast if it cannot be installed.</li>
+<li>Replaced public docs guidance that previously told hosts to access <code>_abstractcore_llm_client</code> directly.</li>
+</ul>
+<h3 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h3>
+<p>Local validation run in this completion pass:</p>
+<ul>
+<li><code>tests/test_abstractcore_host_facade.py</code>: <code>12 passed in 0.20s</code></li>
+<li><code>tests/test_abstractcore_host_facade.py tests/test_prompt_cache_modules.py tests/test_model_residency_control_plane.py</code>: <code>32 passed in 0.25s</code></li>
+</ul>
+<p>Independent test-agent validation:</p>
+<ul>
+<li><code>tests/test_abstractcore_host_facade.py</code>: <code>12 passed</code></li>
+<li><code>tests/test_prompt_cache_modules.py</code>: <code>10 passed</code></li>
+<li><code>tests/test_model_residency_control_plane.py</code>: <code>10 passed</code></li>
+<li>aggregate: <code>32 passed</code>, <code>0 failed</code>, <code>0 skipped</code>, <code>3.00s</code> aggregate wall time</li>
+</ul>
+<h3 id="example-evidence">Example Evidence<a class="headerlink" href="#example-evidence" title="Permanent link">&para;</a></h3>
+<p>The example proof run used a factory-created remote runtime plus the public facade and produced:</p>
+<ul>
+<li>prompt-cache capabilities response with <code>mode=keyed</code></li>
+<li>model-residency load response with <code>runtime_id=rid-42</code></li>
+<li>provider API key forwarded as <code>X-AbstractCore-Provider-API-Key</code></li>
+<li>correct root-level control URLs:</li>
+<li><code>http://core.example/acore/prompt_cache/capabilities?...</code></li>
+<li><code>http://core.example/acore/models/load</code></li>
+<li>combined example execution time: <code>0.056 ms</code> with an in-memory stub sender</li>
+</ul>
+<h3 id="docs-updated">Docs Updated<a class="headerlink" href="#docs-updated" title="Permanent link">&para;</a></h3>
+<ul>
+<li>integration guide now shows <code>get_abstractcore_host_facade(...)</code></li>
+<li>API reference lists the public host facade entrypoint</li>
+<li>FAQ points hosts at the facade rather than the private runtime attachment</li>
+<li><code>llms-full.txt</code> reflects the new public contract</li>
+</ul>
+<h3 id="residual-risks">Residual Risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The facade still depends internally on the private <code>_abstractcore_llm_client</code> runtime attachment; that coupling is
+  now explicit and fail-fast, but it remains an internal integration detail worth revisiting in future refactors.</li>
+<li>The remote-runtime proof path swaps the underlying client's private <code>_sender</code> in tests/example setup, so that one
+  validation path is not purely black-box from the public facade surface.</li>
+<li>There is no dedicated test for the exceptional attach-failure path in <code>factory.py</code>; success-path wiring is covered.</li>
+<li>The docs snippets are not yet executed as tests.</li>
+</ul>
+<h3 id="backlog-code-drift-found">Backlog / Code Drift Found<a class="headerlink" href="#backlog-code-drift-found" title="Permanent link">&para;</a></h3>
+<ul>
+<li>During this completion pass, the stranded residency proposal was cleaned up separately into
+  <code>docs/backlog/completed/022_model_residency_control_plane.md</code>.</li>
+<li>No <code>docs/backlog/overview.md</code> exists in this repository; <code>docs/backlog/README.md</code> currently serves as the effective
+  backlog overview and was updated accordingly.</li>
+<li>No <code>docs/backlog/recurrent/</code> directory exists here, so there were no recurrent-task files to scan in this pass.</li>
+</ul>
+<h3 id="follow-up-impact">Follow-Up Impact<a class="headerlink" href="#follow-up-impact" title="Permanent link">&para;</a></h3>
+<ul>
+<li>This completion narrows and stabilizes the Runtime-owned control plane for host code.</li>
+<li>The remaining adjacent boundary work is still represented by the separate local media truthfulness proposal and the
+  sibling Gateway run-truth item discussed in backlog review.</li>
+</ul>
 
 
 

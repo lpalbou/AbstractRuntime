@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/014_remote_tool_worker_executor/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/adr/0005_runtime_owns_abstractcore_host_discovery_queries/">
       
       
       
@@ -18,16 +18,16 @@
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>014 remote tool worker executor - AbstractRuntime</title>
+        <title>0005 runtime owns abstractcore host discovery queries - AbstractRuntime</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -46,7 +46,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#014_remote_tool_worker_executor-planned" class="md-skip">
+        <a href="#adr-0005-runtime-owns-abstractcore-host-discovery-queries" class="md-skip">
           Skip to content
         </a>
       
@@ -80,7 +80,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              014 remote tool worker executor
+              0005 runtime owns abstractcore host discovery queries
             
           </span>
         </div>
@@ -190,7 +190,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+    <a href="../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -220,7 +220,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -247,7 +247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/" class="md-nav__link">
+      <a href="../../getting-started/" class="md-nav__link">
         
   
   
@@ -274,7 +274,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../api/" class="md-nav__link">
+      <a href="../../api/" class="md-nav__link">
         
   
   
@@ -301,7 +301,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../architecture/" class="md-nav__link">
+      <a href="../../architecture/" class="md-nav__link">
         
   
   
@@ -328,7 +328,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+      <a href="../../integrations/abstractcore/" class="md-nav__link">
         
   
   
@@ -355,7 +355,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../tools-comms/" class="md-nav__link">
+      <a href="../../tools-comms/" class="md-nav__link">
         
   
   
@@ -382,7 +382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../mcp-worker/" class="md-nav__link">
+      <a href="../../mcp-worker/" class="md-nav__link">
         
   
   
@@ -409,7 +409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../workflow-bundles/" class="md-nav__link">
+      <a href="../../workflow-bundles/" class="md-nav__link">
         
   
   
@@ -436,7 +436,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../snapshots/" class="md-nav__link">
+      <a href="../../snapshots/" class="md-nav__link">
         
   
   
@@ -463,7 +463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../provenance/" class="md-nav__link">
+      <a href="../../provenance/" class="md-nav__link">
         
   
   
@@ -490,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evidence/" class="md-nav__link">
+      <a href="../../evidence/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../limits/" class="md-nav__link">
+      <a href="../../limits/" class="md-nav__link">
         
   
   
@@ -544,7 +544,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../faq/" class="md-nav__link">
+      <a href="../../faq/" class="md-nav__link">
         
   
   
@@ -571,7 +571,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../manual_testing/" class="md-nav__link">
+      <a href="../../manual_testing/" class="md-nav__link">
         
   
   
@@ -645,7 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../proposal/" class="md-nav__link">
+      <a href="../../proposal/" class="md-nav__link">
         
   
   
@@ -673,7 +673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -701,7 +701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+      <a href="../0001_layered_coupling_with_abstractcore/" class="md-nav__link">
         
   
   
@@ -729,7 +729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+      <a href="../0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
         
   
   
@@ -757,7 +757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+      <a href="../0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
         
   
   
@@ -810,72 +810,73 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#014_remote_tool_worker_executor-planned" class="md-nav__link">
+  <a href="#adr-0005-runtime-owns-abstractcore-host-discovery-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        014_remote_tool_worker_executor (planned)
+        ADR 0005: Runtime owns AbstractCore host discovery queries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ADR 0005: Runtime owns AbstractCore host discovery queries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Goal
+        Context
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current code reality
+        Decision
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#problem" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Problem
+        Consequences
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#planned-scope" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#enforcement" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Planned scope
+        Enforcement
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#acceptance-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Acceptance criteria
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#validation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -885,26 +886,20 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Non-goals
+        See Also
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#priority-note" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Priority note
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -928,66 +923,63 @@
   
 
 
-  <h1>014 remote tool worker executor</h1>
+  <h1>0005 runtime owns abstractcore host discovery queries</h1>
 
-<h2 id="014_remote_tool_worker_executor-planned">014_remote_tool_worker_executor (planned)<a class="headerlink" href="#014_remote_tool_worker_executor-planned" title="Permanent link">&para;</a></h2>
-<p><strong>Status</strong>: Planned
-<strong>Priority</strong>: Low
-<strong>Depends on</strong>: 005_abstractcore_integration (completed)</p>
-<hr />
-<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Decide whether Runtime still needs a generic non-MCP remote tool-job client beyond the delegated MCP support that already ships today.</p>
-<hr />
-<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<h2 id="adr-0005-runtime-owns-abstractcore-host-discovery-queries">ADR 0005: Runtime owns AbstractCore host discovery queries<a class="headerlink" href="#adr-0005-runtime-owns-abstractcore-host-discovery-queries" title="Permanent link">&para;</a></h2>
+<h3 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h3>
+<p>Accepted (2026-05-20)</p>
+<h3 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h3>
+<p>Gateway and other hosts still need to answer operator and thin-client discovery questions such as:</p>
 <ul>
-<li><code>WaitReason.JOB</code> already exists.</li>
-<li>The <code>TOOL_CALLS</code> effect handler already turns delegated executor results into durable waits.</li>
-<li><code>DelegatingMcpToolExecutor</code> already provides a real job-style delegation path.</li>
-<li><code>McpToolExecutor</code> and <code>abstractruntime-mcp-worker</code> already cover a concrete remote-worker story.</li>
+<li>which providers are available;</li>
+<li>which models a provider exposes;</li>
+<li>what a model's capabilities are;</li>
+<li>which voice, TTS, STT, and vision catalogs are currently visible;</li>
+<li>which local vision models are cached.</li>
 </ul>
-<p>So the broad "add remote worker execution" item is no longer accurate. The remaining question is narrower: should Runtime also ship a generic HTTP tool-job client for deployments that do not want MCP?</p>
-<hr />
-<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>Some thin-client or centralized-execution deployments may still want:</p>
+<p>Before this decision, those reads were often handled outside Runtime by:</p>
 <ul>
-<li>a simple HTTP job queue instead of MCP</li>
-<li>runtime-owned packaging of tool batches into a documented remote job contract</li>
+<li>raw HTTP proxying from Gateway to AbstractCore server routes;</li>
+<li>direct imports of public <code>abstractcore.*</code> registries and helpers from Gateway;</li>
+<li>in at least one case, direct import of a Core-server route implementation.</li>
 </ul>
-<p>But this only matters if MCP delegation is not sufficient for real adopters.</p>
-<hr />
-<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Document the existing delegated MCP path as the preferred shipped solution.</li>
-<li>Evaluate whether a generic non-MCP job protocol still has real consumers.</li>
-<li>If yes, add a small <code>RemoteToolExecutor</code> / client abstraction that:</li>
-<li>submits tool batches to a remote service</li>
-<li>returns a durable <code>JOB</code> wait payload</li>
-<li>stays compatible with existing host resume flows</li>
-<li>Keep the contract intentionally minimal and host-agnostic.</li>
-</ol>
-<hr />
-<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<p>That creates an inconsistent boundary: execution and some controls go through Runtime, but discovery reads bypass it entirely.</p>
+<p>These discovery reads are not durable run truth in the same sense as <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, or run-scoped media child runs. They are current-environment snapshots that may change between the original query and a later replay.</p>
+<h3 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h3>
+<p>AbstractRuntime owns the host-facing AbstractCore discovery/query boundary.</p>
+<p>Specifically:</p>
 <ul>
-<li>[ ] The backlog clearly distinguishes existing MCP delegation from any still-missing generic worker client.</li>
-<li>[ ] If implemented, a generic executor produces durable <code>JOB</code> waits without keeping in-flight tool work in RAM.</li>
-<li>[ ] Documentation explains when to use passthrough, delegated MCP, or a generic HTTP job path.</li>
+<li>Hosts should ask Runtime for AbstractCore discovery and catalog queries rather than importing Core registries or proxying Core server routes directly.</li>
+<li>Runtime provides a public discovery facade for host-oriented snapshot queries.</li>
+<li>These discovery methods are query/snapshot oriented, not durable run effects.</li>
+<li>Replay or audit consumers should treat discovery results as recorded snapshots when they are persisted by hosts, not as work that should be re-executed automatically.</li>
+<li>Gateway-local liveness, auth, install diagnostics, and non-Core helper projections may remain host-local.</li>
 </ul>
-<hr />
-<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Documentation review against the current MCP worker and delegated executor behavior.</li>
-<li>If a generic client is added, unit tests with a stub transport covering submit, wait details, and resume semantics.</li>
-</ol>
-<hr />
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<h3 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h3>
 <ul>
-<li>replacing the existing MCP path</li>
-<li>mandatory worker infrastructure</li>
-<li>cluster scheduling or leasing semantics</li>
+<li>Runtime becomes the single Python integration boundary for AbstractCore execution, control, and discovery surfaces.</li>
+<li>Gateway can shrink into an HTTP projection layer rather than a second Core integration layer.</li>
+<li>Discovery results remain semantically distinct from durable run execution truth.</li>
+<li>Some local discovery implementations may still require Runtime integration code to adapt Core capability helpers or server-backed routes until Core exposes cleaner public helpers.</li>
 </ul>
-<hr />
-<h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
-<p>Keep this low priority unless a concrete non-MCP deployment requirement appears. The durable job-wait foundation is already in place.</p>
+<h3 id="enforcement">Enforcement<a class="headerlink" href="#enforcement" title="Permanent link">&para;</a></h3>
+<ul>
+<li>New Gateway or host adoption work should prefer Runtime facades over direct <code>abstractcore.*</code> imports for discovery/catalog routes.</li>
+<li>Runtime docs should distinguish durable run work, operator controls, and snapshot discovery queries.</li>
+<li>Direct Gateway reach-through to <code>runtime._abstractcore_llm_client</code> remains prohibited when a public facade exists.</li>
+</ul>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Runtime tests should cover local and remote discovery facade behavior.</li>
+<li>Documentation should show the public discovery facade entrypoint and its scope.</li>
+<li>Follow-up backlog work in hosts should remove direct Core discovery bypasses where the facade now covers them.</li>
+</ul>
+<h3 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Implementation: <a href="../backlog/planned/026_runtime_host_discovery_facade_for_core_catalogs.md"><code>../backlog/planned/026_runtime_host_discovery_facade_for_core_catalogs.md</code></a></li>
+<li>Existing operator controls: <a href="../0004_runtime_owns_run_scoped_media_execution_truth/"><code>0004_runtime_owns_run_scoped_media_execution_truth.md</code></a></li>
+<li>Integration guide: <a href="../../integrations/abstractcore/"><code>../integrations/abstractcore.md</code></a></li>
+</ul>
 
 
 
@@ -1043,10 +1035,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

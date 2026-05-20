@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-08_runtime_gateway_env_namespace_cleanup/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-20_agent_runtime_convenience_constructor/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Completed: Runtime Gateway Env Namespace Cleanup - AbstractRuntime</title>
+        <title>Proposed: Agent Runtime Convenience Constructor - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#completed-runtime-gateway-env-namespace-cleanup" class="md-skip">
+        <a href="#proposed-agent-runtime-convenience-constructor" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Completed: Runtime Gateway Env Namespace Cleanup
+              Proposed: Agent Runtime Convenience Constructor
             
           </span>
         </div>
@@ -834,10 +834,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
+  <a href="#why-it-is-not-planned-now" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current Code Reality
+        Why it is not planned now
       
     </span>
   </a>
@@ -845,10 +845,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#problem" class="md-nav__link">
+  <a href="#possible-future-direction" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Problem
+        Possible future direction
       
     </span>
   </a>
@@ -856,87 +856,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-we-want-to-do" class="md-nav__link">
+  <a href="#guidance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What We Want To Do
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#suggested-implementation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Suggested Implementation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#implementation-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Implementation Notes
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Scope
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#promotion-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Promotion Criteria
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Validation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#guidance-for-the-implementing-agent" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Guidance For The Implementing Agent
+        Guidance
       
     </span>
   </a>
@@ -963,157 +886,39 @@
   
 
 
-<h1 id="completed-runtime-gateway-env-namespace-cleanup">Completed: Runtime Gateway Env Namespace Cleanup<a class="headerlink" href="#completed-runtime-gateway-env-namespace-cleanup" title="Permanent link">&para;</a></h1>
+<h1 id="proposed-agent-runtime-convenience-constructor">Proposed: Agent Runtime Convenience Constructor<a class="headerlink" href="#proposed-agent-runtime-convenience-constructor" title="Permanent link">&para;</a></h1>
 <h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Created: 2026-05-08</li>
-<li>Status: Completed</li>
-<li>Completed: 2026-05-08</li>
+<li>Created: 2026-05-20</li>
+<li>Status: Proposed</li>
+<li>Completed: N/A</li>
 </ul>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime should remain a lower-level durable runner. Gateway may compose Runtime and pass
-run-scoped defaults, policy, and deployment choices into Runtime, but Runtime should not learn
-Gateway-specific environment variable names.</p>
-<p>This matters for the two-entry-point design:</p>
+<p>The old <code>015_agent_integration_improvements</code> item no longer fits as planned runtime work.</p>
+<p>Most of the important integration correctness work is already done:</p>
 <ul>
-<li>developers may use Runtime/Core without Gateway;</li>
-<li>Gateway may deploy Runtime as one component in a larger server;</li>
-<li>config precedence should be explicit and testable;</li>
-<li>lower packages should not depend on higher-package env namespaces.</li>
+<li>agent tool execution can go through durable <code>TOOL_CALLS</code></li>
+<li>runtime tool execution is host-configured through <code>ToolExecutor</code></li>
+<li>agent state persistence is not blocked on runtime internals</li>
 </ul>
-<h2 id="current-code-reality">Current Code Reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
-<p>Runtime 0.4.8 carries the current install-boundary work:</p>
+<p>The main remaining idea is much smaller: a convenience constructor such as
+<code>create_agent_runtime(...)</code> that would wrap <code>create_local_runtime(...)</code> plus
+<code>MappingToolExecutor.from_tools(...)</code> for simple local setups.</p>
+<h2 id="why-it-is-not-planned-now">Why it is not planned now<a class="headerlink" href="#why-it-is-not-planned-now" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>pyproject.toml</code> now points Runtime AbstractCore extras at <code>abstractcore&gt;=2.13.12</code>.</li>
-<li>Runtime exposes <code>apple</code>, <code>gpu</code>, <code>all-apple</code>, and <code>all-gpu</code> as explicit Core profile cascades.</li>
-<li><code>tests/test_packaging_extras.py</code> verifies the Core floor and profile cascade dependencies.</li>
-<li><code>tests/test_runtime_install_boundary.py</code> verifies the package root/kernel import boundary.</li>
-<li><code>tests/test_remote_llm_client.py</code> verifies remote AbstractCore clients do not inherit Gateway auth
-  or provider-key env vars.</li>
+<li>It is an ergonomics improvement, not a runtime correctness gap.</li>
+<li>The API shape depends on cross-repo expectations from <code>abstractagent</code>.</li>
+<li>This repo should stay careful about adding convenience APIs that quietly pull in higher-level agent assumptions.</li>
 </ul>
-<p>Before this cleanup, Runtime still had Gateway namespace reads in implementation code:</p>
+<h2 id="possible-future-direction">Possible future direction<a class="headerlink" href="#possible-future-direction" title="Permanent link">&para;</a></h2>
 <ul>
-<li>prompt cache auto-enable reads both <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> and
-  <code>ABSTRACTGATEWAY_PROMPT_CACHE</code>;</li>
-<li>pending-media attachment limits read <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code>.</li>
-<li>workflow bundle default registry resolution reads <code>ABSTRACTGATEWAY_FLOWS_DIR</code>.</li>
+<li>keep the helper explicitly local-only</li>
+<li>accept direct tool functions and build the <code>MappingToolExecutor</code></li>
+<li>avoid storing callables in durable run state</li>
+<li>document clearly that advanced approval/passthrough/delegated tool setups should still use the lower-level factories directly</li>
 </ul>
-<p>Runtime also reads Runtime-owned or generic env vars such as
-<code>ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID</code>, <code>ABSTRACTRUNTIME_MAX_INLINE_BYTES</code>, and
-<code>ABSTRACT_WORKSPACE_BASE_DIR</code>. Those are not the problem; the problem is Runtime directly reading
-Gateway-owned names.</p>
-<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>The current behavior partially violates the desired config cascade:</p>
-<ol>
-<li>Gateway config/env should be consumed by Gateway.</li>
-<li>Gateway should pass Runtime-relevant values explicitly through run state, effect payloads,
-   constructor/config arguments, or a Runtime-owned env name.</li>
-<li>Runtime should not read <code>ABSTRACTGATEWAY_*</code> directly.</li>
-</ol>
-<p>Leaving these reads in Runtime creates subtle deployment coupling:</p>
-<ul>
-<li>a standalone Runtime/Core process can change behavior because a Gateway env var happens to be set;</li>
-<li>Gateway cannot cleanly document its config precedence because Runtime also consumes some of it;</li>
-<li>tests currently cover auth/key leakage but not non-auth Gateway env leakage;</li>
-<li>future Gateway settings may be copied into Runtime ad hoc instead of using explicit handoff.</li>
-</ul>
-<h2 id="what-we-want-to-do">What We Want To Do<a class="headerlink" href="#what-we-want-to-do" title="Permanent link">&para;</a></h2>
-<p>Remove Gateway-specific env reads from Runtime and make the handoff explicit.</p>
-<p>Prompt cache:</p>
-<ul>
-<li>keep <code>_runtime.prompt_cache</code> as the preferred run-scoped control plane;</li>
-<li>allow a Runtime-owned process default such as <code>ABSTRACTRUNTIME_PROMPT_CACHE</code>;</li>
-<li>Gateway should read <code>ABSTRACTGATEWAY_PROMPT_CACHE</code> itself and write <code>_runtime.prompt_cache</code> when
-  it wants prompt cache enabled for a run/session.</li>
-</ul>
-<p>Attachment/media limits:</p>
-<ul>
-<li>add an explicit Runtime-side control such as <code>_runtime.max_attachment_bytes</code>, effect payload
-  <code>max_attachment_bytes</code>, or a small typed attachment policy object;</li>
-<li>allow a Runtime-owned process default such as <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code> if a process
-  env fallback is still needed;</li>
-<li>Gateway should read <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code> itself and pass the effective limit to
-  Runtime explicitly.</li>
-</ul>
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Runtime must not read <code>ABSTRACTGATEWAY_*</code> env vars.</li>
-<li>Runtime may keep <code>ABSTRACTRUNTIME_*</code> env vars for Runtime-owned process defaults.</li>
-<li>Gateway-provided values must travel through explicit run state, effect payloads, Runtime config, or
-  constructor arguments.</li>
-<li>Existing <code>_runtime.prompt_cache</code> behavior should remain supported.</li>
-<li>Add regression tests proving Gateway env vars alone do not change Runtime behavior.</li>
-<li>Add tests proving explicit Runtime controls still work.</li>
-<li>Any compatibility fallback for old Gateway env names must be temporary, documented with
-  <code>#FALLBACK</code>, and preferably implemented in Gateway instead of Runtime.</li>
-</ul>
-<h2 id="suggested-implementation">Suggested Implementation<a class="headerlink" href="#suggested-implementation" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Update <code>_maybe_inject_prompt_cache_key(...)</code> to remove the
-   <code>ABSTRACTGATEWAY_PROMPT_CACHE</code> branch.</li>
-<li>Update the pending-media attachment byte limit resolver to prefer explicit Runtime state/payload
-   and then <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code>; remove <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code>.</li>
-<li>Add focused tests in <code>tests/test_remote_llm_client.py</code> or a new effect-handler test module:</li>
-<li>setting <code>ABSTRACTGATEWAY_PROMPT_CACHE=1</code> alone does not inject a prompt cache key;</li>
-<li>setting <code>_runtime.prompt_cache=True</code> does inject a prompt cache key when session/provider/model
-     are present;</li>
-<li>setting <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code> alone does not alter Runtime attachment limits;</li>
-<li>the chosen explicit Runtime limit path does alter Runtime attachment limits.</li>
-<li>Update Runtime docs that mention prompt cache or attachment limits.</li>
-<li>Update the Gateway backlog/implementation to translate Gateway config/env into Runtime handoff
-   values instead of relying on Runtime to read Gateway env names.</li>
-</ol>
-<h2 id="implementation-notes">Implementation Notes<a class="headerlink" href="#implementation-notes" title="Permanent link">&para;</a></h2>
-<p>Runtime 0.4.7 applies this cleanup directly:</p>
-<ul>
-<li><code>_maybe_inject_prompt_cache_key(...)</code> no longer reads <code>ABSTRACTGATEWAY_PROMPT_CACHE</code>.</li>
-<li>Prompt cache auto-keying still supports explicit <code>LLM_CALL.params.prompt_cache_key</code>,
-  <code>_runtime.prompt_cache</code>, and Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code>.</li>
-<li>Read-file session attachment registration now resolves byte limits from
-  <code>TOOL_CALLS.payload.max_attachment_bytes</code>, <code>_runtime.max_attachment_bytes</code>,
-  <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code>, then the default 25 MiB.</li>
-<li><code>default_workflow_bundles_dir()</code> no longer reads <code>ABSTRACTGATEWAY_FLOWS_DIR</code>; Gateway should pass
-  <code>bundles_dir</code> explicitly or translate to <code>ABSTRACTFRAMEWORK_WORKFLOWS_DIR</code>.</li>
-<li>Regression tests cover prompt-cache env isolation, attachment-limit env isolation, explicit
-  Runtime namespace and effect payload attachment limits, and workflow bundle registry env
-  isolation.</li>
-</ul>
-<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
-<p>Included:</p>
-<ul>
-<li>Runtime AbstractCore effect-handler config lookup cleanup.</li>
-<li>Runtime tests for env namespace isolation.</li>
-<li>Runtime docs/backlog notes required to preserve the boundary.</li>
-</ul>
-<p>Excluded:</p>
-<ul>
-<li>Gateway config implementation.</li>
-<li>Gateway package extras.</li>
-<li>Gateway server route behavior.</li>
-<li>Provider/model/auth decisions, which are already separately covered by existing tests.</li>
-</ul>
-<h2 id="promotion-criteria">Promotion Criteria<a class="headerlink" href="#promotion-criteria" title="Permanent link">&para;</a></h2>
-<p>Promote this before declaring Runtime fully clean for a production Gateway release if either of
-these is true:</p>
-<ul>
-<li>Gateway still relies on <code>ABSTRACTGATEWAY_PROMPT_CACHE</code> or <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code>
-  being read by Runtime;</li>
-<li>Runtime is being released as the official Gateway-aligned baseline.</li>
-</ul>
-<p>If Gateway is updated first to pass explicit Runtime state and no production deployment relies on the
-old env reads, this can be implemented as a small cleanup immediately after Gateway config lands.</p>
-<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
-<ul>
-<li>[x] <code>python -m pytest tests/test_runtime_install_boundary.py tests/test_packaging_extras.py</code></li>
-<li>[x] focused prompt-cache/env isolation tests;</li>
-<li>[x] focused attachment-limit/env isolation tests;</li>
-<li>[x] <code>rg -n "ABSTRACTGATEWAY" src tests docs</code> should show no Runtime implementation reads, except
-  tests that assert the env name is ignored and docs/backlog references explaining the cleanup.</li>
-</ul>
-<h2 id="guidance-for-the-implementing-agent">Guidance For The Implementing Agent<a class="headerlink" href="#guidance-for-the-implementing-agent" title="Permanent link">&para;</a></h2>
-<p>Re-check current Gateway behavior before deleting compatibility assumptions. The clean target is not
-"no env vars"; it is "Runtime owns Runtime env vars, Gateway owns Gateway env vars, and Gateway
-passes Runtime-relevant values explicitly."</p>
+<h2 id="guidance">Guidance<a class="headerlink" href="#guidance" title="Permanent link">&para;</a></h2>
+<p>Re-promote this only if maintainers still want a tiny convenience API after the higher-priority runtime boundary work lands.</p>
 
 
 

@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/014_remote_tool_worker_executor/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/021_runtime_gateway_env_namespace_cleanup/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>014 remote tool worker executor - AbstractRuntime</title>
+        <title>021 Runtime Gateway Env Namespace Cleanup - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#014_remote_tool_worker_executor-planned" class="md-skip">
+        <a href="#021-runtime-gateway-env-namespace-cleanup" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              014 remote tool worker executor
+              021 Runtime Gateway Env Namespace Cleanup
             
           </span>
         </div>
@@ -802,6 +802,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -810,10 +812,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#014_remote_tool_worker_executor-planned" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        014_remote_tool_worker_executor (planned)
+        Metadata
       
     </span>
   </a>
@@ -832,10 +834,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
+  <a href="#what-shipped" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current code reality
+        What Shipped
       
     </span>
   </a>
@@ -843,32 +845,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#problem" class="md-nav__link">
+  <a href="#current-code-pointers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Problem
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#planned-scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Planned scope
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#acceptance-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Acceptance criteria
+        Current Code Pointers
       
     </span>
   </a>
@@ -887,24 +867,107 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
+  <a href="#completion-report" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Non-goals
+        Completion report
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Completion report">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#priority-note" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Priority note
+        Summary
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residual risks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backlogcode-drift-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backlog/code drift found
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#follow-ups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-ups
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -928,66 +991,94 @@
   
 
 
-  <h1>014 remote tool worker executor</h1>
-
-<h2 id="014_remote_tool_worker_executor-planned">014_remote_tool_worker_executor (planned)<a class="headerlink" href="#014_remote_tool_worker_executor-planned" title="Permanent link">&para;</a></h2>
-<p><strong>Status</strong>: Planned
-<strong>Priority</strong>: Low
-<strong>Depends on</strong>: 005_abstractcore_integration (completed)</p>
-<hr />
+<h1 id="021-runtime-gateway-env-namespace-cleanup">021 Runtime Gateway Env Namespace Cleanup<a class="headerlink" href="#021-runtime-gateway-env-namespace-cleanup" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Created: 2026-05-08</li>
+<li>Status: Completed</li>
+<li>Completed: 2026-05-08</li>
+<li>Origin: moved from <code>docs/backlog/proposed/2026-05-08_runtime_gateway_env_namespace_cleanup.md</code> during backlog housekeeping on 2026-05-20</li>
+</ul>
 <h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Decide whether Runtime still needs a generic non-MCP remote tool-job client beyond the delegated MCP support that already ships today.</p>
-<hr />
-<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<p>Keep Gateway-owned configuration in Gateway. Runtime may expose Runtime-owned env defaults, but it should not change
+behavior because <code>ABSTRACTGATEWAY_*</code> happens to be present in the process environment.</p>
+<h2 id="what-shipped">What Shipped<a class="headerlink" href="#what-shipped" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>WaitReason.JOB</code> already exists.</li>
-<li>The <code>TOOL_CALLS</code> effect handler already turns delegated executor results into durable waits.</li>
-<li><code>DelegatingMcpToolExecutor</code> already provides a real job-style delegation path.</li>
-<li><code>McpToolExecutor</code> and <code>abstractruntime-mcp-worker</code> already cover a concrete remote-worker story.</li>
+<li>Runtime no longer reads <code>ABSTRACTGATEWAY_PROMPT_CACHE</code>.</li>
+<li>Runtime no longer reads <code>ABSTRACTGATEWAY_MAX_ATTACHMENT_BYTES</code>.</li>
+<li>Runtime no longer reads <code>ABSTRACTGATEWAY_FLOWS_DIR</code>.</li>
+<li>Prompt-cache defaults now flow through explicit Runtime inputs such as <code>_runtime.prompt_cache</code>,
+  <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code>.</li>
+<li>Attachment registration limits now flow through explicit Runtime inputs such as
+  <code>TOOL_CALLS.payload.max_attachment_bytes</code>, <code>_runtime.max_attachment_bytes</code>, or the Runtime-owned
+  <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code>.</li>
+<li>Workflow bundle default directory resolution now prefers shared/framework env names instead of Gateway-specific ones.</li>
 </ul>
-<p>So the broad "add remote worker execution" item is no longer accurate. The remaining question is narrower: should Runtime also ship a generic HTTP tool-job client for deployments that do not want MCP?</p>
-<hr />
-<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>Some thin-client or centralized-execution deployments may still want:</p>
+<h2 id="current-code-pointers">Current Code Pointers<a class="headerlink" href="#current-code-pointers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>a simple HTTP job queue instead of MCP</li>
-<li>runtime-owned packaging of tool batches into a documented remote job contract</li>
+<li><code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code></li>
+<li><code>src/abstractruntime/workflow_bundle/registry.py</code></li>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/workflow-bundles.md</code></li>
+<li><code>tests/test_prompt_cache_modules.py</code></li>
+<li><code>tests/test_session_attachments_registry_and_open_tool.py</code></li>
+<li><code>tests/test_workflow_bundle_registry.py</code></li>
 </ul>
-<p>But this only matters if MCP delegation is not sufficient for real adopters.</p>
-<hr />
-<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Document the existing delegated MCP path as the preferred shipped solution.</li>
-<li>Evaluate whether a generic non-MCP job protocol still has real consumers.</li>
-<li>If yes, add a small <code>RemoteToolExecutor</code> / client abstraction that:</li>
-<li>submits tool batches to a remote service</li>
-<li>returns a durable <code>JOB</code> wait payload</li>
-<li>stays compatible with existing host resume flows</li>
-<li>Keep the contract intentionally minimal and host-agnostic.</li>
-</ol>
-<hr />
-<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
-<ul>
-<li>[ ] The backlog clearly distinguishes existing MCP delegation from any still-missing generic worker client.</li>
-<li>[ ] If implemented, a generic executor produces durable <code>JOB</code> waits without keeping in-flight tool work in RAM.</li>
-<li>[ ] Documentation explains when to use passthrough, delegated MCP, or a generic HTTP job path.</li>
-</ul>
-<hr />
 <h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Documentation review against the current MCP worker and delegated executor behavior.</li>
-<li>If a generic client is added, unit tests with a stub transport covering submit, wait details, and resume semantics.</li>
-</ol>
-<hr />
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<p>Current focused validation run on 2026-05-20:</p>
 <ul>
-<li>replacing the existing MCP path</li>
-<li>mandatory worker infrastructure</li>
-<li>cluster scheduling or leasing semantics</li>
+<li><code>pytest -q tests/test_prompt_cache_modules.py tests/test_session_attachments_registry_and_open_tool.py tests/test_workflow_bundle_registry.py</code></li>
+<li>Result: <code>33 passed, 3 skipped in 0.62s</code></li>
 </ul>
-<hr />
-<h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
-<p>Keep this low priority unless a concrete non-MCP deployment requirement appears. The durable job-wait foundation is already in place.</p>
+<p>Broader adjacent validation run on 2026-05-20:</p>
+<ul>
+<li><code>pytest -q tests/test_packaging_extras.py tests/test_runtime_install_boundary.py tests/test_remote_llm_client.py tests/test_prompt_cache_modules.py tests/test_session_attachments_registry_and_open_tool.py tests/test_workflow_bundle_registry.py tests/test_model_residency_control_plane.py</code></li>
+<li>Result: <code>51 passed, 3 skipped in 0.83s</code></li>
+</ul>
+<h2 id="completion-report">Completion report<a class="headerlink" href="#completion-report" title="Permanent link">&para;</a></h2>
+<h3 id="date">Date<a class="headerlink" href="#date" title="Permanent link">&para;</a></h3>
+<p>2026-05-20</p>
+<h3 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h3>
+<p>This cleanup was already present in code and tests, but the backlog file had not been moved out of <code>proposed/</code>. The
+current tree still reflects the intended rule: Gateway-owned env names are ignored by Runtime implementation code, and
+hosts must hand off Runtime-relevant values explicitly.</p>
+<h3 id="behavior-changes">Behavior changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Gateway prompt-cache env state no longer leaks into Runtime auto-keying.</li>
+<li>Gateway attachment-limit env state no longer changes Runtime attachment storage limits.</li>
+<li>Gateway flow-directory env state no longer changes Runtime workflow bundle default resolution.</li>
+<li>Runtime docs consistently describe Gateway-to-Runtime config translation as an explicit handoff.</li>
+</ul>
+<h3 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>tests/test_prompt_cache_modules.py</code></li>
+<li><code>tests/test_session_attachments_registry_and_open_tool.py</code></li>
+<li><code>tests/test_workflow_bundle_registry.py</code></li>
+</ul>
+<h3 id="docs">Docs<a class="headerlink" href="#docs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>docs/workflow-bundles.md</code></li>
+<li><code>docs/api.md</code></li>
+</ul>
+<h3 id="residual-risks">Residual risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Runtime still depends on hosts to translate Gateway-owned configuration into explicit Runtime inputs correctly.</li>
+<li>Historical backlog text referenced an earlier <code>abstractcore</code> floor; that does not affect the env-namespace cleanup
+  itself, but it is part of the surrounding backlog drift.</li>
+</ul>
+<h3 id="backlogcode-drift-found">Backlog/code drift found<a class="headerlink" href="#backlogcode-drift-found" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The backlog file already said <code>Status: Completed</code> but had not been moved to <code>completed/</code>.</li>
+<li>The actual implementation/test coverage is stronger than the stranded proposal implied because the cleanup is now
+  covered across prompt cache, attachment limits, and workflow bundle registry resolution.</li>
+</ul>
+<h3 id="follow-ups">Follow-ups<a class="headerlink" href="#follow-ups" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Preserve the invariant that new Gateway settings are either consumed in Gateway or translated into Runtime-owned
+  inputs, never read ad hoc by Runtime from <code>ABSTRACTGATEWAY_*</code>.</li>
+</ul>
 
 
 

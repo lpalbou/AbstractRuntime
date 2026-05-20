@@ -773,6 +773,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#where-should-a-host-get-provider-voice-vision-catalogs-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should a host get provider / voice / vision catalogs from?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#should-a-host-execute-image-tts-stt-directly-for-an-existing-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should a host execute image / TTS / STT directly for an existing run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-can-local-media-residency-return-okfalse-without-failing-the-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why can local media residency return ok:false without failing the run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1325,6 +1358,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#where-should-a-host-get-provider-voice-vision-catalogs-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where should a host get provider / voice / vision catalogs from?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#should-a-host-execute-image-tts-stt-directly-for-an-existing-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should a host execute image / TTS / STT directly for an existing run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-can-local-media-residency-return-okfalse-without-failing-the-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why can local media residency return ok:false without failing the run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-are-local-remote-hybrid-execution-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1550,13 +1616,32 @@ Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime
 <h2 id="where-should-cached-session-or-prompt-cache-state-live">Where should cached session or prompt-cache state live?<a class="headerlink" href="#where-should-cached-session-or-prompt-cache-state-live" title="Permanent link">&para;</a></h2>
 <p>Store stable cache keys or cache configuration in runtime-visible JSON, for example <code>payload.params.prompt_cache_key</code> or <code>run.vars["_runtime"]["prompt_cache"]</code>. A Runtime process can also opt in with <code>ABSTRACTRUNTIME_PROMPT_CACHE</code>. Do not store provider session objects, cache handles, clients, or warm-cache state in <code>RunState.vars</code>. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.</p>
 <p>Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.</p>
-<p>Hosts can inspect or prepare caches through the configured <code>_abstractcore_llm_client</code> control-plane methods (<code>get_prompt_cache_capabilities</code>, <code>prompt_cache_prepare_modules</code>, and related methods).
-Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<p>Hosts can inspect or prepare caches through <code>abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)</code>, which exposes <code>get_prompt_cache_capabilities</code>, <code>prompt_cache_prepare_modules</code>, and the other public prompt-cache/model-residency control methods without depending on the private runtime attachment directly.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="where-should-a-host-get-provider-voice-vision-catalogs-from">Where should a host get provider / voice / vision catalogs from?<a class="headerlink" href="#where-should-a-host-get-provider-voice-vision-catalogs-from" title="Permanent link">&para;</a></h2>
+<p>From Runtime. Use <code>abstractruntime.integrations.abstractcore.get_abstractcore_discovery_facade(runtime)</code> for
+provider discovery, provider models, model capability lookup, voice/TTS/STT catalogs, vision provider catalogs, and
+cached vision model snapshots.</p>
+<p>These are snapshot/query reads, not durable <code>LLM_CALL</code> effects, so replay should use the recorded snapshot rather than
+re-querying the current machine or server and pretending the answer is unchanged.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/discovery_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/discovery_queries.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="should-a-host-execute-image-tts-stt-directly-for-an-existing-run">Should a host execute image / TTS / STT directly for an existing run?<a class="headerlink" href="#should-a-host-execute-image-tts-stt-directly-for-an-existing-run" title="Permanent link">&para;</a></h2>
+<p>No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use <code>abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)</code> and create a child run with <code>generate_image(...)</code>, <code>generate_voice(...)</code>, <code>transcribe_audio(...)</code>, or the lower-level <code>execute_llm_call(...)</code>.</p>
+<p>That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/run_facade.py</code>.</p>
+<h2 id="why-can-local-media-residency-return-okfalse-without-failing-the-run">Why can local media residency return <code>ok:false</code> without failing the run?<a class="headerlink" href="#why-can-local-media-residency-return-okfalse-without-failing-the-run" title="Permanent link">&para;</a></h2>
+<p>Because local media warmup is not always a meaningful reusable state. In particular, local image generation may execute through a one-shot subprocess isolation boundary, so a prior warmup cannot be reused by the next request. Runtime therefore reports unsupported local media residency explicitly instead of pretending success.</p>
+<p>For optional residency (<code>required=false</code>), the effect still completes durably but includes <code>status_hint="warning"</code> and <code>degraded=true</code>. Unsupported local media responses also report <code>execution_mode="local_one_shot_subprocess"</code>, <code>requires_long_lived_server=true</code>, and a <code>config_hint</code> that points at <code>ABSTRACTCORE_SERVER_BASE_URL</code>.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
 <h2 id="what-are-local-remote-hybrid-execution-modes">What are “local / remote / hybrid” execution modes?<a class="headerlink" href="#what-are-local-remote-hybrid-execution-modes" title="Permanent link">&para;</a></h2>
 <p>They refer to where LLM and tools execute:
 - <strong>Local</strong>: in-process LLM + local tool execution
 - <strong>Remote</strong>: HTTP to an AbstractCore server + tools typically passthrough
 - <strong>Hybrid</strong>: remote LLM + local tools</p>
+<p><code>create_local_runtime(...)</code> currently uses <code>MultiLocalAbstractCoreLLMClient</code> under the hood. That client is still
+local-only: it can keep multiple in-process <code>(provider, model)</code> local clients warm and route between them per request,
+but it does not switch between local and remote AbstractCore backends. If you want remote model execution, use
+<code>create_remote_runtime(...)</code> or <code>create_hybrid_runtime(...)</code>.</p>
 <p>Docs: <code>integrations/abstractcore.md</code>, <code>../docs/adr/0002_execution_modes_local_remote_hybrid.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/factory.py</code>.</p>
 <h2 id="what-does-passthrough-tool-mode-mean">What does passthrough tool mode mean?<a class="headerlink" href="#what-does-passthrough-tool-mode-mean" title="Permanent link">&para;</a></h2>
 <p>In passthrough mode, tool calls are <strong>not executed</strong> in-process:

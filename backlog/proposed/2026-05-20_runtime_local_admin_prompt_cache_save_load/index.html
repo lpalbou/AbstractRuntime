@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/015_agent_integration_improvements/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-20_runtime_local_admin_prompt_cache_save_load/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>015 agent integration improvements - AbstractRuntime</title>
+        <title>Proposed: Runtime local-admin prompt-cache save/load - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#015_agent_integration_improvements-planned" class="md-skip">
+        <a href="#proposed-runtime-local-admin-prompt-cache-saveload" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              015 agent integration improvements
+              Proposed: Runtime local-admin prompt-cache save/load
             
           </span>
         </div>
@@ -802,6 +802,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -810,29 +812,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#015_agent_integration_improvements-planned" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        015_agent_integration_improvements (planned)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="015_agent_integration_improvements (planned)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Goal
+        Metadata
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -842,103 +832,81 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#proposed-improvements" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proposed Improvements
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Proposed Improvements">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-agent-factory-pattern" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Agent Factory Pattern
+        Problem
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#2-tool_calls-effect-for-agent-tool-execution" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#what-we-want-to-do" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. TOOL_CALLS Effect for Agent Tool Execution
+        What we want to do
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#3-agent-state-persistence" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#desired-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Agent State Persistence
+        Desired shape
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#acceptance-criteria" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Acceptance Criteria
+        Non-goals
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#dependencies" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#open-questions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Dependencies
+        Open questions
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#priority" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#dependencies-and-related-work" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Priority
+        Dependencies and related work
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#effort" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#why-it-is-proposed-not-planned" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Effort
+        Why it is proposed, not planned
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -962,110 +930,76 @@
   
 
 
-  <h1>015 agent integration improvements</h1>
-
-<h2 id="015_agent_integration_improvements-planned">015_agent_integration_improvements (planned)<a class="headerlink" href="#015_agent_integration_improvements-planned" title="Permanent link">&para;</a></h2>
-<blockquote>
-<p>Update (2025-12-15): Much of this item has been addressed by the framework-wide durable tool execution work:
-- AbstractAgent's ReAct workflow now uses <code>EffectType.TOOL_CALLS</code> (ledger-recorded, retry/idempotency-capable).
-- Tool execution is via host-configured <code>ToolExecutor</code> (durable; no callables in <code>RunState.vars</code>).
-- BaseAgent save/load is reference-only and delegates to RunStore.</p>
-<p>Remaining work is mostly <em>ergonomics</em> (a tiny convenience constructor in the integration layer), not core correctness.</p>
-</blockquote>
-<h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
-<p>Improve the integration experience between AbstractRuntime and agent implementations (like AbstractAgent's ReactAgent).</p>
-<h3 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h3>
-<p>Based on building AbstractAgent on top of AbstractRuntime, several friction points were identified:</p>
-<ol>
-<li>
-<p><strong>Verbose agent setup</strong> - Creating an agent requires multiple steps:
-   <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">MappingToolExecutor</span><span class="p">,</span> <span class="n">create_local_runtime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">abstractagent.agents.react</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReactAgent</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">abstractagent.tools</span><span class="w"> </span><span class="kn">import</span> <span class="n">ALL_TOOLS</span>
-
-<span class="n">tools</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">ALL_TOOLS</span><span class="p">)</span>
-<span class="n">runtime</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-    <span class="n">tool_executor</span><span class="o">=</span><span class="n">MappingToolExecutor</span><span class="o">.</span><span class="n">from_tools</span><span class="p">(</span><span class="n">tools</span><span class="p">),</span>
-<span class="p">)</span>
-<span class="n">agent</span> <span class="o">=</span> <span class="n">ReactAgent</span><span class="p">(</span><span class="n">runtime</span><span class="o">=</span><span class="n">runtime</span><span class="p">,</span> <span class="n">tools</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
-</code></pre></div></p>
-</li>
-<li>
-<p><strong>Tool execution durability</strong> - Tool callables must never be stored in <code>RunState.vars</code> (must be JSON-safe across resume).</p>
-</li>
-<li>
-<p><strong>No run_id persistence at agent level</strong> - Resuming an agent across process restarts requires manually tracking the run_id.</p>
-</li>
-</ol>
-<h3 id="proposed-improvements">Proposed Improvements<a class="headerlink" href="#proposed-improvements" title="Permanent link">&para;</a></h3>
-<h4 id="1-agent-factory-pattern">1. Agent Factory Pattern<a class="headerlink" href="#1-agent-factory-pattern" title="Permanent link">&para;</a></h4>
-<p>Add a convenience factory in the AbstractCore integration:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Current (still a little verbose, but correct)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">MappingToolExecutor</span><span class="p">,</span> <span class="n">create_local_runtime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">abstractagent.agents.react</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReactAgent</span>
-
-<span class="n">tools</span> <span class="o">=</span> <span class="p">[</span><span class="o">...</span><span class="p">]</span>
-<span class="n">runtime</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-    <span class="n">tool_executor</span><span class="o">=</span><span class="n">MappingToolExecutor</span><span class="o">.</span><span class="n">from_tools</span><span class="p">(</span><span class="n">tools</span><span class="p">),</span>
-<span class="p">)</span>
-<span class="n">agent</span> <span class="o">=</span> <span class="n">ReactAgent</span><span class="p">(</span><span class="n">runtime</span><span class="o">=</span><span class="n">runtime</span><span class="p">,</span> <span class="n">tools</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
-
-<span class="c1"># Proposed (simple)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_agent_runtime</span>
-
-<span class="n">runtime</span> <span class="o">=</span> <span class="n">create_agent_runtime</span><span class="p">(</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b-instruct-2507-q4_K_M&quot;</span><span class="p">,</span>
-    <span class="n">tools</span><span class="o">=</span><span class="p">[</span><span class="n">list_files</span><span class="p">,</span> <span class="n">read_file</span><span class="p">],</span>  <span class="c1"># Direct tool functions</span>
-<span class="p">)</span>
-</code></pre></div>
-<h4 id="2-tool_calls-effect-for-agent-tool-execution">2. TOOL_CALLS Effect for Agent Tool Execution<a class="headerlink" href="#2-tool_calls-effect-for-agent-tool-execution" title="Permanent link">&para;</a></h4>
-<p>Modify the ReAct workflow to use TOOL_CALLS effect instead of direct execution (now implemented):</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Previous (pre-effect): direct execution in act_node</span>
-<span class="c1"># result = tool_registry.execute_tool(tool_call)</span>
-
-<span class="c1"># Proposed: Via effect system</span>
-<span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-    <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;act&quot;</span><span class="p">,</span>
-    <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
-        <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">TOOL_CALLS</span><span class="p">,</span>
-        <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;tool_calls&quot;</span><span class="p">:</span> <span class="n">pending_tool_calls</span><span class="p">},</span>
-        <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;tool_results&quot;</span><span class="p">,</span>
-    <span class="p">),</span>
-    <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;observe&quot;</span><span class="p">,</span>
-<span class="p">)</span>
-</code></pre></div>
-<p>Benefits:
-- Tool calls recorded in ledger
-- Retry/idempotency support
-- Consistent architecture</p>
-<h4 id="3-agent-state-persistence">3. Agent State Persistence<a class="headerlink" href="#3-agent-state-persistence" title="Permanent link">&para;</a></h4>
-<p>Add optional run_id persistence to ReactAgent (now supported via BaseAgent.save_state/load_state):</p>
-<div class="highlight"><pre><span></span><code><span class="n">agent</span> <span class="o">=</span> <span class="n">ReactAgent</span><span class="p">(</span><span class="n">runtime</span><span class="o">=</span><span class="n">runtime</span><span class="p">,</span> <span class="n">state_file</span><span class="o">=</span><span class="s2">&quot;agent_state.json&quot;</span><span class="p">)</span>
-<span class="n">agent</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;task&quot;</span><span class="p">)</span>  <span class="c1"># Saves run_id to file</span>
-<span class="c1"># ... process restart ...</span>
-<span class="n">agent</span> <span class="o">=</span> <span class="n">ReactAgent</span><span class="p">(</span><span class="n">runtime</span><span class="o">=</span><span class="n">runtime</span><span class="p">,</span> <span class="n">state_file</span><span class="o">=</span><span class="s2">&quot;agent_state.json&quot;</span><span class="p">)</span>
-<span class="n">agent</span><span class="o">.</span><span class="n">resume_from_file</span><span class="p">()</span>  <span class="c1"># Loads run_id and continues</span>
-</code></pre></div>
-<h3 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h3>
+<h1 id="proposed-runtime-local-admin-prompt-cache-saveload">Proposed: Runtime local-admin prompt-cache save/load<a class="headerlink" href="#proposed-runtime-local-admin-prompt-cache-saveload" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[ ] Agent creation requires ≤3 lines of code for simple cases</li>
-<li>[x] Tool execution is recorded in the ledger</li>
-<li>[x] Agent can resume across process restarts with minimal code</li>
+<li>Created: 2026-05-20</li>
+<li>Status: Proposed</li>
+<li>Completed: N/A</li>
 </ul>
-<h3 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h3>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>Runtime now exposes public host-facing surfaces for:</p>
 <ul>
-<li>AbstractCore tool registry</li>
-<li>Existing TOOL_CALLS effect handler</li>
+<li>prompt-cache control and model residency through <code>AbstractCoreHostFacade</code></li>
+<li>run-scoped durable media execution through <code>AbstractCoreRunFacade</code></li>
+<li>discovery/catalog snapshot queries through <code>AbstractCoreDiscoveryFacade</code></li>
 </ul>
-<h3 id="priority">Priority<a class="headerlink" href="#priority" title="Permanent link">&para;</a></h3>
-<p>Medium - Improves developer experience but not blocking</p>
-<h3 id="effort">Effort<a class="headerlink" href="#effort" title="Permanent link">&para;</a></h3>
-<p>Medium - 2-3 days</p>
+<p>One important prompt-cache feature still has no clean Runtime boundary:</p>
+<ul>
+<li>save a local provider prompt-cache snapshot</li>
+<li>load a local provider prompt-cache snapshot</li>
+</ul>
+<p>Today that behavior still exists as a Gateway-local hack over private Runtime and
+provider state. We need the feature, but not in that form.</p>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>The current shape is wrong for three reasons:</p>
+<ul>
+<li>Gateway reaches through <code>runtime._abstractcore_llm_client</code> instead of using a public Runtime API.</li>
+<li>Gateway needs provider-instance access and provider-private cache fields to make it work.</li>
+<li>The feature is really local provider admin behavior, not a generic provider-neutral prompt-cache contract.</li>
+</ul>
+<h2 id="what-we-want-to-do">What we want to do<a class="headerlink" href="#what-we-want-to-do" title="Permanent link">&para;</a></h2>
+<p>Add an explicit Runtime-owned local-admin facade for prompt-cache save/load.</p>
+<h2 id="desired-shape">Desired shape<a class="headerlink" href="#desired-shape" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Keep it Runtime-owned and public, so hosts ask Runtime.</li>
+<li>Keep the first version local-only and honest about that.</li>
+<li>Delegate to public Core provider methods such as <code>prompt_cache_save(...)</code> and
+  <code>prompt_cache_load(...)</code> where available.</li>
+<li>Return structured capability/error payloads in the same spirit as the existing
+  host control facade.</li>
+</ul>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Do not expose provider-private cache internals.</li>
+<li>Do not promise remote/server save/load until AbstractCore Server has a real
+  public contract for it.</li>
+<li>Do not turn save/load into a durable workflow effect by default. This is an
+  operator/local-admin control surface unless a later design explicitly records
+  it as an audit snapshot.</li>
+</ul>
+<h2 id="open-questions">Open questions<a class="headerlink" href="#open-questions" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Should this extend <code>AbstractCoreHostFacade</code>, or should Runtime expose a
+  separate local-admin facade to keep the main host-control contract narrower?</li>
+<li>What file/path policy should govern local save/load targets?</li>
+<li>Should Runtime record save/load requests as operator audit snapshots even if
+  it does not replay them by re-executing the filesystem mutation?</li>
+</ul>
+<h2 id="dependencies-and-related-work">Dependencies and related work<a class="headerlink" href="#dependencies-and-related-work" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>src/abstractruntime/integrations/abstractcore/host_facade.py</code></li>
+<li><code>src/abstractruntime/integrations/abstractcore/llm_client.py</code></li>
+<li><code>../abstractcore/abstractcore/providers/base.py</code></li>
+<li><code>../abstractgateway/docs/backlog/proposed/2026-05-20_gateway_prompt_cache_save_load_via_runtime.md</code></li>
+</ul>
+<h2 id="why-it-is-proposed-not-planned">Why it is proposed, not planned<a class="headerlink" href="#why-it-is-proposed-not-planned" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The public API shape still needs a design decision.</li>
+<li>The filesystem/path policy needs to be nailed down first.</li>
+<li>Gateway can keep the current behavior temporarily, but it should not be
+  treated as an acceptable end state.</li>
+</ul>
 
 
 

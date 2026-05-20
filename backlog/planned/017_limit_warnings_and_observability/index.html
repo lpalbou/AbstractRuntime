@@ -832,10 +832,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#context-problem" class="md-nav__link">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Context / Problem
+        Current code reality
       
     </span>
   </a>
@@ -843,60 +843,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#proposed-design" class="md-nav__link">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proposed Design
+        Problem
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Proposed Design">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-agent-guidance-injection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Agent Guidance Injection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-observability-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Observability Events
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-token-estimation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Token Estimation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#files-to-modify" class="md-nav__link">
+  <a href="#planned-scope" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Files to Modify
+        Planned scope
       
     </span>
   </a>
@@ -907,7 +868,7 @@
   <a href="#acceptance-criteria" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Acceptance Criteria
+        Acceptance criteria
       
     </span>
   </a>
@@ -915,10 +876,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#test-plan" class="md-nav__link">
+  <a href="#validation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Test Plan
+        Validation
       
     </span>
   </a>
@@ -926,10 +887,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#non-goals" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#priority-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority note
       
     </span>
   </a>
@@ -964,134 +936,56 @@
 <strong>Depends on</strong>: 016_runtime_aware_parameters (completed)</p>
 <hr />
 <h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Wire the limit warning infrastructure (created in 016) to:
-1. Surface warnings to agents for self-aware behavior
-2. Emit observability events for UI/CLI integration
-3. Implement basic token estimation</p>
+<p>Expose runtime-owned limit warning state cleanly to hosts without relying on polling alone.</p>
 <hr />
-<h2 id="context-problem">Context / Problem<a class="headerlink" href="#context-problem" title="Permanent link">&para;</a></h2>
-<p>The <code>_limits</code> namespace and <code>check_limits()</code> method exist, but:
-- <strong>Warnings are not surfaced to agents</strong>: Agents don't know "only 2 turns remaining"
-- <strong>No observability events</strong>: UI/CLI must poll <code>get_limit_status()</code> manually
-- <strong>Token counting is placeholder</strong>: <code>estimated_tokens_used</code> is always 0</p>
-<hr />
-<h2 id="proposed-design">Proposed Design<a class="headerlink" href="#proposed-design" title="Permanent link">&para;</a></h2>
-<h3 id="1-agent-guidance-injection">1. Agent Guidance Injection<a class="headerlink" href="#1-agent-guidance-injection" title="Permanent link">&para;</a></h3>
-<p>When approaching limits, inject guidance into the agent's context/prompt:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># In react_runtime.py reason_node:</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">reason_node</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
-    <span class="n">context</span><span class="p">,</span> <span class="n">scratchpad</span><span class="p">,</span> <span class="n">runtime_ns</span><span class="p">,</span> <span class="n">temp</span><span class="p">,</span> <span class="n">limits</span> <span class="o">=</span> <span class="n">ensure_react_vars</span><span class="p">(</span><span class="n">run</span><span class="p">)</span>
-
-    <span class="c1"># Check for approaching limits</span>
-    <span class="n">warnings</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">current</span> <span class="o">=</span> <span class="n">limits</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;current_iteration&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-    <span class="n">max_iter</span> <span class="o">=</span> <span class="n">limits</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;max_iterations&quot;</span><span class="p">,</span> <span class="mi">25</span><span class="p">)</span>
-    <span class="n">warn_pct</span> <span class="o">=</span> <span class="n">limits</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;warn_iterations_pct&quot;</span><span class="p">,</span> <span class="mi">80</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">max_iter</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="n">current</span> <span class="o">/</span> <span class="n">max_iter</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">warn_pct</span><span class="p">:</span>
-        <span class="n">remaining</span> <span class="o">=</span> <span class="n">max_iter</span> <span class="o">-</span> <span class="n">current</span>
-        <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">remaining</span><span class="si">}</span><span class="s2"> turns remaining&quot;</span><span class="p">)</span>
-
-    <span class="c1"># Inject into guidance</span>
-    <span class="k">if</span> <span class="n">warnings</span><span class="p">:</span>
-        <span class="n">inbox</span> <span class="o">=</span> <span class="n">runtime_ns</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;inbox&quot;</span><span class="p">,</span> <span class="p">[])</span>
-        <span class="n">inbox</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
-            <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;[LIMIT WARNING: </span><span class="si">{</span><span class="s1">&#39;; &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">warnings</span><span class="p">)</span><span class="si">}</span><span class="s2">. Work efficiently!]&quot;</span>
-        <span class="p">})</span>
-        <span class="n">runtime_ns</span><span class="p">[</span><span class="s2">&quot;inbox&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">inbox</span>
-</code></pre></div>
-<h3 id="2-observability-events">2. Observability Events<a class="headerlink" href="#2-observability-events" title="Permanent link">&para;</a></h3>
-<p>Emit events via the <code>on_step</code> callback when warnings trigger:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># New event types</span>
-<span class="n">on_step</span><span class="p">(</span><span class="s2">&quot;limit_warning&quot;</span><span class="p">,</span> <span class="p">{</span>
-    <span class="s2">&quot;limit_type&quot;</span><span class="p">:</span> <span class="s2">&quot;iterations&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;warning&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;current&quot;</span><span class="p">:</span> <span class="mi">20</span><span class="p">,</span>
-    <span class="s2">&quot;maximum&quot;</span><span class="p">:</span> <span class="mi">25</span><span class="p">,</span>
-    <span class="s2">&quot;remaining&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
-    <span class="s2">&quot;pct&quot;</span><span class="p">:</span> <span class="mf">80.0</span><span class="p">,</span>
-<span class="p">})</span>
-
-<span class="n">on_step</span><span class="p">(</span><span class="s2">&quot;limit_exceeded&quot;</span><span class="p">,</span> <span class="p">{</span>
-    <span class="s2">&quot;limit_type&quot;</span><span class="p">:</span> <span class="s2">&quot;iterations&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;current&quot;</span><span class="p">:</span> <span class="mi">25</span><span class="p">,</span>
-    <span class="s2">&quot;maximum&quot;</span><span class="p">:</span> <span class="mi">25</span><span class="p">,</span>
-<span class="p">})</span>
-</code></pre></div>
-<h3 id="3-token-estimation">3. Token Estimation<a class="headerlink" href="#3-token-estimation" title="Permanent link">&para;</a></h3>
-<p>Track tokens from LLM response metadata:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># In LLM effect handler (llm_client.py):</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">handle_llm_call</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">effect</span><span class="p">,</span> <span class="n">default_next_node</span><span class="p">):</span>
-    <span class="n">response</span> <span class="o">=</span> <span class="n">llm_client</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-
-    <span class="c1"># Extract token usage</span>
-    <span class="n">usage</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;usage&quot;</span><span class="p">,</span> <span class="p">{})</span>
-    <span class="n">tokens_used</span> <span class="o">=</span> <span class="n">usage</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;total_tokens&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-
-    <span class="c1"># Update _limits</span>
-    <span class="k">if</span> <span class="n">tokens_used</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="n">limits</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;_limits&quot;</span><span class="p">,</span> <span class="p">{})</span>
-        <span class="n">limits</span><span class="p">[</span><span class="s2">&quot;estimated_tokens_used&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">limits</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;estimated_tokens_used&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">tokens_used</span>
-        <span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">EffectOutcome</span><span class="o">.</span><span class="n">completed</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
-</code></pre></div>
-<hr />
-<h2 id="files-to-modify">Files to Modify<a class="headerlink" href="#files-to-modify" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>File</th>
-<th>Changes</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>abstractagent/adapters/react_runtime.py</code></td>
-<td>Inject warnings into inbox/guidance</td>
-</tr>
-<tr>
-<td><code>abstractagent/adapters/codeact_runtime.py</code></td>
-<td>Inject warnings into inbox/guidance</td>
-</tr>
-<tr>
-<td><code>abstractruntime/integrations/abstractcore/llm_client.py</code></td>
-<td>Track token usage</td>
-</tr>
-<tr>
-<td><code>abstractruntime/integrations/abstractcore/effect_handlers.py</code></td>
-<td>Update _limits after LLM calls</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li>[ ] Agents receive guidance when approaching iteration limits (e.g., "3 turns remaining")</li>
-<li>[ ] Agents receive guidance when approaching token limits</li>
-<li>[ ] <code>on_step</code> callback receives <code>limit_warning</code> and <code>limit_exceeded</code> events</li>
-<li>[ ] <code>estimated_tokens_used</code> is updated after each LLM call</li>
-<li>[ ] Token warnings trigger when approaching context window</li>
-<li>[ ] Existing tests continue to pass</li>
-<li>[ ] New tests for warning injection and observability</li>
+<li><code>_limits</code>, <code>get_limit_status(...)</code>, <code>check_limits(...)</code>, and <code>update_limits(...)</code> already exist.</li>
+<li>Runtime already updates <code>_limits["estimated_tokens_used"]</code> from <code>LLM_CALL</code> usage metadata when providers return it.</li>
+<li>Current observability in this repo is centered on durable ledger records and the global event-bus bridge, not an <code>on_step(...)</code> callback contract.</li>
+</ul>
+<p>So the original item is stale. Token estimation is no longer the missing part, and agent prompt injection is not a runtime-core responsibility in this repo.</p>
+<hr />
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>Hosts can inspect limit state, but Runtime does not yet provide a first-class warning signal when a run crosses configured thresholds. That leaves UIs and drivers to poll and re-derive warning transitions themselves.</p>
+<hr />
+<h2 id="planned-scope">Planned scope<a class="headerlink" href="#planned-scope" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Decide the runtime-owned warning surface:</li>
+<li>ledger/event-bus emission</li>
+<li>explicit helper API</li>
+<li>or another durable runtime signal</li>
+<li>Emit warning/exceeded transitions only when thresholds are crossed, not on every tick.</li>
+<li>Cover both iteration and token warnings using the existing <code>_limits</code> model.</li>
+<li>Document the relationship between durable limit state and derived host notifications.</li>
+</ol>
+<p>If agent frameworks want warning text injected into prompts or inboxes, that should be tracked in the relevant host/agent repo, not here.</p>
+<hr />
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[ ] Runtime documents which surfaces expose limit warning transitions.</li>
+<li>[ ] Warning and exceeded states can be observed without polling-only UX.</li>
+<li>[ ] Emission is threshold-based and avoids duplicate spam for unchanged states.</li>
+<li>[ ] Existing <code>_limits</code> APIs remain the canonical durable state.</li>
+<li>[ ] Token warning behavior is documented as best-effort and usage-metadata-driven.</li>
 </ul>
 <hr />
-<h2 id="test-plan">Test Plan<a class="headerlink" href="#test-plan" title="Permanent link">&para;</a></h2>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Warning injection test</strong>: Start agent with max_iterations=5, verify guidance appears at iteration 4</li>
-<li><strong>Observability test</strong>: Register on_step callback, verify limit_warning events received</li>
-<li><strong>Token tracking test</strong>: Mock LLM response with usage data, verify estimated_tokens_used updated</li>
-<li><strong>Threshold test</strong>: Verify warnings only trigger at/above configured percentage</li>
+<li>Threshold-crossing tests for iterations and tokens.</li>
+<li>Observability tests for whichever warning surface is chosen.</li>
+<li>Docs review against <code>docs/limits.md</code> and existing event-bus/ledger behavior.</li>
 </ol>
 <hr />
-<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Warning injection should be opt-in or configurable (some users may not want it)</li>
-<li>Token estimation depends on LLM providers returning usage data</li>
-<li>Consider rate-limiting warning events to avoid spam</li>
+<li>re-implementing agent prompt guidance in this repo</li>
+<li>replacing the existing <code>_limits</code> APIs</li>
+<li>guaranteeing tokenizer-accurate accounting across providers</li>
 </ul>
+<hr />
+<h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
+<p>This is still useful, but it is not as urgent as the remaining media/workspace boundary gap.</p>
 
 
 

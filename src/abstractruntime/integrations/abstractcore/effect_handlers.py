@@ -556,6 +556,24 @@ def _llm_prompt_cache_identity(llm: Any) -> tuple[Optional[str], Optional[str]]:
     )
 
 
+def _normalize_prompt_cache_binding_request(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    binding = params.pop("expected_prompt_cache_binding", None)
+    second = params.get("prompt_cache_binding")
+    if binding is None:
+        binding = second
+    elif second is not None and second != binding:
+        raise ValueError("expected_prompt_cache_binding and prompt_cache_binding must match when both are supplied.")
+
+    if binding is None:
+        return None
+    if isinstance(binding, str):
+        binding = {"binding_id": binding.strip()}
+    if not isinstance(binding, dict):
+        raise ValueError("prompt_cache_binding must be an object or binding_id string.")
+    params["prompt_cache_binding"] = dict(binding)
+    return dict(binding)
+
+
 def _maybe_inject_prompt_cache_key(
     *,
     run: RunState,
@@ -563,6 +581,20 @@ def _maybe_inject_prompt_cache_key(
     default_provider: Optional[str] = None,
     default_model: Optional[str] = None,
 ) -> None:
+    binding = _normalize_prompt_cache_binding_request(params)
+    if isinstance(binding, dict):
+        binding_key = binding.get("key")
+        if isinstance(binding_key, str) and binding_key.strip():
+            binding_key_s = binding_key.strip()
+            current_key = params.get("prompt_cache_key")
+            if isinstance(current_key, str) and current_key.strip() and current_key.strip() != binding_key_s:
+                raise ValueError("prompt_cache_key and prompt_cache_binding.key must match.")
+            params["prompt_cache_key"] = binding_key_s
+        if "prompt_cache_key" in params:
+            return
+        # Binding is present but does not carry a usable key. Do not inject a derived key.
+        return
+
     # Explicit caller override wins (including None/empty for "disable").
     if "prompt_cache_key" in params:
         return

@@ -18,6 +18,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0003 | [Provenance Hash Chain](0003_provenance_tamper_evident_hash_chain.md) | Accepted | 2025-12-11 | Tamper-evident ledger first; cryptographic signatures deferred |
 | 0004 | [Runtime Owns Run-Scoped Media Execution Truth](0004_runtime_owns_run_scoped_media_execution_truth.md) | Accepted | 2026-05-20 | Hosts must route run-scoped media execution through Runtime |
 | 0005 | [Runtime Owns AbstractCore Host Discovery Queries](0005_runtime_owns_abstractcore_host_discovery_queries.md) | Accepted | 2026-05-20 | Hosts should ask Runtime for Core discovery/catalog snapshots |
+| 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
 
 ## Relationship to Backlog
 
@@ -30,6 +31,7 @@ ADRs explain *why*. Backlog items explain *what* and *how*.
 | 0003 | `backlog/completed/007_provenance_hash_chain.md`, `backlog/planned/008_signatures_and_keys.md` |
 | 0004 | `backlog/completed/023_truthful_local_media_residency_boundaries.md`, `backlog/completed/024_runtime_owned_run_scoped_media_execution.md` |
 | 0005 | `backlog/completed/026_runtime_host_discovery_facade_for_core_catalogs.md` |
+| 0006 | `backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 
 ## Adding New ADRs
 

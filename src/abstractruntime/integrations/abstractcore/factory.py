@@ -74,6 +74,7 @@ def create_local_runtime(
     provider: str,
     model: str,
     llm_kwargs: Optional[Dict[str, Any]] = None,
+    bloc_root_dir: Optional[str | Path] = None,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
@@ -136,6 +137,7 @@ def create_local_runtime(
         model=model,
         llm_kwargs=effective_llm_kwargs,
         artifact_store=artifact_store,
+        bloc_root_dir=bloc_root_dir,
     )
     tools = tool_executor or AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     # Orchestrator policy: enforce tool execution timeout at the runtime layer.
@@ -319,6 +321,7 @@ def create_local_file_runtime(
     provider: str,
     model: str,
     llm_kwargs: Optional[Dict[str, Any]] = None,
+    bloc_root_dir: Optional[str | Path] = None,
     context: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
     tool_timeout_s: Optional[float] = None,
@@ -329,6 +332,7 @@ def create_local_file_runtime(
         provider=provider,
         model=model,
         llm_kwargs=llm_kwargs,
+        bloc_root_dir=Path(bloc_root_dir) if bloc_root_dir is not None else (Path(base_dir) / "blocs"),
         run_store=run_store,
         ledger_store=ledger_store,
         context=context,

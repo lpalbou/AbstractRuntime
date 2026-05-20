@@ -107,12 +107,48 @@ No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, 
 
 ## Where should cached session or prompt-cache state live?
 
-Store stable cache keys or cache configuration in runtime-visible JSON, for example `payload.params.prompt_cache_key` or `run.vars["_runtime"]["prompt_cache"]`. A Runtime process can also opt in with `ABSTRACTRUNTIME_PROMPT_CACHE`. Do not store provider session objects, cache handles, clients, or warm-cache state in `RunState.vars`. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.
+Store stable cache selectors or cache configuration in runtime-visible JSON. There are two main tracks:
+
+- best-effort session reuse: `payload.params.prompt_cache_key`, `run.vars["_runtime"]["prompt_cache"]`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE`
+- durable exact reuse: `payload.params.prompt_cache_binding` from a previously loaded bloc/KV artifact
+
+If a binding includes `key`, Runtime uses it as the effective prompt-cache key and does not derive a competing session key. Do not store provider session objects, cache handles, clients, or warm-cache state in `RunState.vars`. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.
 
 Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.
 
-Hosts can inspect or prepare caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes `get_prompt_cache_capabilities`, `prompt_cache_prepare_modules`, and the other public prompt-cache/model-residency control methods without depending on the private runtime attachment directly.
+Hosts can inspect, prepare, and now clean up caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as `upsert_text_bloc(...)`, `ensure_bloc_kv_artifact(...)`, `load_bloc_kv_artifact(...)`, `list_bloc_kv_artifacts(...)`, `delete_bloc_kv_artifact(...)`, and `delete_bloc(...)` without depending on the private runtime attachment directly.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/host_facade.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+
+## Does Runtime duplicate durable bloc text? How do per-model caches relate to it?
+
+For local runtimes, Runtime owns the bloc root and stores one durable **text snapshot** per SHA256 within that root. That bloc is the source of truth. The provider/model cache is a **derived artifact** under that bloc, not a second independent memory model.
+
+So the intended shape is:
+- one text/file bloc per content hash inside one Runtime bloc root
+- zero or more derived cache artifacts, one per provider/model pair
+
+That means the same bloc text can back several model-specific caches, but those caches are intentionally separate because provider/model-native KV formats are not portable.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/llm_client.py`, `../abstractcore/abstractcore/core/file_blocs.py`.
+
+## Can I delete a specific durable bloc or prune old bloc caches?
+
+Yes.
+
+Use the Runtime host facade:
+- `list_blocs(...)`
+- `list_bloc_kv_artifacts(...)`
+- `delete_bloc_kv_artifact(...)`
+- `prune_bloc_kv_artifacts(...)`
+- `delete_bloc(...)`
+
+The important safety flags are:
+- `dry_run=True` to preview the affected artifact or bloc set
+- `clear_loaded=True` to clear matching live prompt-cache keys before deletion when Runtime can see that live state
+- `force=True` only when you intentionally want to bypass the live-binding safety check
+
+The important scope distinction is:
+- `delete_bloc_kv_artifact(...)`: delete one provider/model artifact, keep the durable text bloc
+- `delete_bloc(...)`: delete the durable text bloc itself and, by default, all derived KV artifacts under it
 
 ## Where should a host get provider / voice / vision catalogs from?
 

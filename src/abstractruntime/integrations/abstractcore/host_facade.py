@@ -5,6 +5,8 @@ Hosts should import this module instead of reaching through
 
 Scope:
 - prompt-cache control operations
+- durable bloc/KV prompt-cache operations
+- durable bloc/KV lifecycle operations
 - model-residency control operations
 
 Non-goals:
@@ -26,6 +28,16 @@ _HOST_CONTROL_METHODS = (
     "prompt_cache_fork",
     "prompt_cache_clear",
     "prompt_cache_prepare_modules",
+    "upsert_text_bloc",
+    "get_bloc_record",
+    "list_blocs",
+    "get_bloc_kv_manifest",
+    "ensure_bloc_kv_artifact",
+    "load_bloc_kv_artifact",
+    "list_bloc_kv_artifacts",
+    "delete_bloc_kv_artifact",
+    "prune_bloc_kv_artifacts",
+    "delete_bloc",
     "list_model_residency",
     "load_model_residency",
     "unload_model_residency",
@@ -92,6 +104,135 @@ class AbstractCoreHostControlClient(Protocol):
         make_default: bool = False,
         ttl_s: Optional[float] = None,
         version: int = 1,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -255,6 +396,206 @@ class AbstractCoreHostFacade:
             make_default=make_default,
             ttl_s=ttl_s,
             version=version,
+            **kwargs,
+        )
+
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.upsert_text_bloc(
+            path=path,
+            content=content,
+            sha256=sha256,
+            content_sha256=content_sha256,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            mtime_ns=mtime_ns,
+            format=format,
+            estimated_tokens=estimated_tokens,
+            relpath_base=relpath_base,
+            summary=summary,
+            keywords=keywords,
+            **kwargs,
+        )
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.get_bloc_record(sha256=sha256, bloc_id=bloc_id, **kwargs)
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_blocs(sha256=sha256, bloc_id=bloc_id, **kwargs)
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.get_bloc_kv_manifest(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            **kwargs,
+        )
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.ensure_bloc_kv_artifact(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            force_rebuild=force_rebuild,
+            debug=debug,
+            **kwargs,
+        )
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.load_bloc_kv_artifact(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            stable_cache_key=stable_cache_key,
+            key=key,
+            make_default=make_default,
+            force_rebuild=force_rebuild,
+            debug=debug,
+            **kwargs,
+        )
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_bloc_kv_artifacts(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider=provider,
+            model=model,
+            **kwargs,
+        )
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.delete_bloc_kv_artifact(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            provider=provider,
+            model=model,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+            debug=debug,
+            **kwargs,
+        )
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.prune_bloc_kv_artifacts(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider=provider,
+            model=model,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+            debug=debug,
+            **kwargs,
+        )
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.delete_bloc(
+            sha256=sha256,
+            bloc_id=bloc_id,
+            delete_kv=delete_kv,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
             **kwargs,
         )
 

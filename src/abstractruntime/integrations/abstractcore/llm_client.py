@@ -20,11 +20,13 @@ import json
 import locale
 import mimetypes
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -770,6 +772,135 @@ class AbstractCoreLLMClient(Protocol):
     ) -> Dict[str, Any]:
         """Prepare hierarchical prompt-cache modules."""
 
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Persist or update one durable text bloc."""
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Read one durable bloc record by sha256 or bloc_id."""
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """List durable bloc records, optionally filtered by sha256 or bloc_id."""
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Inspect one durable bloc KV manifest."""
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Compile or validate one durable bloc KV artifact."""
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Load or fork one durable bloc KV artifact into a prompt-cache key."""
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """List durable bloc KV artifacts, optionally filtered by bloc/provider/model."""
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Delete one durable bloc KV artifact with optional live-binding safety."""
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Delete matching durable bloc KV artifacts by filter."""
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Delete one durable bloc and optionally its derived KV artifacts."""
+
 
 class AbstractCoreControlClient(Protocol):
     """Runtime/provider control-plane calls exposed by AbstractCore-capable clients."""
@@ -1085,6 +1216,679 @@ def _prompt_cache_unsupported_payload(provider: Any, *, operation: str, error: s
         "error": str(error),
         "capabilities": _prompt_cache_capabilities_dict(provider),
     }
+
+
+def _runtime_default_blocs_root_dir() -> Path:
+    return Path.home() / ".abstractruntime" / "blocs"
+
+
+def _coerce_bloc_root_dir(root_dir: Any) -> Path:
+    if isinstance(root_dir, Path):
+        raw = str(root_dir).strip()
+    elif isinstance(root_dir, str):
+        raw = root_dir.strip()
+    else:
+        raw = ""
+    if not raw:
+        return _runtime_default_blocs_root_dir()
+    return Path(raw).expanduser()
+
+
+def _load_abstractcore_bloc_api() -> Dict[str, Any]:
+    try:
+        import abstractcore as abstractcore_module  # type: ignore
+    except Exception:  # pragma: no cover
+        abstractcore_module = None  # type: ignore[assignment]
+    try:
+        from abstractcore.core import bloc_kv as bloc_kv_module  # type: ignore
+    except Exception:  # pragma: no cover
+        bloc_kv_module = None  # type: ignore[assignment]
+    from abstractcore.core.file_blocs import FileBlocStore  # type: ignore
+
+    def _method(name: str) -> Any:
+        for module in (abstractcore_module, bloc_kv_module):
+            if module is None:
+                continue
+            value = getattr(module, name, None)
+            if callable(value):
+                return value
+        return None
+
+    return {
+        "FileBlocStore": FileBlocStore,
+        "ensure_bloc_kv_artifact": _method("ensure_bloc_kv_artifact"),
+        "load_bloc_kv_artifact": _method("load_bloc_kv_artifact"),
+        "read_bloc_kv_manifest": _method("read_bloc_kv_manifest"),
+        "list_bloc_kv_artifacts": _method("list_bloc_kv_artifacts"),
+        "find_bloc_kv_live_bindings": _method("find_bloc_kv_live_bindings"),
+        "delete_bloc_kv_artifact": _method("delete_bloc_kv_artifact"),
+        "prune_bloc_kv_artifacts": _method("prune_bloc_kv_artifacts"),
+        "delete_bloc": _method("delete_bloc"),
+    }
+
+
+def _bloc_error_payload(provider: Any, *, operation: str, error: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"ok": False, "operation": str(operation or "").strip()}
+    to_dict = getattr(error, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            payload["code"] = str(data.get("code") or "bloc_error")
+            payload["error"] = str(data.get("message") or error)
+            if isinstance(data.get("capabilities"), dict):
+                payload["capabilities"] = dict(data["capabilities"])
+            return payload
+    payload["code"] = "bloc_error"
+    payload["error"] = str(error)
+    if provider is not None:
+        payload["capabilities"] = _prompt_cache_capabilities_dict(provider)
+    return payload
+
+
+def _bloc_not_found_payload(*, operation: str, selector: str) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "operation": str(operation or "").strip(),
+        "code": "not_found",
+        "error": f"bloc not found for {selector}",
+    }
+
+
+def _bloc_selector_error_payload(*, operation: str) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "operation": str(operation or "").strip(),
+        "code": "invalid_request",
+        "error": "provide sha256 or bloc_id",
+    }
+
+
+def _bloc_dependency_missing_payload(*, operation: str, helper: str) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "operation": str(operation or "").strip(),
+        "code": "dependency_missing",
+        "error": (
+            "Installed AbstractCore does not expose the required durable bloc lifecycle helper "
+            f"`{helper}`. Upgrade to a matching AbstractCore build that includes bloc delete/list/prune support."
+        ),
+    }
+
+
+def _bloc_in_use_payload(*, operation: str, error: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "ok": False,
+        "operation": str(operation or "").strip(),
+        "code": "artifact_in_use",
+        "error": str(error),
+    }
+    live = getattr(error, "live_bindings", None)
+    if isinstance(live, list):
+        out["live_bindings"] = [dict(item) for item in live if isinstance(item, dict)]
+    return out
+
+
+def _resolve_local_bloc_store(*, root_dir: Any) -> Any:
+    api = _load_abstractcore_bloc_api()
+    store_cls = api["FileBlocStore"]
+    return store_cls(root_dir=_coerce_bloc_root_dir(root_dir))
+
+
+def _refresh_bloc_record(store: Any, record: Any) -> Any:
+    if record is None:
+        return None
+    ensure_ids = getattr(store, "ensure_bloc_ids", None)
+    if callable(ensure_ids):
+        try:
+            ensure_ids()
+        except Exception:
+            pass
+    sha256 = getattr(record, "sha256", None)
+    if isinstance(sha256, str) and sha256.strip():
+        getter = getattr(store, "get", None)
+        if callable(getter):
+            try:
+                fresh = getter(sha256.strip().lower())
+            except Exception:
+                fresh = None
+            if fresh is not None:
+                return fresh
+    return record
+
+
+def _resolve_local_bloc_record(
+    *,
+    store: Any,
+    sha256: Optional[str],
+    bloc_id: Optional[int],
+) -> tuple[Any, Optional[Dict[str, Any]]]:
+    getter = getattr(store, "get", None)
+    get_by_bloc_id = getattr(store, "get_by_bloc_id", None)
+    sha_value = str(sha256 or "").strip().lower()
+    if sha_value:
+        if not callable(getter):
+            return None, _bloc_error_payload(None, operation="record", error="bloc store does not implement get()")
+        try:
+            record = getter(sha_value)
+        except Exception as exc:
+            return None, _bloc_error_payload(None, operation="record", error=exc)
+        if record is None:
+            return None, _bloc_not_found_payload(operation="record", selector=f"sha256={sha_value}")
+        return _refresh_bloc_record(store, record), None
+    if bloc_id is not None:
+        if not callable(get_by_bloc_id):
+            return None, _bloc_error_payload(
+                None,
+                operation="record",
+                error="bloc store does not implement get_by_bloc_id()",
+            )
+        try:
+            record = get_by_bloc_id(int(bloc_id))
+        except Exception as exc:
+            return None, _bloc_error_payload(None, operation="record", error=exc)
+        if record is None:
+            return None, _bloc_not_found_payload(operation="record", selector=f"bloc_id={bloc_id}")
+        return _refresh_bloc_record(store, record), None
+    return None, _bloc_selector_error_payload(operation="record")
+
+
+def _upsert_text_bloc_local(
+    *,
+    root_dir: Any,
+    path: str,
+    content: str,
+    sha256: Optional[str] = None,
+    content_sha256: Optional[str] = None,
+    media_type: str = "text",
+    size_bytes: Optional[int] = None,
+    mtime_ns: Optional[int] = None,
+    format: Optional[str] = None,
+    estimated_tokens: Optional[int] = None,
+    relpath_base: Optional[str] = None,
+    summary: Optional[str] = None,
+    keywords: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    content_text = str(content or "")
+    if not content_text:
+        return {
+            "ok": False,
+            "operation": "upsert_text",
+            "code": "invalid_request",
+            "error": "content is required",
+        }
+    path_text = str(path or "").strip()
+    if not path_text:
+        return {
+            "ok": False,
+            "operation": "upsert_text",
+            "code": "invalid_request",
+            "error": "path is required",
+        }
+    root_path = _coerce_bloc_root_dir(root_dir)
+    store = _resolve_local_bloc_store(root_dir=root_path)
+    content_sha = (
+        str(content_sha256).strip().lower()
+        if isinstance(content_sha256, str) and content_sha256.strip()
+        else hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+    )
+    bloc_sha = (
+        str(sha256).strip().lower()
+        if isinstance(sha256, str) and sha256.strip()
+        else hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+    )
+    relpath_value = str(relpath_base).strip() if isinstance(relpath_base, str) and relpath_base.strip() else None
+    relpath_base_path = Path(relpath_value).expanduser() if relpath_value else None
+    try:
+        record = store.upsert(
+            file_meta={
+                "path": path_text,
+                "media_type": str(media_type or "text"),
+                "size_bytes": int(size_bytes) if size_bytes is not None else len(content_text.encode("utf-8")),
+                "mtime_ns": int(mtime_ns) if mtime_ns is not None else time.time_ns(),
+                "sha256": bloc_sha,
+                "content_sha256": content_sha,
+                "format": format,
+                "content_length": len(content_text),
+                "estimated_tokens": int(estimated_tokens) if estimated_tokens is not None else None,
+            },
+            content=content_text,
+            relpath_base=relpath_base_path,
+            summary=summary,
+            keywords=keywords,
+        )
+    except Exception as exc:
+        return _bloc_error_payload(None, operation="upsert_text", error=exc)
+    record = _refresh_bloc_record(store, record)
+    return {"ok": True, "operation": "upsert_text", "record": record.to_dict()}
+
+
+def _get_bloc_record_local(
+    *,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    record, error = _resolve_local_bloc_record(store=store, sha256=sha256, bloc_id=bloc_id)
+    if error is not None:
+        error["operation"] = "record"
+        return error
+    return {"ok": True, "operation": "record", "record": record.to_dict()}
+
+
+def _list_blocs_local(
+    *,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    if (isinstance(sha256, str) and sha256.strip()) or bloc_id is not None:
+        record, error = _resolve_local_bloc_record(store=store, sha256=sha256, bloc_id=bloc_id)
+        if error is not None:
+            if error.get("code") == "not_found":
+                return {"ok": True, "operation": "list", "records": []}
+            error["operation"] = "list"
+            return error
+        return {"ok": True, "operation": "list", "records": [record.to_dict()]}
+
+    list_fn = getattr(store, "list", None)
+    if not callable(list_fn):
+        return _bloc_error_payload(None, operation="list", error="bloc store does not implement list()")
+
+    ensure_ids = getattr(store, "ensure_bloc_ids", None)
+    if callable(ensure_ids):
+        try:
+            ensure_ids()
+        except Exception:
+            pass
+
+    try:
+        records = []
+        for record in list(list_fn() or []):
+            refreshed = _refresh_bloc_record(store, record)
+            if refreshed is not None:
+                records.append(refreshed.to_dict())
+        return {"ok": True, "operation": "list", "records": records}
+    except Exception as exc:
+        return _bloc_error_payload(None, operation="list", error=exc)
+
+
+def _get_bloc_kv_manifest_local(
+    *,
+    provider: Any,
+    model: str,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    artifact_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    record, error = _resolve_local_bloc_record(store=store, sha256=sha256, bloc_id=bloc_id)
+    if error is not None:
+        error["operation"] = "kv_manifest"
+        return error
+    try:
+        manifest = api["read_bloc_kv_manifest"](
+            provider=provider,
+            store=store,
+            model=str(model or "").strip(),
+            record=record,
+            artifact_path=artifact_path,
+        )
+    except Exception as exc:
+        return _bloc_error_payload(provider, operation="kv_manifest", error=exc)
+    if manifest is None:
+        selector = f"sha256={record.sha256}" if getattr(record, "sha256", None) else f"bloc_id={bloc_id}"
+        return _bloc_not_found_payload(operation="kv_manifest", selector=selector)
+    return {"ok": True, "operation": "kv_manifest", "manifest": manifest.to_dict()}
+
+
+def _ensure_bloc_kv_artifact_local(
+    *,
+    provider: Any,
+    model: str,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    artifact_path: Optional[str] = None,
+    force_rebuild: bool = False,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    record, error = _resolve_local_bloc_record(store=store, sha256=sha256, bloc_id=bloc_id)
+    if error is not None:
+        error["operation"] = "kv_ensure"
+        return error
+    try:
+        result = api["ensure_bloc_kv_artifact"](
+            provider=provider,
+            store=store,
+            model=str(model or "").strip(),
+            record=record,
+            artifact_path=artifact_path,
+            force_rebuild=bool(force_rebuild),
+            debug=bool(debug),
+        )
+    except Exception as exc:
+        return _bloc_error_payload(provider, operation="kv_ensure", error=exc)
+    artifact: Dict[str, Any] = {
+        "artifact_path": str(result.artifact_path),
+        "manifest_path": str(result.manifest_path),
+        "compiled": bool(result.compiled),
+        "rebuilt": bool(result.rebuilt),
+        "source_cache_key": result.source_cache_key,
+        "binding_id": result.binding_id,
+        "prompt_cache_binding": result.prompt_cache_binding,
+        "manifest": result.manifest.to_dict(),
+    }
+    if result.debug is not None:
+        artifact["debug"] = result.debug
+    return {"ok": True, "operation": "kv_ensure", "artifact": artifact}
+
+
+def _load_bloc_kv_artifact_local(
+    *,
+    provider: Any,
+    model: str,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    artifact_path: Optional[str] = None,
+    stable_cache_key: Optional[str] = None,
+    key: Optional[str] = None,
+    make_default: bool = False,
+    force_rebuild: bool = False,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    record, error = _resolve_local_bloc_record(store=store, sha256=sha256, bloc_id=bloc_id)
+    if error is not None:
+        error["operation"] = "kv_load"
+        return error
+    try:
+        result = api["load_bloc_kv_artifact"](
+            provider=provider,
+            store=store,
+            model=str(model or "").strip(),
+            record=record,
+            artifact_path=artifact_path,
+            stable_cache_key=stable_cache_key,
+            key=key,
+            make_default=bool(make_default),
+            force_rebuild=bool(force_rebuild),
+            debug=bool(debug),
+        )
+    except Exception as exc:
+        return _bloc_error_payload(provider, operation="kv_load", error=exc)
+    artifact: Dict[str, Any] = {
+        "artifact_path": str(result.artifact_path),
+        "manifest_path": str(result.manifest_path),
+        "compiled": bool(result.compiled),
+        "loaded": bool(result.loaded),
+        "reloaded_stable_key": bool(result.reloaded_stable_key),
+        "key": result.key,
+        "stable_cache_key": result.stable_cache_key,
+        "forked_from": result.forked_from,
+        "binding_id": result.binding_id,
+        "prompt_cache_binding": result.prompt_cache_binding,
+        "manifest": result.manifest.to_dict(),
+    }
+    if result.debug is not None:
+        artifact["debug"] = result.debug
+    return {"ok": True, "operation": "kv_load", "artifact": artifact}
+
+
+def _list_bloc_kv_artifacts_local(
+    *,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    provider_name: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    list_fn = api.get("list_bloc_kv_artifacts")
+    if not callable(list_fn):
+        return _bloc_dependency_missing_payload(operation="kv_list", helper="list_bloc_kv_artifacts")
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    try:
+        artifacts = list_fn(
+            store=store,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider=provider_name,
+            model=model,
+        )
+    except Exception as exc:
+        return _bloc_error_payload(None, operation="kv_list", error=exc)
+    out = [dict(item) for item in list(artifacts or []) if isinstance(item, dict)]
+    return {"ok": True, "operation": "kv_list", "artifacts": out}
+
+
+def _delete_bloc_kv_artifact_local(
+    *,
+    provider: Any,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    artifact_path: Optional[str] = None,
+    provider_name: Optional[str] = None,
+    model: Optional[str] = None,
+    clear_loaded: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    delete_fn = api.get("delete_bloc_kv_artifact")
+    if not callable(delete_fn):
+        return _bloc_dependency_missing_payload(operation="kv_delete", helper="delete_bloc_kv_artifact")
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    try:
+        result = delete_fn(
+            store=store,
+            provider=provider,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider_name=provider_name,
+            model=model,
+            artifact_path=artifact_path,
+            clear_loaded=bool(clear_loaded),
+            force=bool(force),
+            dry_run=bool(dry_run),
+            debug=bool(debug),
+        )
+    except Exception as exc:
+        if hasattr(exc, "live_bindings"):
+            return _bloc_in_use_payload(operation="kv_delete", error=exc)
+        return _bloc_error_payload(provider, operation="kv_delete", error=exc)
+    return {"ok": True, "operation": "kv_delete", "result": result.to_dict()}
+
+
+def _prune_bloc_kv_artifacts_local(
+    *,
+    provider: Any,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    provider_name: Optional[str] = None,
+    model: Optional[str] = None,
+    clear_loaded: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    prune_fn = api.get("prune_bloc_kv_artifacts")
+    if not callable(prune_fn):
+        return _bloc_dependency_missing_payload(operation="kv_prune", helper="prune_bloc_kv_artifacts")
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    try:
+        results = prune_fn(
+            store=store,
+            provider=provider,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider_name=provider_name,
+            model=model,
+            clear_loaded=bool(clear_loaded),
+            force=bool(force),
+            dry_run=bool(dry_run),
+            debug=bool(debug),
+        )
+    except Exception as exc:
+        if hasattr(exc, "live_bindings"):
+            return _bloc_in_use_payload(operation="kv_prune", error=exc)
+        return _bloc_error_payload(provider, operation="kv_prune", error=exc)
+    return {"ok": True, "operation": "kv_prune", "results": [item.to_dict() for item in list(results or [])]}
+
+
+def _delete_bloc_local(
+    *,
+    provider: Any,
+    root_dir: Any,
+    sha256: Optional[str] = None,
+    bloc_id: Optional[int] = None,
+    delete_kv: bool = True,
+    clear_loaded: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    api = _load_abstractcore_bloc_api()
+    delete_fn = api.get("delete_bloc")
+    if not callable(delete_fn):
+        return _bloc_dependency_missing_payload(operation="delete", helper="delete_bloc")
+    store = _resolve_local_bloc_store(root_dir=root_dir)
+    try:
+        result = delete_fn(
+            store=store,
+            provider=provider,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            delete_kv=bool(delete_kv),
+            clear_loaded=bool(clear_loaded),
+            force=bool(force),
+            dry_run=bool(dry_run),
+        )
+    except Exception as exc:
+        if hasattr(exc, "live_bindings"):
+            return _bloc_in_use_payload(operation="delete", error=exc)
+        return _bloc_error_payload(provider, operation="delete", error=exc)
+    return {"ok": True, "operation": "delete", "result": result.to_dict()}
+
+
+def _bloc_kv_entry_provider(entry: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(entry, dict):
+        return None
+    manifest = entry.get("manifest")
+    raw = entry.get("provider")
+    if not raw and isinstance(manifest, dict):
+        raw = manifest.get("provider")
+    value = str(raw or "").strip().lower()
+    return value or None
+
+
+def _bloc_kv_entry_model(entry: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(entry, dict):
+        return None
+    manifest = entry.get("manifest")
+    raw = entry.get("model")
+    if not raw and isinstance(manifest, dict):
+        raw = manifest.get("model")
+    value = str(raw or "").strip()
+    return value or None
+
+
+def _bloc_kv_entry_artifact_path(entry: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(entry, dict):
+        return None
+    for key in ("artifact_path", "manifest_path"):
+        raw = entry.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def _filter_bloc_kv_entries_by_artifact_path(entries: List[Dict[str, Any]], artifact_path: Optional[str]) -> List[Dict[str, Any]]:
+    artifact_text = str(artifact_path or "").strip()
+    if not artifact_text:
+        return list(entries)
+    out: List[Dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("artifact_path", "manifest_path"):
+            raw = entry.get(key)
+            if isinstance(raw, str) and raw.strip() == artifact_text:
+                out.append(entry)
+                break
+    return out
+
+
+def _multilocal_loaded_provider(multilocal: Any, provider: Optional[str], model: Optional[str]) -> Any:
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    if not provider_s or not model_s:
+        return None
+    client = getattr(multilocal, "_clients", {}).get((provider_s, model_s))
+    return getattr(client, "_llm", None) if client is not None else None
+
+
+def _find_entry_live_bindings_local(*, provider: Any, entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if provider is None:
+        return []
+    api = _load_abstractcore_bloc_api()
+    finder = api.get("find_bloc_kv_live_bindings")
+    if not callable(finder):
+        return []
+    artifact_path = _bloc_kv_entry_artifact_path(entry)
+    if not artifact_path:
+        return []
+    try:
+        live = finder(provider=provider, artifact_path=artifact_path)
+    except Exception:
+        return []
+    return [dict(item) for item in list(live or []) if isinstance(item, dict)]
+
+
+def _has_prompt_cache_binding(params: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    return params.get("prompt_cache_binding") is not None or params.get("expected_prompt_cache_binding") is not None
+
+
+def _normalize_prompt_cache_binding_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = dict(params or {})
+    binding = out.pop("expected_prompt_cache_binding", None)
+    second = out.get("prompt_cache_binding")
+    if binding is None:
+        binding = second
+    elif second is not None and second != binding:
+        raise ValueError("expected_prompt_cache_binding and prompt_cache_binding must match when both are supplied.")
+    if binding is None:
+        return out
+    if isinstance(binding, str):
+        binding = {"binding_id": binding}
+    elif not isinstance(binding, dict):
+        raise ValueError("prompt_cache_binding must be an object or binding_id string.")
+    else:
+        binding = dict(binding)
+    out["prompt_cache_binding"] = binding
+    binding_key = binding.get("key")
+    if isinstance(binding_key, str) and binding_key.strip():
+        binding_key = binding_key.strip()
+        existing = out.get("prompt_cache_key")
+        if existing is not None and str(existing).strip() and str(existing).strip() != binding_key:
+            raise ValueError("prompt_cache_key and prompt_cache_binding.key must match.")
+        out["prompt_cache_key"] = binding_key
+    return out
 
 
 def _normalize_residency_task(task: Any) -> str:
@@ -1951,6 +2755,7 @@ class LocalAbstractCoreLLMClient:
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
         artifact_store: Optional[Any] = None,
+        bloc_root_dir: Optional[str | Path] = None,
     ):
         # In this monorepo layout, `import abstractcore` can resolve to a namespace package
         # (the outer project directory) when running from the repo root. In that case, the
@@ -1968,6 +2773,7 @@ class LocalAbstractCoreLLMClient:
         self._provider = provider
         self._model = model
         self._artifact_store = artifact_store
+        self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
         self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
         if self._generate_lock is not None:
             _warn_local_generate_lock_once(provider=self._provider, model=self._model)
@@ -2297,8 +3103,9 @@ class LocalAbstractCoreLLMClient:
             media = _resolve_media_artifacts(media, artifact_store=self._artifact_store)
 
         try:
-            params = dict(params or {})
+            params = _normalize_prompt_cache_binding_params(params)
             prompt = _promote_text_param_to_prompt(prompt, params)
+            has_binding = _has_prompt_cache_binding(params)
             output_request = params.get("output")
             acore_output_request = _is_abstractcore_output_request(output_request)
             if _output_request_has_generated_media(output_request) and self._artifact_store is None:
@@ -2418,12 +3225,13 @@ class LocalAbstractCoreLLMClient:
 
             lock = getattr(self, "_generate_lock", None)
             if lock is None:
-                self._maybe_prepare_prompt_cache(
-                    prompt_cache_key=params.get("prompt_cache_key"),
-                    system_prompt=system_prompt,
-                    tools=tools,
-                    messages=messages,
-                )
+                if not has_binding:
+                    self._maybe_prepare_prompt_cache(
+                        prompt_cache_key=params.get("prompt_cache_key"),
+                        system_prompt=system_prompt,
+                        tools=tools,
+                        messages=messages,
+                    )
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
                     messages=messages,
@@ -2448,12 +3256,13 @@ class LocalAbstractCoreLLMClient:
             else:
                 # Serialize generation for non-thread-safe providers (e.g. MLX).
                 with lock:
-                    self._maybe_prepare_prompt_cache(
-                        prompt_cache_key=params.get("prompt_cache_key"),
-                        system_prompt=system_prompt,
-                        tools=tools,
-                        messages=messages,
-                    )
+                    if not has_binding:
+                        self._maybe_prepare_prompt_cache(
+                            prompt_cache_key=params.get("prompt_cache_key"),
+                            system_prompt=system_prompt,
+                            tools=tools,
+                            messages=messages,
+                        )
                     resp = self._llm.generate(
                         prompt=str(prompt or ""),
                         messages=messages,
@@ -2909,6 +3718,218 @@ class LocalAbstractCoreLLMClient:
         except Exception as e:
             return _prompt_cache_error_payload(provider, operation="prepare_modules", error=e)
 
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _upsert_text_bloc_local(
+            root_dir=root_dir,
+            path=path,
+            content=content,
+            sha256=sha256,
+            content_sha256=content_sha256,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            mtime_ns=mtime_ns,
+            format=format,
+            estimated_tokens=estimated_tokens,
+            relpath_base=relpath_base,
+            summary=summary,
+            keywords=keywords,
+        )
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _get_bloc_record_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _list_blocs_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _get_bloc_kv_manifest_local(
+            provider=getattr(self, "_llm", None),
+            model=self._model,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+        )
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _ensure_bloc_kv_artifact_local(
+            provider=getattr(self, "_llm", None),
+            model=self._model,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            force_rebuild=force_rebuild,
+            debug=debug,
+        )
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _load_bloc_kv_artifact_local(
+            provider=getattr(self, "_llm", None),
+            model=self._model,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            stable_cache_key=stable_cache_key,
+            key=key,
+            make_default=make_default,
+            force_rebuild=force_rebuild,
+            debug=debug,
+        )
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (provider, model)
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _list_bloc_kv_artifacts_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (provider, model)
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _delete_bloc_kv_artifact_local(
+            provider=getattr(self, "_llm", None),
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+            debug=debug,
+        )
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (provider, model)
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _prune_bloc_kv_artifacts_local(
+            provider=getattr(self, "_llm", None),
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+            debug=debug,
+        )
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _delete_bloc_local(
+            provider=getattr(self, "_llm", None),
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            delete_kv=delete_kv,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+        )
+
 
 class MultiLocalAbstractCoreLLMClient:
     """Local AbstractCore client with per-request provider/model routing.
@@ -2926,11 +3947,13 @@ class MultiLocalAbstractCoreLLMClient:
         model: str,
         llm_kwargs: Optional[Dict[str, Any]] = None,
         artifact_store: Optional[Any] = None,
+        bloc_root_dir: Optional[str | Path] = None,
     ):
         self._llm_kwargs = dict(llm_kwargs or {})
         self._default_provider = provider.strip().lower()
         self._default_model = model.strip()
         self._artifact_store = artifact_store
+        self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
         self._default_client = self._get_client(self._default_provider, self._default_model)
 
@@ -2944,12 +3967,23 @@ class MultiLocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
         client = self._clients.get(key)
         if client is None:
-            client = LocalAbstractCoreLLMClient(
-                provider=key[0],
-                model=key[1],
-                llm_kwargs=self._llm_kwargs,
-                artifact_store=self._artifact_store,
-            )
+            try:
+                client = LocalAbstractCoreLLMClient(
+                    provider=key[0],
+                    model=key[1],
+                    llm_kwargs=self._llm_kwargs,
+                    artifact_store=self._artifact_store,
+                    bloc_root_dir=self._bloc_root_dir,
+                )
+            except TypeError as exc:
+                if "bloc_root_dir" not in str(exc):
+                    raise
+                client = LocalAbstractCoreLLMClient(
+                    provider=key[0],
+                    model=key[1],
+                    llm_kwargs=self._llm_kwargs,
+                    artifact_store=self._artifact_store,
+                )
             self._clients[key] = client
         return client
 
@@ -3428,6 +4462,381 @@ class MultiLocalAbstractCoreLLMClient:
             version=version,
             **kwargs,
         )
+
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _upsert_text_bloc_local(
+            root_dir=root_dir,
+            path=path,
+            content=content,
+            sha256=sha256,
+            content_sha256=content_sha256,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            mtime_ns=mtime_ns,
+            format=format,
+            estimated_tokens=estimated_tokens,
+            relpath_base=relpath_base,
+            summary=summary,
+            keywords=keywords,
+        )
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _get_bloc_record_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        return _list_blocs_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return _get_bloc_kv_manifest_local(
+            provider=getattr(client, "_llm", None),
+            model=model_str,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+        )
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return _ensure_bloc_kv_artifact_local(
+            provider=getattr(client, "_llm", None),
+            model=model_str,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            force_rebuild=force_rebuild,
+            debug=debug,
+        )
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return _load_bloc_kv_artifact_local(
+            provider=getattr(client, "_llm", None),
+            model=model_str,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=artifact_path,
+            stable_cache_key=stable_cache_key,
+            key=key,
+            make_default=make_default,
+            force_rebuild=force_rebuild,
+            debug=debug,
+        )
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else None
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else None
+        return _list_bloc_kv_artifacts_local(
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider_name=provider_str,
+            model=model_str,
+        )
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else None
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else None
+        listed = _list_bloc_kv_artifacts_local(
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider_name=provider_str,
+            model=model_str,
+        )
+        if not listed.get("ok"):
+            return listed
+        entries = _filter_bloc_kv_entries_by_artifact_path(list(listed.get("artifacts") or []), artifact_path)
+        if not entries:
+            selector = f"artifact_path={artifact_path}" if artifact_path else f"sha256={sha256}" if sha256 else f"bloc_id={bloc_id}"
+            return _bloc_not_found_payload(operation="kv_delete", selector=selector)
+        if len(entries) != 1:
+            return {
+                "ok": False,
+                "operation": "kv_delete",
+                "code": "invalid_request",
+                "error": "delete_bloc_kv_artifact requires a selector that resolves to exactly one artifact",
+            }
+        entry = entries[0]
+        entry_provider = provider_str or _bloc_kv_entry_provider(entry)
+        entry_model = model_str or _bloc_kv_entry_model(entry)
+        loaded_provider = _multilocal_loaded_provider(self, entry_provider, entry_model)
+        return _delete_bloc_kv_artifact_local(
+            provider=loaded_provider,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            artifact_path=_bloc_kv_entry_artifact_path(entry) or artifact_path,
+            provider_name=entry_provider,
+            model=entry_model,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+            debug=debug,
+        )
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        provider_str = str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else None
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else None
+        listed = _list_bloc_kv_artifacts_local(
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            provider_name=provider_str,
+            model=model_str,
+        )
+        if not listed.get("ok"):
+            return listed
+        entries = [dict(item) for item in list(listed.get("artifacts") or []) if isinstance(item, dict)]
+        if not entries:
+            return {"ok": True, "operation": "kv_prune", "results": []}
+
+        live_bindings: List[Dict[str, Any]] = []
+        if not (clear_loaded or force):
+            for entry in entries:
+                loaded_provider = _multilocal_loaded_provider(
+                    self,
+                    provider_str or _bloc_kv_entry_provider(entry),
+                    model_str or _bloc_kv_entry_model(entry),
+                )
+                live_bindings.extend(_find_entry_live_bindings_local(provider=loaded_provider, entry=entry))
+            if live_bindings:
+                return {
+                    "ok": False,
+                    "operation": "kv_prune",
+                    "code": "artifact_in_use",
+                    "error": "matching bloc KV artifacts may be loaded in live prompt-cache keys",
+                    "live_bindings": live_bindings,
+                }
+
+        results: List[Dict[str, Any]] = []
+        for entry in entries:
+            entry_provider = provider_str or _bloc_kv_entry_provider(entry)
+            entry_model = model_str or _bloc_kv_entry_model(entry)
+            loaded_provider = _multilocal_loaded_provider(self, entry_provider, entry_model)
+            payload = _delete_bloc_kv_artifact_local(
+                provider=loaded_provider,
+                root_dir=root_dir,
+                sha256=sha256,
+                bloc_id=bloc_id,
+                artifact_path=_bloc_kv_entry_artifact_path(entry),
+                provider_name=entry_provider,
+                model=entry_model,
+                clear_loaded=clear_loaded,
+                force=force,
+                dry_run=dry_run,
+                debug=debug,
+            )
+            if not payload.get("ok"):
+                return payload
+            results.append(dict(payload.get("result") or {}))
+        return {"ok": True, "operation": "kv_prune", "results": results}
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = kwargs.pop("bloc_root_dir", self._bloc_root_dir)
+        if not delete_kv:
+            return _delete_bloc_local(
+                provider=None,
+                root_dir=root_dir,
+                sha256=sha256,
+                bloc_id=bloc_id,
+                delete_kv=False,
+                clear_loaded=clear_loaded,
+                force=force,
+                dry_run=dry_run,
+            )
+
+        listed = _list_bloc_kv_artifacts_local(root_dir=root_dir, sha256=sha256, bloc_id=bloc_id)
+        if not listed.get("ok"):
+            return listed
+        entries = [dict(item) for item in list(listed.get("artifacts") or []) if isinstance(item, dict)]
+
+        live_bindings: List[Dict[str, Any]] = []
+        if not (clear_loaded or force):
+            for entry in entries:
+                loaded_provider = _multilocal_loaded_provider(
+                    self,
+                    _bloc_kv_entry_provider(entry),
+                    _bloc_kv_entry_model(entry),
+                )
+                live_bindings.extend(_find_entry_live_bindings_local(provider=loaded_provider, entry=entry))
+            if live_bindings:
+                return {
+                    "ok": False,
+                    "operation": "delete",
+                    "code": "artifact_in_use",
+                    "error": "bloc has loaded KV artifacts in live prompt-cache keys",
+                    "live_bindings": live_bindings,
+                }
+
+        kv_results: List[Dict[str, Any]] = []
+        for entry in entries:
+            entry_provider = _bloc_kv_entry_provider(entry)
+            entry_model = _bloc_kv_entry_model(entry)
+            loaded_provider = _multilocal_loaded_provider(self, entry_provider, entry_model)
+            payload = _delete_bloc_kv_artifact_local(
+                provider=loaded_provider,
+                root_dir=root_dir,
+                sha256=sha256,
+                bloc_id=bloc_id,
+                artifact_path=_bloc_kv_entry_artifact_path(entry),
+                provider_name=entry_provider,
+                model=entry_model,
+                clear_loaded=clear_loaded,
+                force=force,
+                dry_run=dry_run,
+                debug=False,
+            )
+            if not payload.get("ok"):
+                return payload
+            kv_results.append(dict(payload.get("result") or {}))
+
+        deleted = _delete_bloc_local(
+            provider=None,
+            root_dir=root_dir,
+            sha256=sha256,
+            bloc_id=bloc_id,
+            delete_kv=False,
+            clear_loaded=clear_loaded,
+            force=force,
+            dry_run=dry_run,
+        )
+        if not deleted.get("ok"):
+            return deleted
+        result = dict(deleted.get("result") or {})
+        result["kv_results"] = kv_results
+        result["live_bindings"] = live_bindings
+        deleted["result"] = result
+        return deleted
 
 
 class HttpxRequestSender:
@@ -4240,6 +5649,329 @@ class RemoteAbstractCoreLLMClient:
             kwargs=kwargs,
         )
 
+    def _default_bloc_target_fields(self) -> Dict[str, Any]:
+        provider = None
+        model = str(self._model or "").strip() or None
+        if model and "/" in model:
+            maybe_provider, maybe_model = model.split("/", 1)
+            if maybe_provider.strip() and maybe_model.strip():
+                provider = maybe_provider.strip().lower()
+                model = maybe_model.strip()
+        if provider is None or model is None:
+            return {}
+        return {"provider": provider, "model": model}
+
+    def _bloc_proxy_fields(self, kwargs: Dict[str, Any], *, include_default_target: bool = True) -> Dict[str, Any]:
+        base_url = kwargs.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            return {"base_url": base_url.strip()}
+        out = self._default_bloc_target_fields() if include_default_target else {}
+        for key in ("runtime_id", "provider", "model"):
+            raw = kwargs.get(key)
+            if isinstance(raw, str) and raw.strip():
+                out[key] = raw.strip()
+        return {key: value for key, value in out.items() if value is not None}
+
+    def _bloc_get(
+        self,
+        path: str,
+        *,
+        operation: str,
+        query: Optional[Dict[str, Any]] = None,
+        kwargs: Optional[Dict[str, Any]] = None,
+        include_default_target: bool = True,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        timeout_s = float(call_kwargs.get("timeout_s")) if call_kwargs.get("timeout_s") is not None else self._timeout_s
+        payload = dict(self._bloc_proxy_fields(call_kwargs, include_default_target=include_default_target))
+        for key, value in dict(query or {}).items():
+            if value is not None:
+                payload[key] = value
+        encoded: Dict[str, str] = {}
+        for key, raw in payload.items():
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                encoded[str(key)] = "true" if raw else "false"
+                continue
+            text = str(raw).strip()
+            if text:
+                encoded[str(key)] = text
+        url = _join_core_control_url(self._server_base_url, path)
+        if encoded:
+            url = f"{url}?{urlencode(encoded)}"
+        try:
+            raw = self._sender.get(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                timeout=timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as exc:
+            return {"ok": False, "operation": operation, "error": str(exc), "diagnostics": {"source": "abstractcore.remote"}}
+        if isinstance(resp, dict):
+            return resp
+        return {"ok": False, "operation": operation, "error": f"invalid bloc {operation} response"}
+
+    def _bloc_post(
+        self,
+        path: str,
+        *,
+        operation: str,
+        body: Dict[str, Any],
+        kwargs: Optional[Dict[str, Any]] = None,
+        include_default_target: bool = True,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        timeout_s = float(call_kwargs.get("timeout_s")) if call_kwargs.get("timeout_s") is not None else self._timeout_s
+        payload = {k: _jsonable(v) for k, v in dict(body).items() if v is not None}
+        payload.update(self._bloc_proxy_fields(call_kwargs, include_default_target=include_default_target))
+        url = _join_core_control_url(self._server_base_url, path)
+        try:
+            raw = self._sender.post(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                json=payload,
+                timeout=timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as exc:
+            return {"ok": False, "operation": operation, "error": str(exc), "diagnostics": {"source": "abstractcore.remote"}}
+        if isinstance(resp, dict):
+            return resp
+        return {"ok": False, "operation": operation, "error": f"invalid bloc {operation} response"}
+
+    def upsert_text_bloc(
+        self,
+        *,
+        path: str,
+        content: str,
+        sha256: Optional[str] = None,
+        content_sha256: Optional[str] = None,
+        media_type: str = "text",
+        size_bytes: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
+        format: Optional[str] = None,
+        estimated_tokens: Optional[int] = None,
+        relpath_base: Optional[str] = None,
+        summary: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "path": path,
+            "content": content,
+            "sha256": sha256,
+            "content_sha256": content_sha256,
+            "media_type": media_type,
+            "size_bytes": size_bytes,
+            "mtime_ns": mtime_ns,
+            "format": format,
+            "estimated_tokens": estimated_tokens,
+            "relpath_base": relpath_base,
+            "summary": summary,
+            "keywords": keywords,
+        }
+        return self._bloc_post("/acore/blocs/upsert_text", operation="upsert_text", body=body, kwargs=kwargs)
+
+    def get_bloc_record(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._bloc_get(
+            "/acore/blocs/record",
+            operation="record",
+            query={"sha256": sha256, "bloc_id": bloc_id},
+            kwargs=kwargs,
+        )
+
+    def list_blocs(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._bloc_get(
+            "/acore/blocs",
+            operation="list",
+            query={"sha256": sha256, "bloc_id": bloc_id},
+            kwargs=kwargs,
+            include_default_target=False,
+        )
+
+    def get_bloc_kv_manifest(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._bloc_get(
+            "/acore/blocs/kv/manifest",
+            operation="kv_manifest",
+            query={"sha256": sha256, "bloc_id": bloc_id, "artifact_path": artifact_path},
+            kwargs=kwargs,
+        )
+
+    def ensure_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "sha256": sha256,
+            "bloc_id": bloc_id,
+            "artifact_path": artifact_path,
+            "force_rebuild": bool(force_rebuild),
+            "debug": bool(debug),
+        }
+        return self._bloc_post("/acore/blocs/kv/ensure", operation="kv_ensure", body=body, kwargs=kwargs)
+
+    def load_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        stable_cache_key: Optional[str] = None,
+        key: Optional[str] = None,
+        make_default: bool = False,
+        force_rebuild: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "sha256": sha256,
+            "bloc_id": bloc_id,
+            "artifact_path": artifact_path,
+            "stable_cache_key": stable_cache_key,
+            "key": key,
+            "make_default": bool(make_default),
+            "force_rebuild": bool(force_rebuild),
+            "debug": bool(debug),
+        }
+        return self._bloc_post("/acore/blocs/kv/load", operation="kv_load", body=body, kwargs=kwargs)
+
+    def list_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._bloc_get(
+            "/acore/blocs/kv/list",
+            operation="kv_list",
+            query={"sha256": sha256, "bloc_id": bloc_id, "provider": provider, "model": model},
+            kwargs=kwargs,
+            include_default_target=False,
+        )
+
+    def delete_bloc_kv_artifact(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "sha256": sha256,
+            "bloc_id": bloc_id,
+            "artifact_path": artifact_path,
+            "provider": provider,
+            "model": model,
+            "clear_loaded": bool(clear_loaded),
+            "force": bool(force),
+            "dry_run": bool(dry_run),
+            "debug": bool(debug),
+        }
+        return self._bloc_post(
+            "/acore/blocs/kv/delete",
+            operation="kv_delete",
+            body=body,
+            kwargs=kwargs,
+            include_default_target=False,
+        )
+
+    def prune_bloc_kv_artifacts(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "sha256": sha256,
+            "bloc_id": bloc_id,
+            "provider": provider,
+            "model": model,
+            "clear_loaded": bool(clear_loaded),
+            "force": bool(force),
+            "dry_run": bool(dry_run),
+            "debug": bool(debug),
+        }
+        return self._bloc_post(
+            "/acore/blocs/kv/prune",
+            operation="kv_prune",
+            body=body,
+            kwargs=kwargs,
+            include_default_target=False,
+        )
+
+    def delete_bloc(
+        self,
+        *,
+        sha256: Optional[str] = None,
+        bloc_id: Optional[int] = None,
+        delete_kv: bool = True,
+        clear_loaded: bool = False,
+        force: bool = False,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "sha256": sha256,
+            "bloc_id": bloc_id,
+            "delete_kv": bool(delete_kv),
+            "clear_loaded": bool(clear_loaded),
+            "force": bool(force),
+            "dry_run": bool(dry_run),
+        }
+        return self._bloc_post(
+            "/acore/blocs/delete",
+            operation="delete",
+            body=body,
+            kwargs=kwargs,
+            include_default_target=False,
+        )
+
     def _model_residency_error_payload(self, *, operation: str, error: Any) -> Dict[str, Any]:
         status_code = None
         response = getattr(error, "response", None)
@@ -4816,7 +6548,7 @@ class RemoteAbstractCoreLLMClient:
         media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        params = dict(params or {})
+        params = _normalize_prompt_cache_binding_params(params)
         prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)
@@ -4917,6 +6649,9 @@ class RemoteAbstractCoreLLMClient:
         prompt_cache_key = params.get("prompt_cache_key")
         if isinstance(prompt_cache_key, str) and prompt_cache_key.strip():
             body["prompt_cache_key"] = prompt_cache_key.strip()
+        prompt_cache_binding = params.get("prompt_cache_binding")
+        if prompt_cache_binding is not None:
+            body["prompt_cache_binding"] = _jsonable(prompt_cache_binding)
 
         # Pass through common OpenAI-compatible parameters.
         for key in (

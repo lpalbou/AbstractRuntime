@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
 > Updated: 2026-05-20
-> Version: 0.4.15
+> Version: 0.4.16
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.

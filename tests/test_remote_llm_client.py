@@ -154,3 +154,61 @@ def test_remote_prompt_cache_control_plane_forwards_proxy_context() -> None:
     assert post_call["json"]["key"] == "sess:abc"
     assert post_call["json"]["base_url"] == "http://localhost:8001/v1"
     assert "api_key" not in post_call["json"]
+
+
+def test_remote_llm_client_forwards_prompt_cache_binding_to_chat_completions() -> None:
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+        timeout_s=12.0,
+    )
+
+    binding = {
+        "binding_id": "bind-1",
+        "key": "bloc:orbit",
+        "manifest_sha256": "abc123",
+    }
+
+    result = client.generate(
+        prompt="Summarize the loaded bloc.",
+        params={
+            "prompt_cache_binding": binding,
+        },
+    )
+
+    assert result["content"] == "ok"
+    call = sender.calls[0]
+    assert call["url"] == "http://localhost:8080/v1/chat/completions"
+    assert call["json"]["prompt_cache_binding"] == binding
+
+
+def test_remote_llm_client_normalizes_expected_prompt_cache_binding_alias() -> None:
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+        timeout_s=12.0,
+    )
+
+    binding = {
+        "binding_id": "bind-2",
+        "key": "bloc:alias",
+        "manifest_sha256": "def456",
+    }
+
+    result = client.generate(
+        prompt="Summarize the loaded bloc.",
+        params={
+            "expected_prompt_cache_binding": binding,
+        },
+    )
+
+    assert result["content"] == "ok"
+    call = sender.calls[0]
+    assert call["url"] == "http://localhost:8080/v1/chat/completions"
+    assert call["json"]["prompt_cache_binding"] == binding
+    assert call["json"]["prompt_cache_key"] == "bloc:alias"
+    assert "expected_prompt_cache_binding" not in call["json"]

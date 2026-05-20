@@ -1,9 +1,13 @@
-# Proposed: Runtime local-admin prompt-cache save/load
+# Proposed: Runtime local-admin prompt-cache snapshot control
 
 ## Metadata
 - Created: 2026-05-20
 - Status: Proposed
 - Completed: N/A
+
+## ADR status
+- Governing ADRs: `../abstractcore/docs/adr/0007-durable-memory-bloc-cache-binding.md`
+- ADR impact: None; this item is intentionally secondary to Core's accepted durable bloc contract.
 
 ## Context
 
@@ -13,62 +17,176 @@ Runtime now exposes public host-facing surfaces for:
 - run-scoped durable media execution through `AbstractCoreRunFacade`
 - discovery/catalog snapshot queries through `AbstractCoreDiscoveryFacade`
 
-One important prompt-cache feature still has no clean Runtime boundary:
+Core `2.13.23` also makes the durable app-facing prompt-cache path clear:
 
-- save a local provider prompt-cache snapshot
-- load a local provider prompt-cache snapshot
+- blocs + KV artifacts + `prompt_cache_binding`
 
-Today that behavior still exists as a Gateway-local hack over private Runtime and
-provider state. We need the feature, but not in that form.
+That means live prompt-cache snapshot save/load should no longer be treated as
+the main app contract. It remains useful only as a separate local operator/admin
+surface.
 
-## Problem
+Today Gateway still implements that surface as a private hack.
 
-The current shape is wrong for three reasons:
+## Current code reality
 
-- Gateway reaches through `runtime._abstractcore_llm_client` instead of using a public Runtime API.
-- Gateway needs provider-instance access and provider-private cache fields to make it work.
-- The feature is really local provider admin behavior, not a generic provider-neutral prompt-cache contract.
+Inspected files and behavior:
 
-## What we want to do
+- `src/abstractruntime/integrations/abstractcore/host_facade.py`
+  - no snapshot admin methods yet
+- `../abstractgateway/src/abstractgateway/routes/gateway.py`
+  - `/prompt_cache/saved|save|load` still reaches through private Runtime state
+    and provider instances directly
+  - current implementation hard-codes only MLX and HuggingFace GGUF-style local
+    behavior
+- `../abstractcore/abstractcore/providers/base.py`
+  - exposes public provider methods `prompt_cache_save(...)` and
+    `prompt_cache_load(...)`
+- `../abstractcore/abstractcore/providers/mlx_provider.py`
+  - implements public prompt-cache save/load
+- `../abstractcore/abstractcore/providers/huggingface_provider.py`
+  - implements public prompt-cache save/load across the provider's supported
+    local cache modes
+- `docs/backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md`
+  - records the primary app-facing durable bloc track that already shipped
 
-Add an explicit Runtime-owned local-admin facade for prompt-cache save/load.
+What exists now:
 
-## Desired shape
+- Runtime owns normal prompt-cache control operations cleanly.
+- Gateway owns a working but boundary-breaking local snapshot implementation.
+- Core exposes the public provider hooks Runtime would need.
 
-- Keep it Runtime-owned and public, so hosts ask Runtime.
-- Keep the first version local-only and honest about that.
-- Delegate to public Core provider methods such as `prompt_cache_save(...)` and
-  `prompt_cache_load(...)` where available.
-- Return structured capability/error payloads in the same spirit as the existing
-  host control facade.
+What is still wrong:
+
+- no Runtime-owned public snapshot-admin contract
+- Gateway still reads provider-private state and hard-codes two backend paths
+- the current item is too narrow because listing/cataloging saved snapshots is
+  part of the real operator workflow too
+
+## Problem or opportunity
+
+There is still one operator/admin prompt-cache feature with no clean Runtime
+boundary:
+
+- list locally saved prompt-cache snapshots
+- save a live local provider cache snapshot
+- load a saved local provider cache snapshot
+
+We may still need that feature, but not as a Gateway-local hack and not as the
+normal app-facing prompt-cache story.
+
+## Proposed direction
+
+Add a Runtime-owned **local-admin snapshot control** surface as a secondary
+prompt-cache track.
+
+### Preferred Runtime boundary
+
+Prefer extending the existing `AbstractCoreHostFacade` with explicit
+admin-oriented snapshot methods rather than creating yet another public facade.
+
+Likely methods:
+
+- `list_prompt_cache_snapshots(...)`
+- `prompt_cache_save_snapshot(...)`
+- `prompt_cache_load_snapshot(...)`
+
+The naming should make the boundary obvious:
+
+- local admin / snapshot control
+- not the normal durable bloc app contract
+
+### Capability and backend rules
+
+Do not hard-code provider names in Runtime or Gateway.
+
+Instead, base support on Core's public provider capabilities and methods.
+Runtime should stay honest that snapshot support is:
+
+- local only
+- model/backend-specific
+- available only when Core reports save/load support
+
+The honest target matrix is:
+
+- MLX
+- HuggingFace transformers where cache serialization/reload is supported
+- HuggingFace GGUF where cache serialization/reload is supported
+
+That is better described as **three local backend families**, not three generic
+provider names.
+
+### Path and naming policy
+
+The public surface should not expose arbitrary filesystem paths as the primary
+client contract.
+
+Before promotion, define:
+
+- Runtime-owned snapshot root policy
+- logical snapshot naming rules
+- whether hosts may pass an explicit root/directory
+- whether the public contract returns raw paths, opaque names, or both
+
+Gateway's current `saved` listing behavior implies that list/catalog metadata is
+part of the required feature, not a separate afterthought.
+
+### Relationship to durable blocs
+
+Keep this separate from the durable bloc contract.
+
+Intended split:
+
+- durable blocs + bindings: app-facing exact reuse across restarts
+- snapshot admin: operator/local-admin tooling around live provider cache state
+
+## Why it might matter
+
+If local operator workflows still need snapshot save/load after durable blocs
+ship, Runtime should own that boundary too:
+
+- Gateway can stop reaching through private Runtime and provider internals
+- support can expand beyond today's MLX + HF GGUF limitation
+- clients can distinguish app-facing durable reuse from local-admin snapshot
+  tooling
+
+## Promotion criteria
+
+- Completed item `027_runtime_durable_bloc_prompt_cache_facade.md` remains the primary app-facing prompt-cache path.
+- Runtime maintainers confirm that a secondary local-admin snapshot surface is
+  still needed after that.
+- Runtime defines a snapshot root/path policy that does not leak raw filesystem
+  contracts casually.
+- Gateway confirms that `list/save/load` through Runtime is enough to replace
+  the current private-provider implementation.
+
+## Validation ideas
+
+- Host-facade tests covering structured unsupported responses and happy paths
+  for:
+  - listing snapshots
+  - saving snapshots
+  - loading snapshots
+- Backend coverage across:
+  - MLX
+  - HuggingFace transformers when Core capabilities allow save/load
+  - HuggingFace GGUF when Core capabilities allow save/load
+- Negative tests proving unsupported local backends fail honestly instead of
+  pretending to support snapshots.
+- Gateway adoption tests proving `/prompt_cache/saved|save|load` delegate
+  through Runtime only and no longer hard-code only two backend families.
 
 ## Non-goals
 
+- Do not treat snapshot save/load as the normal app-facing durable prompt-cache
+  contract.
 - Do not expose provider-private cache internals.
-- Do not promise remote/server save/load until AbstractCore Server has a real
-  public contract for it.
-- Do not turn save/load into a durable workflow effect by default. This is an
-  operator/local-admin control surface unless a later design explicitly records
-  it as an audit snapshot.
+- Do not promise remote/server snapshot persistence without a real public Core
+  contract.
+- Do not turn snapshot save/load into a durable workflow effect by default.
 
-## Open questions
+## Guidance for future agents
 
-- Should this extend `AbstractCoreHostFacade`, or should Runtime expose a
-  separate local-admin facade to keep the main host-control contract narrower?
-- What file/path policy should govern local save/load targets?
-- Should Runtime record save/load requests as operator audit snapshots even if
-  it does not replay them by re-executing the filesystem mutation?
+Implement this only after the durable bloc track is shipped and adopted where needed.
 
-## Dependencies and related work
-
-- `src/abstractruntime/integrations/abstractcore/host_facade.py`
-- `src/abstractruntime/integrations/abstractcore/llm_client.py`
-- `../abstractcore/abstractcore/providers/base.py`
-- `../abstractgateway/docs/backlog/proposed/2026-05-20_gateway_prompt_cache_save_load_via_runtime.md`
-
-## Why it is proposed, not planned
-
-- The public API shape still needs a design decision.
-- The filesystem/path policy needs to be nailed down first.
-- Gateway can keep the current behavior temporarily, but it should not be
-  treated as an acceptable end state.
+This is secondary local-admin work. Keep it honest, capability-driven, and
+explicitly separate from the main app contract of blocs + bindings.

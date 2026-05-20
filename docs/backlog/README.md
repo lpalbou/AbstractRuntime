@@ -34,6 +34,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 023 | `completed/023_truthful_local_media_residency_boundaries.md` |
 | 024 | `completed/024_runtime_owned_run_scoped_media_execution.md` |
 | 026 | `completed/026_runtime_host_discovery_facade_for_core_catalogs.md` |
+| 027 | `completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
+| 028 | `completed/028_runtime_bloc_kv_lifecycle_and_pruning.md` |
 
 ## Planned
 

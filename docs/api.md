@@ -176,7 +176,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.20 or newer).
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.23 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -188,14 +188,14 @@ Entry points:
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_vision_provider_models`, `list_cached_vision_models`)
-- host-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
+- host-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
 - run-facade helpers create durable child runs for existing runs (`execute_llm_call`, `generate_image`, `generate_voice`, `transcribe_audio`)
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
 - `prompt`, `messages`, `system_prompt`, and convenience `text`
 - `media`: a media path, artifact ref (`{"$artifact": "..."}` or `{"artifact_id": "..."}`), media dict, or list of those
 - `output`: AbstractCore output selector; top-level `outputs` is accepted as a runtime alias
-- `params`: provider/model routing, generation controls, prompt-cache keys, structured-output schema options, and tracing metadata
+- `params`: provider/model routing, generation controls, prompt-cache keys or `prompt_cache_binding`, structured-output schema options, and tracing metadata
 
 Multimodal support:
 - install `abstractruntime[multimodal]` for common AbstractCore media, vision, voice, and audio dependencies
@@ -210,6 +210,9 @@ Multimodal support:
 Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
+- `LLM_CALL.params.prompt_cache_binding` is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes `key`, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
+- `get_abstractcore_host_facade(...)` also exposes durable bloc helpers (`upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`)
+- local Runtime owns the bloc root policy: `~/.abstractruntime/blocs` by default, `<base_dir>/blocs` for `create_local_file_runtime(...)`, and explicit `bloc_root_dir=...` overrides when needed
 - provider cache/session handles are not durable runtime state and should not be stored in `RunState.vars`
 
 Attachment registration limits:

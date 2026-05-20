@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.20 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
+This extra installs AbstractCore 2.13.23 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.20`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
+This installs `abstractcore[remote,vision,voice,audio]>=2.13.23`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -296,9 +296,9 @@ tools = ApprovalToolExecutor(
 rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=tools)
 ```
 
-## Prompt-cache control plane
+## Prompt-cache control plane and durable blocs
 
-AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache and model-residency operations:
+AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:
 
 - `get_abstractcore_host_facade(runtime)`
 - `AbstractCoreHostFacade`
@@ -309,6 +309,16 @@ AbstractRuntime's AbstractCore integration now exposes a public host-control fac
 - `prompt_cache_fork(...)`
 - `prompt_cache_clear(...)`
 - `prompt_cache_prepare_modules(...)`
+- `upsert_text_bloc(...)`
+- `get_bloc_record(...)`
+- `list_blocs(...)`
+- `get_bloc_kv_manifest(...)`
+- `ensure_bloc_kv_artifact(...)`
+- `load_bloc_kv_artifact(...)`
+- `list_bloc_kv_artifacts(...)`
+- `delete_bloc_kv_artifact(...)`
+- `prune_bloc_kv_artifacts(...)`
+- `delete_bloc(...)`
 - `list_model_residency(...)`
 - `load_model_residency(...)`
 - `unload_model_residency(...)`
@@ -318,6 +328,7 @@ Behavior by execution mode:
 - **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.
 - **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` on the configured AbstractCore server.
   - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream `base_url` through these prompt-cache methods. Per-request provider key overrides supplied as `api_key` / `provider_api_key` are converted to `X-AbstractCore-Provider-API-Key` headers, not request bodies or query strings.
+  - For durable bloc/KV methods, `base_url` takes precedence over local loaded-runtime selectors. Runtime omits `provider`, `model`, and `runtime_id` when `base_url` is supplied so Core takes the upstream endpoint branch cleanly.
 
 Contract notes:
 
@@ -325,8 +336,17 @@ Contract notes:
 - Unsupported operations return structured payloads with `supported=false`, `operation`, `code`, and `capabilities`.
 - When a provider reports `mode=local_control_plane` (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized `system | tools | history` cache path automatically.
 - When a provider reports `mode=keyed`, the runtime still forwards stable `prompt_cache_key`s but skips module preparation/fork/update orchestration.
-- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches through the public facade instead of reaching through to provider internals.
+- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
+- Durable exact reuse uses `LLM_CALL.params.prompt_cache_binding`. If a binding includes `key`, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.
+- Local Runtime owns the bloc store root policy:
+  - default local root: `~/.abstractruntime/blocs`
+  - default file-runtime root: `<base_dir>/blocs`
+  - explicit `bloc_root_dir=...` overrides are allowed when hosts need a different root
+- The three prompt-cache tracks are distinct:
+  - session prompt cache: best-effort volatile reuse
+  - durable bloc prompt cache: exact reuse through bloc/KV/binding
+  - snapshot prompt-cache admin: separate local-admin work, if enabled later
 
 Host-side prompt-cache example:
 
@@ -349,6 +369,106 @@ if caps.get("capabilities", {}).get("supports_prepare_modules"):
         ],
     )
 ```
+
+Host-side durable bloc example:
+
+```python
+from abstractruntime.integrations.abstractcore import (
+    create_local_file_runtime,
+    get_abstractcore_host_facade,
+)
+
+rt = create_local_file_runtime(
+    base_dir="./runtime-data",
+    provider="mlx",
+    model="mlx-community/Qwen3-4B-4bit",
+)
+facade = get_abstractcore_host_facade(rt)
+
+record = facade.upsert_text_bloc(
+    path="assistant/system.txt",
+    content="Long-lived system prompt or memory text",
+)
+artifact = facade.ensure_bloc_kv_artifact(
+    provider="mlx",
+    model="mlx-community/Qwen3-4B-4bit",
+    sha256=record["sha256"],
+)
+loaded = facade.load_bloc_kv_artifact(
+    provider="mlx",
+    model="mlx-community/Qwen3-4B-4bit",
+    sha256=record["sha256"],
+)
+
+binding = loaded["artifact"]["prompt_cache_binding"]
+```
+
+Host-side durable bloc lifecycle example:
+
+```python
+records = facade.list_blocs()
+artifacts = facade.list_bloc_kv_artifacts(bloc_id=record["record"]["bloc_id"])
+
+# Preview a safe delete first.
+preview = facade.delete_bloc_kv_artifact(
+    bloc_id=record["record"]["bloc_id"],
+    artifact_path=artifacts["artifacts"][0]["artifact_path"],
+    dry_run=True,
+)
+
+# Remove one derived KV artifact but keep the durable text bloc.
+facade.delete_bloc_kv_artifact(
+    bloc_id=record["record"]["bloc_id"],
+    artifact_path=artifacts["artifacts"][0]["artifact_path"],
+    clear_loaded=True,
+)
+
+# Remove the whole bloc and all derived artifacts under it.
+facade.delete_bloc(
+    bloc_id=record["record"]["bloc_id"],
+    clear_loaded=True,
+)
+```
+
+Then use the binding in a normal runtime `LLM_CALL`:
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "prompt": "Use the durable cached prefix.",
+        "params": {"prompt_cache_binding": binding},
+    },
+    result_key="llm",
+)
+```
+
+### Storage semantics
+
+- For **local** and **local-file** runtimes, `upsert_text_bloc(...)` persists one durable text snapshot under the Runtime-owned bloc root. Runtime chooses the root (`~/.abstractruntime/blocs` by default, or `<base_dir>/blocs` for `create_local_file_runtime(...)`), while AbstractCore's `FileBlocStore` defines the on-disk layout under that root.
+- Within one bloc root, the durable source of truth is **content-addressed by SHA256**. Re-upserting the same text/file hash reuses or updates the same bloc record; it does not intentionally create several independent bloc copies under that same root.
+- Deduplication is therefore **per bloc root**, not global across every Runtime instance. If several runtimes should share one durable bloc store, point them at the same `bloc_root_dir`. Separate roots intentionally isolate storage and can hold separate copies of the same text.
+- The durable text bloc and the provider/model cache are different layers:
+  - one bloc: durable extracted text plus metadata
+  - zero or more derived KV artifacts: one per `(provider, model)` pair, stored under that bloc's `kv/` area
+- Derived KV artifacts are **not portable** across providers or models. The same text bloc can legitimately have several provider/model-native artifacts, but each artifact remains tied to one provider/backend/model rendering path.
+- `prompt_cache_binding` is a request-time proof that a specific runtime cache key still points at the exact loaded bloc artifact. It is not the durable text itself.
+- For **remote** and **hybrid** runtimes using `base_url`, Runtime does not create its own local bloc copy; it proxies the bloc/KV operation to the configured AbstractCore server or upstream endpoint, and that remote side owns the store.
+
+### Lifecycle operations
+
+- Runtime now exposes public host methods for:
+  - listing durable bloc records
+  - listing provider/model KV artifacts under those blocs
+  - deleting one derived KV artifact while keeping the bloc text
+  - pruning matching KV artifacts by filter
+  - deleting one durable bloc and, by default, its derived KV artifacts
+- Safety behavior mirrors the public AbstractCore contract:
+  - `dry_run=True` previews the delete/prune result without mutating storage
+  - `clear_loaded=True` clears matching live prompt-cache keys before deletion when the relevant provider/model is resident in the current runtime or the remote Core server
+  - `force=True` bypasses that safety check and should be treated as an explicit operator choice
+- `delete_bloc_kv_artifact(...)` deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.
+- `delete_bloc(...)` removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass `delete_kv=False` only if you intentionally want to leave those artifacts behind.
 
 ## Discovery snapshots
 

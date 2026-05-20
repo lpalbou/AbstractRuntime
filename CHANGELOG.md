@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-05-21
+
+### Added
+- Public durable AbstractCore bloc lifecycle operations on `get_abstractcore_host_facade(...)` across local, remote, and hybrid runtimes:
+  - `list_blocs(...)`
+  - `list_bloc_kv_artifacts(...)`
+  - `delete_bloc_kv_artifact(...)`
+  - `prune_bloc_kv_artifacts(...)`
+  - `delete_bloc(...)`
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.23`.
+- Runtime's public docs and AI-readable `llms.txt` / `llms-full.txt` now describe the shipped durable bloc prompt-cache lifecycle boundary, including per-model KV artifacts and explicit cleanup controls.
+
 ## [0.4.15] - 2026-05-20
 
 ### Added
@@ -434,7 +448,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...HEAD
+[0.4.16]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/lpalbou/abstractruntime/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/lpalbou/abstractruntime/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/lpalbou/abstractruntime/compare/v0.4.12...v0.4.13

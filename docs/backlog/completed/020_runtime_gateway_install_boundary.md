@@ -18,7 +18,7 @@ the base package, while still exposing explicit extras and profile cascades for 
   `abstractruntime[multimodal]`.
 - Runtime now exposes explicit profile-cascade extras (`apple`, `gpu`, `all-apple`, `all-gpu`) instead of requiring
   hosts to guess how to align local-engine install profiles.
-- The package metadata floor has since advanced to `abstractcore>=2.13.20`; the original completion landed on an older
+- The package metadata floor has since advanced to `abstractcore>=2.13.23`; the original completion landed on an older
   2.13.12-aligned floor and was later tightened without changing the boundary itself.
 - Regression tests cover package metadata, optional-stack imports, and the rule that Gateway env/auth does not leak
   into Runtime's remote AbstractCore client boundary.
@@ -79,7 +79,7 @@ through extras, and tests prove the packaging/import boundary.
 
 ### Residual risks
 
-- Version-floor references in historical backlog text had drifted behind the current `abstractcore>=2.13.20` baseline.
+- Version-floor references in historical backlog text had drifted behind the current `abstractcore>=2.13.23` baseline.
   That drift is now explicit here, but other historical backlog notes may still mention `2.13.12`.
 - This item validates the package/import boundary, not every higher-level deployment profile that Gateway may choose.
 

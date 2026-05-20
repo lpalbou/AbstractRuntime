@@ -8,7 +8,7 @@ Provides:
 - Effect handlers wiring
 - Convenience runtime factories for local/remote/hybrid modes
 - Public discovery facade for provider/media/catalog snapshot queries
-- Public host facade for prompt-cache and model-residency control operations
+- Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
 - Public durable run facade for run-scoped AbstractCore child runs
 - RuntimeConfig for limits and model capabilities
 

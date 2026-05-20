@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-20_runtime_local_admin_prompt_cache_save_load/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/028_runtime_bloc_kv_lifecycle_and_pruning/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Proposed: Runtime local-admin prompt-cache snapshot control - AbstractRuntime</title>
+        <title>028 Runtime Bloc/KV Lifecycle And Pruning - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#proposed-runtime-local-admin-prompt-cache-snapshot-control" class="md-skip">
+        <a href="#028-runtime-blockv-lifecycle-and-pruning" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Proposed: Runtime local-admin prompt-cache snapshot control
+              028 Runtime Bloc/KV Lifecycle And Pruning
             
           </span>
         </div>
@@ -823,10 +823,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#adr-status" class="md-nav__link">
+  <a href="#goal" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ADR status
+        Goal
       
     </span>
   </a>
@@ -834,10 +834,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#context" class="md-nav__link">
+  <a href="#what-shipped" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Context
+        What Shipped
       
     </span>
   </a>
@@ -845,10 +845,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
+  <a href="#current-code-pointers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current code reality
+        Current Code Pointers
       
     </span>
   </a>
@@ -856,10 +856,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#problem-or-opportunity" class="md-nav__link">
+  <a href="#validation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Problem or opportunity
+        Validation
       
     </span>
   </a>
@@ -867,22 +867,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#proposed-direction" class="md-nav__link">
+  <a href="#completion-report" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proposed direction
+        Completion Report
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Proposed direction">
+    <nav class="md-nav" aria-label="Completion Report">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#preferred-runtime-boundary" class="md-nav__link">
+  <a href="#date" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Preferred Runtime boundary
+        Date
       
     </span>
   </a>
@@ -890,10 +890,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#capability-and-backend-rules" class="md-nav__link">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Capability and backend rules
+        Summary
       
     </span>
   </a>
@@ -901,10 +901,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#path-and-naming-policy" class="md-nav__link">
+  <a href="#behavior-changes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Path and naming policy
+        Behavior Changes
       
     </span>
   </a>
@@ -912,10 +912,54 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#relationship-to-durable-blocs" class="md-nav__link">
+  <a href="#review-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Relationship to durable blocs
+        Review Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residual Risks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#follow-ups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-Ups
       
     </span>
   </a>
@@ -924,61 +968,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why-it-might-matter" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why it might matter
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#promotion-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Promotion criteria
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-ideas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Validation ideas
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Non-goals
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#guidance-for-future-agents" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Guidance for future agents
-      
-    </span>
-  </a>
   
 </li>
       
@@ -1002,178 +991,144 @@
   
 
 
-<h1 id="proposed-runtime-local-admin-prompt-cache-snapshot-control">Proposed: Runtime local-admin prompt-cache snapshot control<a class="headerlink" href="#proposed-runtime-local-admin-prompt-cache-snapshot-control" title="Permanent link">&para;</a></h1>
+<h1 id="028-runtime-blockv-lifecycle-and-pruning">028 Runtime Bloc/KV Lifecycle And Pruning<a class="headerlink" href="#028-runtime-blockv-lifecycle-and-pruning" title="Permanent link">&para;</a></h1>
 <h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Created: 2026-05-20</li>
-<li>Status: Proposed</li>
-<li>Completed: N/A</li>
+<li>Status: Completed</li>
+<li>Completed: 2026-05-21</li>
+<li>Origin: promoted from <code>proposed/2026-05-20_runtime_bloc_kv_lifecycle_and_pruning.md</code></li>
 </ul>
-<h2 id="adr-status">ADR status<a class="headerlink" href="#adr-status" title="Permanent link">&para;</a></h2>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>Close the remaining durable bloc lifecycle gap so Runtime can list, inspect,
+delete, and prune AbstractCore-backed bloc/KV storage through the public host
+facade instead of leaving hosts to manual filesystem deletion or private Core
+hooks.</p>
+<h2 id="what-shipped">What Shipped<a class="headerlink" href="#what-shipped" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Governing ADRs: <code>../abstractcore/docs/adr/0007-durable-memory-bloc-cache-binding.md</code></li>
-<li>ADR impact: None; this item is intentionally secondary to Core's accepted durable bloc contract.</li>
+<li>Extended <code>AbstractCoreHostFacade</code> with durable bloc lifecycle methods:</li>
+<li><code>list_blocs(...)</code></li>
+<li><code>list_bloc_kv_artifacts(...)</code></li>
+<li><code>delete_bloc_kv_artifact(...)</code></li>
+<li><code>prune_bloc_kv_artifacts(...)</code></li>
+<li><code>delete_bloc(...)</code></li>
+<li>Wired those methods through:</li>
+<li>local <code>LocalAbstractCoreLLMClient</code></li>
+<li>standard local <code>MultiLocalAbstractCoreLLMClient</code></li>
+<li>remote/hybrid <code>RemoteAbstractCoreLLMClient</code></li>
+<li>Added Runtime-side local lifecycle helpers that normalize Core delete/list
+  results into the same JSON-safe host payload shape as the rest of the facade.</li>
+<li>Preserved Core safety semantics on the Runtime boundary:</li>
+<li><code>dry_run=True</code> preview</li>
+<li><code>clear_loaded=True</code> live-key clearing when Runtime can see the resident
+    provider state</li>
+<li><code>force=True</code> explicit override</li>
+<li>Added <code>MultiLocal</code> orchestration so shared local bloc roots can delete/prune
+  across several loaded provider/model clients without inventing raw filesystem
+  rules.</li>
+<li>Updated docs, FAQ, API docs, and LLM indexes so the repo no longer claims
+  this lifecycle surface is missing.</li>
 </ul>
-<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>Runtime now exposes public host-facing surfaces for:</p>
-<ul>
-<li>prompt-cache control and model residency through <code>AbstractCoreHostFacade</code></li>
-<li>run-scoped durable media execution through <code>AbstractCoreRunFacade</code></li>
-<li>discovery/catalog snapshot queries through <code>AbstractCoreDiscoveryFacade</code></li>
-</ul>
-<p>Core <code>2.13.23</code> also makes the durable app-facing prompt-cache path clear:</p>
-<ul>
-<li>blocs + KV artifacts + <code>prompt_cache_binding</code></li>
-</ul>
-<p>That means live prompt-cache snapshot save/load should no longer be treated as
-the main app contract. It remains useful only as a separate local operator/admin
-surface.</p>
-<p>Today Gateway still implements that surface as a private hack.</p>
-<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
-<p>Inspected files and behavior:</p>
+<h2 id="current-code-pointers">Current Code Pointers<a class="headerlink" href="#current-code-pointers" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>src/abstractruntime/integrations/abstractcore/host_facade.py</code></li>
-<li>no snapshot admin methods yet</li>
-<li><code>../abstractgateway/src/abstractgateway/routes/gateway.py</code></li>
-<li><code>/prompt_cache/saved|save|load</code> still reaches through private Runtime state
-    and provider instances directly</li>
-<li>current implementation hard-codes only MLX and HuggingFace GGUF-style local
-    behavior</li>
-<li><code>../abstractcore/abstractcore/providers/base.py</code></li>
-<li>exposes public provider methods <code>prompt_cache_save(...)</code> and
-    <code>prompt_cache_load(...)</code></li>
-<li><code>../abstractcore/abstractcore/providers/mlx_provider.py</code></li>
-<li>implements public prompt-cache save/load</li>
-<li><code>../abstractcore/abstractcore/providers/huggingface_provider.py</code></li>
-<li>implements public prompt-cache save/load across the provider's supported
-    local cache modes</li>
-<li><code>docs/backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md</code></li>
-<li>records the primary app-facing durable bloc track that already shipped</li>
+<li><code>src/abstractruntime/integrations/abstractcore/llm_client.py</code></li>
+<li><code>tests/test_abstractcore_host_facade.py</code></li>
+<li><code>tests/test_prompt_cache_modules.py</code></li>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>docs/api.md</code></li>
+<li><code>docs/adr/0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md</code></li>
 </ul>
-<p>What exists now:</p>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<p>Focused lifecycle and regression run on 2026-05-21:</p>
 <ul>
-<li>Runtime owns normal prompt-cache control operations cleanly.</li>
-<li>Gateway owns a working but boundary-breaking local snapshot implementation.</li>
-<li>Core exposes the public provider hooks Runtime would need.</li>
+<li><code>PYTHONPATH=src pytest -q tests/test_abstractcore_host_facade.py tests/test_prompt_cache_modules.py tests/test_remote_llm_client.py tests/test_packaging_extras.py</code></li>
+<li>Result: <code>41 passed in 0.23s</code></li>
 </ul>
-<p>What is still wrong:</p>
+<p>Additional focused lifecycle slice:</p>
 <ul>
-<li>no Runtime-owned public snapshot-admin contract</li>
-<li>Gateway still reads provider-private state and hard-codes two backend paths</li>
-<li>the current item is too narrow because listing/cataloging saved snapshots is
-  part of the real operator workflow too</li>
+<li><code>PYTHONPATH=src pytest -q tests/test_abstractcore_host_facade.py tests/test_prompt_cache_modules.py</code></li>
+<li>Result: <code>33 passed in 0.26s</code></li>
 </ul>
-<h2 id="problem-or-opportunity">Problem or opportunity<a class="headerlink" href="#problem-or-opportunity" title="Permanent link">&para;</a></h2>
-<p>There is still one operator/admin prompt-cache feature with no clean Runtime
-boundary:</p>
+<p>Additional syntax validation:</p>
 <ul>
-<li>list locally saved prompt-cache snapshots</li>
-<li>save a live local provider cache snapshot</li>
-<li>load a saved local provider cache snapshot</li>
+<li><code>python -m py_compile src/abstractruntime/integrations/abstractcore/llm_client.py src/abstractruntime/integrations/abstractcore/host_facade.py tests/test_abstractcore_host_facade.py tests/test_prompt_cache_modules.py</code></li>
+<li>Result: clean</li>
 </ul>
-<p>We may still need that feature, but not as a Gateway-local hack and not as the
-normal app-facing prompt-cache story.</p>
-<h2 id="proposed-direction">Proposed direction<a class="headerlink" href="#proposed-direction" title="Permanent link">&para;</a></h2>
-<p>Add a Runtime-owned <strong>local-admin snapshot control</strong> surface as a secondary
-prompt-cache track.</p>
-<h3 id="preferred-runtime-boundary">Preferred Runtime boundary<a class="headerlink" href="#preferred-runtime-boundary" title="Permanent link">&para;</a></h3>
-<p>Prefer extending the existing <code>AbstractCoreHostFacade</code> with explicit
-admin-oriented snapshot methods rather than creating yet another public facade.</p>
-<p>Likely methods:</p>
+<p>Practical proof points from the shipped tests:</p>
 <ul>
-<li><code>list_prompt_cache_snapshots(...)</code></li>
-<li><code>prompt_cache_save_snapshot(...)</code></li>
-<li><code>prompt_cache_load_snapshot(...)</code></li>
+<li>Remote Runtime now proxies:</li>
+<li><code>GET /acore/blocs</code></li>
+<li><code>GET /acore/blocs/kv/list</code></li>
+<li><code>POST /acore/blocs/kv/delete</code></li>
+<li><code>POST /acore/blocs/kv/prune</code></li>
+<li><code>POST /acore/blocs/delete</code></li>
+<li>Local Runtime now lists bloc records and per-model artifacts from the
+  Runtime-owned bloc root, then deletes one artifact or a whole bloc through
+  the same host facade contract.</li>
+<li><code>MultiLocal</code> local runtimes keep the shared bloc root behavior but can still
+  route lifecycle operations through the correct loaded provider/model client
+  when live prompt-cache state matters.</li>
 </ul>
-<p>The naming should make the boundary obvious:</p>
+<h2 id="completion-report">Completion Report<a class="headerlink" href="#completion-report" title="Permanent link">&para;</a></h2>
+<h3 id="date">Date<a class="headerlink" href="#date" title="Permanent link">&para;</a></h3>
+<p>2026-05-21</p>
+<h3 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h3>
+<p>Runtime now owns the durable bloc lifecycle boundary as well as the durable
+bloc create/read/load boundary. Hosts can enumerate durable bloc records,
+inspect per-model KV artifacts, delete one artifact while keeping the durable
+text bloc, prune matching artifacts by filter, or delete the whole bloc and its
+derived artifacts through <code>get_abstractcore_host_facade(runtime)</code>.</p>
+<h3 id="behavior-changes">Behavior Changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
 <ul>
-<li>local admin / snapshot control</li>
-<li>not the normal durable bloc app contract</li>
+<li>The host facade is now sufficient for the full durable bloc lifecycle, not
+  just durable bloc creation and loading.</li>
+<li>Local and file-backed runtimes no longer require manual bloc-root inspection
+  or filesystem deletion for supported operator cleanup flows.</li>
+<li>Remote and hybrid runtimes can drive the same lifecycle operations through
+  Core's public <code>/acore/blocs*</code> lifecycle routes.</li>
 </ul>
-<h3 id="capability-and-backend-rules">Capability and backend rules<a class="headerlink" href="#capability-and-backend-rules" title="Permanent link">&para;</a></h3>
-<p>Do not hard-code provider names in Runtime or Gateway.</p>
-<p>Instead, base support on Core's public provider capabilities and methods.
-Runtime should stay honest that snapshot support is:</p>
+<h3 id="review-notes">Review Notes<a class="headerlink" href="#review-notes" title="Permanent link">&para;</a></h3>
 <ul>
-<li>local only</li>
-<li>model/backend-specific</li>
-<li>available only when Core reports save/load support</li>
+<li>The implementation kept lifecycle work on the existing host facade instead of
+  adding another public Runtime surface.</li>
+<li>The main tricky point was <code>MultiLocal</code> safety: one shared bloc root can back
+  several loaded provider/model clients, so Runtime now resolves live-state
+  checks through the currently loaded client when possible instead of guessing
+  from files alone.</li>
+<li>Runtime still keeps a graceful <code>dependency_missing</code> response path at the
+  facade boundary, but the published dependency floor now matches the released
+  Core lifecycle helpers.</li>
 </ul>
-<p>The honest target matrix is:</p>
+<h3 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h3>
 <ul>
-<li>MLX</li>
-<li>HuggingFace transformers where cache serialization/reload is supported</li>
-<li>HuggingFace GGUF where cache serialization/reload is supported</li>
+<li><code>tests/test_abstractcore_host_facade.py</code></li>
+<li><code>tests/test_prompt_cache_modules.py</code></li>
+<li>regression support in:</li>
+<li><code>tests/test_remote_llm_client.py</code></li>
+<li><code>tests/test_packaging_extras.py</code></li>
 </ul>
-<p>That is better described as <strong>three local backend families</strong>, not three generic
-provider names.</p>
-<h3 id="path-and-naming-policy">Path and naming policy<a class="headerlink" href="#path-and-naming-policy" title="Permanent link">&para;</a></h3>
-<p>The public surface should not expose arbitrary filesystem paths as the primary
-client contract.</p>
-<p>Before promotion, define:</p>
+<h3 id="docs">Docs<a class="headerlink" href="#docs" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Runtime-owned snapshot root policy</li>
-<li>logical snapshot naming rules</li>
-<li>whether hosts may pass an explicit root/directory</li>
-<li>whether the public contract returns raw paths, opaque names, or both</li>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>docs/api.md</code></li>
+<li><code>llms.txt</code></li>
+<li><code>llms-full.txt</code></li>
+<li><code>docs/adr/0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md</code></li>
 </ul>
-<p>Gateway's current <code>saved</code> listing behavior implies that list/catalog metadata is
-part of the required feature, not a separate afterthought.</p>
-<h3 id="relationship-to-durable-blocs">Relationship to durable blocs<a class="headerlink" href="#relationship-to-durable-blocs" title="Permanent link">&para;</a></h3>
-<p>Keep this separate from the durable bloc contract.</p>
-<p>Intended split:</p>
+<h3 id="residual-risks">Residual Risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
 <ul>
-<li>durable blocs + bindings: app-facing exact reuse across restarts</li>
-<li>snapshot admin: operator/local-admin tooling around live provider cache state</li>
+<li><code>clear_loaded=True</code> can only clear live keys that Runtime can actually see in
+  the current local process or the remote Core server. External provider state
+  outside the public Core contract remains out of scope.</li>
 </ul>
-<h2 id="why-it-might-matter">Why it might matter<a class="headerlink" href="#why-it-might-matter" title="Permanent link">&para;</a></h2>
-<p>If local operator workflows still need snapshot save/load after durable blocs
-ship, Runtime should own that boundary too:</p>
+<h3 id="follow-ups">Follow-Ups<a class="headerlink" href="#follow-ups" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Gateway can stop reaching through private Runtime and provider internals</li>
-<li>support can expand beyond today's MLX + HF GGUF limitation</li>
-<li>clients can distinguish app-facing durable reuse from local-admin snapshot
-  tooling</li>
+<li>Keep the separate local-admin snapshot save/load/list proposal independent of
+  this durable bloc lifecycle contract.</li>
 </ul>
-<h2 id="promotion-criteria">Promotion criteria<a class="headerlink" href="#promotion-criteria" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Completed item <code>027_runtime_durable_bloc_prompt_cache_facade.md</code> remains the primary app-facing prompt-cache path.</li>
-<li>Runtime maintainers confirm that a secondary local-admin snapshot surface is
-  still needed after that.</li>
-<li>Runtime defines a snapshot root/path policy that does not leak raw filesystem
-  contracts casually.</li>
-<li>Gateway confirms that <code>list/save/load</code> through Runtime is enough to replace
-  the current private-provider implementation.</li>
-</ul>
-<h2 id="validation-ideas">Validation ideas<a class="headerlink" href="#validation-ideas" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Host-facade tests covering structured unsupported responses and happy paths
-  for:</li>
-<li>listing snapshots</li>
-<li>saving snapshots</li>
-<li>loading snapshots</li>
-<li>Backend coverage across:</li>
-<li>MLX</li>
-<li>HuggingFace transformers when Core capabilities allow save/load</li>
-<li>HuggingFace GGUF when Core capabilities allow save/load</li>
-<li>Negative tests proving unsupported local backends fail honestly instead of
-  pretending to support snapshots.</li>
-<li>Gateway adoption tests proving <code>/prompt_cache/saved|save|load</code> delegate
-  through Runtime only and no longer hard-code only two backend families.</li>
-</ul>
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Do not treat snapshot save/load as the normal app-facing durable prompt-cache
-  contract.</li>
-<li>Do not expose provider-private cache internals.</li>
-<li>Do not promise remote/server snapshot persistence without a real public Core
-  contract.</li>
-<li>Do not turn snapshot save/load into a durable workflow effect by default.</li>
-</ul>
-<h2 id="guidance-for-future-agents">Guidance for future agents<a class="headerlink" href="#guidance-for-future-agents" title="Permanent link">&para;</a></h2>
-<p>Implement this only after the durable bloc track is shipped and adopted where needed.</p>
-<p>This is secondary local-admin work. Keep it honest, capability-driven, and
-explicitly separate from the main app contract of blocs + bindings.</p>
 
 
 

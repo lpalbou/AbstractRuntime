@@ -480,13 +480,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prompt-cache-control-plane" class="md-nav__link">
+  <a href="#prompt-cache-control-plane-and-durable-blocs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prompt-cache control plane
+        Prompt-cache control plane and durable blocs
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Prompt-cache control plane and durable blocs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#storage-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1105,13 +1133,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prompt-cache-control-plane" class="md-nav__link">
+  <a href="#prompt-cache-control-plane-and-durable-blocs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prompt-cache control plane
+        Prompt-cache control plane and durable blocs
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Prompt-cache control plane and durable blocs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#storage-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1202,11 +1258,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.20 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.</p>
+<p>This extra installs AbstractCore 2.13.23 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.</p>
 <p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[media,openai,vision,voice,audio]&gt;=2.13.20</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
+<p>This installs <code>abstractcore[remote,vision,voice,audio]&gt;=2.13.23</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>
@@ -1422,8 +1478,8 @@ hello
 <span class="p">)</span>
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
 </code></pre></div>
-<h2 id="prompt-cache-control-plane">Prompt-cache control plane<a class="headerlink" href="#prompt-cache-control-plane" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache and model-residency operations:</p>
+<h2 id="prompt-cache-control-plane-and-durable-blocs">Prompt-cache control plane and durable blocs<a class="headerlink" href="#prompt-cache-control-plane-and-durable-blocs" title="Permanent link">&para;</a></h2>
+<p>AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:</p>
 <ul>
 <li><code>get_abstractcore_host_facade(runtime)</code></li>
 <li><code>AbstractCoreHostFacade</code></li>
@@ -1434,6 +1490,16 @@ hello
 <li><code>prompt_cache_fork(...)</code></li>
 <li><code>prompt_cache_clear(...)</code></li>
 <li><code>prompt_cache_prepare_modules(...)</code></li>
+<li><code>upsert_text_bloc(...)</code></li>
+<li><code>get_bloc_record(...)</code></li>
+<li><code>list_blocs(...)</code></li>
+<li><code>get_bloc_kv_manifest(...)</code></li>
+<li><code>ensure_bloc_kv_artifact(...)</code></li>
+<li><code>load_bloc_kv_artifact(...)</code></li>
+<li><code>list_bloc_kv_artifacts(...)</code></li>
+<li><code>delete_bloc_kv_artifact(...)</code></li>
+<li><code>prune_bloc_kv_artifacts(...)</code></li>
+<li><code>delete_bloc(...)</code></li>
 <li><code>list_model_residency(...)</code></li>
 <li><code>load_model_residency(...)</code></li>
 <li><code>unload_model_residency(...)</code></li>
@@ -1443,6 +1509,7 @@ hello
 <li><strong>Local</strong> (<code>MultiLocalAbstractCoreLLMClient</code> / <code>LocalAbstractCoreLLMClient</code>): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.</li>
 <li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/acore/prompt_cache/*</code> on the configured AbstractCore server.</li>
 <li>When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream <code>base_url</code> through these prompt-cache methods. Per-request provider key overrides supplied as <code>api_key</code> / <code>provider_api_key</code> are converted to <code>X-AbstractCore-Provider-API-Key</code> headers, not request bodies or query strings.</li>
+<li>For durable bloc/KV methods, <code>base_url</code> takes precedence over local loaded-runtime selectors. Runtime omits <code>provider</code>, <code>model</code>, and <code>runtime_id</code> when <code>base_url</code> is supplied so Core takes the upstream endpoint branch cleanly.</li>
 </ul>
 <p>Contract notes:</p>
 <ul>
@@ -1450,8 +1517,17 @@ hello
 <li>Unsupported operations return structured payloads with <code>supported=false</code>, <code>operation</code>, <code>code</code>, and <code>capabilities</code>.</li>
 <li>When a provider reports <code>mode=local_control_plane</code> (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized <code>system | tools | history</code> cache path automatically.</li>
 <li>When a provider reports <code>mode=keyed</code>, the runtime still forwards stable <code>prompt_cache_key</code>s but skips module preparation/fork/update orchestration.</li>
-<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches through the public facade instead of reaching through to provider internals.</li>
+<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.</li>
 <li>Automatic per-session prompt-cache keys are enabled by <code>run.vars["_runtime"]["prompt_cache"]</code>, <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default. Gateway-specific prompt-cache env vars should be translated by Gateway into <code>_runtime.prompt_cache</code>.</li>
+<li>Durable exact reuse uses <code>LLM_CALL.params.prompt_cache_binding</code>. If a binding includes <code>key</code>, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.</li>
+<li>Local Runtime owns the bloc store root policy:</li>
+<li>default local root: <code>~/.abstractruntime/blocs</code></li>
+<li>default file-runtime root: <code>&lt;base_dir&gt;/blocs</code></li>
+<li>explicit <code>bloc_root_dir=...</code> overrides are allowed when hosts need a different root</li>
+<li>The three prompt-cache tracks are distinct:</li>
+<li>session prompt cache: best-effort volatile reuse</li>
+<li>durable bloc prompt cache: exact reuse through bloc/KV/binding</li>
+<li>snapshot prompt-cache admin: separate local-admin work, if enabled later</li>
 </ul>
 <p>Host-side prompt-cache example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -1472,6 +1548,97 @@ hello
         <span class="p">],</span>
     <span class="p">)</span>
 </code></pre></div>
+<p>Host-side durable bloc example:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">create_local_file_runtime</span><span class="p">,</span>
+    <span class="n">get_abstractcore_host_facade</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_file_runtime</span><span class="p">(</span>
+    <span class="n">base_dir</span><span class="o">=</span><span class="s2">&quot;./runtime-data&quot;</span><span class="p">,</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">record</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">upsert_text_bloc</span><span class="p">(</span>
+    <span class="n">path</span><span class="o">=</span><span class="s2">&quot;assistant/system.txt&quot;</span><span class="p">,</span>
+    <span class="n">content</span><span class="o">=</span><span class="s2">&quot;Long-lived system prompt or memory text&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">artifact</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">ensure_bloc_kv_artifact</span><span class="p">(</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
+    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;sha256&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+<span class="n">loaded</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">load_bloc_kv_artifact</span><span class="p">(</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
+    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;sha256&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+
+<span class="n">binding</span> <span class="o">=</span> <span class="n">loaded</span><span class="p">[</span><span class="s2">&quot;artifact&quot;</span><span class="p">][</span><span class="s2">&quot;prompt_cache_binding&quot;</span><span class="p">]</span>
+</code></pre></div>
+<p>Host-side durable bloc lifecycle example:</p>
+<div class="highlight"><pre><span></span><code><span class="n">records</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_blocs</span><span class="p">()</span>
+<span class="n">artifacts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_bloc_kv_artifacts</span><span class="p">(</span><span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">])</span>
+
+<span class="c1"># Preview a safe delete first.</span>
+<span class="n">preview</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc_kv_artifact</span><span class="p">(</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
+    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">&quot;artifacts&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_path&quot;</span><span class="p">],</span>
+    <span class="n">dry_run</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># Remove one derived KV artifact but keep the durable text bloc.</span>
+<span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc_kv_artifact</span><span class="p">(</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
+    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">&quot;artifacts&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_path&quot;</span><span class="p">],</span>
+    <span class="n">clear_loaded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># Remove the whole bloc and all derived artifacts under it.</span>
+<span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc</span><span class="p">(</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
+    <span class="n">clear_loaded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Then use the binding in a normal runtime <code>LLM_CALL</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Use the durable cached prefix.&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;prompt_cache_binding&quot;</span><span class="p">:</span> <span class="n">binding</span><span class="p">},</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;llm&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<h3 id="storage-semantics">Storage semantics<a class="headerlink" href="#storage-semantics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>For <strong>local</strong> and <strong>local-file</strong> runtimes, <code>upsert_text_bloc(...)</code> persists one durable text snapshot under the Runtime-owned bloc root. Runtime chooses the root (<code>~/.abstractruntime/blocs</code> by default, or <code>&lt;base_dir&gt;/blocs</code> for <code>create_local_file_runtime(...)</code>), while AbstractCore's <code>FileBlocStore</code> defines the on-disk layout under that root.</li>
+<li>Within one bloc root, the durable source of truth is <strong>content-addressed by SHA256</strong>. Re-upserting the same text/file hash reuses or updates the same bloc record; it does not intentionally create several independent bloc copies under that same root.</li>
+<li>Deduplication is therefore <strong>per bloc root</strong>, not global across every Runtime instance. If several runtimes should share one durable bloc store, point them at the same <code>bloc_root_dir</code>. Separate roots intentionally isolate storage and can hold separate copies of the same text.</li>
+<li>The durable text bloc and the provider/model cache are different layers:</li>
+<li>one bloc: durable extracted text plus metadata</li>
+<li>zero or more derived KV artifacts: one per <code>(provider, model)</code> pair, stored under that bloc's <code>kv/</code> area</li>
+<li>Derived KV artifacts are <strong>not portable</strong> across providers or models. The same text bloc can legitimately have several provider/model-native artifacts, but each artifact remains tied to one provider/backend/model rendering path.</li>
+<li><code>prompt_cache_binding</code> is a request-time proof that a specific runtime cache key still points at the exact loaded bloc artifact. It is not the durable text itself.</li>
+<li>For <strong>remote</strong> and <strong>hybrid</strong> runtimes using <code>base_url</code>, Runtime does not create its own local bloc copy; it proxies the bloc/KV operation to the configured AbstractCore server or upstream endpoint, and that remote side owns the store.</li>
+</ul>
+<h3 id="lifecycle-operations">Lifecycle operations<a class="headerlink" href="#lifecycle-operations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Runtime now exposes public host methods for:</li>
+<li>listing durable bloc records</li>
+<li>listing provider/model KV artifacts under those blocs</li>
+<li>deleting one derived KV artifact while keeping the bloc text</li>
+<li>pruning matching KV artifacts by filter</li>
+<li>deleting one durable bloc and, by default, its derived KV artifacts</li>
+<li>Safety behavior mirrors the public AbstractCore contract:</li>
+<li><code>dry_run=True</code> previews the delete/prune result without mutating storage</li>
+<li><code>clear_loaded=True</code> clears matching live prompt-cache keys before deletion when the relevant provider/model is resident in the current runtime or the remote Core server</li>
+<li><code>force=True</code> bypasses that safety check and should be treated as an explicit operator choice</li>
+<li><code>delete_bloc_kv_artifact(...)</code> deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.</li>
+<li><code>delete_bloc(...)</code> removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass <code>delete_kv=False</code> only if you intentionally want to leave those artifacts behind.</li>
+</ul>
 <h2 id="discovery-snapshots">Discovery snapshots<a class="headerlink" href="#discovery-snapshots" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:</p>
 <ul>

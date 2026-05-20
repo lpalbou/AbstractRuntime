@@ -773,6 +773,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does Runtime duplicate durable bloc text? How do per-model caches relate to it?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#can-i-delete-a-specific-durable-bloc-or-prune-old-bloc-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can I delete a specific durable bloc or prune old bloc caches?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-should-a-host-get-provider-voice-vision-catalogs-from" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1358,6 +1380,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does Runtime duplicate durable bloc text? How do per-model caches relate to it?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#can-i-delete-a-specific-durable-bloc-or-prune-old-bloc-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can I delete a specific durable bloc or prune old bloc caches?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-should-a-host-get-provider-voice-vision-catalogs-from" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1614,10 +1658,37 @@ Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime
 <h2 id="does-abstractruntime-implement-image-voice-music-or-video-engines">Does AbstractRuntime implement image, voice, music, or video engines?<a class="headerlink" href="#does-abstractruntime-implement-image-voice-music-or-video-engines" title="Permanent link">&para;</a></h2>
 <p>No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Future music/video support should use the same JSON-safe <code>output</code> selector plus artifact-backed result shape unless a new workflow-level wait/effect semantic is needed.</p>
 <h2 id="where-should-cached-session-or-prompt-cache-state-live">Where should cached session or prompt-cache state live?<a class="headerlink" href="#where-should-cached-session-or-prompt-cache-state-live" title="Permanent link">&para;</a></h2>
-<p>Store stable cache keys or cache configuration in runtime-visible JSON, for example <code>payload.params.prompt_cache_key</code> or <code>run.vars["_runtime"]["prompt_cache"]</code>. A Runtime process can also opt in with <code>ABSTRACTRUNTIME_PROMPT_CACHE</code>. Do not store provider session objects, cache handles, clients, or warm-cache state in <code>RunState.vars</code>. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.</p>
+<p>Store stable cache selectors or cache configuration in runtime-visible JSON. There are two main tracks:</p>
+<ul>
+<li>best-effort session reuse: <code>payload.params.prompt_cache_key</code>, <code>run.vars["_runtime"]["prompt_cache"]</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code></li>
+<li>durable exact reuse: <code>payload.params.prompt_cache_binding</code> from a previously loaded bloc/KV artifact</li>
+</ul>
+<p>If a binding includes <code>key</code>, Runtime uses it as the effective prompt-cache key and does not derive a competing session key. Do not store provider session objects, cache handles, clients, or warm-cache state in <code>RunState.vars</code>. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.</p>
 <p>Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.</p>
-<p>Hosts can inspect or prepare caches through <code>abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)</code>, which exposes <code>get_prompt_cache_capabilities</code>, <code>prompt_cache_prepare_modules</code>, and the other public prompt-cache/model-residency control methods without depending on the private runtime attachment directly.
+<p>Hosts can inspect, prepare, and now clean up caches through <code>abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)</code>, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as <code>upsert_text_bloc(...)</code>, <code>ensure_bloc_kv_artifact(...)</code>, <code>load_bloc_kv_artifact(...)</code>, <code>list_bloc_kv_artifacts(...)</code>, <code>delete_bloc_kv_artifact(...)</code>, and <code>delete_bloc(...)</code> without depending on the private runtime attachment directly.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it">Does Runtime duplicate durable bloc text? How do per-model caches relate to it?<a class="headerlink" href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" title="Permanent link">&para;</a></h2>
+<p>For local runtimes, Runtime owns the bloc root and stores one durable <strong>text snapshot</strong> per SHA256 within that root. That bloc is the source of truth. The provider/model cache is a <strong>derived artifact</strong> under that bloc, not a second independent memory model.</p>
+<p>So the intended shape is:
+- one text/file bloc per content hash inside one Runtime bloc root
+- zero or more derived cache artifacts, one per provider/model pair</p>
+<p>That means the same bloc text can back several model-specific caches, but those caches are intentionally separate because provider/model-native KV formats are not portable.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>, <code>../abstractcore/abstractcore/core/file_blocs.py</code>.</p>
+<h2 id="can-i-delete-a-specific-durable-bloc-or-prune-old-bloc-caches">Can I delete a specific durable bloc or prune old bloc caches?<a class="headerlink" href="#can-i-delete-a-specific-durable-bloc-or-prune-old-bloc-caches" title="Permanent link">&para;</a></h2>
+<p>Yes.</p>
+<p>Use the Runtime host facade:
+- <code>list_blocs(...)</code>
+- <code>list_bloc_kv_artifacts(...)</code>
+- <code>delete_bloc_kv_artifact(...)</code>
+- <code>prune_bloc_kv_artifacts(...)</code>
+- <code>delete_bloc(...)</code></p>
+<p>The important safety flags are:
+- <code>dry_run=True</code> to preview the affected artifact or bloc set
+- <code>clear_loaded=True</code> to clear matching live prompt-cache keys before deletion when Runtime can see that live state
+- <code>force=True</code> only when you intentionally want to bypass the live-binding safety check</p>
+<p>The important scope distinction is:
+- <code>delete_bloc_kv_artifact(...)</code>: delete one provider/model artifact, keep the durable text bloc
+- <code>delete_bloc(...)</code>: delete the durable text bloc itself and, by default, all derived KV artifacts under it</p>
 <h2 id="where-should-a-host-get-provider-voice-vision-catalogs-from">Where should a host get provider / voice / vision catalogs from?<a class="headerlink" href="#where-should-a-host-get-provider-voice-vision-catalogs-from" title="Permanent link">&para;</a></h2>
 <p>From Runtime. Use <code>abstractruntime.integrations.abstractcore.get_abstractcore_discovery_facade(runtime)</code> for
 provider discovery, provider models, model capability lookup, voice/TTS/STT catalogs, vision provider catalogs, and

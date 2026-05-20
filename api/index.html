@@ -1373,7 +1373,7 @@
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.</p>
 <h2 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.20 or newer).</p>
+<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.23 or newer).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1383,13 +1383,13 @@
 - effect handler wiring: <code>build_effect_handlers(...)</code> (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>)
 - tool executors: <code>MappingToolExecutor</code>, <code>AbstractCoreToolExecutor</code>, <code>PassthroughToolExecutor</code>, <code>ApprovalToolExecutor</code>, <code>ToolApprovalPolicy</code> (<code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>list_providers</code>, <code>list_provider_models</code>, <code>get_voice_catalog</code>, <code>list_tts_models</code>, <code>list_stt_models</code>, <code>list_vision_provider_models</code>, <code>list_cached_vision_models</code>)
-- host-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>get_prompt_cache_capabilities</code>, <code>get_prompt_cache_stats</code>, <code>prompt_cache_set</code>, <code>prompt_cache_update</code>, <code>prompt_cache_fork</code>, <code>prompt_cache_clear</code>, <code>prompt_cache_prepare_modules</code>, <code>list_model_residency</code>, <code>load_model_residency</code>, <code>unload_model_residency</code>)
+- host-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>get_prompt_cache_capabilities</code>, <code>get_prompt_cache_stats</code>, <code>prompt_cache_set</code>, <code>prompt_cache_update</code>, <code>prompt_cache_fork</code>, <code>prompt_cache_clear</code>, <code>prompt_cache_prepare_modules</code>, <code>upsert_text_bloc</code>, <code>get_bloc_record</code>, <code>list_blocs</code>, <code>get_bloc_kv_manifest</code>, <code>ensure_bloc_kv_artifact</code>, <code>load_bloc_kv_artifact</code>, <code>list_bloc_kv_artifacts</code>, <code>delete_bloc_kv_artifact</code>, <code>prune_bloc_kv_artifacts</code>, <code>delete_bloc</code>, <code>list_model_residency</code>, <code>load_model_residency</code>, <code>unload_model_residency</code>)
 - run-facade helpers create durable child runs for existing runs (<code>execute_llm_call</code>, <code>generate_image</code>, <code>generate_voice</code>, <code>transcribe_audio</code>)</p>
 <p><code>LLM_CALL</code> payloads are JSON-safe effect payloads. Common fields:
 - <code>prompt</code>, <code>messages</code>, <code>system_prompt</code>, and convenience <code>text</code>
 - <code>media</code>: a media path, artifact ref (<code>{"$artifact": "..."}</code> or <code>{"artifact_id": "..."}</code>), media dict, or list of those
 - <code>output</code>: AbstractCore output selector; top-level <code>outputs</code> is accepted as a runtime alias
-- <code>params</code>: provider/model routing, generation controls, prompt-cache keys, structured-output schema options, and tracing metadata</p>
+- <code>params</code>: provider/model routing, generation controls, prompt-cache keys or <code>prompt_cache_binding</code>, structured-output schema options, and tracing metadata</p>
 <p>Multimodal support:
 - install <code>abstractruntime[multimodal]</code> for common AbstractCore media, vision, voice, and audio dependencies
 - local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
@@ -1402,6 +1402,9 @@
 <p>Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code> or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default
+- <code>LLM_CALL.params.prompt_cache_binding</code> is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes <code>key</code>, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
+- <code>get_abstractcore_host_facade(...)</code> also exposes durable bloc helpers (<code>upsert_text_bloc</code>, <code>get_bloc_record</code>, <code>list_blocs</code>, <code>get_bloc_kv_manifest</code>, <code>ensure_bloc_kv_artifact</code>, <code>load_bloc_kv_artifact</code>, <code>list_bloc_kv_artifacts</code>, <code>delete_bloc_kv_artifact</code>, <code>prune_bloc_kv_artifacts</code>, <code>delete_bloc</code>)
+- local Runtime owns the bloc root policy: <code>~/.abstractruntime/blocs</code> by default, <code>&lt;base_dir&gt;/blocs</code> for <code>create_local_file_runtime(...)</code>, and explicit <code>bloc_root_dir=...</code> overrides when needed
 - provider cache/session handles are not durable runtime state and should not be stored in <code>RunState.vars</code></p>
 <p>Attachment registration limits:
 - <code>TOOL_CALLS.payload.max_attachment_bytes</code>, <code>run.vars["_runtime"]["max_attachment_bytes"]</code>, or <code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code> bound the bytes Runtime stores when local <code>read_file</code> outputs are captured as session attachments</p>

@@ -1009,7 +1009,7 @@ the base package, while still exposing explicit extras and profile cascades for 
   <code>abstractruntime[multimodal]</code>.</li>
 <li>Runtime now exposes explicit profile-cascade extras (<code>apple</code>, <code>gpu</code>, <code>all-apple</code>, <code>all-gpu</code>) instead of requiring
   hosts to guess how to align local-engine install profiles.</li>
-<li>The package metadata floor has since advanced to <code>abstractcore&gt;=2.13.20</code>; the original completion landed on an older
+<li>The package metadata floor has since advanced to <code>abstractcore&gt;=2.13.23</code>; the original completion landed on an older
   2.13.12-aligned floor and was later tightened without changing the boundary itself.</li>
 <li>Regression tests cover package metadata, optional-stack imports, and the rule that Gateway env/auth does not leak
   into Runtime's remote AbstractCore client boundary.</li>
@@ -1064,7 +1064,7 @@ through extras, and tests prove the packaging/import boundary.</p>
 </ul>
 <h3 id="residual-risks">Residual risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Version-floor references in historical backlog text had drifted behind the current <code>abstractcore&gt;=2.13.20</code> baseline.
+<li>Version-floor references in historical backlog text had drifted behind the current <code>abstractcore&gt;=2.13.23</code> baseline.
   That drift is now explicit here, but other historical backlog notes may still mention <code>2.13.12</code>.</li>
 <li>This item validates the package/import boundary, not every higher-level deployment profile that Gateway may choose.</li>
 </ul>

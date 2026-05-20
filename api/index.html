@@ -1336,7 +1336,7 @@
 <p>Artifacts are used by:
 - offloading wrappers (<code>src/abstractruntime/storage/offloading.py</code>)
 - evidence capture (<code>docs/evidence.md</code>, <code>src/abstractruntime/evidence/recorder.py</code>)
-- AbstractCore media integration: input artifact refs can be materialized for LLM calls, and generated image/voice/audio outputs are stored as artifact refs</p>
+- AbstractCore media integration: input artifact refs can be materialized for LLM calls, and generated image/voice/music/audio outputs are stored as artifact refs</p>
 <h2 id="snapshots-bookmarks">Snapshots / bookmarks<a class="headerlink" href="#snapshots-bookmarks" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/storage/snapshots.py</code>.</p>
 <ul>
@@ -1373,7 +1373,7 @@
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.</p>
 <h2 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.23 or newer).</p>
+<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.24 or newer).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1382,20 +1382,20 @@
 - public durable run facade: <code>AbstractCoreRunFacade</code>, <code>get_abstractcore_run_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/run_facade.py</code>)
 - effect handler wiring: <code>build_effect_handlers(...)</code> (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>)
 - tool executors: <code>MappingToolExecutor</code>, <code>AbstractCoreToolExecutor</code>, <code>PassthroughToolExecutor</code>, <code>ApprovalToolExecutor</code>, <code>ToolApprovalPolicy</code> (<code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>)
-- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>list_providers</code>, <code>list_provider_models</code>, <code>get_voice_catalog</code>, <code>list_tts_models</code>, <code>list_stt_models</code>, <code>list_vision_provider_models</code>, <code>list_cached_vision_models</code>)
+- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>list_providers</code>, <code>list_provider_models</code>, <code>get_voice_catalog</code>, <code>list_tts_models</code>, <code>list_stt_models</code>, <code>list_music_providers</code>, <code>list_music_models</code>, <code>list_vision_provider_models</code>, <code>list_cached_vision_models</code>)
 - host-facade delegation is implemented by the configured AbstractCore LLM clients in <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code> (<code>get_prompt_cache_capabilities</code>, <code>get_prompt_cache_stats</code>, <code>prompt_cache_set</code>, <code>prompt_cache_update</code>, <code>prompt_cache_fork</code>, <code>prompt_cache_clear</code>, <code>prompt_cache_prepare_modules</code>, <code>upsert_text_bloc</code>, <code>get_bloc_record</code>, <code>list_blocs</code>, <code>get_bloc_kv_manifest</code>, <code>ensure_bloc_kv_artifact</code>, <code>load_bloc_kv_artifact</code>, <code>list_bloc_kv_artifacts</code>, <code>delete_bloc_kv_artifact</code>, <code>prune_bloc_kv_artifacts</code>, <code>delete_bloc</code>, <code>list_model_residency</code>, <code>load_model_residency</code>, <code>unload_model_residency</code>)
-- run-facade helpers create durable child runs for existing runs (<code>execute_llm_call</code>, <code>generate_image</code>, <code>generate_voice</code>, <code>transcribe_audio</code>)</p>
+- run-facade helpers create durable child runs for existing runs (<code>execute_llm_call</code>, <code>generate_image</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>transcribe_audio</code>)</p>
 <p><code>LLM_CALL</code> payloads are JSON-safe effect payloads. Common fields:
 - <code>prompt</code>, <code>messages</code>, <code>system_prompt</code>, and convenience <code>text</code>
 - <code>media</code>: a media path, artifact ref (<code>{"$artifact": "..."}</code> or <code>{"artifact_id": "..."}</code>), media dict, or list of those
 - <code>output</code>: AbstractCore output selector; top-level <code>outputs</code> is accepted as a runtime alias
 - <code>params</code>: provider/model routing, generation controls, prompt-cache keys or <code>prompt_cache_binding</code>, structured-output schema options, and tracing metadata</p>
 <p>Multimodal support:
-- install <code>abstractruntime[multimodal]</code> for common AbstractCore media, vision, voice, and audio dependencies
+- install <code>abstractruntime[multimodal]</code> for common AbstractCore media, vision, voice, audio, and music dependencies
 - local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, music generation, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
-- generated image/voice/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
+- generated image/voice/music/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
 - media-only normalized results expose <code>runtime_provider</code> / <code>runtime_model</code> separately from <code>media_provider</code> / <code>media_model</code>
 - optional local media residency failures complete with <code>status_hint="warning"</code> and <code>degraded=true</code>, while unsupported local media warmup also reports <code>execution_mode="local_one_shot_subprocess"</code> and <code>requires_long_lived_server=true</code>
 - Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs</p>

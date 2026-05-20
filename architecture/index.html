@@ -1260,8 +1260,8 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-05-20
-Version: 0.4.16
+<p>Updated: 2026-05-21
+Version: 0.4.17
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1280,7 +1280,7 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - <strong>Append-only observability</strong>: every step is recorded as a <code>StepRecord</code> in a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).
 - <strong>Side effects are mediated</strong>: nodes request work via <code>Effect</code>/<code>EffectType</code>; execution happens via effect handlers (<code>src/abstractruntime/core/runtime.py</code>).</p>
 <h2 id="abstractcore-capability-boundary">AbstractCore capability boundary<a class="headerlink" href="#abstractcore-capability-boundary" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, transcription, and future modalities such as music or video.</p>
+<p>AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, music generation, transcription, and future modalities such as video.</p>
 <p>The boundary is intentionally narrow:
 - Workflow nodes request model work with <code>EffectType.LLM_CALL</code>; the runtime persists the request/result and delegates execution to the configured AbstractCore client.
 - <code>media</code> inputs remain JSON-safe in the effect payload. Artifact refs are materialized into temporary provider-ready files for the call, then cleaned up.

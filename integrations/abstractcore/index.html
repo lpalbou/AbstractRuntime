@@ -1258,11 +1258,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.23 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.</p>
+<p>This extra installs AbstractCore 2.13.24 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight <code>abstractmusic&gt;=0.1.4</code> remote ACE path surfaced through Runtime music generation.</p>
 <p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[remote,vision,voice,audio]&gt;=2.13.23</code>. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).</p>
+<p>This installs <code>abstractcore[remote,vision,voice,audio,music]&gt;=2.13.24</code>. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With <code>abstractmusic&gt;=0.1.4</code>, the base music extra now includes the lightweight remote ACE Music backend without local model-runtime extras.</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>
@@ -1324,7 +1324,7 @@ the current process. Remote model execution is a separate topology exposed throu
 <span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}],</span>
 <span class="w">  </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;media&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;path/or/artifact-ref&quot;</span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text|image|voice&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text|image|voice|music&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional&quot;</span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;parameters&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}],</span>
 <span class="w">  </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
@@ -1371,6 +1371,16 @@ hello
     <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;speech_result&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
+<p>Generate music:</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Warm lo-fi piano with brushed drums.&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;music&quot;</span><span class="p">,</span> <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;acemusic&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;ace-step&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">},</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;music_result&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
 <p>Transcribe/analyze audio:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
@@ -1398,10 +1408,10 @@ hello
 <p>Media-only normalized results now distinguish orchestration identity from the actual media backend:</p>
 <ul>
 <li><code>runtime_provider</code> / <code>runtime_model</code>: the runtime-side orchestration identity, when relevant</li>
-<li><code>media_provider</code> / <code>media_model</code>: the actual image/voice backend identity surfaced from the generated output</li>
+<li><code>media_provider</code> / <code>media_model</code>: the actual image/voice/music backend identity surfaced from the generated output</li>
 </ul>
 <p>For local one-shot subprocess image generation, runtime metadata also records <code>execution_mode="local_one_shot_subprocess"</code>.</p>
-<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), TTS (<code>/v1/audio/speech</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.</p>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
 <p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>tts</code>, and <code>stt</code> return:</p>
 <ul>
@@ -1650,6 +1660,8 @@ hello
 <li><code>get_voice_catalog(...)</code></li>
 <li><code>list_tts_models(...)</code></li>
 <li><code>list_stt_models(...)</code></li>
+<li><code>list_music_providers(...)</code></li>
+<li><code>list_music_models(...)</code></li>
 <li><code>list_vision_provider_models(...)</code></li>
 <li><code>list_cached_vision_models(...)</code></li>
 </ul>
@@ -1688,10 +1700,11 @@ hello
 
 <span class="n">providers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_providers</span><span class="p">(</span><span class="n">include_models</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 <span class="n">voices</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_voice_catalog</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">music</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_music_providers</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_music&quot;</span><span class="p">)</span>
 <span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_image&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="durable-run-scoped-media-execution">Durable run-scoped media execution<a class="headerlink" href="#durable-run-scoped-media-execution" title="Permanent link">&para;</a></h2>
-<p>Hosts sometimes need to trigger image/TTS/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
+<p>Hosts sometimes need to trigger image/TTS/music/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
 <p>Public durable entry points:</p>
 <ul>
 <li><code>get_abstractcore_run_facade(runtime)</code></li>
@@ -1699,6 +1712,7 @@ hello
 <li><code>execute_llm_call(...)</code></li>
 <li><code>generate_image(...)</code></li>
 <li><code>generate_voice(...)</code></li>
+<li><code>generate_music(...)</code></li>
 <li><code>transcribe_audio(...)</code></li>
 </ul>
 <p>These helpers create child runs under an existing parent run and execute the real <code>LLM_CALL</code> through Runtime rather than doing media work in host/controller code.</p>

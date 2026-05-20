@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.23 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
+This extra installs AbstractCore 2.13.24 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.4` remote ACE path surfaced through Runtime music generation.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[remote,vision,voice,audio]>=2.13.23`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
+This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.24`. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.4`, the base music extra now includes the lightweight remote ACE Music backend without local model-runtime extras.
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -101,7 +101,7 @@ print(state.output)
   "messages": [{"role": "user", "content": "..."}],
   "system_prompt": "...",
   "media": ["path/or/artifact-ref"],
-  "output": {"modality": "text|image|voice", "task": "optional"},
+  "output": {"modality": "text|image|voice|music", "task": "optional"},
   "tools": [{"name": "...", "description": "...", "parameters": {...}}],
   "params": {
     "temperature": 0.0,
@@ -165,6 +165,19 @@ Effect(
 )
 ```
 
+Generate music:
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "text": "Warm lo-fi piano with brushed drums.",
+        "output": {"modality": "music", "provider": "acemusic", "model": "ace-step", "format": "wav"},
+    },
+    result_key="music_result",
+)
+```
+
 Transcribe/analyze audio:
 
 ```python
@@ -198,11 +211,11 @@ Generated binary media requires a runtime `ArtifactStore` and is stored there. T
 Media-only normalized results now distinguish orchestration identity from the actual media backend:
 
 - `runtime_provider` / `runtime_model`: the runtime-side orchestration identity, when relevant
-- `media_provider` / `media_model`: the actual image/voice backend identity surfaced from the generated output
+- `media_provider` / `media_model`: the actual image/voice/music backend identity surfaced from the generated output
 
 For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), TTS (`/v1/audio/speech`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
@@ -482,6 +495,8 @@ AbstractRuntime's AbstractCore integration also exposes a public host discovery 
 - `get_voice_catalog(...)`
 - `list_tts_models(...)`
 - `list_stt_models(...)`
+- `list_music_providers(...)`
+- `list_music_models(...)`
 - `list_vision_provider_models(...)`
 - `list_cached_vision_models(...)`
 
@@ -522,12 +537,13 @@ facade = get_abstractcore_discovery_facade(rt)
 
 providers = facade.list_providers(include_models=False)
 voices = facade.get_voice_catalog(provider="openai", providers_only=True)
+music = facade.list_music_providers(task="text_to_music")
 vision = facade.list_vision_provider_models(task="text_to_image", providers_only=True)
 ```
 
 ## Durable run-scoped media execution
 
-Hosts sometimes need to trigger image/TTS/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
+Hosts sometimes need to trigger image/TTS/music/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
 
 Public durable entry points:
 
@@ -536,6 +552,7 @@ Public durable entry points:
 - `execute_llm_call(...)`
 - `generate_image(...)`
 - `generate_voice(...)`
+- `generate_music(...)`
 - `transcribe_audio(...)`
 
 These helpers create child runs under an existing parent run and execute the real `LLM_CALL` through Runtime rather than doing media work in host/controller code.

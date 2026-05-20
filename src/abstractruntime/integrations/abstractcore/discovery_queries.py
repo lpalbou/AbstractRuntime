@@ -74,6 +74,56 @@ def _provider_models_from_mapping(mapping: Dict[str, list[str]]) -> list[Dict[st
     return rows
 
 
+def _music_provider_id(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    for key in ("provider", "provider_id", "backend_id", "id", "name"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _music_model_provider(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    for key in ("provider", "provider_id", "owned_by", "backend", "backend_id"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _music_model_id(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    for key in ("model", "model_id", "id", "name"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _music_models_by_provider(models: list[Dict[str, Any]]) -> Dict[str, list[str]]:
+    out: Dict[str, list[str]] = {}
+    seen: Dict[str, set[str]] = {}
+    for item in models:
+        provider = _music_model_provider(item)
+        model = _music_model_id(item)
+        if not provider or not model:
+            continue
+        provider_seen = seen.setdefault(provider.lower(), set())
+        if model.lower() in provider_seen:
+            continue
+        provider_seen.add(model.lower())
+        out.setdefault(provider, []).append(model)
+    return out
+
+
 def _voice_record_provider(item: Any) -> str:
     if not isinstance(item, dict):
         return ""
@@ -462,6 +512,8 @@ def _runtime_capability_owner_config(
     voice_api_key: Optional[str] = None,
     vision_base_url: Optional[str] = None,
     vision_api_key: Optional[str] = None,
+    music_base_url: Optional[str] = None,
+    music_api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {}
     if isinstance(voice_base_url, str) and voice_base_url.strip():
@@ -473,6 +525,10 @@ def _runtime_capability_owner_config(
         cfg.setdefault("vision_backend", "openai-compatible")
     if isinstance(vision_api_key, str) and vision_api_key.strip():
         cfg["vision_api_key"] = vision_api_key.strip()
+    if isinstance(music_base_url, str) and music_base_url.strip():
+        cfg["music_acemusic_base_url"] = music_base_url.strip()
+    if isinstance(music_api_key, str) and music_api_key.strip():
+        cfg["music_acemusic_api_key"] = music_api_key.strip()
     for env_key, cfg_key in {
         "ABSTRACTVOICE_TTS_ENGINE": "voice_tts_engine",
         "ABSTRACTVOICE_STT_ENGINE": "voice_stt_engine",
@@ -495,6 +551,12 @@ def _runtime_capability_owner_config(
         "ABSTRACTVISION_SDCPP_MODEL": "vision_sdcpp_model",
         "ABSTRACTVISION_SDCPP_DIFFUSION_MODEL": "vision_sdcpp_diffusion_model",
         "ABSTRACTVISION_SDCPP_BIN": "vision_sdcpp_bin",
+        "ABSTRACTMUSIC_BACKEND": "music_backend",
+        "ABSTRACTMUSIC_MODEL_ID": "music_model_id",
+        "ABSTRACTMUSIC_BASE_URL": "music_acemusic_base_url",
+        "ACEMUSIC_BASE_URL": "music_acemusic_base_url",
+        "ABSTRACTMUSIC_API_KEY": "music_acemusic_api_key",
+        "ACEMUSIC_API_KEY": "music_acemusic_api_key",
     }.items():
         value = os.getenv(env_key)
         if isinstance(value, str) and value.strip() and cfg_key not in cfg:
@@ -508,6 +570,8 @@ def _runtime_capability_registry(
     voice_api_key: Optional[str] = None,
     vision_base_url: Optional[str] = None,
     vision_api_key: Optional[str] = None,
+    music_base_url: Optional[str] = None,
+    music_api_key: Optional[str] = None,
 ) -> Any:
     from abstractcore.capabilities import CapabilityRegistry
 
@@ -525,6 +589,8 @@ def _runtime_capability_registry(
                 voice_api_key=voice_api_key,
                 vision_base_url=vision_base_url,
                 vision_api_key=vision_api_key,
+                music_base_url=music_base_url,
+                music_api_key=music_api_key,
             )
         },
     )()
@@ -851,6 +917,103 @@ def local_list_stt_models(
     )
 
 
+def local_list_music_providers(
+    *,
+    task: Optional[str] = None,
+    base_url: Optional[str] = None,
+    provider_api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    task_value = str(task or "").strip() or "text_to_music"
+    try:
+        music = _runtime_capability_registry(
+            music_base_url=base_url,
+            music_api_key=provider_api_key,
+        ).music
+        raw = music.available_providers(task=task_value) if hasattr(music, "available_providers") else []
+    except Exception as exc:
+        return _with_status(
+            {
+                "task": task_value,
+                "providers": [],
+                "available_providers": [],
+                "provider_details": [],
+            },
+            source="abstractmusic.local",
+            available=False,
+            error=str(exc),
+        )
+
+    details = [dict(item) for item in list(raw or []) if isinstance(item, dict)]
+    providers = _dedupe_strings([_music_provider_id(item) for item in details if _music_provider_id(item)])
+    return _with_status(
+        {
+            "task": task_value,
+            "providers": providers,
+            "available_providers": providers,
+            "provider_details": details,
+        },
+        source="abstractmusic.local",
+        available=bool(providers or details),
+        error=None,
+    )
+
+
+def local_list_music_models(
+    *,
+    task: Optional[str] = None,
+    base_url: Optional[str] = None,
+    provider_api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Dict[str, Any]:
+    task_value = str(task or "").strip() or "text_to_music"
+    provider_value = str(provider or "").strip()
+    try:
+        music = _runtime_capability_registry(
+            music_base_url=base_url,
+            music_api_key=provider_api_key,
+        ).music
+        raw = music.list_models(task=task_value, provider=provider_value or None) if hasattr(music, "list_models") else []
+    except Exception as exc:
+        return _with_status(
+            {
+                "task": task_value,
+                "provider": provider_value or None,
+                "models": [],
+                "providers": [],
+                "available_providers": [],
+                "models_by_provider": {},
+                "provider_models": [],
+            },
+            source="abstractmusic.local",
+            available=False,
+            error=str(exc),
+        )
+
+    models = [dict(item) for item in list(raw or []) if isinstance(item, dict)]
+    if provider_value:
+        models = [
+            item for item in models if _music_model_provider(item).lower() == provider_value.lower()
+        ]
+    models_by_provider = _music_models_by_provider(models)
+    providers = _dedupe_strings(
+        [_music_model_provider(item) for item in models if _music_model_provider(item)]
+    )
+    return _with_status(
+        {
+            "task": task_value,
+            "provider": provider_value or None,
+            "models": models,
+            "providers": providers,
+            "available_providers": providers,
+            "models_by_provider": models_by_provider,
+            "provider_models": _provider_models_from_mapping(models_by_provider),
+        },
+        source="abstractmusic.local",
+        available=bool(models or providers),
+        error=None,
+    )
+
+
 def local_list_vision_provider_models(
     *,
     task: Optional[str] = None,
@@ -986,6 +1149,8 @@ def local_list_cached_vision_models(
 
 __all__ = [
     "local_get_model_capabilities",
+    "local_list_music_models",
+    "local_list_music_providers",
     "local_get_voice_catalog",
     "local_list_cached_vision_models",
     "local_list_providers",

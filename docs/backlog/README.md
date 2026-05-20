@@ -10,6 +10,19 @@ This folder contains a structured backlog used during development. Items are gro
 
 If you are new to the project, start with `../README.md` and `../architecture.md` instead.
 
+## Next recommended work
+
+1. `planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md`
+   This is the narrow Runtime work that unblocks the last high-pressure direct
+   `abstractcore` imports in Gateway for comms/email and Telegram without
+   reopening the already-completed media/discovery boundary work.
+2. `planned/018_workspace_access_policy_for_media_and_tools.md`
+   Keep workspace and tool policy explicit while Gateway extracts its local
+   workspace helpers.
+3. `planned/014_remote_tool_worker_executor.md`
+   The public ToolExecutor path is still the larger follow-on after the current
+   Gateway boundary cleanup.
+
 ## Completed
 
 | ID | Item |
@@ -36,6 +49,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 026 | `completed/026_runtime_host_discovery_facade_for_core_catalogs.md` |
 | 027 | `completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 | 028 | `completed/028_runtime_bloc_kv_lifecycle_and_pruning.md` |
+| 029 | `completed/029_runtime_music_generation_and_discovery_via_abstractcore.md` |
 
 ## Planned
 
@@ -46,13 +60,15 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 017 | `planned/017_limit_warnings_and_observability.md` |
 | 018 | `planned/018_workspace_access_policy_for_media_and_tools.md` |
 | 025 | `planned/025_runtime_retention_and_purge_contract.md` |
+| 0030 | `planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md` |
 
 ## Proposed
 
-| Date | Item |
-|------|------|
+| ID | Item |
+|----|------|
 | 2026-05-20 | `proposed/2026-05-20_agent_runtime_convenience_constructor.md` |
 | 2026-05-20 | `proposed/2026-05-20_runtime_local_admin_prompt_cache_save_load.md` |
+| 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
 
 ## Deprecated
 

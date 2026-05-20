@@ -614,6 +614,60 @@ class _RemoteTtsSender:
         return HttpBinaryResponse(content=b"wav-remote", headers={"content-type": "audio/wav"})
 
 
+class _RemoteMusicSender:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def get(self, url, *, headers, timeout):
+        raise AssertionError("not used")
+
+    def post(self, url, *, headers, json, timeout):
+        raise AssertionError("post_bytes should be used for binary music")
+
+    def post_bytes(self, url, *, headers, json, timeout):
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
+        return HttpBinaryResponse(content=b"wav-music", headers={"content-type": "audio/wav"})
+
+
+def test_remote_music_output_uses_music_endpoint_and_stores_artifact() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteMusicSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="Warm lo-fi piano with brushed drums.",
+        params={
+            "output": {
+                "modality": "music",
+                "provider": "acemusic",
+                "model": "ace-step",
+                "format": "wav",
+            },
+            "trace_metadata": {"run_id": "run-music", "node_id": "n-music"},
+        },
+    )
+
+    assert sender.calls[0]["url"] == "http://core.test/v1/audio/music"
+    assert sender.calls[0]["json"]["prompt"] == "Warm lo-fi piano with brushed drums."
+    assert sender.calls[0]["json"]["provider"] == "acemusic"
+    assert sender.calls[0]["json"]["model"] == "ace-step"
+    assert sender.calls[0]["json"]["task"] == "music_generation"
+    item = out["outputs"]["music"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"wav-music"
+    assert artifact.metadata.content_type == "audio/wav"
+    assert artifact.metadata.run_id == "run-music"
+    assert artifact.metadata.tags["node_id"] == "n-music"
+    assert out["media_provider"] == "acemusic"
+    assert out["media_model"] == "ace-step"
+
+
 def test_remote_voice_output_uses_speech_endpoint_and_stores_artifact() -> None:
     store = InMemoryArtifactStore()
     sender = _RemoteTtsSender()

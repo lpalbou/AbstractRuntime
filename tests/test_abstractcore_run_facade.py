@@ -170,3 +170,78 @@ def test_run_facade_transcribe_audio_inherits_runtime_media_defaults() -> None:
     assert seen["params"]["stt_language"] == "fr"
     assert seen["params"]["output"]["task"] == "transcription"
     assert seen["media"][0]["artifact_id"] == meta.artifact_id
+
+
+def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backed_output() -> None:
+    store = InMemoryArtifactStore()
+    seen: Dict[str, Any] = {}
+
+    class _MusicProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                outputs={
+                    "music": [
+                        GeneratedItem(
+                            modality="music",
+                            task="music_generation",
+                            data=b"wav-child",
+                            content_type="audio/wav",
+                            format="wav",
+                            provider="acemusic",
+                            model="ace-step",
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _MusicProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(
+        workflow=parent,
+        session_id="sess-music",
+        vars={"_runtime": {"music_backend": "acemusic"}},
+    )
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.generate_music(
+        parent_run_id,
+        prompt="Warm lo-fi piano with brushed drums.",
+        output={"provider": "acemusic", "model": "ace-step", "format": "wav"},
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert child.parent_run_id == parent_run_id
+    assert child.session_id == "sess-music"
+    assert seen["prompt"] == "Warm lo-fi piano with brushed drums."
+    assert seen["output"]["modality"] == "music"
+    assert seen["output"]["task"] == "music_generation"
+    assert seen["output"]["provider"] == "acemusic"
+    assert seen["output"]["model"] == "ace-step"
+
+    result = child.output["result"]
+    assert result["media_provider"] == "acemusic"
+    assert result["media_model"] == "ace-step"
+    assert result["model"] == "ace-step"
+    item = result["outputs"]["music"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"wav-child"
+    assert artifact.metadata.run_id == child.run_id
+    assert artifact.metadata.tags["kind"] == "generated_media"

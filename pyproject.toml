@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.16"
+version = "0.4.17"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,14 +46,14 @@ dependencies = [
 [project.optional-dependencies]
 # Enables `abstractruntime.integrations.abstractcore.*` imports.
 abstractcore = [
-  "abstractcore>=2.13.23",
+  "abstractcore>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
 ]
 
 apple = [
-  "abstractcore[apple]>=2.13.23",
+  "abstractcore[apple]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -61,7 +61,7 @@ apple = [
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.13.23",
+  "abstractcore[gpu]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -69,7 +69,7 @@ gpu = [
 ]
 
 all-apple = [
-  "abstractcore[all-apple]>=2.13.23",
+  "abstractcore[all-apple]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -77,17 +77,17 @@ all-apple = [
 ]
 
 all-gpu = [
-  "abstractcore[all-gpu]>=2.13.23",
+  "abstractcore[all-gpu]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
-# Enables AbstractCore multimodal generation helpers with common OpenAI-backed
-# image/voice capability packages.
+# Enables AbstractCore multimodal generation helpers with common image/voice/
+# audio/music capability packages.
 multimodal = [
-  "abstractcore[remote,vision,voice,audio]>=2.13.23",
+  "abstractcore[remote,vision,voice,audio,music]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -101,7 +101,7 @@ multimodal = [
 
 # Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
 mcp-worker = [
-  "abstractcore[tools]>=2.13.23",
+  "abstractcore[tools]>=2.13.24",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",

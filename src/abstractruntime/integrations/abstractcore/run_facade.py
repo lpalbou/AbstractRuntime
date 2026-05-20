@@ -5,7 +5,7 @@ Runtime ledger instead of executing in host route/controller code.
 
 Current focus:
 - durable run-scoped `LLM_CALL` child runs
-- convenience wrappers for image generation, TTS, and STT/transcription
+- convenience wrappers for image generation, music generation, TTS, and STT/transcription
 """
 
 from __future__ import annotations
@@ -224,6 +224,28 @@ class AbstractCoreRunFacade:
             run_id,
             text=text,
             media=media,
+            output=spec,
+            params=params,
+            child_vars=child_vars,
+        )
+
+    def generate_music(
+        self,
+        run_id: str,
+        *,
+        prompt: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ) -> RunState:
+        """Create a durable child run for music generation."""
+
+        spec = {"modality": "music", "task": "music_generation"}
+        if isinstance(output, dict):
+            spec.update(copy.deepcopy(output))
+        return self.execute_llm_call(
+            run_id,
+            prompt=prompt,
             output=spec,
             params=params,
             child_vars=child_vars,

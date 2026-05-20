@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.16 • **Python:** 3.10+
+**Version:** 0.4.17 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.23 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, and lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, and audio dependencies.
+The `abstractcore` extra installs AbstractCore 2.13.24 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, and lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.4` ACE-remote path used by Runtime music generation are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, audio, and music dependencies.
 
 Hardware profile cascades are available for native Python installs:
 `abstractruntime[apple]`, `abstractruntime[gpu]`, `abstractruntime[all-apple]`,
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.16)
+## What’s included (v0.4.17)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -116,7 +116,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Optional integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, durable bloc prompt-cache controls, bindings, and lifecycle operations, media inputs, generated media, tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, durable bloc prompt-cache controls, bindings, and lifecycle operations, media inputs, generated image/voice/music outputs, tool approval waits): `docs/integrations/abstractcore.md`
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends
   such as LanceDB, SQLite, or in-memory stores.

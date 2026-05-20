@@ -18,7 +18,7 @@ Optional (LLM + tools via AbstractCore):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This installs AbstractCore 2.13.23 or newer, which matches the documented server auth, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool behavior, public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery. Use `abstractruntime[multimodal]` when your workflows need common media, vision, voice, or audio dependencies.
+This installs AbstractCore 2.13.24 or newer, which matches the documented server auth, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool behavior, public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.4` ACE-remote path used by Runtime music generation. Use `abstractruntime[multimodal]` when your workflows need common media, vision, voice, audio, or music dependencies.
 
 ## Mental model (source of truth)
 

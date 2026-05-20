@@ -1909,6 +1909,11 @@ def _normalize_residency_task(task: Any) -> str:
         "voice": "tts",
         "speech": "tts",
         "audio_speech": "tts",
+        "music": "music_generation",
+        "song": "music_generation",
+        "t2m": "music_generation",
+        "text_to_music": "music_generation",
+        "lyrics_to_music": "music_generation",
         "transcription": "stt",
         "transcribe": "stt",
         "audio_transcription": "stt",
@@ -2300,7 +2305,7 @@ def _normalize_generated_item(
     if not isinstance(content_type, str) or not content_type.strip():
         if modality == "image":
             content_type = f"image/{str(fmt or 'png').strip().lower() or 'png'}"
-        elif modality in {"voice", "audio"}:
+        elif modality in {"voice", "audio", "music"}:
             content_type = f"audio/{str(fmt or 'wav').strip().lower() or 'wav'}"
         else:
             content_type = "application/octet-stream"
@@ -3460,6 +3465,44 @@ class LocalAbstractCoreLLMClient:
             provider=provider,
         )
 
+    def list_music_providers(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_music_providers
+
+        return local_list_music_providers(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+        )
+
+    def list_music_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_music_models
+
+        return local_list_music_models(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+        )
+
     def list_vision_provider_models(
         self,
         *,
@@ -4280,6 +4323,38 @@ class MultiLocalAbstractCoreLLMClient:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._default_client.list_stt_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_music_providers(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_music_providers(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            **kwargs,
+        )
+
+    def list_music_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_music_models(
+            task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -5415,6 +5490,81 @@ class RemoteAbstractCoreLLMClient:
             model_keys=("models_by_provider", "stt_models_by_provider"),
         )
 
+    def list_music_providers(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import _dedupe_strings, _music_provider_id
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        task_value = str(task or "").strip() or "text_to_music"
+        payload = self._discovery_get(
+            "/audio/music/providers",
+            source="abstractmusic.remote",
+            query={"task": task_value, "base_url": base_url},
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        details = [dict(item) for item in list(payload.get("providers") or []) if isinstance(item, dict)]
+        providers = _dedupe_strings([_music_provider_id(item) for item in details if _music_provider_id(item)])
+        payload = dict(payload)
+        payload["task"] = task_value
+        payload["providers"] = providers
+        payload["available_providers"] = providers
+        payload["provider_details"] = details
+        return payload
+
+    def list_music_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import (
+            _dedupe_strings,
+            _music_model_provider,
+            _music_models_by_provider,
+            _provider_models_from_mapping,
+        )
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        task_value = str(task or "").strip() or "text_to_music"
+        payload = self._discovery_get(
+            "/audio/music/models",
+            source="abstractmusic.remote",
+            query={"task": task_value, "provider": provider, "base_url": base_url},
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        models = [dict(item) for item in list(payload.get("models") or []) if isinstance(item, dict)]
+        provider_value = str(provider or "").strip()
+        if provider_value:
+            models = [
+                item for item in models if _music_model_provider(item).lower() == provider_value.lower()
+            ]
+        models_by_provider = _music_models_by_provider(models)
+        providers = _dedupe_strings(
+            [_music_model_provider(item) for item in models if _music_model_provider(item)]
+        )
+        payload = dict(payload)
+        payload["task"] = task_value
+        payload["provider"] = provider_value or None
+        payload["models"] = models
+        payload["providers"] = providers
+        payload["available_providers"] = providers
+        payload["models_by_provider"] = models_by_provider
+        payload["provider_models"] = _provider_models_from_mapping(models_by_provider)
+        return payload
+
     def list_vision_provider_models(
         self,
         *,
@@ -6381,6 +6531,83 @@ class RemoteAbstractCoreLLMClient:
             default_tags=tags,
         )
 
+    def _remote_music(
+        self,
+        *,
+        spec: Dict[str, Any],
+        prompt: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
+        body: Dict[str, Any] = {
+            "prompt": str(prompt or ""),
+            "task": str(spec.get("task") or "music_generation"),
+            "format": fmt,
+        }
+        route_selector = str(spec.get("backend") or spec.get("music_backend") or "").strip().lower().replace("_", "-")
+        for key, value in spec.items():
+            if key in {
+                "modality",
+                "type",
+                "output",
+                "task",
+                "prompt",
+                "input",
+                "text",
+                "format",
+                "response_format",
+                "backend",
+                "music_backend",
+                "run_id",
+                "tags",
+                "artifact_id",
+            }:
+                continue
+            if value is not None:
+                body[key] = value
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            body["base_url"] = base_url.strip()
+
+        if route_selector:
+            url = _join_core_provider_v1_url(self._server_base_url, route_selector, "/audio/music")
+        else:
+            url = _join_core_v1_url(self._server_base_url, "/audio/music")
+        audio_bytes, resp_headers = self._post_bytes(url, headers=headers, json_body=body)
+        content_type = str(resp_headers.get("content-type") or f"audio/{fmt}").split(";", 1)[0].strip() or f"audio/{fmt}"
+        media_provider = (
+            str(body.get("provider") or route_selector or "abstractcore-server").strip() or "abstractcore-server"
+        )
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="music_generation",
+            modality="music",
+            model=str(body.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {
+                "outputs": {
+                    "music": [
+                        {
+                            "modality": "music",
+                            "task": "music_generation",
+                            "data": audio_bytes,
+                            "content_type": content_type,
+                            "format": fmt,
+                            "provider": media_provider,
+                            "model": str(body.get("model") or "") or None,
+                            "metadata": {"_provider_request": {"url": url, "payload": body}},
+                        }
+                    ]
+                },
+                "metadata": {"model": body.get("model"), "provider": "abstractcore-server"},
+            },
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
     def _remote_transcription(
         self,
         *,
@@ -6476,6 +6703,13 @@ class RemoteAbstractCoreLLMClient:
             if not text:
                 raise ValueError("Remote TTS requires prompt or text.")
             return self._remote_tts(spec=spec, text=text, headers=headers, params=params)
+
+        if modality == "music":
+            if media:
+                raise ValueError("Remote music output does not accept input audio media yet; use lyrics/text fields instead.")
+            if not text:
+                raise ValueError("Remote music generation requires prompt or text.")
+            return self._remote_music(spec=spec, prompt=text, headers=headers, params=params)
 
         if modality == "text" and (task == "transcription" or (media and not text)):
             audio_items = [item for item in list(media or []) if _is_audio_media_item(item)]

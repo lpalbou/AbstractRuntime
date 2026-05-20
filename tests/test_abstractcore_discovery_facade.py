@@ -33,6 +33,8 @@ class _RecordingDiscoveryClient:
             "get_voice_catalog": {"providers": ["openai"], "profiles": []},
             "list_tts_models": {"providers": ["openai"], "models": ["tts-1"]},
             "list_stt_models": {"providers": ["openai"], "models": ["whisper-1"]},
+            "list_music_providers": {"providers": ["acemusic"], "provider_details": [{"provider": "acemusic"}]},
+            "list_music_models": {"providers": ["acemusic"], "models": [{"provider": "acemusic", "id": "ace-step"}]},
             "list_vision_provider_models": {"providers": ["mflux"], "models": []},
             "list_cached_vision_models": {"models": [{"id": "flux-dev", "provider": "mflux"}]},
         }
@@ -99,6 +101,42 @@ class _RecordingDiscoveryClient:
         return self._record(
             "list_stt_models",
             None,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_music_providers(
+        self,
+        *,
+        task: str | None = None,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_music_providers",
+            None,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            **kwargs,
+        )
+
+    def list_music_models(
+        self,
+        *,
+        task: str | None = None,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_music_models",
+            None,
+            task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -196,6 +234,24 @@ class _RecordingRequestSender:
                     "models_by_provider": {"openai": ["whisper-1"]},
                     "stt_models_by_provider": {"openai": ["whisper-1"]},
                     "providers": ["openai"],
+                }
+            )
+        if url == "http://core.test/v1/audio/music/providers?task=text_to_music&base_url=http%3A%2F%2Fprovider.test%2Fv1":
+            return _HttpResponse(
+                {
+                    "providers": [
+                        {"provider": "acemusic", "tasks": ["text_to_music"]},
+                        {"provider": "suno", "tasks": ["text_to_music"]},
+                    ]
+                }
+            )
+        if url == "http://core.test/v1/audio/music/models?task=text_to_music&provider=acemusic&base_url=http%3A%2F%2Fprovider.test%2Fv1":
+            return _HttpResponse(
+                {
+                    "models": [
+                        {"provider": "acemusic", "id": "ace-step", "tasks": ["text_to_music"]},
+                        {"provider": "acemusic", "model": "ace-pro", "tasks": ["text_to_music"]},
+                    ]
                 }
             )
         if url == "http://core.test/v1/vision/provider_models?task=text_to_image&provider=mflux&providers_only=true":
@@ -322,6 +378,17 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
     )
     tts = facade.list_tts_models(base_url="http://provider.test/v1", provider="openai")
     stt = facade.list_stt_models(provider="openai")
+    music_providers = facade.list_music_providers(
+        task="text_to_music",
+        base_url="http://provider.test/v1",
+        provider_api_key="secret",
+    )
+    music_models = facade.list_music_models(
+        task="text_to_music",
+        base_url="http://provider.test/v1",
+        provider_api_key="secret",
+        provider="acemusic",
+    )
     vision = facade.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
     cached = facade.list_cached_vision_models(task="text_to_image", provider="mflux")
 
@@ -331,6 +398,8 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
     assert voices == {"providers": ["openai"], "profiles": []}
     assert tts == {"providers": ["openai"], "models": ["tts-1"]}
     assert stt == {"providers": ["openai"], "models": ["whisper-1"]}
+    assert music_providers == {"providers": ["acemusic"], "provider_details": [{"provider": "acemusic"}]}
+    assert music_models == {"providers": ["acemusic"], "models": [{"provider": "acemusic", "id": "ace-step"}]}
     assert vision == {"providers": ["mflux"], "models": []}
     assert cached == {"models": [{"id": "flux-dev", "provider": "mflux"}]}
 
@@ -365,6 +434,25 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
                 "base_url": None,
                 "provider_api_key": None,
                 "provider": "openai",
+            },
+        ),
+        (
+            "list_music_providers",
+            None,
+            {
+                "task": "text_to_music",
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": "secret",
+            },
+        ),
+        (
+            "list_music_models",
+            None,
+            {
+                "task": "text_to_music",
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": "secret",
+                "provider": "acemusic",
             },
         ),
         (
@@ -452,6 +540,25 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_music_providers",
+        lambda *, task=None, base_url=None, provider_api_key=None: {
+            "task": task,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+            "providers": ["acemusic"],
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_music_models",
+        lambda *, task=None, base_url=None, provider_api_key=None, provider=None: {
+            "task": task,
+            "provider": provider,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+            "models": [{"provider": provider or "acemusic", "id": "ace-step"}],
+        },
+    )
+    monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_vision_provider_models",
         lambda *, task=None, base_url=None, provider_api_key=None, provider=None, providers_only=False: {
             "task": task,
@@ -507,6 +614,24 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         "base_url": None,
         "provider_api_key": None,
     }
+    assert client.list_music_providers(task="text_to_music", base_url="http://provider.test/v1", api_key="secret") == {
+        "task": "text_to_music",
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+        "providers": ["acemusic"],
+    }
+    assert client.list_music_models(
+        task="text_to_music",
+        base_url="http://provider.test/v1",
+        api_key="secret",
+        provider="acemusic",
+    ) == {
+        "task": "text_to_music",
+        "provider": "acemusic",
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+        "models": [{"provider": "acemusic", "id": "ace-step"}],
+    }
     assert client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True) == {
         "task": "text_to_image",
         "provider": "mflux",
@@ -550,9 +675,27 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
             _ = task
             return [{"provider": "mflux", "model": "flux-dev"}]
 
+    class _FakeMusic:
+        backend_id = "music-backend"
+
+        def available_providers(self, *, task: str | None = None) -> List[Dict[str, Any]]:
+            _ = task
+            return [{"provider": "acemusic", "tasks": ["text_to_music"]}]
+
+        def list_models(self, *, task: str | None = None, provider: str | None = None) -> List[Dict[str, Any]]:
+            _ = task
+            models = [
+                {"provider": "acemusic", "id": "ace-step"},
+                {"provider": "acemusic", "model": "ace-pro"},
+            ]
+            if provider:
+                return [item for item in models if item.get("provider") == provider]
+            return models
+
     class _FakeRegistry:
         def __init__(self) -> None:
             self.voice = _FakeVoice()
+            self.music = _FakeMusic()
             self.vision = _FakeVision()
 
     monkeypatch.setattr(
@@ -595,6 +738,8 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     voices = client.get_voice_catalog(provider="openai", providers_only=True)
     tts = client.list_tts_models(provider="openai")
     stt = client.list_stt_models(provider="openai")
+    music_providers = client.list_music_providers(task="text_to_music")
+    music_models = client.list_music_models(task="text_to_music", provider="acemusic")
     vision = client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
     cached = client.list_cached_vision_models(task="text_to_image", provider="mflux")
 
@@ -608,6 +753,10 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     assert voices["profiles"] == []
     assert tts["models"] == ["tts-1"]
     assert stt["models"] == ["whisper-1"]
+    assert music_providers["providers"] == ["acemusic"]
+    assert music_providers["provider_details"] == [{"provider": "acemusic", "tasks": ["text_to_music"]}]
+    assert music_models["providers"] == ["acemusic"]
+    assert music_models["models_by_provider"] == {"acemusic": ["ace-step", "ace-pro"]}
     assert vision["providers"] == ["mflux"]
     assert vision["models"] == []
     assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
@@ -703,6 +852,17 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         api_key="secret",
     )
     stt = facade.list_stt_models(provider="openai")
+    music_providers = facade.list_music_providers(
+        task="text_to_music",
+        base_url="http://provider.test/v1",
+        api_key="secret",
+    )
+    music_models = facade.list_music_models(
+        task="text_to_music",
+        base_url="http://provider.test/v1",
+        provider="acemusic",
+        api_key="secret",
+    )
     vision = facade.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
     cached = facade.list_cached_vision_models(task="text_to_image", provider="mflux")
 
@@ -722,6 +882,10 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
     assert voices["profiles"] == []
     assert tts["models"] == ["tts-1"]
     assert stt["models"] == ["whisper-1"]
+    assert music_providers["providers"] == ["acemusic", "suno"]
+    assert music_providers["available_providers"] == ["acemusic", "suno"]
+    assert music_models["providers"] == ["acemusic"]
+    assert music_models["models_by_provider"] == {"acemusic": ["ace-step", "ace-pro"]}
     assert vision["providers"] == ["mflux"]
     assert vision["models"] == []
     assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
@@ -755,6 +919,18 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
             "method": "GET",
             "url": "http://core.test/v1/audio/transcriptions/models?provider=openai",
             "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/audio/music/providers?task=text_to_music&base_url=http%3A%2F%2Fprovider.test%2Fv1",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/audio/music/models?task=text_to_music&provider=acemusic&base_url=http%3A%2F%2Fprovider.test%2Fv1",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
             "timeout": 12.0,
         },
         {

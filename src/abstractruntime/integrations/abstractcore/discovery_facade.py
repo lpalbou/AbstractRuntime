@@ -8,6 +8,7 @@ Scope:
 - provider model discovery
 - model capability lookup
 - audio/voice/TTS/STT catalogs
+- music provider/model catalogs
 - vision provider catalogs
 - cached vision model snapshots
 
@@ -28,6 +29,8 @@ _DISCOVERY_METHODS = (
     "get_voice_catalog",
     "list_tts_models",
     "list_stt_models",
+    "list_music_providers",
+    "list_music_models",
     "list_vision_provider_models",
     "list_cached_vision_models",
 )
@@ -82,6 +85,27 @@ class AbstractCoreDiscoveryClient(Protocol):
     def list_stt_models(
         self,
         *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_music_providers(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_music_models(
+        self,
+        *,
+        task: Optional[str] = None,
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
@@ -237,6 +261,38 @@ class AbstractCoreDiscoveryFacade:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._client.list_stt_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_music_providers(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_music_providers(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            **kwargs,
+        )
+
+    def list_music_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_music_models(
+            task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,

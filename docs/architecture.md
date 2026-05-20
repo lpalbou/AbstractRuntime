@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-05-20
-> Version: 0.4.16
+> Updated: 2026-05-21
+> Version: 0.4.17
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -28,7 +28,7 @@ Key invariants (enforced by code, not convention):
 
 ## AbstractCore capability boundary
 
-AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, transcription, and future modalities such as music or video.
+AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, music generation, transcription, and future modalities such as video.
 
 The boundary is intentionally narrow:
 - Workflow nodes request model work with `EffectType.LLM_CALL`; the runtime persists the request/result and delegates execution to the configured AbstractCore client.

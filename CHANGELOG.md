@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-05-21
+
+### Added
+- Runtime now surfaces AbstractCore-backed music through the same durable boundary as other generated artifacts:
+  - host discovery snapshot methods for music providers/models
+  - durable run-scoped `generate_music(...)`
+  - artifact-backed normalized music outputs for local and remote Runtime paths
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.24`.
+- The `multimodal` extra now installs `abstractcore[remote,vision,voice,audio,music]>=2.13.24`, which includes AbstractMusic's lightweight remote ACE backend path via `abstractmusic>=0.1.4`.
+- Runtime docs and AI-readable `llms.txt` / `llms-full.txt` now describe the shipped music boundary and the current `0030` Gateway cleanup scope more accurately.
+
 ## [0.4.16] - 2026-05-21
 
 ### Added
@@ -448,7 +461,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.17...HEAD
+[0.4.17]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/lpalbou/abstractruntime/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/lpalbou/abstractruntime/compare/v0.4.13...v0.4.14

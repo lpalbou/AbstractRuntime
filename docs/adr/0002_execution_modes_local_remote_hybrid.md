@@ -34,6 +34,6 @@ effect payloads, client construction arguments, or Runtime-owned environment var
 ### See Also
 - Implementation: [`backlog/completed/005_abstractcore_integration.md`](../backlog/completed/005_abstractcore_integration.md)
 - Integration guide: [`integrations/abstractcore.md`](../integrations/abstractcore.md)
-- Gateway install boundary: [`backlog/proposed/2026-05-08_runtime_gateway_install_boundary.md`](../backlog/proposed/2026-05-08_runtime_gateway_install_boundary.md)
+- Gateway install boundary: [`backlog/completed/020_runtime_gateway_install_boundary.md`](../backlog/completed/020_runtime_gateway_install_boundary.md)
 - Code: `src/abstractruntime/integrations/abstractcore/factory.py`
 - Framework ADR: `../../../docs/adr/0033-install-profiles-config-entrypoints-and-server-boundaries.md`

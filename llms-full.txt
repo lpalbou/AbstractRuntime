@@ -1,4 +1,4 @@
-# AbstractRuntime (llms-full)
+# AbstractRuntime
 
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
@@ -10,11 +10,11 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.7
+- Version: 0.4.15
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
-- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.11`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[media,openai,vision,voice,audio]>=2.13.11`
+- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.20`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[remote,vision,voice,audio]>=2.13.20`
 - Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned env/config should be translated into explicit Runtime inputs or Runtime-owned env names.
 
 ```mermaid
@@ -197,9 +197,10 @@ These are exported at the package root (`src/abstractruntime/__init__.py`).
 Docs: `docs/integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/*`.
 
 What you get:
-- effect handlers for `LLM_CALL` and `TOOL_CALLS`
+- effect handlers for `LLM_CALL`, `TOOL_CALLS`, and `MODEL_RESIDENCY`
 - three execution modes (ADR-0002): local / remote / hybrid
 - tool execution modes: executed (trusted local), approval-gated local execution, or passthrough (external worker boundary)
+- public Runtime discovery, host-control, and durable run facades for AbstractCore-backed hosts
 - prompt-cache control methods on local/multi-local/remote LLM clients
 - cached-session/prompt-cache routing through stable runtime keys; provider cache objects stay inside AbstractCore clients
 - media input analysis and transcription via `LLM_CALL.media`
@@ -221,7 +222,7 @@ Notes:
 - Use `ApprovalToolExecutor(delegate=..., policy=ToolApprovalPolicy())` when a local host should auto-run safe tools but pause for user approval before write/command/unknown tools.
 - Remote `params.api_key` and `params.provider_api_key` are compatibility inputs; runtime converts them to `X-AbstractCore-Provider-API-Key` headers for current AbstractCore servers.
 - Gateway/hosts choose Core server URLs, Core server auth headers, provider/model defaults, tool executors, artifact stores, and any Gateway env/config translation before Runtime sees the call.
-- Hosts can access the configured LLM client via the factory-set `_abstractcore_llm_client` attribute for prompt-cache operations such as `get_prompt_cache_capabilities()` and `prompt_cache_prepare_modules(...)`.
+- Hosts should bind `get_abstractcore_host_facade(rt)` for prompt-cache and model-residency control operations instead of reaching through the private `_abstractcore_llm_client` attachment directly.
 - Use `pip install "abstractruntime[multimodal]"` for common AbstractCore media, vision, voice, and audio dependencies.
 - Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
 - Read-file session attachment registration is bounded by `TOOL_CALLS.payload.max_attachment_bytes`, `run.vars["_runtime"]["max_attachment_bytes"]`, `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`, then the 25 MiB default.
@@ -240,10 +241,12 @@ tools = ApprovalToolExecutor(
 Prompt-cache control-plane sketch:
 
 ```python
-client = getattr(rt, "_abstractcore_llm_client", None)
-caps = client.get_prompt_cache_capabilities() if client is not None else {}
+from abstractruntime.integrations.abstractcore import get_abstractcore_host_facade
+
+facade = get_abstractcore_host_facade(rt)
+caps = facade.get_prompt_cache_capabilities()
 if caps.get("capabilities", {}).get("supports_prepare_modules"):
-    client.prompt_cache_prepare_modules(namespace="assistant", modules=[{"module_id": "system", "system_prompt": "..."}])
+    facade.prompt_cache_prepare_modules(namespace="assistant", modules=[{"module_id": "system", "system_prompt": "..."}])
 ```
 
 LLM_CALL multimodal payload shape:
@@ -314,7 +317,7 @@ Cached sessions / prompt cache:
 - Gateway prompt-cache env vars should be consumed by Gateway and translated into `_runtime.prompt_cache`; Runtime does not read Gateway env names directly.
 - Keep provider cache handles, session objects, and warm-cache state inside AbstractCore clients or servers.
 - Runtime correctness must not depend on a warm cache; a cold cache may be slower but should produce the same durable graph behavior.
-- Use `_abstractcore_llm_client` only as a host-side control-plane escape hatch for cache inspection/preparation, not as data stored in `RunState.vars`.
+- Use `get_abstractcore_host_facade(runtime)` for host-side cache inspection/preparation and residency control, not `_abstractcore_llm_client`, and never store either in `RunState.vars`.
 
 ## MCP worker (`abstractruntime-mcp-worker`)
 

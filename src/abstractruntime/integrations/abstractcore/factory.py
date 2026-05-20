@@ -52,6 +52,23 @@ def _ensure_observable_ledger(ledger_store: LedgerStore) -> LedgerStore:
     return ObservableLedgerStore(ledger_store)
 
 
+def _attach_runtime_abstractcore_client(runtime: Runtime, llm_client: Any) -> None:
+    """Attach the internal client consumed by `get_abstractcore_host_facade(runtime)`.
+
+    The attribute intentionally stays private so `Runtime` does not grow an
+    AbstractCore-specific public API. Hosts should bind the public facade
+    through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(...)`.
+    """
+
+    try:
+        setattr(runtime, "_abstractcore_llm_client", llm_client)
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Failed to attach the AbstractCore control client to the runtime. "
+            "The public host facade would be unavailable for this runtime instance."
+        ) from exc
+
+
 def create_local_runtime(
     *,
     provider: str,
@@ -169,12 +186,7 @@ def create_local_runtime(
             setter(tools)
     except Exception:
         pass
-    # Best-effort: expose the underlying LLM client for host-side control planes (e.g. gateway cache ops).
-    # This stays an internal attribute to avoid hard API commitments on Runtime itself.
-    try:  # pragma: no cover
-        setattr(rt, "_abstractcore_llm_client", llm_client)
-    except Exception:
-        pass
+    _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 
 
@@ -228,10 +240,7 @@ def create_remote_runtime(
             setter(tools)
     except Exception:
         pass
-    try:  # pragma: no cover
-        setattr(rt, "_abstractcore_llm_client", llm_client)
-    except Exception:
-        pass
+    _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 
 
@@ -300,10 +309,7 @@ def create_hybrid_runtime(
             setter(tools)
     except Exception:
         pass
-    try:  # pragma: no cover
-        setattr(rt, "_abstractcore_llm_client", llm_client)
-    except Exception:
-        pass
+    _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 
 

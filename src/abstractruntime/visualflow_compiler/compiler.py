@@ -21,6 +21,7 @@ from .adapters.effect_adapter import (
     create_memory_tag_handler,
     create_memory_compact_handler,
     create_memory_rehydrate_handler,
+    create_model_residency_handler,
     create_llm_call_handler,
     create_tool_calls_handler,
     create_call_tool_handler,
@@ -179,6 +180,14 @@ def _create_effect_node_handler(
             model=effect_config.get("model"),
             temperature=effect_config.get("temperature", 0.7),
             seed=effect_config.get("seed", -1),
+        )
+    elif effect_type == "model_residency":
+        base_handler = create_model_residency_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+            config=effect_config,
         )
     elif effect_type == "listen_voice":
         base_handler = create_wait_event_handler(

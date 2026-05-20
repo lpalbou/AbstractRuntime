@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-05-20
+
+### Added
+- Public AbstractCore Runtime facades for:
+  - discovery/catalog snapshot queries (`get_abstractcore_discovery_facade(...)`)
+  - prompt-cache and model-residency host control operations (`get_abstractcore_host_facade(...)`)
+  - durable run-scoped child-run execution for image, TTS, STT, and direct LLM calls (`get_abstractcore_run_facade(...)`)
+- `EffectType.MODEL_RESIDENCY` with AbstractCore-backed load/list/unload handling and VisualFlow lowering support for runtime-owned model residency control.
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.20`.
+- Local cached-vision discovery now depends on AbstractCore's public `get_local_vision_cache_catalog()` helper instead of private server internals.
+- Local media residency no-op/unsupported responses now complete truthfully with warning/degraded metadata, and media-only results distinguish runtime orchestration identity from the actual media backend identity.
+- Documentation was refreshed for the current Runtime/Core boundary, including root docs, ADR/backlog references, and AI-readable `llms.txt` / `llms-full.txt`.
+
 ## [0.4.14] - 2026-05-19
 
 ### Fixed
@@ -419,7 +434,15 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...HEAD
+[0.4.15]: https://github.com/lpalbou/abstractruntime/compare/v0.4.14...v0.4.15
+[0.4.14]: https://github.com/lpalbou/abstractruntime/compare/v0.4.13...v0.4.14
+[0.4.13]: https://github.com/lpalbou/abstractruntime/compare/v0.4.12...v0.4.13
+[0.4.12]: https://github.com/lpalbou/abstractruntime/compare/v0.4.11...v0.4.12
+[0.4.11]: https://github.com/lpalbou/abstractruntime/compare/v0.4.10...v0.4.11
+[0.4.10]: https://github.com/lpalbou/abstractruntime/compare/v0.4.9...v0.4.10
+[0.4.9]: https://github.com/lpalbou/abstractruntime/compare/v0.4.8...v0.4.9
+[0.4.8]: https://github.com/lpalbou/abstractruntime/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/lpalbou/abstractruntime/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/lpalbou/abstractruntime/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/lpalbou/abstractruntime/compare/v0.4.4...v0.4.5

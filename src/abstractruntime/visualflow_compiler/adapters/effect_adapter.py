@@ -833,6 +833,92 @@ def create_llm_call_handler(
     return handler
 
 
+def create_model_residency_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Callable:
+    """Create a node handler for Runtime-owned model residency controls."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    cfg = dict(config or {})
+
+    def _get(payload: Dict[str, Any], *keys: str, default: Any = None) -> Any:
+        for key in keys:
+            if key in payload and payload.get(key) not in (None, ""):
+                return payload.get(key)
+        for key in keys:
+            if key in cfg and cfg.get(key) not in (None, ""):
+                return cfg.get(key)
+        return default
+
+    def _boolish(value: Any, *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                return float(value) != 0.0
+            except Exception:
+                return default
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if not text:
+                return default
+            if text in {"false", "0", "no", "off"}:
+                return False
+            if text in {"true", "1", "yes", "on"}:
+                return True
+        return default
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        _ = ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+        payload = dict(input_data) if isinstance(input_data, dict) else {}
+
+        effect_payload: Dict[str, Any] = {
+            "operation": str(_get(payload, "operation", default="list_loaded") or "list_loaded"),
+        }
+        for key, aliases in {
+            "task": ("task",),
+            "provider": ("provider",),
+            "model": ("model",),
+            "runtime_id": ("runtime_id", "runtimeId"),
+            "base_url": ("base_url", "baseUrl"),
+            "timeout_s": ("timeout_s", "timeout", "timeoutS"),
+            "provider_api_key": ("provider_api_key", "api_key", "apiKey"),
+            "cache_policy": ("cache_policy", "cachePolicy"),
+        }.items():
+            raw = _get(payload, *aliases)
+            if raw is not None and raw != "":
+                effect_payload[key] = raw
+        options = _get(payload, "options")
+        if isinstance(options, dict):
+            effect_payload["options"] = dict(options)
+        if "pin" in payload or "pin" in cfg:
+            effect_payload["pin"] = _boolish(_get(payload, "pin", default=True), default=True)
+        if "required" in payload or "required" in cfg:
+            effect_payload["required"] = _boolish(_get(payload, "required", default=False), default=False)
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(
+                type=EffectType.MODEL_RESIDENCY,
+                payload=effect_payload,
+                result_key=output_key or f"_temp.effects.{node_id}",
+            ),
+            next_node=next_node,
+        )
+
+    return handler
+
+
 def create_tool_calls_handler(
     node_id: str,
     next_node: Optional[str],

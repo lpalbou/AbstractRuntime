@@ -12,6 +12,7 @@ from abstractruntime.integrations.abstractcore.llm_client import (
     LocalAbstractCoreLLMClient,
     RemoteAbstractCoreLLMClient,
     _normalize_local_response,
+    _run_local_image_subprocess,
 )
 from abstractruntime.integrations.abstractcore.output_specs import (
     is_abstractcore_output_request,
@@ -56,6 +57,9 @@ def test_normalize_multimodal_response_stores_generated_bytes_as_artifact() -> N
         default_tags={"source": "test"},
     )
 
+    assert out["media_provider"] == "fake"
+    assert out["media_model"] == "fake-image-model"
+    assert out["model"] == "fake-image-model"
     item = out["outputs"]["image"][0]
     assert item["artifact_id"]
     assert "data_base64" not in item
@@ -142,6 +146,108 @@ def test_local_image_output_keeps_runtime_metadata_out_of_core_kwargs() -> None:
     assert artifact.metadata.run_id == "run-img"
     assert artifact.metadata.tags["node_id"] == "n-img"
     assert artifact.metadata.tags["tenant"] == "demo"
+
+
+def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(monkeypatch) -> None:
+    store = InMemoryArtifactStore()
+    calls = []
+
+    class _InProcessImageLLM:
+        def _run_multimodal_spec(self, **_kwargs):
+            raise AssertionError("image generation must be isolated from the runtime process")
+
+    def fake_subprocess(**kwargs):
+        calls.append(kwargs)
+        return {
+            "outputs": {
+                "image": [
+                    {
+                        "modality": "image",
+                        "task": "image_generation",
+                        "data": b"png-from-subprocess",
+                        "content_type": "image/png",
+                        "format": "png",
+                        "provider": "mflux",
+                        "model": "flux2-klein-4b",
+                    }
+                ]
+            },
+            "metadata": {
+                "media_only": True,
+                "subprocess": True,
+                "runtime_provider": "mlx",
+                "runtime_model": "qwen3.5-2b",
+                "execution_mode": "local_one_shot_subprocess",
+            },
+        }
+
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.llm_client._run_local_image_subprocess",
+        fake_subprocess,
+    )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen3.5-2b"
+    client._llm_kwargs = {"enable_tracing": True}
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _InProcessImageLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out = client.generate(
+        prompt="A red mug.",
+        params={
+            "output": {
+                "modality": "image",
+                "provider": "mflux",
+                "model": "flux2-klein-4b",
+                "run_id": "run-img",
+                "tags": {"node_id": "n-img"},
+            },
+            "trace_metadata": {"run_id": "run-img", "node_id": "n-img"},
+        },
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "mlx"
+    assert calls[0]["model"] == "qwen3.5-2b"
+    assert calls[0]["specs"][0]["provider"] == "mflux"
+    assert calls[0]["specs"][0]["model"] == "flux2-klein-4b"
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-from-subprocess"
+    assert artifact.metadata.run_id == "run-img"
+    assert artifact.metadata.tags["node_id"] == "n-img"
+    assert artifact.metadata.tags["kind"] == "generated_media"
+    assert out["runtime_provider"] == "mlx"
+    assert out["runtime_model"] == "qwen3.5-2b"
+    assert out["media_provider"] == "mflux"
+    assert out["media_model"] == "flux2-klein-4b"
+    assert out["model"] == "flux2-klein-4b"
+
+
+def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -> None:
+    class _AbortResult:
+        returncode = 134
+        stdout = ""
+        stderr = "failed assertion `A command encoder is already encoding to this command buffer'"
+
+    def fake_run(*_args, **_kwargs):
+        return _AbortResult()
+
+    monkeypatch.setattr("abstractruntime.integrations.abstractcore.llm_client.subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Local image generation subprocess exited with code 134"):
+        _run_local_image_subprocess(
+            provider="mlx",
+            model="qwen3.5-2b",
+            llm_kwargs={},
+            prompt="A red mug.",
+            specs=[{"modality": "image", "task": "image_generation"}],
+            timeout_s=30,
+        )
 
 
 def test_local_generated_media_requires_artifact_store_before_provider_call() -> None:

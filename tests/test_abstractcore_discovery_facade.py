@@ -1,0 +1,814 @@
+from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
+from typing import Any, Dict, List, Tuple
+
+import pytest
+
+from abstractruntime.integrations import abstractcore
+from abstractruntime.integrations.abstractcore import (
+    AbstractCoreDiscoveryFacade,
+    LocalAbstractCoreLLMClient,
+    MultiLocalAbstractCoreLLMClient,
+    RemoteAbstractCoreLLMClient,
+    discovery_facade,
+    get_abstractcore_discovery_facade,
+)
+
+
+class _HttpResponse:
+    def __init__(self, body: Dict[str, Any], *, headers: Dict[str, str] | None = None) -> None:
+        self.body = body
+        self.headers = dict(headers or {})
+
+
+class _RecordingDiscoveryClient:
+    def __init__(self) -> None:
+        self.calls: List[Tuple[str, Any, Dict[str, Any]]] = []
+        self.responses: Dict[str, Dict[str, Any]] = {
+            "list_providers": {"items": [{"name": "mlx"}]},
+            "list_provider_models": {"provider": "mlx", "models": ["qwen"]},
+            "lookup_model_capabilities": {"model": "qwen", "capabilities": {"max_tokens": 4096}},
+            "get_voice_catalog": {"providers": ["openai"], "profiles": []},
+            "list_tts_models": {"providers": ["openai"], "models": ["tts-1"]},
+            "list_stt_models": {"providers": ["openai"], "models": ["whisper-1"]},
+            "list_vision_provider_models": {"providers": ["mflux"], "models": []},
+            "list_cached_vision_models": {"models": [{"id": "flux-dev", "provider": "mflux"}]},
+        }
+
+    def _record(self, name: str, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        self.calls.append((name, args[0] if args else None, dict(kwargs)))
+        return self.responses[name]
+
+    def list_providers(self, *, include_models: bool = False, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("list_providers", include_models, **kwargs)
+
+    def list_provider_models(self, provider_name: str, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("list_provider_models", provider_name, **kwargs)
+
+    def lookup_model_capabilities(self, model_name: str | None = None) -> Dict[str, Any]:
+        return self._record("lookup_model_capabilities", model_name)
+
+    def get_voice_catalog(
+        self,
+        *,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "get_voice_catalog",
+            None,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            model=model,
+            providers_only=providers_only,
+            **kwargs,
+        )
+
+    def list_tts_models(
+        self,
+        *,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_tts_models",
+            None,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_stt_models(
+        self,
+        *,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_stt_models",
+            None,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_vision_provider_models(
+        self,
+        *,
+        task: str | None = None,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_vision_provider_models",
+            None,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            providers_only=providers_only,
+            **kwargs,
+        )
+
+    def list_cached_vision_models(
+        self,
+        *,
+        task: str | None = None,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_cached_vision_models",
+            None,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+
+class _LegacyDiscoveryClient(_RecordingDiscoveryClient):
+    lookup_model_capabilities = None  # type: ignore[assignment]
+
+    def get_model_capabilities(self, model_name: str | None = None) -> Dict[str, Any]:
+        return {"max_tokens": 2048, "model_id": model_name}
+
+
+class _RecordingRequestSender:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def get(self, url: str, *, headers: Dict[str, str], timeout: float) -> _HttpResponse:
+        self.calls.append({"method": "GET", "url": url, "headers": dict(headers), "timeout": timeout})
+        if url == "http://core.test/providers?include_models=true":
+            return _HttpResponse({"providers": [{"name": "openai"}, {"name": "ollama"}]})
+        if url == "http://core.test/v1/models?provider=ollama&base_url=http%3A%2F%2Fprovider.test%2Fv1":
+            return _HttpResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": "ollama/qwen"},
+                        {"id": "ollama/llama"},
+                    ],
+                }
+            )
+        if url == "http://core.test/v1/audio/voices?base_url=http%3A%2F%2Fprovider.test%2Fv1&provider=openai&providers_only=true":
+            return _HttpResponse(
+                {
+                    "tts_providers": ["openai"],
+                    "providers": ["openai"],
+                    "profiles": [{"id": "alloy", "provider": "openai", "model": "tts-1"}],
+                    "tts_models_by_provider": {"openai": ["tts-1"]},
+                }
+            )
+        if url == "http://core.test/v1/audio/speech/models?base_url=http%3A%2F%2Fprovider.test%2Fv1&provider=openai":
+            return _HttpResponse(
+                {
+                    "models": ["tts-1"],
+                    "models_by_provider": {"openai": ["tts-1"]},
+                    "tts_models_by_provider": {"openai": ["tts-1"]},
+                    "providers": ["openai"],
+                }
+            )
+        if url == "http://core.test/v1/audio/transcriptions/models?provider=openai":
+            return _HttpResponse(
+                {
+                    "models": ["whisper-1"],
+                    "models_by_provider": {"openai": ["whisper-1"]},
+                    "stt_models_by_provider": {"openai": ["whisper-1"]},
+                    "providers": ["openai"],
+                }
+            )
+        if url == "http://core.test/v1/vision/provider_models?task=text_to_image&provider=mflux&providers_only=true":
+            return _HttpResponse(
+                {
+                    "models": [{"provider": "mflux", "model": "flux-dev"}],
+                    "providers": ["mflux"],
+                    "available_providers": ["mflux"],
+                    "models_by_provider": {"mflux": ["flux-dev"]},
+                }
+            )
+        if url == "http://core.test/v1/vision/models?task=text_to_image&provider=mflux":
+            return _HttpResponse(
+                {
+                    "models": [
+                        {"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]},
+                        {"id": "other", "provider": "openai", "tasks": ["text_to_image"]},
+                    ]
+                }
+            )
+        raise AssertionError(f"Unexpected GET url: {url}")
+
+    def post(self, url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> _HttpResponse:
+        raise AssertionError(f"Unexpected POST url: {url}")
+
+
+class _ErrorResponse:
+    def __init__(self, *, status_code: int, body: Dict[str, Any]) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.text = str(body)
+
+
+class _DiscoveryError(Exception):
+    def __init__(self, response: _ErrorResponse) -> None:
+        self.response = response
+        super().__init__(f"HTTP {response.status_code}")
+
+
+class _FailingDiscoverySender:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def get(self, url: str, *, headers: Dict[str, str], timeout: float) -> _HttpResponse:
+        self.calls.append({"method": "GET", "url": url, "headers": dict(headers), "timeout": timeout})
+        raise _DiscoveryError(_ErrorResponse(status_code=403, body={"error": {"message": "forbidden"}}))
+
+    def post(self, url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> _HttpResponse:
+        raise AssertionError(f"Unexpected POST url: {url}")
+
+
+class _TransportFailingDiscoverySender:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def get(self, url: str, *, headers: Dict[str, str], timeout: float) -> _HttpResponse:
+        self.calls.append({"method": "GET", "url": url, "headers": dict(headers), "timeout": timeout})
+        raise RuntimeError("connection refused")
+
+    def post(self, url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> _HttpResponse:
+        raise AssertionError(f"Unexpected POST url: {url}")
+
+
+def test_public_discovery_facade_exports_are_available() -> None:
+    assert abstractcore.AbstractCoreDiscoveryFacade is AbstractCoreDiscoveryFacade
+    assert abstractcore.get_abstractcore_discovery_facade is get_abstractcore_discovery_facade
+    assert "AbstractCoreDiscoveryFacade" in abstractcore.__all__
+    assert "get_abstractcore_discovery_facade" in abstractcore.__all__
+    assert "AbstractCoreDiscoveryFacade" in discovery_facade.__all__
+    assert "get_abstractcore_discovery_facade" in discovery_facade.__all__
+
+
+def test_discovery_facade_can_be_built_directly_or_from_runtime_helper() -> None:
+    client = _RecordingDiscoveryClient()
+    runtime = SimpleNamespace(_abstractcore_llm_client=client)
+
+    direct = AbstractCoreDiscoveryFacade(runtime)
+    from_runtime = AbstractCoreDiscoveryFacade.from_runtime(runtime)
+    runtime_helper = get_abstractcore_discovery_facade(runtime)
+
+    assert direct._client is client
+    assert from_runtime._client is client
+    assert runtime_helper._client is client
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: AbstractCoreDiscoveryFacade(SimpleNamespace(_abstractcore_llm_client=object())),
+        lambda: AbstractCoreDiscoveryFacade.from_runtime(SimpleNamespace(_abstractcore_llm_client=object())),
+        lambda: get_abstractcore_discovery_facade(SimpleNamespace(_abstractcore_llm_client=object())),
+    ],
+)
+def test_discovery_facade_rejects_runtime_clients_that_do_not_match_the_contract(factory) -> None:
+    with pytest.raises(TypeError, match="Missing methods"):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: AbstractCoreDiscoveryFacade.from_runtime(object()),
+        lambda: get_abstractcore_discovery_facade(object()),
+    ],
+)
+def test_discovery_facade_runtime_helpers_raise_when_runtime_has_no_client(factory) -> None:
+    with pytest.raises(RuntimeError, match="Runtime is not wired to AbstractCore discovery helpers"):
+        factory()
+
+
+def test_discovery_facade_delegates_snapshot_queries() -> None:
+    client = _RecordingDiscoveryClient()
+    facade = AbstractCoreDiscoveryFacade(SimpleNamespace(_abstractcore_llm_client=client))
+
+    providers = facade.list_providers(include_models=True)
+    provider_models = facade.list_provider_models("mlx", base_url="http://provider.test/v1")
+    capabilities = facade.get_model_capabilities("mlx/qwen")
+    voices = facade.get_voice_catalog(
+        base_url="http://provider.test/v1",
+        provider_api_key="secret",
+        provider="openai",
+        model="tts-1",
+        providers_only=True,
+    )
+    tts = facade.list_tts_models(base_url="http://provider.test/v1", provider="openai")
+    stt = facade.list_stt_models(provider="openai")
+    vision = facade.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
+    cached = facade.list_cached_vision_models(task="text_to_image", provider="mflux")
+
+    assert providers == {"items": [{"name": "mlx"}]}
+    assert provider_models == {"provider": "mlx", "models": ["qwen"]}
+    assert capabilities == {"model": "qwen", "capabilities": {"max_tokens": 4096}}
+    assert voices == {"providers": ["openai"], "profiles": []}
+    assert tts == {"providers": ["openai"], "models": ["tts-1"]}
+    assert stt == {"providers": ["openai"], "models": ["whisper-1"]}
+    assert vision == {"providers": ["mflux"], "models": []}
+    assert cached == {"models": [{"id": "flux-dev", "provider": "mflux"}]}
+
+    assert client.calls == [
+        ("list_providers", True, {}),
+        ("list_provider_models", "mlx", {"base_url": "http://provider.test/v1"}),
+        ("lookup_model_capabilities", "mlx/qwen", {}),
+        (
+            "get_voice_catalog",
+            None,
+            {
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": "secret",
+                "provider": "openai",
+                "model": "tts-1",
+                "providers_only": True,
+            },
+        ),
+        (
+            "list_tts_models",
+            None,
+            {
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": None,
+                "provider": "openai",
+            },
+        ),
+        (
+            "list_stt_models",
+            None,
+            {
+                "base_url": None,
+                "provider_api_key": None,
+                "provider": "openai",
+            },
+        ),
+        (
+            "list_vision_provider_models",
+            None,
+            {
+                "task": "text_to_image",
+                "base_url": None,
+                "provider_api_key": None,
+                "provider": "mflux",
+                "providers_only": True,
+            },
+        ),
+        (
+            "list_cached_vision_models",
+            None,
+            {
+                "task": "text_to_image",
+                "base_url": None,
+                "provider_api_key": None,
+                "provider": "mflux",
+            },
+        ),
+    ]
+
+
+def test_discovery_facade_accepts_legacy_clients_with_raw_get_model_capabilities() -> None:
+    client = _LegacyDiscoveryClient()
+    runtime = SimpleNamespace(_abstractcore_llm_client=client)
+
+    payload = get_abstractcore_discovery_facade(runtime).get_model_capabilities("legacy/model")
+
+    assert payload == {
+        "model": "legacy/model",
+        "capabilities": {"max_tokens": 2048, "model_id": "legacy/model"},
+    }
+
+
+def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_providers",
+        lambda *, include_models, default_provider, default_model: {
+            "items": [{"name": default_provider}],
+            "default_model": default_model,
+            "include_models": include_models,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_provider_models",
+        lambda provider_name, *, base_url=None, provider_api_key=None, timeout_s=None: {
+            "provider": provider_name,
+            "models": [base_url or "default"],
+            "provider_api_key": provider_api_key,
+            "timeout_s": timeout_s,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractcore.architectures.detection.get_model_capabilities",
+        lambda model_name: {"model_id": model_name, "max_tokens": 123},
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_get_voice_catalog",
+        lambda *, base_url=None, provider_api_key=None, provider=None, model=None, providers_only=False: {
+            "provider": provider,
+            "model": model,
+            "providers_only": providers_only,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_tts_models",
+        lambda *, base_url=None, provider_api_key=None, provider=None: {
+            "provider": provider,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_stt_models",
+        lambda *, base_url=None, provider_api_key=None, provider=None: {
+            "provider": provider,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_vision_provider_models",
+        lambda *, task=None, base_url=None, provider_api_key=None, provider=None, providers_only=False: {
+            "task": task,
+            "provider": provider,
+            "providers_only": providers_only,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+        },
+    )
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_cached_vision_models",
+        lambda *, task=None, provider=None: {"task": task, "provider": provider},
+    )
+
+    default_client = object.__new__(LocalAbstractCoreLLMClient)
+    default_client._provider = "mlx"
+    default_client._model = "qwen"
+
+    client = object.__new__(MultiLocalAbstractCoreLLMClient)
+    client._default_provider = "mlx"
+    client._default_model = "qwen"
+    client._default_client = default_client
+
+    assert client.list_providers(include_models=True) == {
+        "items": [{"name": "mlx"}],
+        "default_model": "qwen",
+        "include_models": True,
+    }
+    assert client.list_provider_models("ollama", base_url="http://provider.test/v1", api_key="secret") == {
+        "provider": "ollama",
+        "models": ["http://provider.test/v1"],
+        "provider_api_key": "secret",
+        "timeout_s": None,
+    }
+    assert client.get_model_capabilities("ollama/qwen") == {
+        "model_id": "ollama/qwen",
+        "max_tokens": 123,
+    }
+    assert client.get_voice_catalog(base_url="http://provider.test/v1", api_key="secret", provider="openai") == {
+        "provider": "openai",
+        "model": None,
+        "providers_only": False,
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+    }
+    assert client.list_tts_models(base_url="http://provider.test/v1", api_key="secret", provider="openai") == {
+        "provider": "openai",
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+    }
+    assert client.list_stt_models(provider="openai") == {
+        "provider": "openai",
+        "base_url": None,
+        "provider_api_key": None,
+    }
+    assert client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True) == {
+        "task": "text_to_image",
+        "provider": "mflux",
+        "providers_only": True,
+        "base_url": None,
+        "provider_api_key": None,
+    }
+    assert client.list_cached_vision_models(task="text_to_image", provider="mflux") == {
+        "task": "text_to_image",
+        "provider": "mflux",
+    }
+
+
+def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
+    class _FakeVoice:
+        backend_id = "voice-backend"
+
+        def voice_catalog(self) -> Dict[str, Any]:
+            return {
+                "profiles": [{"id": "alloy", "provider": "openai", "model": "tts-1"}],
+                "tts_providers": ["openai"],
+                "stt_providers": ["openai"],
+                "tts_models_by_provider": {"openai": ["tts-1"]},
+                "stt_models_by_provider": {"openai": ["whisper-1"]},
+            }
+
+        def list_tts_models(self) -> List[str]:
+            return ["tts-1"]
+
+        def list_stt_models(self) -> List[str]:
+            return ["whisper-1"]
+
+    class _FakeVision:
+        backend_id = "vision-backend"
+
+        def available_providers(self, *, task: str | None = None) -> Dict[str, Any]:
+            _ = task
+            return {"providers": ["mflux"], "available_providers": ["mflux"]}
+
+        def list_provider_models(self, *, task: str | None = None) -> List[Dict[str, Any]]:
+            _ = task
+            return [{"provider": "mflux", "model": "flux-dev"}]
+
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.voice = _FakeVoice()
+            self.vision = _FakeVision()
+
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries._runtime_capability_registry",
+        lambda **_kwargs: _FakeRegistry(),
+    )
+    monkeypatch.setattr(
+        "abstractcore.providers.registry.get_all_providers_with_models",
+        lambda include_models=False: [{"name": "mlx", "include_models": include_models}],
+    )
+    monkeypatch.setattr(
+        "abstractcore.providers.registry.get_available_models_for_provider",
+        lambda provider_name, **_kwargs: ["qwen", "llama"] if provider_name == "ollama" else [],
+    )
+    monkeypatch.setattr(
+        "abstractcore.architectures.detection.get_model_capabilities",
+        lambda model_name: {"model_id": model_name, "max_tokens": 2048},
+    )
+
+    def fake_local_vision_catalog() -> Dict[str, Any]:
+        return {
+            "models": [
+                {"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]},
+                {"id": "other", "provider": "openai", "tasks": ["text_to_image"]},
+            ]
+        }
+
+    monkeypatch.setattr(
+        "abstractcore.capabilities.vision_catalog.get_local_vision_cache_catalog",
+        fake_local_vision_catalog,
+    )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen"
+
+    providers = client.list_providers(include_models=True)
+    provider_models = client.list_provider_models("ollama", base_url="http://provider.test/v1", api_key="secret")
+    capabilities = client.get_model_capabilities("ollama/qwen")
+    voices = client.get_voice_catalog(provider="openai", providers_only=True)
+    tts = client.list_tts_models(provider="openai")
+    stt = client.list_stt_models(provider="openai")
+    vision = client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
+    cached = client.list_cached_vision_models(task="text_to_image", provider="mflux")
+
+    assert providers["items"] == [{"name": "mlx", "include_models": True}]
+    assert providers["default_provider"] == "mlx"
+    assert providers["default_model"] == "qwen"
+    assert provider_models["provider"] == "ollama"
+    assert provider_models["models"] == ["llama", "qwen"]
+    assert capabilities == {"model_id": "ollama/qwen", "max_tokens": 2048}
+    assert voices["providers"] == ["openai"]
+    assert voices["profiles"] == []
+    assert tts["models"] == ["tts-1"]
+    assert stt["models"] == ["whisper-1"]
+    assert vision["providers"] == ["mflux"]
+    assert vision["models"] == []
+    assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
+
+
+def test_local_cached_vision_models_do_not_import_core_server_helper(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    monkeypatch.setitem(sys.modules, "abstractcore.server.vision_endpoints", None)
+    monkeypatch.setattr(
+        "abstractcore.capabilities.vision_catalog.get_local_vision_cache_catalog",
+        lambda: {"models": [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]},
+    )
+
+    payload = discovery_queries.local_list_cached_vision_models(task="text_to_image", provider="mflux")
+
+    assert payload["available"] is True
+    assert payload["source"] == "abstractvision.local_cache"
+    assert payload["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
+
+
+def test_local_cached_vision_models_preserve_helper_error_details(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    monkeypatch.setattr(
+        "abstractcore.capabilities.vision_catalog.get_local_vision_cache_catalog",
+        lambda: {
+            "models": [],
+            "registry_available": False,
+            "error": "Failed to initialize AbstractVision registry: registry init failed",
+        },
+    )
+
+    payload = discovery_queries.local_list_cached_vision_models(task="text_to_image")
+
+    assert payload["available"] is False
+    assert payload["error"] == "Failed to initialize AbstractVision registry: registry init failed"
+    assert payload["source"] == "abstractvision.local_cache"
+
+
+def test_discovery_facade_preserves_model_capability_lookup_failures(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "abstractcore.architectures.detection.get_model_capabilities",
+        lambda _model_name: (_ for _ in ()).throw(RuntimeError("capability lookup failed")),
+    )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen"
+    runtime = SimpleNamespace(_abstractcore_llm_client=client)
+
+    payload = get_abstractcore_discovery_facade(runtime).get_model_capabilities("bad/model")
+
+    assert payload["model"] == "bad/model"
+    assert payload["capabilities"] == {}
+    assert payload["available"] is False
+    assert payload["error"] == "capability lookup failed"
+    assert payload["source"] == "abstractcore.local"
+
+
+def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "abstractcore.architectures.detection.get_model_capabilities",
+        lambda model_name: {"model_id": model_name, "max_tokens": 777},
+    )
+    sender = _RecordingRequestSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        timeout_s=12.0,
+        headers={"X-Test": "1"},
+    )
+    runtime = SimpleNamespace(_abstractcore_llm_client=client)
+    facade = get_abstractcore_discovery_facade(runtime)
+
+    providers = facade.list_providers(include_models=True)
+    provider_models = facade.list_provider_models(
+        "ollama",
+        base_url="http://provider.test/v1",
+        api_key="secret",
+    )
+    capabilities = facade.get_model_capabilities("openai/gpt-4o-mini")
+    voices = facade.get_voice_catalog(
+        base_url="http://provider.test/v1",
+        provider="openai",
+        providers_only=True,
+        api_key="secret",
+    )
+    tts = facade.list_tts_models(
+        base_url="http://provider.test/v1",
+        provider="openai",
+        api_key="secret",
+    )
+    stt = facade.list_stt_models(provider="openai")
+    vision = facade.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
+    cached = facade.list_cached_vision_models(task="text_to_image", provider="mflux")
+
+    assert providers["items"] == [{"name": "ollama"}, {"name": "openai"}]
+    assert providers["default_provider"] == "openai"
+    assert providers["default_model"] == "gpt-4o-mini"
+    assert provider_models["provider"] == "ollama"
+    assert provider_models["models"] == ["llama", "qwen"]
+    assert provider_models["source"] == "abstractcore.remote"
+    assert provider_models["available"] is True
+    assert capabilities["model"] == "openai/gpt-4o-mini"
+    assert capabilities["capabilities"] == {"model_id": "openai/gpt-4o-mini", "max_tokens": 777}
+    assert capabilities["available"] is True
+    assert capabilities["error"] is None
+    assert capabilities["source"] == "abstractcore.local"
+    assert voices["providers"] == ["openai"]
+    assert voices["profiles"] == []
+    assert tts["models"] == ["tts-1"]
+    assert stt["models"] == ["whisper-1"]
+    assert vision["providers"] == ["mflux"]
+    assert vision["models"] == []
+    assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
+
+    assert sender.calls == [
+        {
+            "method": "GET",
+            "url": "http://core.test/providers?include_models=true",
+            "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/models?provider=ollama&base_url=http%3A%2F%2Fprovider.test%2Fv1",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/audio/voices?base_url=http%3A%2F%2Fprovider.test%2Fv1&provider=openai&providers_only=true",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/audio/speech/models?base_url=http%3A%2F%2Fprovider.test%2Fv1&provider=openai",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/audio/transcriptions/models?provider=openai",
+            "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/vision/provider_models?task=text_to_image&provider=mflux&providers_only=true",
+            "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/vision/models?task=text_to_image&provider=mflux",
+            "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+    ]
+
+
+def test_remote_discovery_preserves_status_and_timeout_on_failures() -> None:
+    sender = _FailingDiscoverySender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        timeout_s=12.0,
+        headers={"X-Test": "1"},
+    )
+
+    payload = client.list_providers(include_models=True, timeout_s=3.5)
+
+    assert payload["available"] is False
+    assert payload["status_code"] == 403
+    assert payload["upstream_error"] == {"error": {"message": "forbidden"}}
+    assert sender.calls == [
+        {
+            "method": "GET",
+            "url": "http://core.test/providers?include_models=true",
+            "headers": {"X-Test": "1"},
+            "timeout": 3.5,
+        }
+    ]
+
+
+def test_remote_discovery_marks_transport_failures_as_route_unavailable() -> None:
+    sender = _TransportFailingDiscoverySender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        timeout_s=12.0,
+        headers={"X-Test": "1"},
+    )
+
+    payload = client.list_tts_models(provider="openai")
+
+    assert payload["available"] is False
+    assert payload["route_available"] is False
+    assert payload["error"] == "connection refused"

@@ -21,10 +21,12 @@ import locale
 import mimetypes
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from urllib.parse import quote, urlencode
 
@@ -45,6 +47,7 @@ _LOCAL_GENERATE_LOCKS: Dict[Tuple[str, str], threading.Lock] = {}
 _LOCAL_GENERATE_LOCKS_LOCK = threading.Lock()
 _LOCAL_GENERATE_LOCKS_WARNED: set[Tuple[str, str]] = set()
 _LOCAL_GENERATE_LOCKS_WARNED_LOCK = threading.Lock()
+_LOCAL_IMAGE_SUBPROCESS_LOCK = threading.Lock()
 
 
 @dataclass
@@ -84,6 +87,40 @@ def _pop_provider_api_key(values: Dict[str, Any]) -> Optional[str]:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
     return None
+
+
+def _core_server_root_url(server_base_url: str) -> str:
+    base = str(server_base_url or "").strip().rstrip("/")
+    if base.lower().endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    return base
+
+
+def _join_core_control_url(server_base_url: str, path: str) -> str:
+    root = _core_server_root_url(server_base_url)
+    suffix = str(path or "").strip()
+    if not suffix.startswith("/"):
+        suffix = f"/{suffix}"
+    return f"{root}{suffix}"
+
+
+def _join_core_v1_url(server_base_url: str, path: str) -> str:
+    root = _core_server_root_url(server_base_url)
+    suffix = str(path or "").strip()
+    if not suffix.startswith("/"):
+        suffix = f"/{suffix}"
+    if suffix == "/v1" or suffix.startswith("/v1/"):
+        return f"{root}{suffix}"
+    return f"{root}/v1{suffix}"
+
+
+def _join_core_provider_v1_url(server_base_url: str, provider: str, path: str) -> str:
+    root = _core_server_root_url(server_base_url)
+    provider_s = str(provider or "").strip().lower().replace("_", "-")
+    suffix = str(path or "").strip()
+    if not suffix.startswith("/"):
+        suffix = f"/{suffix}"
+    return f"{root}/{quote(provider_s, safe='')}/v1{suffix}"
 
 
 def _set_header_case_insensitive(headers: Dict[str, str], name: str, value: str) -> None:
@@ -669,6 +706,9 @@ class AbstractCoreLLMClient(Protocol):
     ) -> Dict[str, Any]:
         """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
 
+    def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return model capability metadata for a specific model or the default client model."""
+
     def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         """Return a JSON-safe prompt-cache capability payload."""
 
@@ -731,6 +771,44 @@ class AbstractCoreLLMClient(Protocol):
         """Prepare hierarchical prompt-cache modules."""
 
 
+class AbstractCoreControlClient(Protocol):
+    """Runtime/provider control-plane calls exposed by AbstractCore-capable clients."""
+
+    def list_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Return a JSON-safe snapshot of currently resident models."""
+
+    def load_model_residency(
+        self,
+        *,
+        task: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        pin: bool = True,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Request idempotent model residency."""
+
+    def unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Request best-effort model unload."""
+
+
 def _jsonable(value: Any) -> Any:
     """Best-effort conversion to JSON-safe objects.
 
@@ -760,6 +838,155 @@ def _jsonable(value: Any) -> Any:
         return _jsonable(to_dict())
 
     return str(value)
+
+
+def _env_flag_enabled(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _loads_last_json_line(text: str) -> Dict[str, Any]:
+    """Parse the last JSON object line from a subprocess stream.
+
+    Some native model stacks write progress to stdout. The worker prints a single JSON
+    line as its final record, so parsing from the bottom keeps the transport robust.
+    """
+
+    for line in reversed(str(text or "").splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("Subprocess did not return a JSON response.")
+
+
+def _decode_subprocess_media_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = _jsonable(payload)
+    if not isinstance(out, dict):
+        raise ValueError("Subprocess returned an invalid media response.")
+
+    outputs = out.get("outputs")
+    if isinstance(outputs, dict):
+        for items in outputs.values():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                data_b64 = item.pop("data_b64", None)
+                if isinstance(data_b64, str) and data_b64:
+                    item["data"] = base64.b64decode(data_b64.encode("ascii"))
+    return out
+
+
+def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional[List[Any]]) -> bool:
+    if not _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS", default=True):
+        return False
+    if media:
+        # Image edits can carry artifact-backed files and masks. Keep those in-process until
+        # the subprocess transport has an explicit media-file contract.
+        return False
+    if not specs:
+        return False
+    for spec in specs:
+        if not isinstance(spec, dict):
+            return False
+        modality = str(spec.get("modality") or "").strip().lower()
+        task = str(spec.get("task") or "").strip().lower()
+        if modality != "image":
+            return False
+        if task and task not in {"image_generation", "t2i", "text_to_image"}:
+            return False
+    return True
+
+
+def _local_image_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[str, Any]) -> float:
+    for raw in (
+        os.environ.get("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_TIMEOUT_S"),
+        params.get("timeout_s"),
+        params.get("timeout"),
+        llm_kwargs.get("timeout_s"),
+        llm_kwargs.get("timeout"),
+    ):
+        if raw is None:
+            continue
+        try:
+            timeout = float(raw)
+        except Exception:
+            continue
+        if timeout > 0:
+            return timeout
+    return 3600.0
+
+
+def _run_local_image_subprocess(
+    *,
+    provider: str,
+    model: str,
+    llm_kwargs: Dict[str, Any],
+    prompt: str,
+    specs: List[Dict[str, Any]],
+    timeout_s: float,
+) -> Dict[str, Any]:
+    request = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "llm_kwargs": _jsonable(llm_kwargs or {}),
+        "prompt": str(prompt or ""),
+        "specs": _jsonable(specs),
+    }
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    def _invoke() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "abstractruntime.integrations.abstractcore.media_subprocess"],
+            input=json.dumps(request, ensure_ascii=False),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_s,
+            env=env,
+            check=False,
+        )
+
+    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_SERIALIZE", default=True):
+        with _LOCAL_IMAGE_SUBPROCESS_LOCK:
+            proc = _invoke()
+    else:
+        proc = _invoke()
+
+    parsed: Optional[Dict[str, Any]] = None
+    try:
+        parsed = _loads_last_json_line(proc.stdout)
+    except Exception:
+        parsed = None
+
+    if proc.returncode != 0:
+        stderr = str(proc.stderr or "").strip()
+        stdout = str(proc.stdout or "").strip()
+        if parsed and parsed.get("ok") is False:
+            detail = str(parsed.get("error") or "local image generation failed")
+        else:
+            detail = stderr or stdout or "local image generation failed"
+        raise RuntimeError(
+            f"Local image generation subprocess exited with code {proc.returncode}: {detail[-2000:]}"
+        )
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Local image generation subprocess returned no parseable response.")
+    if parsed.get("ok") is False:
+        raise RuntimeError(str(parsed.get("error") or "local image generation failed"))
+    response = parsed.get("response")
+    if not isinstance(response, dict):
+        raise RuntimeError("Local image generation subprocess returned an invalid response.")
+    return _decode_subprocess_media_payload(response)
 
 
 def _prompt_cache_capabilities_payload(provider: Any) -> Dict[str, Any]:
@@ -857,6 +1084,79 @@ def _prompt_cache_unsupported_payload(provider: Any, *, operation: str, error: s
         "code": "prompt_cache_unsupported",
         "error": str(error),
         "capabilities": _prompt_cache_capabilities_dict(provider),
+    }
+
+
+def _normalize_residency_task(task: Any) -> str:
+    raw = str(task or "").strip().lower().replace("-", "_")
+    aliases = {
+        "": "text_generation",
+        "text": "text_generation",
+        "llm": "text_generation",
+        "chat": "text_generation",
+        "chat_completion": "text_generation",
+        "chat_completions": "text_generation",
+        "completion": "text_generation",
+        "completions": "text_generation",
+        "image": "image_generation",
+        "images": "image_generation",
+        "t2i": "image_generation",
+        "text_to_image": "image_generation",
+        "voice": "tts",
+        "speech": "tts",
+        "audio_speech": "tts",
+        "transcription": "stt",
+        "transcribe": "stt",
+        "audio_transcription": "stt",
+    }
+    return aliases.get(raw, raw)
+
+
+def _model_residency_unsupported_payload(
+    *,
+    operation: str,
+    task: Any = None,
+    provider: Any = None,
+    model: Any = None,
+    error: str,
+) -> Dict[str, Any]:
+    task_s = _normalize_residency_task(task)
+    payload = {
+        "ok": False,
+        "supported": False,
+        "operation": str(operation or "").strip(),
+        "task": task_s,
+        "provider": str(provider or "").strip() or None,
+        "model": str(model or "").strip() or None,
+        "code": "model_residency_unsupported",
+        "error": str(error),
+        "warnings": [str(error)],
+        "diagnostics": {"source": "abstractruntime"},
+    }
+    if task_s in {"image_generation", "tts", "stt"}:
+        payload["execution_mode"] = "local_one_shot_subprocess"
+        payload["requires_long_lived_server"] = True
+        payload["config_hint"] = (
+            "Set ABSTRACTCORE_SERVER_BASE_URL to a long-lived AbstractCore server to enable media warmup."
+        )
+    return payload
+
+
+def _local_residency_record(*, provider: str, model: str, default: bool = False) -> Dict[str, Any]:
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    return {
+        "task": "text_generation",
+        "provider": provider_s,
+        "model": model_s,
+        "runtime_id": f"local:text_generation:{provider_s}:{model_s}",
+        "resident": True,
+        "loaded": True,
+        "state": "loaded",
+        "pinned": bool(default),
+        "default": bool(default),
+        "source": "abstractruntime.local",
+        "isolation": "in_process",
     }
 
 
@@ -1250,6 +1550,27 @@ def _normalize_generated_item(
     return {k: v for k, v in out.items() if v is not None}
 
 
+def _first_media_identity(
+    *,
+    outputs: Dict[str, List[Dict[str, Any]]],
+    resources: Dict[str, List[Dict[str, Any]]],
+) -> tuple[Optional[str], Optional[str]]:
+    for bucket in (outputs, resources):
+        for items in bucket.values():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                provider = item.get("provider")
+                model = item.get("model")
+                provider_s = str(provider).strip() if isinstance(provider, str) and provider.strip() else None
+                model_s = str(model).strip() if isinstance(model, str) and model.strip() else None
+                if provider_s is not None or model_s is not None:
+                    return provider_s, model_s
+    return None, None
+
+
 def _normalize_multimodal_response(
     resp: Any,
     *,
@@ -1295,6 +1616,45 @@ def _normalize_multimodal_response(
     if not isinstance(metadata, dict):
         metadata = {"value": metadata}
 
+    media_provider, media_model = _first_media_identity(outputs=outputs, resources=resources)
+    legacy_runtime_provider = None
+    legacy_runtime_model = None
+    if metadata.get("subprocess") is True or metadata.get("execution_mode") == "local_one_shot_subprocess":
+        raw_provider = metadata.get("provider")
+        raw_model = metadata.get("model")
+        if isinstance(raw_provider, str) and raw_provider.strip():
+            legacy_runtime_provider = raw_provider.strip()
+        if isinstance(raw_model, str) and raw_model.strip():
+            legacy_runtime_model = raw_model.strip()
+
+    runtime_provider = metadata.get("runtime_provider")
+    runtime_model = metadata.get("runtime_model")
+    runtime_provider_s = str(runtime_provider).strip() if isinstance(runtime_provider, str) and runtime_provider.strip() else None
+    runtime_model_s = str(runtime_model).strip() if isinstance(runtime_model, str) and runtime_model.strip() else None
+    if runtime_provider_s is None:
+        runtime_provider_s = legacy_runtime_provider
+    if runtime_model_s is None:
+        runtime_model_s = legacy_runtime_model
+
+    has_media_outputs = any(bool(items) for items in outputs.values()) or any(bool(items) for items in resources.values())
+    media_only = bool(has_media_outputs) and text is None
+
+    text_provider = text.get("provider") if isinstance(text, dict) else None
+    text_model = text.get("model") if isinstance(text, dict) else None
+    top_provider = (
+        (str(text_provider).strip() if isinstance(text_provider, str) and text_provider.strip() else None)
+        or (media_provider if media_only else None)
+    )
+    top_model = (
+        (str(text_model).strip() if isinstance(text_model, str) and text_model.strip() else None)
+        or (media_model if media_only else None)
+        or (
+            str(metadata.get("model")).strip()
+            if (not media_only and isinstance(metadata.get("model"), str) and str(metadata.get("model")).strip())
+            else None
+        )
+    )
+
     content = text.get("content") if isinstance(text, dict) else _field(resp, "content", None)
     result: Dict[str, Any] = {
         "content": content,
@@ -1306,7 +1666,12 @@ def _normalize_multimodal_response(
         "warnings": warnings,
         "errors": errors,
         "usage": text.get("usage") if isinstance(text, dict) else None,
-        "model": (text.get("model") if isinstance(text, dict) else None) or metadata.get("model"),
+        "provider": top_provider,
+        "model": top_model,
+        "runtime_provider": runtime_provider_s,
+        "runtime_model": runtime_model_s,
+        "media_provider": media_provider,
+        "media_model": media_model,
         "finish_reason": text.get("finish_reason") if isinstance(text, dict) else None,
         "metadata": metadata,
         "trace_id": text.get("trace_id") if isinstance(text, dict) else None,
@@ -1612,6 +1977,7 @@ class LocalAbstractCoreLLMClient:
             # Keep a small in-memory ring buffer for exact request/response observability.
             # This enables hosts (AbstractCode/AbstractFlow) to inspect trace payloads by trace_id.
             kwargs.setdefault("max_traces", 50)
+        self._llm_kwargs = dict(kwargs)
         self._llm = create_llm(provider, model=model, **kwargs)
         self._tool_handler = UniversalToolHandler(model)
         self._prompt_cache_state_lock = threading.Lock()
@@ -1619,6 +1985,124 @@ class LocalAbstractCoreLLMClient:
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._provider, self._model
+
+    def list_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        task_s = _normalize_residency_task(task)
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation="list_loaded",
+                task=task_s,
+                provider=provider,
+                model=model,
+                error=(
+                    "Local in-process residency is only supported for the active text-generation "
+                    "client; local image subprocess execution is one-shot and cannot stay warm."
+                ),
+            )
+        record = _local_residency_record(provider=self._provider, model=self._model, default=True)
+        if isinstance(provider, str) and provider.strip() and provider.strip().lower() != self._provider:
+            records: List[Dict[str, Any]] = []
+        elif isinstance(model, str) and model.strip() and model.strip() != self._model:
+            records = []
+        else:
+            records = [record]
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "list_loaded",
+            "task": "text_generation",
+            "models": records,
+            "diagnostics": {"source": "abstractruntime.local", "count": len(records)},
+        }
+
+    def load_model_residency(
+        self,
+        *,
+        task: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        pin: bool = True,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (options, pin, kwargs)
+        task_s = _normalize_residency_task(task)
+        provider_s = str(provider or self._provider or "").strip().lower()
+        model_s = str(model or self._model or "").strip()
+        if task_s != "text_generation" or provider_s != self._provider or model_s != self._model:
+            return _model_residency_unsupported_payload(
+                operation="load",
+                task=task_s,
+                provider=provider_s,
+                model=model_s,
+                error=(
+                    "This local client can only report its already-active text-generation model. "
+                    "Use MultiLocalAbstractCoreLLMClient or remote AbstractCore for loading other models."
+                ),
+            )
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "load",
+            "task": "text_generation",
+            "loaded_new": False,
+            "runtime": _local_residency_record(provider=self._provider, model=self._model, default=True),
+            "diagnostics": {"source": "abstractruntime.local", "loaded_new": False},
+        }
+
+    def unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (runtime_id, options, kwargs)
+        task_s = _normalize_residency_task(task)
+        provider_s = str(provider or self._provider or "").strip().lower()
+        model_s = str(model or self._model or "").strip()
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation="unload",
+                task=task_s,
+                provider=provider_s,
+                model=model_s,
+                error="Local one-shot media execution does not support model unload residency controls.",
+            )
+        if provider_s != self._provider or model_s != self._model:
+            requested = _local_residency_record(provider=provider_s, model=model_s, default=False)
+            return {
+                "ok": True,
+                "supported": True,
+                "operation": "unload",
+                "task": "text_generation",
+                "unloaded": False,
+                "runtime": dict(requested, resident=False, loaded=False, state="not_found"),
+                "warnings": ["Requested local runtime was not resident in this client."],
+                "diagnostics": {"source": "abstractruntime.local", "reason": "not_found"},
+            }
+        warning = "The active local default text-generation client cannot be unloaded from itself."
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "unload",
+            "task": "text_generation",
+            "unloaded": False,
+            "runtime": _local_residency_record(provider=self._provider, model=self._model, default=True),
+            "warnings": [warning],
+            "diagnostics": {"source": "abstractruntime.local", "reason": "active_default_client"},
+        }
 
     def _maybe_prepare_prompt_cache(
         self,
@@ -1888,23 +2372,45 @@ class LocalAbstractCoreLLMClient:
                 )
                 run_spec = getattr(self._llm, "_run_multimodal_spec", None)
                 if media_only and callable(run_spec):
-                    from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
-
-                    result_obj = MultimodalGenerateResponse(metadata={"media_only": True})
-                    for spec in specs:
-                        run_spec(
-                            result=result_obj,
-                            spec=dict(spec),
+                    if _is_subprocess_safe_image_specs(specs, media):
+                        result_obj = _run_local_image_subprocess(
+                            provider=self._provider,
+                            model=self._model,
+                            llm_kwargs=getattr(self, "_llm_kwargs", {}),
                             prompt=str(prompt or ""),
-                            media=media,
-                            artifact_store=self._artifact_store,
+                            specs=[dict(spec) for spec in specs],
+                            timeout_s=_local_image_subprocess_timeout_s(params, getattr(self, "_llm_kwargs", {})),
                         )
-                    result = _normalize_local_response(
-                        result_obj,
-                        artifact_store=self._artifact_store,
-                        run_id=run_id,
-                        default_tags=default_artifact_tags,
-                    )
+                        result = _normalize_multimodal_response(
+                            result_obj,
+                            artifact_store=self._artifact_store,
+                            run_id=run_id,
+                            default_tags=default_artifact_tags,
+                        )
+                    else:
+                        from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
+
+                        result_obj = MultimodalGenerateResponse(
+                            metadata={
+                                "media_only": True,
+                                "runtime_provider": self._provider,
+                                "runtime_model": self._model,
+                            }
+                        )
+                        for spec in specs:
+                            run_spec(
+                                result=result_obj,
+                                spec=dict(spec),
+                                prompt=str(prompt or ""),
+                                media=media,
+                                artifact_store=self._artifact_store,
+                            )
+                        result = _normalize_local_response(
+                            result_obj,
+                            artifact_store=self._artifact_store,
+                            run_id=run_id,
+                            default_tags=default_artifact_tags,
+                        )
                     _sanitize_runtime_grounding_echoes(result)
                     _attach_runtime_grounding(result, runtime_grounding)
                     result["tool_calls"] = []
@@ -2029,7 +2535,7 @@ class LocalAbstractCoreLLMClient:
                 except Exception:
                     pass
 
-    def get_model_capabilities(self) -> Dict[str, Any]:
+    def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Get model capabilities including max_tokens, vision_support, etc.
 
         Uses AbstractCore's architecture detection system to query model limits
@@ -2039,14 +2545,147 @@ class LocalAbstractCoreLLMClient:
         Returns:
             Dict with model capabilities. Always includes 'max_tokens' (default: DEFAULT_MAX_TOKENS).
         """
-        try:
-            from abstractcore.architectures.detection import get_model_capabilities
-            return get_model_capabilities(self._model)
-        except Exception:
-            # Safe fallback if detection fails
-            from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+        target_model = str(model_name or self._model or "").strip() or self._model
+        from .discovery_queries import local_get_model_capabilities
 
-            return {"max_tokens": DEFAULT_MAX_TOKENS}
+        payload = local_get_model_capabilities(target_model)
+        capabilities = payload.get("capabilities") if isinstance(payload, dict) else None
+        if isinstance(capabilities, dict):
+            return capabilities
+        from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
+        return {"max_tokens": DEFAULT_MAX_TOKENS}
+
+    def lookup_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        target_model = str(model_name or self._model or "").strip() or self._model
+        from .discovery_queries import local_get_model_capabilities
+
+        return local_get_model_capabilities(target_model)
+
+    def list_providers(
+        self,
+        *,
+        include_models: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        from .discovery_queries import local_list_providers
+
+        return local_list_providers(
+            include_models=include_models,
+            default_provider=self._provider,
+            default_model=self._model,
+        )
+
+    def list_provider_models(
+        self,
+        provider_name: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import local_list_provider_models
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        return local_list_provider_models(
+            provider_name,
+            base_url=call_kwargs.get("base_url"),
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+
+    def get_voice_catalog(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_get_voice_catalog
+
+        return local_get_voice_catalog(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            model=model,
+            providers_only=providers_only,
+        )
+
+    def list_tts_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_tts_models
+
+        return local_list_tts_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+        )
+
+    def list_stt_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_stt_models
+
+        return local_list_stt_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+        )
+
+    def list_vision_provider_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_vision_provider_models
+
+        return local_list_vision_provider_models(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            providers_only=providers_only,
+        )
+
+    def list_cached_vision_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (base_url, provider_api_key, kwargs)
+        from .discovery_queries import local_list_cached_vision_models
+
+        return local_list_cached_vision_models(task=task, provider=provider)
 
     def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         _ = kwargs
@@ -2323,6 +2962,189 @@ class MultiLocalAbstractCoreLLMClient:
         """Return (provider, model) pairs loaded in this process (best-effort)."""
         return list(self._clients.keys())
 
+    def list_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        task_s = _normalize_residency_task(task)
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation="list_loaded",
+                task=task_s,
+                provider=provider,
+                model=model,
+                error=(
+                    "Local image/audio residency is unsupported in AbstractRuntime. Use a long-lived "
+                    "remote AbstractCore server for media model warmup."
+                ),
+            )
+
+        provider_filter = str(provider or "").strip().lower()
+        model_filter = str(model or "").strip()
+        records: List[Dict[str, Any]] = []
+        for provider_s, model_s in self.list_loaded_clients():
+            if provider_filter and provider_s != provider_filter:
+                continue
+            if model_filter and model_s != model_filter:
+                continue
+            records.append(
+                _local_residency_record(
+                    provider=provider_s,
+                    model=model_s,
+                    default=(provider_s, model_s) == (self._default_provider, self._default_model),
+                )
+            )
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "list_loaded",
+            "task": "text_generation",
+            "models": records,
+            "diagnostics": {"source": "abstractruntime.multilocal", "count": len(records)},
+        }
+
+    def load_model_residency(
+        self,
+        *,
+        task: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        pin: bool = True,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (options, pin, kwargs)
+        task_s = _normalize_residency_task(task)
+        provider_s = str(provider or self._default_provider or "").strip().lower()
+        model_s = str(model or self._default_model or "").strip()
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation="load",
+                task=task_s,
+                provider=provider_s,
+                model=model_s,
+                error=(
+                    "MultiLocalAbstractCoreLLMClient can keep text-generation clients warm only. "
+                    "Media warmup requires a long-lived remote AbstractCore server."
+                ),
+            )
+        if not provider_s or not model_s:
+            return {
+                "ok": False,
+                "supported": True,
+                "operation": "load",
+                "task": "text_generation",
+                "provider": provider_s or None,
+                "model": model_s or None,
+                "error": "model_residency load requires provider and model",
+                "warnings": ["model_residency load requires provider and model"],
+            }
+        key = (provider_s, model_s)
+        loaded_new = key not in self._clients
+        self._get_client(provider_s, model_s)
+        record = _local_residency_record(
+            provider=provider_s,
+            model=model_s,
+            default=key == (self._default_provider, self._default_model),
+        )
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "load",
+            "task": "text_generation",
+            "loaded_new": loaded_new,
+            "runtime": record,
+            "diagnostics": {"source": "abstractruntime.multilocal", "loaded_new": loaded_new},
+        }
+
+    def unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (options, kwargs)
+        task_s = _normalize_residency_task(task)
+        provider_s = str(provider or "").strip().lower()
+        model_s = str(model or "").strip()
+        if not provider_s or not model_s:
+            raw_runtime_id = str(runtime_id or "").strip()
+            prefix = "local:text_generation:"
+            if raw_runtime_id.startswith(prefix):
+                rest = raw_runtime_id[len(prefix) :]
+                if ":" in rest:
+                    provider_s, model_s = rest.split(":", 1)
+                    provider_s = provider_s.strip().lower()
+                    model_s = model_s.strip()
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation="unload",
+                task=task_s,
+                provider=provider_s,
+                model=model_s,
+                error="Local media residency unload is unsupported in AbstractRuntime.",
+            )
+        if not provider_s or not model_s:
+            return {
+                "ok": False,
+                "supported": True,
+                "operation": "unload",
+                "task": "text_generation",
+                "unloaded": False,
+                "error": "model_residency unload requires runtime_id or provider/model",
+                "warnings": ["model_residency unload requires runtime_id or provider/model"],
+            }
+
+        key = (provider_s, model_s)
+        record = _local_residency_record(
+            provider=provider_s,
+            model=model_s,
+            default=key == (self._default_provider, self._default_model),
+        )
+        if key == (self._default_provider, self._default_model):
+            warning = "The default local text-generation client remains resident for runtime services."
+            return {
+                "ok": True,
+                "supported": True,
+                "operation": "unload",
+                "task": "text_generation",
+                "unloaded": False,
+                "runtime": record,
+                "warnings": [warning],
+                "diagnostics": {"source": "abstractruntime.multilocal", "reason": "default_client"},
+            }
+
+        client = self._clients.pop(key, None)
+        if client is None:
+            return {
+                "ok": True,
+                "supported": True,
+                "operation": "unload",
+                "task": "text_generation",
+                "unloaded": False,
+                "runtime": dict(record, resident=False, loaded=False, state="not_found"),
+                "warnings": ["Requested local runtime was not resident."],
+                "diagnostics": {"source": "abstractruntime.multilocal", "reason": "not_found"},
+            }
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "unload",
+            "task": "text_generation",
+            "unloaded": True,
+            "runtime": dict(record, resident=False, loaded=False, state="unloaded"),
+            "diagnostics": {"source": "abstractruntime.multilocal"},
+        }
+
     def generate(
         self,
         *,
@@ -2352,9 +3174,119 @@ class MultiLocalAbstractCoreLLMClient:
             params=params,
         )
 
-    def get_model_capabilities(self) -> Dict[str, Any]:
-        # Best-effort: use default model capabilities. Per-model limits can be added later.
-        return self._default_client.get_model_capabilities()
+    def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        # Best-effort: use requested model name or the default client model.
+        return self._default_client.get_model_capabilities(model_name=model_name)
+
+    def lookup_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        return self._default_client.lookup_model_capabilities(model_name=model_name)
+
+    def list_providers(
+        self,
+        *,
+        include_models: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = kwargs
+        from .discovery_queries import local_list_providers
+
+        return local_list_providers(
+            include_models=include_models,
+            default_provider=self._default_provider,
+            default_model=self._default_model,
+        )
+
+    def list_provider_models(
+        self,
+        provider_name: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_provider_models(provider_name, **kwargs)
+
+    def get_voice_catalog(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.get_voice_catalog(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            model=model,
+            providers_only=providers_only,
+            **kwargs,
+        )
+
+    def list_tts_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_tts_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_stt_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_stt_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_vision_provider_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_vision_provider_models(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            providers_only=providers_only,
+            **kwargs,
+        )
+
+    def list_cached_vision_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_cached_vision_models(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
 
     def get_prompt_cache_capabilities(
         self,
@@ -2800,7 +3732,7 @@ class RemoteAbstractCoreLLMClient:
     ):
         from .constants import DEFAULT_LLM_TIMEOUT_S
 
-        self._server_base_url = server_base_url.rstrip("/")
+        self._server_base_url = _core_server_root_url(server_base_url)
         self._model = model
         self._timeout_s = float(timeout_s) if timeout_s is not None else DEFAULT_LLM_TIMEOUT_S
         self._headers = dict(headers or {})
@@ -2827,11 +3759,321 @@ class RemoteAbstractCoreLLMClient:
             )
         return headers
 
+    def _discovery_error_payload(self, *, source: str, error: Any) -> Dict[str, Any]:
+        response = getattr(error, "response", None)
+        status_code = None
+        try:
+            status_code = int(getattr(response, "status_code", None))
+        except Exception:
+            status_code = None
+        detail: Any = None
+        if response is not None:
+            body = getattr(response, "body", None)
+            if isinstance(body, dict):
+                detail = _jsonable(body)
+            else:
+                json_fn = getattr(response, "json", None)
+                if callable(json_fn):
+                    try:
+                        detail = _jsonable(json_fn())
+                    except Exception:
+                        detail = None
+                if detail is None:
+                    text = getattr(response, "text", None)
+                    if isinstance(text, str) and text.strip():
+                        detail = text.strip()
+        payload = {
+            "available": False,
+            "route_available": response is not None,
+            "source": source,
+            "stale": False,
+            "refreshed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "error": str(error),
+        }
+        if status_code is not None:
+            payload["status_code"] = status_code
+        if detail is not None:
+            payload["upstream_error"] = detail
+        return payload
+
+    def _discovery_get(
+        self,
+        path: str,
+        *,
+        source: str,
+        query: Optional[Dict[str, Any]] = None,
+        provider_api_key: Optional[str] = None,
+        v1: bool = True,
+        timeout_s: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        encoded: Dict[str, str] = {}
+        for key, raw in dict(query or {}).items():
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                encoded[str(key)] = "true" if raw else "false"
+                continue
+            text = str(raw).strip()
+            if text:
+                encoded[str(key)] = text
+        url = _join_core_v1_url(self._server_base_url, path) if v1 else _join_core_control_url(self._server_base_url, path)
+        if encoded:
+            url = f"{url}?{urlencode(encoded)}"
+        try:
+            raw = self._sender.get(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                timeout=float(timeout_s) if timeout_s is not None else self._timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as exc:
+            return self._discovery_error_payload(source=source, error=exc)
+        if not isinstance(resp, dict):
+            return self._discovery_error_payload(source=source, error=f"invalid discovery response for {path}")
+        out = dict(resp)
+        out.setdefault("available", True)
+        out["route_available"] = True
+        out["source"] = source
+        out.setdefault("stale", False)
+        out.setdefault("error", None)
+        out["refreshed_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return out
+
+    def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        target_model = str(model_name or self._model or "").strip() or self._model
+        from .discovery_queries import local_get_model_capabilities
+
+        payload = local_get_model_capabilities(target_model)
+        capabilities = payload.get("capabilities") if isinstance(payload, dict) else None
+        if isinstance(capabilities, dict):
+            return capabilities
+        from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
+        return {"max_tokens": DEFAULT_MAX_TOKENS}
+
+    def lookup_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+        target_model = str(model_name or self._model or "").strip() or self._model
+        from .discovery_queries import local_get_model_capabilities
+
+        return local_get_model_capabilities(target_model)
+
+    def list_providers(
+        self,
+        *,
+        include_models: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        payload = self._discovery_get(
+            "/providers",
+            source="abstractcore.remote",
+            query={"include_models": bool(include_models)},
+            v1=False,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        providers = payload.get("providers")
+        items = [dict(item) for item in list(providers or []) if isinstance(item, dict)]
+        items.sort(key=lambda item: str(item.get("name") or ""))
+        provider_hint = None
+        model_hint = str(self._model or "").strip() or None
+        if model_hint and "/" in model_hint:
+            maybe_provider, maybe_model = model_hint.split("/", 1)
+            if maybe_provider.strip() and maybe_model.strip():
+                provider_hint = maybe_provider.strip().lower()
+                model_hint = maybe_model.strip()
+        payload["items"] = items
+        payload["default_provider"] = provider_hint
+        payload["default_model"] = model_hint
+        payload["available"] = bool(items)
+        return payload
+
+    def list_provider_models(
+        self,
+        provider_name: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_text = str(provider_name or "").strip()
+        if not provider_text:
+            return self._discovery_error_payload(source="abstractcore.remote", error="provider_name is required")
+        call_kwargs = dict(kwargs)
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/models",
+            source="abstractcore.remote",
+            query={
+                "provider": provider_text,
+                "base_url": call_kwargs.get("base_url"),
+            },
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        data = payload.get("data")
+        out: List[str] = []
+        if isinstance(data, list):
+            prefix = f"{provider_text.lower()}/"
+            for item in data:
+                model_id = ""
+                if isinstance(item, str):
+                    model_id = item.strip()
+                elif isinstance(item, dict):
+                    model_id = str(item.get("id") or item.get("model") or item.get("name") or "").strip()
+                if not model_id:
+                    continue
+                if model_id.lower().startswith(prefix):
+                    model_id = model_id[len(prefix) :]
+                out.append(model_id)
+        out = sorted({model.strip(): model.strip() for model in out if model.strip()}.values(), key=str.lower)
+        payload["provider"] = provider_text
+        payload["models"] = out
+        payload["available"] = bool(out)
+        return payload
+
+    def get_voice_catalog(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import _filter_voice_catalog_response
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/audio/voices",
+            source="abstractcore.remote",
+            query={
+                "base_url": base_url,
+                "provider": provider,
+                "model": model,
+                "providers_only": providers_only,
+            },
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        return _filter_voice_catalog_response(payload, provider=provider, model=model, providers_only=providers_only)
+
+    def list_tts_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import _filter_provider_model_catalog_response
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/audio/speech/models",
+            source="abstractcore.remote",
+            query={"base_url": base_url, "provider": provider},
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        return _filter_provider_model_catalog_response(
+            payload,
+            provider=provider,
+            model_keys=("models_by_provider", "tts_models_by_provider"),
+        )
+
+    def list_stt_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import _filter_provider_model_catalog_response
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/audio/transcriptions/models",
+            source="abstractcore.remote",
+            query={"base_url": base_url, "provider": provider},
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        return _filter_provider_model_catalog_response(
+            payload,
+            provider=provider,
+            model_keys=("models_by_provider", "stt_models_by_provider"),
+        )
+
+    def list_vision_provider_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        from .discovery_queries import _filter_vision_provider_models_response
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/vision/provider_models",
+            source="abstractcore.remote",
+            query={
+                "task": task,
+                "base_url": base_url,
+                "provider": provider,
+                "providers_only": providers_only,
+            },
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        return _filter_vision_provider_models_response(
+            payload,
+            provider=provider,
+            providers_only=providers_only,
+        )
+
+    def list_cached_vision_models(
+        self,
+        *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/vision/models",
+            source="abstractcore.remote",
+            query={"task": task, "base_url": base_url, "provider": provider},
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        items = payload.get("models")
+        models = [dict(item) for item in list(items or []) if isinstance(item, dict)]
+        provider_value = str(provider or "").strip().lower()
+        if provider_value:
+            models = [
+                item
+                for item in models
+                if str(item.get("provider") or "").strip().lower() == provider_value
+            ]
+        payload["models"] = models
+        payload["available"] = bool(models)
+        return payload
+
     def _prompt_cache_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         call_kwargs = dict(kwargs or {})
         provider_api_key = _pop_provider_api_key(call_kwargs)
         proxy_fields = self._prompt_cache_proxy_fields(call_kwargs)
-        url = f"{self._server_base_url}{path}"
+        url = _join_core_control_url(self._server_base_url, path)
         if proxy_fields:
             url = f"{url}?{urlencode(proxy_fields)}"
         try:
@@ -2868,7 +4110,7 @@ class RemoteAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs or {})
         provider_api_key = _pop_provider_api_key(call_kwargs)
-        url = f"{self._server_base_url}{path}"
+        url = _join_core_control_url(self._server_base_url, path)
         payload = dict(body)
         payload.update(self._prompt_cache_proxy_fields(call_kwargs))
         try:
@@ -2997,6 +4239,158 @@ class RemoteAbstractCoreLLMClient:
             body=body,
             kwargs=kwargs,
         )
+
+    def _model_residency_error_payload(self, *, operation: str, error: Any) -> Dict[str, Any]:
+        status_code = None
+        response = getattr(error, "response", None)
+        try:
+            status_code = int(getattr(response, "status_code", None))
+        except Exception:
+            status_code = None
+        payload: Dict[str, Any] = {
+            "ok": False,
+            "supported": False,
+            "operation": operation,
+            "error": str(error),
+            "warnings": [str(error)],
+            "diagnostics": {"source": "abstractcore.remote"},
+        }
+        if status_code is not None:
+            payload["status_code"] = status_code
+        return payload
+
+    def _model_residency_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        query: Dict[str, Any] = {}
+        for key in ("task", "provider", "model", "base_url"):
+            raw = call_kwargs.get(key)
+            if isinstance(raw, str) and raw.strip():
+                query[key] = raw.strip()
+        url = _join_core_control_url(self._server_base_url, path)
+        if query:
+            url = f"{url}?{urlencode(query)}"
+        try:
+            raw = self._sender.get(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                timeout=self._timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as e:
+            return self._model_residency_error_payload(operation=operation, error=e)
+        return resp if isinstance(resp, dict) else {"ok": False, "operation": operation, "data": _jsonable(resp)}
+
+    def _model_residency_post(
+        self,
+        path: str,
+        *,
+        operation: str,
+        body: Dict[str, Any],
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs or {})
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        payload = {k: _jsonable(v) for k, v in dict(body).items() if v is not None}
+        for key in ("base_url", "timeout_s"):
+            raw = call_kwargs.get(key)
+            if raw is not None and raw != "":
+                payload[key] = _jsonable(raw)
+        url = _join_core_control_url(self._server_base_url, path)
+        try:
+            raw = self._sender.post(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                json=payload,
+                timeout=self._timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as e:
+            return self._model_residency_error_payload(operation=operation, error=e)
+        return resp if isinstance(resp, dict) else {"ok": False, "operation": operation, "data": _jsonable(resp)}
+
+    def list_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        if task is not None:
+            call_kwargs["task"] = _normalize_residency_task(task)
+        if provider is not None:
+            call_kwargs["provider"] = provider
+        if model is not None:
+            call_kwargs["model"] = model
+        result = self._model_residency_get(
+            "/acore/models/loaded",
+            operation="list_loaded",
+            kwargs=call_kwargs,
+        )
+        if isinstance(result, dict):
+            result.setdefault("operation", "list_loaded")
+            if "models" not in result:
+                for key in ("loaded", "runtimes", "data"):
+                    if isinstance(result.get(key), list):
+                        result["models"] = result.get(key)
+                        break
+        return result
+
+    def load_model_residency(
+        self,
+        *,
+        task: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        pin: bool = True,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "task": _normalize_residency_task(task),
+            "provider": provider,
+            "model": model,
+            "options": options if isinstance(options, dict) else None,
+            "pin": bool(pin),
+        }
+        result = self._model_residency_post(
+            "/acore/models/load",
+            operation="load",
+            body=body,
+            kwargs=kwargs,
+        )
+        if isinstance(result, dict):
+            result.setdefault("operation", "load")
+        return result
+
+    def unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "task": _normalize_residency_task(task) if task is not None else None,
+            "runtime_id": runtime_id,
+            "provider": provider,
+            "model": model,
+            "options": options if isinstance(options, dict) else None,
+        }
+        result = self._model_residency_post(
+            "/acore/models/unload",
+            operation="unload",
+            body=body,
+            kwargs=kwargs,
+        )
+        if isinstance(result, dict):
+            result.setdefault("operation", "unload")
+        return result
 
     def _effective_model_from_params(self, params: Dict[str, Any]) -> str:
         provider = params.pop("_provider", None)
@@ -3145,7 +4539,7 @@ class RemoteAbstractCoreLLMClient:
         if isinstance(base_url, str) and base_url.strip():
             body["base_url"] = base_url.strip()
 
-        url = f"{self._server_base_url}/v1/images/generations"
+        url = _join_core_v1_url(self._server_base_url, "/images/generations")
         raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
         resp, _resp_headers = _unwrap_http_response(raw)
 
@@ -3221,9 +4615,9 @@ class RemoteAbstractCoreLLMClient:
 
         if endpoint_provider:
             body.pop("provider", None)
-            url = f"{self._server_base_url}/{quote(endpoint_provider, safe='')}/v1/audio/speech"
+            url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/audio/speech")
         else:
-            url = f"{self._server_base_url}/v1/audio/speech"
+            url = _join_core_v1_url(self._server_base_url, "/audio/speech")
         audio_bytes, resp_headers = self._post_bytes(url, headers=headers, json_body=body)
         content_type = str(resp_headers.get("content-type") or f"audio/{fmt}").split(";", 1)[0].strip() or f"audio/{fmt}"
         run_id, tags = self._trace_run_id_and_tags(
@@ -3288,9 +4682,9 @@ class RemoteAbstractCoreLLMClient:
             data["base_url"] = base_url.strip()
         if endpoint_provider:
             data.pop("provider", None)
-            url = f"{self._server_base_url}/{quote(endpoint_provider, safe='')}/v1/audio/transcriptions"
+            url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/audio/transcriptions")
         else:
-            url = f"{self._server_base_url}/v1/audio/transcriptions"
+            url = _join_core_v1_url(self._server_base_url, "/audio/transcriptions")
         resp, _resp_headers = self._post_multipart(url, headers=headers, data=data, file_path=media_paths[0])
         text = resp.get("text") if isinstance(resp, dict) else None
         if text is None and isinstance(resp, dict):
@@ -3553,7 +4947,7 @@ class RemoteAbstractCoreLLMClient:
         if tools is not None:
             body["tools"] = tools
 
-        url = f"{self._server_base_url}/v1/chat/completions"
+        url = _join_core_v1_url(self._server_base_url, "/chat/completions")
         raw = self._sender.post(url, headers=req_headers, json=body, timeout=self._timeout_s)
         resp, resp_headers = _unwrap_http_response(raw)
         lower_headers = {str(k).lower(): str(v) for k, v in resp_headers.items()}

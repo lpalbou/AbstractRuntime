@@ -53,6 +53,7 @@ class EffectType(str, Enum):
 
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"
+    MODEL_RESIDENCY = "model_residency"
     TOOL_CALLS = "tool_calls"
     MEMORY_QUERY = "memory_query"
     MEMORY_TAG = "memory_tag"

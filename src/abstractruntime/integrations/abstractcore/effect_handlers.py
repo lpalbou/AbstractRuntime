@@ -2892,6 +2892,180 @@ def make_tool_calls_handler(
     return _handler
 
 
+def _coerce_boolish(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return float(value) != 0.0
+        except Exception:
+            return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return default
+        if text in {"false", "0", "no", "off", "disable", "disabled"}:
+            return False
+        if text in {"true", "1", "yes", "on", "enable", "enabled"}:
+            return True
+    return default
+
+
+def _normalize_model_residency_operation(raw: Any) -> str:
+    op = str(raw or "list_loaded").strip().lower().replace("-", "_")
+    if op in {"list", "loaded", "list_loaded", "list_models", "loaded_models"}:
+        return "list_loaded"
+    if op in {"load", "warm", "preload"}:
+        return "load"
+    if op in {"unload", "release", "evict"}:
+        return "unload"
+    return op
+
+
+def _model_residency_not_found(payload: Dict[str, Any]) -> bool:
+    try:
+        if int(payload.get("status_code")) == 404:
+            return True
+    except Exception:
+        pass
+    for key in ("code", "type", "reason"):
+        raw = payload.get(key)
+        if isinstance(raw, str) and "not_found" in raw.lower():
+            return True
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return _model_residency_not_found(error)
+    if isinstance(error, str):
+        text = error.lower().replace("-", "_").replace(" ", "_")
+        return "not_found" in text
+    return False
+
+
+def _soft_model_residency_failure(*, operation: str, message: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "ok": False,
+        "operation": operation,
+        "error": message,
+        "warnings": [message],
+        "status_hint": "warning",
+        "degraded": True,
+    }
+    if payload:
+        out["diagnostics"] = _jsonable(payload)
+    return out
+
+
+def make_model_residency_handler(*, control: Any) -> EffectHandler:
+    def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        _ = (run, default_next_node)
+        payload = dict(effect.payload or {})
+        operation = _normalize_model_residency_operation(payload.get("operation"))
+        required = _coerce_boolish(payload.get("required"), default=False)
+
+        if operation not in {"list_loaded", "load", "unload"}:
+            result = _soft_model_residency_failure(
+                operation=operation,
+                message=f"Unsupported model_residency operation: {operation!r}",
+            )
+            return EffectOutcome.failed(result["error"]) if required else EffectOutcome.completed(_jsonable(result))
+
+        method_name = {
+            "list_loaded": "list_model_residency",
+            "load": "load_model_residency",
+            "unload": "unload_model_residency",
+        }[operation]
+        method = getattr(control, method_name, None)
+        if not callable(method):
+            result = _soft_model_residency_failure(
+                operation=operation,
+                message="Configured AbstractCore client does not expose model residency controls.",
+            )
+            return EffectOutcome.failed(result["error"]) if required else EffectOutcome.completed(_jsonable(result))
+
+        options = payload.get("options")
+        call_kwargs: Dict[str, Any] = {}
+        for key in ("task", "provider", "model", "runtime_id", "base_url", "timeout_s", "provider_api_key", "api_key"):
+            raw = payload.get(key)
+            if raw is not None and raw != "":
+                call_kwargs[key] = raw
+        if isinstance(options, dict):
+            call_kwargs["options"] = dict(options)
+        if "pin" in payload:
+            call_kwargs["pin"] = _coerce_boolish(payload.get("pin"), default=True)
+
+        try:
+            if operation == "list_loaded":
+                result = method(
+                    task=call_kwargs.pop("task", None),
+                    provider=call_kwargs.pop("provider", None),
+                    model=call_kwargs.pop("model", None),
+                    **call_kwargs,
+                )
+            elif operation == "load":
+                task = call_kwargs.pop("task", None)
+                if not isinstance(task, str) or not task.strip():
+                    raise ValueError("model_residency load requires payload.task")
+                result = method(
+                    task=task,
+                    provider=call_kwargs.pop("provider", None),
+                    model=call_kwargs.pop("model", None),
+                    options=call_kwargs.pop("options", None),
+                    pin=call_kwargs.pop("pin", True),
+                    **call_kwargs,
+                )
+            else:
+                result = method(
+                    task=call_kwargs.pop("task", None),
+                    runtime_id=call_kwargs.pop("runtime_id", None),
+                    provider=call_kwargs.pop("provider", None),
+                    model=call_kwargs.pop("model", None),
+                    options=call_kwargs.pop("options", None),
+                    **call_kwargs,
+                )
+        except Exception as e:
+            result = _soft_model_residency_failure(operation=operation, message=str(e))
+
+        if not isinstance(result, dict):
+            result = {"ok": True, "operation": operation, "data": _jsonable(result)}
+        else:
+            result = _jsonable(result)
+            if not isinstance(result, dict):
+                result = {"ok": True, "operation": operation, "data": result}
+
+        result.setdefault("operation", operation)
+        if operation == "list_loaded":
+            result.setdefault("ok", True)
+            if "models" not in result and isinstance(result.get("data"), list):
+                result["models"] = result.get("data")
+        elif operation == "load":
+            result.setdefault("ok", True)
+        elif operation == "unload":
+            result.setdefault("unloaded", False)
+            if result.get("ok") is False and _model_residency_not_found(result) and not required:
+                warning = str(result.get("error") or "Requested runtime was not resident.")
+                result = {
+                    "ok": True,
+                    "operation": "unload",
+                    "unloaded": False,
+                    "warnings": [warning],
+                    "diagnostics": {"source": "abstractruntime", "not_found": True, "original": result},
+                }
+            else:
+                result.setdefault("ok", True)
+
+        if result.get("ok") is False and not required:
+            result.setdefault("status_hint", "warning")
+            result.setdefault("degraded", True)
+
+        if result.get("ok") is False and required:
+            return EffectOutcome.failed(str(result.get("error") or "model_residency failed"))
+        return EffectOutcome.completed(_jsonable(result))
+
+    return _handler
+
+
 def build_effect_handlers(
     *,
     llm: AbstractCoreLLMClient,
@@ -2901,5 +3075,6 @@ def build_effect_handlers(
 ) -> Dict[EffectType, Any]:
     return {
         EffectType.LLM_CALL: make_llm_call_handler(llm=llm, artifact_store=artifact_store),
+        EffectType.MODEL_RESIDENCY: make_model_residency_handler(control=llm),
         EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools, artifact_store=artifact_store, run_store=run_store),
     }

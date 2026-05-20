@@ -1,69 +1,74 @@
 ## 014_remote_tool_worker_executor (planned)
 
-### Goal
-Provide an optional remote tool execution pathway:
-- runtime submits `tool_calls` to a remote worker service
-- runtime waits for job completion (`WaitReason.JOB`)
-- host resumes with results
-
-### Context / problem
-Today, remote/untrusted mode uses tool passthrough:
-- runtime returns WAITING with tool calls
-- the host executes tools and resumes
-
-That is correct, but sometimes you want:
-- centralized tool execution on a backend
-- thin clients that cannot execute tools
-
-### Non-goals
-- No mandatory worker service.
-- No cluster leasing semantics.
+**Status**: Planned
+**Priority**: Low
+**Depends on**: 005_abstractcore_integration (completed)
 
 ---
 
-### Proposed design
+## Goal
 
-#### A) Worker API contract (minimal)
-
-- `POST /v1/tool_jobs`
-  - request: `{run_id, tool_calls: [...], metadata?}`
-  - response: `{job_id}`
-
-- `GET /v1/tool_jobs/{job_id}`
-  - response: `{status: pending|running|completed|failed, result?, error?}`
-
-Alternatively, the worker can emit events and the host resumes runs.
-
-#### B) Runtime integration
-Add a `RemoteToolExecutor` implementation:
-- on execute(tool_calls):
-  - POST tool job
-  - return `{mode: "job", job_id, tool_calls}`
-
-Update the `TOOL_CALLS` effect handler:
-- if mode == job:
-  - return `WAITING` with `WaitReason.JOB` and `wait_key=job_id`
-
-#### C) Scheduler/driver integration
-A separate driver process can:
-- poll job statuses
-- resume runs when completed
+Decide whether Runtime still needs a generic non-MCP remote tool-job client beyond the delegated MCP support that already ships today.
 
 ---
 
-### Files to add / modify
-- `src/abstractruntime/integrations/abstractcore/tool_executor.py` (add RemoteToolExecutor)
-- new module: `src/abstractruntime/integrations/tool_worker_client.py`
-- docs page explaining worker contract
-- tests:
-  - stub worker client
-  - verify WAITING semantics for job mode
+## Current code reality
+
+- `WaitReason.JOB` already exists.
+- The `TOOL_CALLS` effect handler already turns delegated executor results into durable waits.
+- `DelegatingMcpToolExecutor` already provides a real job-style delegation path.
+- `McpToolExecutor` and `abstractruntime-mcp-worker` already cover a concrete remote-worker story.
+
+So the broad "add remote worker execution" item is no longer accurate. The remaining question is narrower: should Runtime also ship a generic HTTP tool-job client for deployments that do not want MCP?
 
 ---
 
-### Acceptance criteria
-- Thin clients can still run workflows with tools by delegating to a worker.
-- The runtime remains durable and does not keep in-flight tool execution in RAM.
+## Problem
 
-### Test plan
-- Unit tests with stubbed HTTP sender.
+Some thin-client or centralized-execution deployments may still want:
+
+- a simple HTTP job queue instead of MCP
+- runtime-owned packaging of tool batches into a documented remote job contract
+
+But this only matters if MCP delegation is not sufficient for real adopters.
+
+---
+
+## Planned scope
+
+1. Document the existing delegated MCP path as the preferred shipped solution.
+2. Evaluate whether a generic non-MCP job protocol still has real consumers.
+3. If yes, add a small `RemoteToolExecutor` / client abstraction that:
+   - submits tool batches to a remote service
+   - returns a durable `JOB` wait payload
+   - stays compatible with existing host resume flows
+4. Keep the contract intentionally minimal and host-agnostic.
+
+---
+
+## Acceptance criteria
+
+- [ ] The backlog clearly distinguishes existing MCP delegation from any still-missing generic worker client.
+- [ ] If implemented, a generic executor produces durable `JOB` waits without keeping in-flight tool work in RAM.
+- [ ] Documentation explains when to use passthrough, delegated MCP, or a generic HTTP job path.
+
+---
+
+## Validation
+
+1. Documentation review against the current MCP worker and delegated executor behavior.
+2. If a generic client is added, unit tests with a stub transport covering submit, wait details, and resume semantics.
+
+---
+
+## Non-goals
+
+- replacing the existing MCP path
+- mandatory worker infrastructure
+- cluster scheduling or leasing semantics
+
+---
+
+## Priority note
+
+Keep this low priority unless a concrete non-MCP deployment requirement appears. The durable job-wait foundation is already in place.

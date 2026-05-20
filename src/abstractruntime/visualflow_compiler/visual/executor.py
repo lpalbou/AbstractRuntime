@@ -206,6 +206,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     EFFECT_NODE_TYPES = {
         "ask_user",
         "answer_user",
+        "model_residency",
         "llm_call",
         "generate_image",
         "generate_voice",
@@ -1369,6 +1370,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_ask_user_handler(data, effect_config)
         if effect_type == "answer_user":
             return _create_answer_user_handler(data, effect_config)
+        if effect_type == "model_residency":
+            return _create_model_residency_handler(data, effect_config)
         if effect_type == "llm_call":
             return _create_llm_call_handler(data, effect_config)
         if effect_type == "generate_image":
@@ -1608,6 +1611,58 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "output": output_spec,
             }
             return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_model_residency_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            operation = str(_input_or_config(payload, config, "operation", default="list_loaded") or "list_loaded").strip()
+            task = _nonempty_str(_input_or_config(payload, config, "task"))
+            provider = _nonempty_str(_input_or_config(payload, config, "provider"))
+            model = _nonempty_str(_input_or_config(payload, config, "model"))
+            runtime_id = _nonempty_str(_input_or_config(payload, config, "runtime_id", "runtimeId"))
+            base_url = _nonempty_str(_input_or_config(payload, config, "base_url", "baseUrl"))
+            provider_api_key = _nonempty_str(_input_or_config(payload, config, "provider_api_key", "api_key", "apiKey"))
+            timeout_s = _coerce_float(_input_or_config(payload, config, "timeout_s", "timeout", "timeoutS"))
+            options = _input_or_config(payload, config, "options")
+            cache_policy = _nonempty_str(_input_or_config(payload, config, "cache_policy", "cachePolicy"))
+
+            pending: Dict[str, Any] = {
+                "type": "model_residency",
+                "operation": operation or "list_loaded",
+            }
+            if task:
+                pending["task"] = task
+            if provider:
+                pending["provider"] = provider
+            if model:
+                pending["model"] = model
+            if runtime_id:
+                pending["runtime_id"] = runtime_id
+            if base_url:
+                pending["base_url"] = base_url
+            if provider_api_key:
+                pending["provider_api_key"] = provider_api_key
+            if timeout_s is not None:
+                pending["timeout_s"] = timeout_s
+            if isinstance(options, dict):
+                pending["options"] = dict(options)
+            if "pin" in payload or (isinstance(config, dict) and "pin" in config):
+                pending["pin"] = _coerce_bool(_input_or_config(payload, config, "pin", default=True))
+            if "required" in payload or (isinstance(config, dict) and "required" in config):
+                pending["required"] = _coerce_bool(_input_or_config(payload, config, "required", default=False))
+            if cache_policy:
+                pending["cache_policy"] = cache_policy
+
+            return {
+                "ok": None,
+                "models": [],
+                "runtime": None,
+                "unloaded": None,
+                "loaded_new": None,
+                "_pending_effect": pending,
+            }
 
         return handler
 

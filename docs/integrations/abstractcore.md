@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.12 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, and async/sync text-generation output-selector parity.
+This extra installs AbstractCore 2.13.20 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.12`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
+This installs `abstractcore[media,openai,vision,voice,audio]>=2.13.20`. Local image/voice generation still depends on the configured AbstractCore capability backends (for example AbstractVision and AbstractVoice, or OpenAI/OpenAI-compatible remote engines).
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -38,6 +38,11 @@ The factories implement three execution modes (ADR-0002):
 - **Local**: in-process AbstractCore providers + local tool execution
 - **Remote**: HTTP to an AbstractCore server (`/v1/chat/completions`) + tool passthrough
 - **Hybrid**: remote LLM + local tool execution
+
+Local mode currently uses `MultiLocalAbstractCoreLLMClient` as the built-in LLM router. Despite the name, it is not a
+local+remote combo client: it routes among multiple in-process local `(provider, model)` clients and keeps them warm in
+the current process. Remote model execution is a separate topology exposed through `create_remote_runtime(...)` and
+`create_hybrid_runtime(...)`.
 
 Factory functions (exported from `abstractruntime.integrations.abstractcore`):
 - `create_local_runtime(...)`
@@ -190,9 +195,25 @@ Generated binary media requires a runtime `ArtifactStore` and is stored there. T
 }
 ```
 
+Media-only normalized results now distinguish orchestration identity from the actual media backend:
+
+- `runtime_provider` / `runtime_model`: the runtime-side orchestration identity, when relevant
+- `media_provider` / `media_model`: the actual image/voice backend identity surfaced from the generated output
+
+For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
+
 Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), TTS (`/v1/audio/speech`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
+
+Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `tts`, and `stt` return:
+
+- `code="model_residency_unsupported"`
+- `execution_mode="local_one_shot_subprocess"`
+- `requires_long_lived_server=true`
+- `config_hint` pointing to `ABSTRACTCORE_SERVER_BASE_URL`
+
+When the workflow marks residency as optional (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true` so hosts can render the no-op honestly.
 
 Remote auth example:
 
@@ -277,8 +298,10 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=too
 
 ## Prompt-cache control plane
 
-AbstractRuntime's AbstractCore LLM clients now expose a unified prompt-cache control-plane surface for host code:
+AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache and model-residency operations:
 
+- `get_abstractcore_host_facade(runtime)`
+- `AbstractCoreHostFacade`
 - `get_prompt_cache_capabilities(...)`
 - `get_prompt_cache_stats(...)`
 - `prompt_cache_set(...)`
@@ -286,6 +309,9 @@ AbstractRuntime's AbstractCore LLM clients now expose a unified prompt-cache con
 - `prompt_cache_fork(...)`
 - `prompt_cache_clear(...)`
 - `prompt_cache_prepare_modules(...)`
+- `list_model_residency(...)`
+- `load_model_residency(...)`
+- `unload_model_residency(...)`
 
 Behavior by execution mode:
 
@@ -299,24 +325,121 @@ Contract notes:
 - Unsupported operations return structured payloads with `supported=false`, `operation`, `code`, and `capabilities`.
 - When a provider reports `mode=local_control_plane` (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized `system | tools | history` cache path automatically.
 - When a provider reports `mode=keyed`, the runtime still forwards stable `prompt_cache_key`s but skips module preparation/fork/update orchestration.
-- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches without reaching through to provider internals.
+- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 
 Host-side prompt-cache example:
 
 ```python
-rt = create_local_runtime(provider="mlx", model="mlx-community/Qwen3-4B-4bit")
-client = getattr(rt, "_abstractcore_llm_client", None)
+from abstractruntime.integrations.abstractcore import (
+    create_local_runtime,
+    get_abstractcore_host_facade,
+)
 
-caps = client.get_prompt_cache_capabilities() if client is not None else {}
+rt = create_local_runtime(provider="mlx", model="mlx-community/Qwen3-4B-4bit")
+facade = get_abstractcore_host_facade(rt)
+
+caps = facade.get_prompt_cache_capabilities()
 if caps.get("capabilities", {}).get("supports_prepare_modules"):
-    client.prompt_cache_prepare_modules(
+    facade.prompt_cache_prepare_modules(
         namespace="assistant",
         modules=[
             {"module_id": "system", "system_prompt": "You are concise."},
             {"module_id": "tools", "tools": [{"name": "read_file", "parameters": {"type": "object"}}]},
         ],
     )
+```
+
+## Discovery snapshots
+
+AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:
+
+- `get_abstractcore_discovery_facade(runtime)`
+- `AbstractCoreDiscoveryFacade`
+- `list_providers(...)`
+- `list_provider_models(...)`
+- `get_model_capabilities(...)`
+- `get_voice_catalog(...)`
+- `list_tts_models(...)`
+- `list_stt_models(...)`
+- `list_vision_provider_models(...)`
+- `list_cached_vision_models(...)`
+
+Behavior by execution mode:
+
+- **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): uses public AbstractCore registries,
+  capability facades, and local vision cache inspection to return JSON-safe snapshot payloads.
+- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/providers`, `/v1/models`, `/v1/audio/*`, and
+  `/v1/vision/*` on the configured AbstractCore server. Per-request provider key overrides supplied as `api_key` /
+  `provider_api_key` become `X-AbstractCore-Provider-API-Key` headers.
+
+Contract notes:
+
+- This surface is query-oriented. It does not create durable Runtime history on its own.
+- Hosts should still ask Runtime for these reads instead of rebuilding Core catalog logic or importing Core server
+  helpers directly.
+- Model capability lookup is static metadata, not a live server probe. Replay should treat it as a recorded snapshot,
+  not as a query to re-run.
+- `list_cached_vision_models(...)` may still depend on the current local machine state. It is a Runtime-owned snapshot
+  query, not durable run truth.
+- Remote discovery methods accept `timeout_s=...` through facade kwargs. Local discovery remains synchronous helper
+  code; async hosts should offload it to a worker thread if they do not want to block their event loop.
+
+Host-side discovery example:
+
+```python
+from abstractruntime.integrations.abstractcore import (
+    create_remote_runtime,
+    get_abstractcore_discovery_facade,
+)
+
+rt = create_remote_runtime(
+    server_base_url="http://127.0.0.1:8000",
+    model="openai/gpt-4o-mini",
+    headers={"Authorization": "Bearer server-master-key"},
+)
+facade = get_abstractcore_discovery_facade(rt)
+
+providers = facade.list_providers(include_models=False)
+voices = facade.get_voice_catalog(provider="openai", providers_only=True)
+vision = facade.list_vision_provider_models(task="text_to_image", providers_only=True)
+```
+
+## Durable run-scoped media execution
+
+Hosts sometimes need to trigger image/TTS/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
+
+Public durable entry points:
+
+- `get_abstractcore_run_facade(runtime)`
+- `AbstractCoreRunFacade`
+- `execute_llm_call(...)`
+- `generate_image(...)`
+- `generate_voice(...)`
+- `transcribe_audio(...)`
+
+These helpers create child runs under an existing parent run and execute the real `LLM_CALL` through Runtime rather than doing media work in host/controller code.
+
+Example:
+
+```python
+from abstractruntime.integrations.abstractcore import (
+    create_local_runtime,
+    get_abstractcore_run_facade,
+)
+
+rt = create_local_runtime(provider="mlx", model="qwen-chat")
+facade = get_abstractcore_run_facade(rt)
+
+child = facade.generate_image(
+    "existing-parent-run-id",
+    prompt="A red mug on a white table.",
+    output={"provider": "mflux", "model": "flux-dev", "format": "png"},
+)
+
+assert child.status.value == "completed"
+result = child.output["result"]
+print(child.run_id, result["media_model"], result["outputs"]["image"][0]["artifact_id"])
 ```
 
 ## Attachment registration limits

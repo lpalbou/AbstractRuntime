@@ -111,8 +111,32 @@ Store stable cache keys or cache configuration in runtime-visible JSON, for exam
 
 Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.
 
-Hosts can inspect or prepare caches through the configured `_abstractcore_llm_client` control-plane methods (`get_prompt_cache_capabilities`, `prompt_cache_prepare_modules`, and related methods).
-Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+Hosts can inspect or prepare caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes `get_prompt_cache_capabilities`, `prompt_cache_prepare_modules`, and the other public prompt-cache/model-residency control methods without depending on the private runtime attachment directly.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/host_facade.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+
+## Where should a host get provider / voice / vision catalogs from?
+
+From Runtime. Use `abstractruntime.integrations.abstractcore.get_abstractcore_discovery_facade(runtime)` for
+provider discovery, provider models, model capability lookup, voice/TTS/STT catalogs, vision provider catalogs, and
+cached vision model snapshots.
+
+These are snapshot/query reads, not durable `LLM_CALL` effects, so replay should use the recorded snapshot rather than
+re-querying the current machine or server and pretending the answer is unchanged.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/discovery_facade.py`, `src/abstractruntime/integrations/abstractcore/discovery_queries.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+
+## Should a host execute image / TTS / STT directly for an existing run?
+
+No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `generate_voice(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.
+
+That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/run_facade.py`.
+
+## Why can local media residency return `ok:false` without failing the run?
+
+Because local media warmup is not always a meaningful reusable state. In particular, local image generation may execute through a one-shot subprocess isolation boundary, so a prior warmup cannot be reused by the next request. Runtime therefore reports unsupported local media residency explicitly instead of pretending success.
+
+For optional residency (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true`. Unsupported local media responses also report `execution_mode="local_one_shot_subprocess"`, `requires_long_lived_server=true`, and a `config_hint` that points at `ABSTRACTCORE_SERVER_BASE_URL`.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/effect_handlers.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
 ## What are “local / remote / hybrid” execution modes?
 
@@ -120,6 +144,11 @@ They refer to where LLM and tools execute:
 - **Local**: in-process LLM + local tool execution
 - **Remote**: HTTP to an AbstractCore server + tools typically passthrough
 - **Hybrid**: remote LLM + local tools
+
+`create_local_runtime(...)` currently uses `MultiLocalAbstractCoreLLMClient` under the hood. That client is still
+local-only: it can keep multiple in-process `(provider, model)` local clients warm and route between them per request,
+but it does not switch between local and remote AbstractCore backends. If you want remote model execution, use
+`create_remote_runtime(...)` or `create_hybrid_runtime(...)`.
 
 Docs: `integrations/abstractcore.md`, `../docs/adr/0002_execution_modes_local_remote_hybrid.md`. Code: `src/abstractruntime/integrations/abstractcore/factory.py`.
 

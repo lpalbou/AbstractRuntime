@@ -493,6 +493,11 @@ email and Telegram:
   - `list_emails(...)`
   - `read_email(...)`
   - `send_email(...)`
+- `abstractruntime.integrations.abstractcore.comms_facade` also exposes:
+  - `list_email_accounts(...)`
+  - `list_emails(...)`
+  - `read_email(...)`
+  - `send_email(...)`
 - `abstractruntime.integrations.abstractcore.telegram_facade` exposes:
   - `TelegramTdlibNotAvailable`
   - `bootstrap_telegram_auth_from_env(...)`
@@ -504,6 +509,9 @@ Contract notes:
 
 - These are **host-local** wrappers over current public AbstractCore tool
   modules. They do not proxy through the remote AbstractCore server.
+- The host facade email methods and the standalone `comms_facade` functions use
+  the same Runtime-owned email wrapper layer; choose whichever is more natural
+  for the host surface you are building.
 - They are intentionally **nondurable**. They do not write Runtime run history
   on their own.
 - Direct `send_email(...)` on the host facade and direct

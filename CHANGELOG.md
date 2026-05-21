@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-05-21
+
+### Added
+- Runtime now ships the missed standalone email comms wrapper/export layer for host-local operator surfaces:
+  - `abstractruntime.integrations.abstractcore.comms_facade`
+  - package-level email helper exports from `abstractruntime.integrations.abstractcore`
+
+### Changed
+- Host-facade email helpers now delegate through Runtime's own comms facade instead of importing `abstractcore.tools.comms_tools` directly in the facade method body.
+- Runtime docs and AI-readable `llms.txt` / `llms-full.txt` now describe the standalone email comms facade/export layer alongside the existing host facade, Telegram wrappers, and durable run-owned comms sends.
+
 ## [0.4.18] - 2026-05-21
 
 ### Added
@@ -478,7 +489,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.18...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.19...HEAD
+[0.4.19]: https://github.com/lpalbou/abstractruntime/compare/v0.4.18...v0.4.19
 [0.4.18]: https://github.com/lpalbou/abstractruntime/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...v0.4.16

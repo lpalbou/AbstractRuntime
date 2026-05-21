@@ -8,7 +8,8 @@ Provides:
 - Effect handlers wiring
 - Convenience runtime factories for local/remote/hybrid modes
 - Public discovery facade for provider/media/catalog snapshot queries
-- Public host facade for prompt-cache, durable bloc/KV, model-residency, and host-local email control operations
+- Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
+- Public comms facade for host-local email helper operations
 - Public Telegram host wrappers for TDLib bootstrap/global-client/send parity
 - Public durable run facade for run-scoped AbstractCore LLM/tool child runs, including outbound comms sends
 - RuntimeConfig for limits and model capabilities
@@ -28,6 +29,12 @@ from .embeddings_client import AbstractCoreEmbeddingsClient, EmbeddingsResult
 from .host_facade import (
     AbstractCoreHostFacade,
     get_abstractcore_host_facade,
+)
+from .comms_facade import (
+    list_email_accounts,
+    list_emails,
+    read_email,
+    send_email,
 )
 from .discovery_facade import (
     AbstractCoreDiscoveryFacade,
@@ -86,6 +93,9 @@ __all__ = [
     "bootstrap_telegram_auth_from_env",
     "get_abstractcore_discovery_facade",
     "get_abstractcore_host_facade",
+    "list_email_accounts",
+    "list_emails",
+    "read_email",
     "get_global_telegram_client",
     "get_abstractcore_run_facade",
     "create_local_runtime",
@@ -93,6 +103,7 @@ __all__ = [
     "create_hybrid_runtime",
     "create_local_file_runtime",
     "create_remote_file_runtime",
+    "send_email",
     "send_telegram_message",
     "stop_global_telegram_client",
     "attach_global_event_bus_bridge",

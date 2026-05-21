@@ -169,6 +169,10 @@ No. For the remaining host/operator paths, use Runtime's public wrappers instead
 - `...list_emails(...)`
 - `...read_email(...)`
 - `...send_email(...)`
+- `abstractruntime.integrations.abstractcore.list_email_accounts(...)`
+- `...list_emails(...)`
+- `...read_email(...)`
+- `...send_email(...)`
 - `abstractruntime.integrations.abstractcore.telegram_facade.bootstrap_telegram_auth_from_env(...)`
 - `...get_global_telegram_client(...)`
 - `...stop_global_telegram_client()`

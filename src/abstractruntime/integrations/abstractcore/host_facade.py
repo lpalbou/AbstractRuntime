@@ -657,7 +657,7 @@ class AbstractCoreHostFacade:
         )
 
     def list_email_accounts(self) -> Dict[str, Any]:
-        from abstractcore.tools.comms_tools import list_email_accounts
+        from .comms_facade import list_email_accounts
 
         return list_email_accounts()
 
@@ -671,7 +671,7 @@ class AbstractCoreHostFacade:
         limit: int = 20,
         timeout_s: float = 30.0,
     ) -> Dict[str, Any]:
-        from abstractcore.tools.comms_tools import list_emails
+        from .comms_facade import list_emails
 
         return list_emails(
             account=account,
@@ -691,7 +691,7 @@ class AbstractCoreHostFacade:
         timeout_s: float = 30.0,
         max_body_chars: int = 20000,
     ) -> Dict[str, Any]:
-        from abstractcore.tools.comms_tools import read_email
+        from .comms_facade import read_email
 
         return read_email(
             uid=uid,
@@ -720,8 +720,7 @@ class AbstractCoreHostFacade:
         `get_abstractcore_run_facade(runtime).send_email(...)` instead so
         Runtime authors the durable child-run truth.
         """
-
-        from abstractcore.tools.comms_tools import send_email
+        from .comms_facade import send_email
 
         return send_email(
             to=to,

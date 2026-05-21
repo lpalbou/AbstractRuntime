@@ -48,7 +48,7 @@ Notes:
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (`PassthroughToolExecutor` in `src/abstractruntime/integrations/abstractcore/tool_executor.py`).
 - For local bridge-owned delivery flows, `ApprovalToolExecutor` can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable `TOOL_CALLS` path, Runtime also exposes **host wrappers** for operator-owned email and Telegram surfaces:
-  - email helpers on `get_abstractcore_host_facade(runtime)`
+  - email helpers on `get_abstractcore_host_facade(runtime)` and `abstractruntime.integrations.abstractcore.comms_facade`
   - Telegram lifecycle/send wrappers in `abstractruntime.integrations.abstractcore.telegram_facade`
   - read/bootstrap helpers stay host-local and do not create run history by themselves
   - if an outbound send belongs to a run, prefer the durable run facade:

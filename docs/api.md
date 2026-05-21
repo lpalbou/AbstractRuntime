@@ -184,13 +184,14 @@ Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - public discovery facade: `AbstractCoreDiscoveryFacade`, `get_abstractcore_discovery_facade(...)` (`src/abstractruntime/integrations/abstractcore/discovery_facade.py`)
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
+- public email comms wrappers: `list_email_accounts(...)`, `list_emails(...)`, `read_email(...)`, `send_email(...)` (`src/abstractruntime/integrations/abstractcore/comms_facade.py`)
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
 - public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`)
 - host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
-- host-facade email helpers remain host-local wrappers over AbstractCore's public comms helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
+- host-facade email helpers delegate to Runtime's host-local comms facade/export layer (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
 - run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:

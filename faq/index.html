@@ -806,6 +806,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#should-gateway-or-another-host-import-abstractcore-comms-or-telegram-helpers-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should Gateway or another host import AbstractCore comms or Telegram helpers directly?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#should-a-host-execute-image-tts-music-stt-directly-for-an-existing-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1413,6 +1424,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#should-gateway-or-another-host-import-abstractcore-comms-or-telegram-helpers-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should Gateway or another host import AbstractCore comms or Telegram helpers directly?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#should-a-host-execute-image-tts-music-stt-directly-for-an-existing-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1697,6 +1719,30 @@ vision provider catalogs, and cached vision model snapshots.</p>
 <p>These are snapshot/query reads, not durable <code>LLM_CALL</code> effects, so replay should use the recorded snapshot rather than
 re-querying the current machine or server and pretending the answer is unchanged.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/discovery_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/discovery_queries.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="should-gateway-or-another-host-import-abstractcore-comms-or-telegram-helpers-directly">Should Gateway or another host import AbstractCore comms or Telegram helpers directly?<a class="headerlink" href="#should-gateway-or-another-host-import-abstractcore-comms-or-telegram-helpers-directly" title="Permanent link">&para;</a></h2>
+<p>No. For the remaining host/operator paths, use Runtime's public wrappers instead:</p>
+<ul>
+<li><code>get_abstractcore_host_facade(runtime).list_email_accounts(...)</code></li>
+<li><code>...list_emails(...)</code></li>
+<li><code>...read_email(...)</code></li>
+<li><code>...send_email(...)</code></li>
+<li><code>abstractruntime.integrations.abstractcore.telegram_facade.bootstrap_telegram_auth_from_env(...)</code></li>
+<li><code>...get_global_telegram_client(...)</code></li>
+<li><code>...stop_global_telegram_client()</code></li>
+<li><code>...send_telegram_message(...)</code></li>
+</ul>
+<p>Important nuance: the read/bootstrap wrappers are still <strong>host-local</strong>. They do not proxy through a remote Core
+server, and they do not write durable Runtime history on their own. They exist so hosts can depend
+on Runtime as the package boundary instead of importing <code>abstractcore.tools.comms_tools</code>,
+<code>abstractcore.tools.telegram_tdlib</code>, or <code>abstractcore.tools.telegram_tools</code> directly.</p>
+<p>For outbound sends that belong to a run, use the durable run facade instead:</p>
+<ul>
+<li><code>get_abstractcore_run_facade(runtime).send_email(...)</code></li>
+<li><code>get_abstractcore_run_facade(runtime).send_telegram_message(...)</code></li>
+<li><code>get_abstractcore_run_facade(runtime).resume_tool_calls(...)</code> when an approval-gated or passthrough tool child run needs to continue</li>
+</ul>
+<p>Those create child runs, record the send request and outcome in the ledger, and replay should show
+the recorded result rather than resending the external message.</p>
 <h2 id="should-a-host-execute-image-tts-music-stt-directly-for-an-existing-run">Should a host execute image / TTS / music / STT directly for an existing run?<a class="headerlink" href="#should-a-host-execute-image-tts-music-stt-directly-for-an-existing-run" title="Permanent link">&para;</a></h2>
 <p>No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use <code>abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)</code> and create a child run with <code>generate_image(...)</code>, <code>generate_voice(...)</code>, <code>generate_music(...)</code>, <code>transcribe_audio(...)</code>, or the lower-level <code>execute_llm_call(...)</code>.</p>
 <p>That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.

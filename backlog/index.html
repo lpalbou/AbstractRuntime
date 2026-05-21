@@ -896,16 +896,16 @@
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="next-recommended-work">Next recommended work<a class="headerlink" href="#next-recommended-work" title="Permanent link">&para;</a></h2>
 <ol>
-<li><code>planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md</code>
-   This is the narrow Runtime work that unblocks the last high-pressure direct
-   <code>abstractcore</code> imports in Gateway for comms/email and Telegram without
-   reopening the already-completed media/discovery boundary work.</li>
 <li><code>planned/018_workspace_access_policy_for_media_and_tools.md</code>
    Keep workspace and tool policy explicit while Gateway extracts its local
    workspace helpers.</li>
 <li><code>planned/014_remote_tool_worker_executor.md</code>
    The public ToolExecutor path is still the larger follow-on after the current
    Gateway boundary cleanup.</li>
+<li><code>proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md</code>
+   The comms/Telegram boundary cleanup is now complete; the remaining lower
+   pressure follow-up is a Runtime-owned tool-spec surface if Gateway or the
+   MCP worker still need one after adoption.</li>
 </ol>
 <h2 id="completed">Completed<a class="headerlink" href="#completed" title="Permanent link">&para;</a></h2>
 <table>
@@ -1008,6 +1008,14 @@
 <td>029</td>
 <td><code>completed/029_runtime_music_generation_and_discovery_via_abstractcore.md</code></td>
 </tr>
+<tr>
+<td>0030</td>
+<td><code>completed/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md</code></td>
+</tr>
+<tr>
+<td>0032</td>
+<td><code>completed/0032_runtime_durable_outbound_comms_truth.md</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="planned">Planned<a class="headerlink" href="#planned" title="Permanent link">&para;</a></h2>
@@ -1038,10 +1046,6 @@
 <tr>
 <td>025</td>
 <td><code>planned/025_runtime_retention_and_purge_contract.md</code></td>
-</tr>
-<tr>
-<td>0030</td>
-<td><code>planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md</code></td>
 </tr>
 </tbody>
 </table>

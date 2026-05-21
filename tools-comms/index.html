@@ -1051,7 +1051,16 @@
 <p>Notes:
 - Install extras: <code>pip install "abstractruntime[abstractcore]"</code> (or <code>abstractruntime[mcp-worker]</code>).
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (<code>PassthroughToolExecutor</code> in <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>).
-- For local bridge-owned delivery flows, <code>ApprovalToolExecutor</code> can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.</p>
+- For local bridge-owned delivery flows, <code>ApprovalToolExecutor</code> can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
+- Separate from the durable <code>TOOL_CALLS</code> path, Runtime also exposes <strong>host wrappers</strong> for operator-owned email and Telegram surfaces:
+  - email helpers on <code>get_abstractcore_host_facade(runtime)</code>
+  - Telegram lifecycle/send wrappers in <code>abstractruntime.integrations.abstractcore.telegram_facade</code>
+  - read/bootstrap helpers stay host-local and do not create run history by themselves
+  - if an outbound send belongs to a run, prefer the durable run facade:
+    <code>get_abstractcore_run_facade(runtime).send_email(...)</code> /
+    <code>send_telegram_message(...)</code>
+  - if that durable child run pauses for approval or passthrough execution, resume it via
+    <code>get_abstractcore_run_facade(runtime).resume_tool_calls(...)</code></p>
 <h2 id="credentialsconfig-provided-by-abstractcore">Credentials/config (provided by AbstractCore)<a class="headerlink" href="#credentialsconfig-provided-by-abstractcore" title="Permanent link">&para;</a></h2>
 <p>The actual comms tools live in AbstractCore:
 - email + WhatsApp: <code>abstractcore.tools.comms_tools</code>

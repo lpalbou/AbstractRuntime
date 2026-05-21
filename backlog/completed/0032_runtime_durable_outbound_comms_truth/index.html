@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/0032_runtime_durable_outbound_comms_truth/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Planned: Runtime host facades for comms and Telegram, with tool-spec follow-up split out - AbstractRuntime</title>
+        <title>0032 Runtime Durable Outbound Comms Truth - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#planned-runtime-host-facades-for-comms-and-telegram-with-tool-spec-follow-up-split-out" class="md-skip">
+        <a href="#0032-runtime-durable-outbound-comms-truth" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Planned: Runtime host facades for comms and Telegram, with tool-spec follow-up split out
+              0032 Runtime Durable Outbound Comms Truth
             
           </span>
         </div>
@@ -823,131 +823,43 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Goal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-shipped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Shipped
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-code-pointers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current Code Pointers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adr-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ADR status
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#context" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Context
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#current-code-reality" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Current code reality
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#problem" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Problem
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-we-want-to-do" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What we want to do
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#suggested-implementation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Suggested implementation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Scope
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Non-goals
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dependencies-and-related-tasks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dependencies and related tasks
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#expected-outcomes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Expected outcomes
+        ADR Status
       
     </span>
   </a>
@@ -966,24 +878,118 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#progress-checklist" class="md-nav__link">
+  <a href="#completion-report" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Progress checklist
+        Completion Report
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Completion Report">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#guidance-for-the-implementing-agent" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Guidance for the implementing agent
+        Summary
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#review-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residual Risks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#practical-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical Proof
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#follow-ups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-Ups
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1007,164 +1013,164 @@
   
 
 
-<h1 id="planned-runtime-host-facades-for-comms-and-telegram-with-tool-spec-follow-up-split-out">Planned: Runtime host facades for comms and Telegram, with tool-spec follow-up split out<a class="headerlink" href="#planned-runtime-host-facades-for-comms-and-telegram-with-tool-spec-follow-up-split-out" title="Permanent link">&para;</a></h1>
+<h1 id="0032-runtime-durable-outbound-comms-truth">0032 Runtime Durable Outbound Comms Truth<a class="headerlink" href="#0032-runtime-durable-outbound-comms-truth" title="Permanent link">&para;</a></h1>
 <h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Created: 2026-05-21</li>
-<li>Status: Planned</li>
-<li>Completed: N/A</li>
+<li>Status: Completed</li>
+<li>Completed: 2026-05-21</li>
+<li>Origin: follow-up correction to <code>completed/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md</code></li>
 </ul>
-<h2 id="adr-status">ADR status<a class="headerlink" href="#adr-status" title="Permanent link">&para;</a></h2>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>Close the remaining durability gap left after <code>0030</code>: outbound comms sends that
+belong to a run must execute through Runtime so the request and outcome become
+ledgered child-run truth instead of host-local side effects with no Runtime
+record.</p>
+<h2 id="what-shipped">What Shipped<a class="headerlink" href="#what-shipped" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Governing ADRs: None</li>
-<li>ADR impact: None; this extends the existing public host-facade pattern rather than creating a new architecture rule.</li>
-</ul>
-<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>Runtime already owns the public Gateway-facing integration boundary for the
-main AbstractCore-backed surfaces:</p>
-<ul>
-<li><code>AbstractCoreHostFacade</code> for operator/control-plane helpers</li>
-<li><code>AbstractCoreDiscoveryFacade</code> for provider/model/media catalogs</li>
-<li><code>AbstractCoreRunFacade</code> for run-scoped durable media execution</li>
-</ul>
-<p>Gateway now uses those facades for prompt-cache control, durable blocs, model
-residency, discovery, and run-scoped voice/STT/image work. The remaining
-direct <code>abstractcore</code> imports in Gateway are concentrated in comms/Telegram
-helpers and a smaller tool-spec/testing tail.</p>
-<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
-<p>Inspected on 2026-05-21:</p>
-<ul>
-<li><code>src/abstractruntime/integrations/abstractcore/host_facade.py</code></li>
-<li>exposes prompt-cache, bloc, and model-residency helpers</li>
-<li>does not expose email/comms helpers</li>
-<li><code>src/abstractruntime/integrations/abstractcore/default_tools.py</code></li>
-<li>imports <code>abstractcore.tools.common_tools</code>, <code>comms_tools</code>, and <code>telegram_tools</code></li>
-<li>derives JSON-safe tool specs via <code>abstractcore.tools.core.ToolDefinition</code></li>
-<li><code>src/abstractruntime/integrations/abstractcore/mcp_worker.py</code></li>
-<li>converts callables to MCP entries through <code>ToolDefinition.from_function(...)</code></li>
-<li><code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code></li>
-<li>still constructs <code>abstractcore.tools.core.ToolCall</code></li>
-<li><code>../abstractgateway/src/abstractgateway/routes/gateway.py</code></li>
-<li>still imports <code>abstractcore.tools.comms_tools</code> directly for email helper routes</li>
-<li><code>../abstractgateway/src/abstractgateway/cli.py</code></li>
-<li>still imports <code>abstractcore.tools.telegram_tdlib</code> directly for <code>telegram-auth</code></li>
-<li><code>../abstractgateway/src/abstractgateway/integrations/telegram_bridge.py</code></li>
-<li>still imports <code>abstractcore.tools.telegram_tdlib</code> global-client helpers directly</li>
-</ul>
-<p>Runtime therefore has the right facade pattern already, but the remaining
-host/operator surfaces have not been moved onto it. The strongest current
-Gateway production pressure is comms/email and Telegram bootstrap/global-client
-access; tool-spec coupling is lower-pressure follow-up work.</p>
-<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
-<p>Gateway cannot fully stop importing <code>abstractcore</code> directly until Runtime owns
-two small public surfaces in phase 1:</p>
-<ol>
-<li>comms/email host helpers</li>
-<li>Telegram bootstrap/global-client wrappers, plus a thin send helper for notifier parity</li>
-</ol>
-<p>The missing pieces are not durable-run problems. They are host/operator
-integration surfaces, so they belong next to the existing host-facade pattern.
-Tool-spec helpers remain useful, but they are not the strongest current
-Gateway blocker and should not hold up the narrower phase-1 cleanup.</p>
-<h2 id="what-we-want-to-do">What we want to do<a class="headerlink" href="#what-we-want-to-do" title="Permanent link">&para;</a></h2>
-<p>Extend Runtime's public host integration layer so Gateway can depend on
-Runtime alone for the remaining comms/Telegram edges, while tracking
-tool-spec normalization as a separate follow-up.</p>
-<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
-<ul>
-<li>keeps Gateway source aligned with the Runtime-owned boundary</li>
-<li>reuses the existing facade pattern instead of inventing another Gateway/Core seam</li>
-<li>gives future hosts one place to look for operator-scoped helper contracts</li>
-<li>lets Runtime normalize local/remote Core topology for these paths too when needed later</li>
-<li>avoids over-scoping a release-blocking boundary cleanup around a lower-pressure
-  tool-spec concern</li>
-</ul>
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Add public host-facing email helpers for:</li>
-<li>list accounts</li>
-<li>list messages</li>
-<li>read message</li>
-<li>send message</li>
-<li>Add a Runtime-owned Telegram wrapper surface for:</li>
-<li>one-shot TDLib auth bootstrap from env</li>
-<li>a stable "not available" error</li>
-<li>access to the global TDLib client lifecycle used by the Gateway bridge</li>
-<li>stop/cleanup of the global client</li>
-<li><code>send_telegram_message(...)</code> for notifier parity</li>
-<li>Keep these host helpers nondurable. They must not write Runtime run history by themselves.</li>
-<li>Allow Runtime to wrap existing public Core tool modules in phase 1; do not block on a larger Core refactor.</li>
-<li>Do not require a new AbstractCore runtime-facing backend seam for phase 1.</li>
-</ul>
-<h2 id="suggested-implementation">Suggested implementation<a class="headerlink" href="#suggested-implementation" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Extend <code>AbstractCoreHostFacade</code> with email/comms methods:</li>
-<li><code>list_email_accounts(...)</code></li>
-<li><code>list_emails(...)</code></li>
-<li><code>read_email(...)</code></li>
+<li>Extended <code>AbstractCoreRunFacade</code> with a generic durable child-run helper:</li>
+<li><code>execute_tool_calls(...)</code></li>
+<li>Extended <code>AbstractCoreRunFacade</code> with a public durable resume helper:</li>
+<li><code>resume_tool_calls(...)</code></li>
+<li>Extended <code>AbstractCoreRunFacade</code> with durable outbound comms helpers:</li>
 <li><code>send_email(...)</code></li>
-<li>Add a small Runtime Telegram helper module, for example under
-   <code>abstractruntime.integrations.abstractcore.telegram_facade</code>, with:</li>
-<li><code>TelegramTdlibNotAvailable</code></li>
-<li><code>bootstrap_telegram_auth_from_env(...)</code></li>
-<li><code>get_global_telegram_client(start=False)</code></li>
-<li><code>stop_global_telegram_client()</code></li>
 <li><code>send_telegram_message(...)</code></li>
-<li>Keep Runtime wrappers thin over current public Core helpers first:</li>
-<li><code>abstractcore.tools.comms_tools</code></li>
-<li><code>abstractcore.tools.telegram_tdlib</code></li>
-<li><code>abstractcore.tools.telegram_tools</code></li>
-<li>Keep full abstractagent/tool-type decoupling explicitly out of scope here.</li>
-</ol>
-<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Runtime host facade extension for email/comms</li>
-<li>Runtime Telegram wrappers for Gateway CLI/bridge/notifier adoption</li>
-<li>tests proving those surfaces are public, stable, and JSON-safe</li>
+<li>Kept the existing host-local read/bootstrap wrappers intact:</li>
+<li>host-facade email list/read helpers stay operator-scoped</li>
+<li>Telegram TDLib bootstrap/global-client helpers stay host-scoped</li>
+<li>Preserved the replay rule:</li>
+<li>Runtime records the send request and the send outcome</li>
+<li>replay should show the recorded result</li>
+<li>replay should not resend the external email or Telegram message</li>
 </ul>
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<h2 id="current-code-pointers">Current Code Pointers<a class="headerlink" href="#current-code-pointers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Do not move Gateway workspace/file policy into Runtime.</li>
-<li>Do not redesign Core tool execution or the durable <code>TOOL_CALLS</code> effect.</li>
-<li>Do not block this on a full replacement of <code>abstractcore.tools.ToolCall</code> inside AbstractAgent.</li>
-<li>Do not block this phase on Runtime-owned tool-spec adapters; track those separately.</li>
-<li>Do not introduce new Core HTTP endpoints just to satisfy Gateway.</li>
+<li><code>src/abstractruntime/integrations/abstractcore/run_facade.py</code></li>
+<li><code>tests/test_abstractcore_run_facade.py</code></li>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/api.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>docs/tools-comms.md</code></li>
 </ul>
-<h2 id="dependencies-and-related-tasks">Dependencies and related tasks<a class="headerlink" href="#dependencies-and-related-tasks" title="Permanent link">&para;</a></h2>
+<h2 id="adr-status">ADR Status<a class="headerlink" href="#adr-status" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>../completed/019_runtime_host_facade_for_core_operator_surfaces.md</code></li>
-<li><code>../completed/026_runtime_host_discovery_facade_for_core_catalogs.md</code></li>
-<li><code>../completed/027_runtime_durable_bloc_prompt_cache_facade.md</code></li>
-<li><code>../completed/028_runtime_bloc_kv_lifecycle_and_pruning.md</code></li>
-<li><code>../proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md</code></li>
-<li><code>../../../../abstractgateway/docs/backlog/planned/0050_gateway_runtime_boundary_cleanup_for_workspace_comms_and_telegram.md</code></li>
-<li><code>../../../../abstractcore/docs/backlog/proposed/0796_runtime_facing_comms_and_telegram_backend_surface.md</code></li>
-</ul>
-<h2 id="expected-outcomes">Expected outcomes<a class="headerlink" href="#expected-outcomes" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Gateway can stop importing <code>abstractcore.tools.comms_tools</code> directly.</li>
-<li>Gateway can stop importing <code>abstractcore.tools.telegram_tdlib</code> and <code>telegram_tools</code> directly.</li>
-<li>Runtime remains the only lower-level dependency that Gateway imports for these operator/tooling paths.</li>
-<li>Runtime phase 1 proves whether a later Runtime-owned tool-spec surface is still needed.</li>
+<li>Governing ADRs: none added</li>
+<li>ADR impact: none; this extends the already-accepted Runtime-owned durable
+  child-run pattern from the run facade rather than introducing a new durable
+  policy</li>
 </ul>
 <h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<p>Focused validation:</p>
 <ul>
-<li>focused Runtime tests for new host-facade email methods</li>
-<li>focused Runtime tests for Telegram wrapper happy/unavailable paths</li>
-<li>Gateway adoption tests proving direct <code>abstractcore</code> imports are removed from those paths</li>
+<li><code>pytest -q tests/test_abstractcore_run_facade.py tests/test_abstractcore_host_facade.py tests/test_abstractcore_telegram_facade.py</code></li>
+<li>Result: <code>32 passed in 0.19s</code></li>
 </ul>
-<h2 id="progress-checklist">Progress checklist<a class="headerlink" href="#progress-checklist" title="Permanent link">&para;</a></h2>
+<p>Aggregate validation:</p>
 <ul>
-<li>[ ] Extend <code>AbstractCoreHostFacade</code> with email/comms helpers.</li>
-<li>[ ] Add Runtime-owned Telegram wrapper helpers for bootstrap, send, and global-client lifecycle.</li>
-<li>[ ] Validate Gateway adoption and re-run focused Runtime/Gateway boundary tests.</li>
+<li><code>pytest -q tests/test_abstractcore_run_facade.py tests/test_abstractcore_host_facade.py tests/test_abstractcore_telegram_facade.py tests/test_prompt_cache_modules.py tests/test_model_residency_control_plane.py tests/test_packaging_extras.py</code></li>
+<li>Result: <code>61 passed in 0.21s</code></li>
 </ul>
-<h2 id="guidance-for-the-implementing-agent">Guidance for the implementing agent<a class="headerlink" href="#guidance-for-the-implementing-agent" title="Permanent link">&para;</a></h2>
-<p>Prefer thin public wrappers over current Core functionality first. If phase 1
-can unblock Gateway without new Core changes, do that. Keep Core item <code>0796</code>
-proposed unless Runtime adoption proves the existing public tool modules are
-too unstable or too duplicative. Keep Runtime-owned tool-spec adapters as a
-separate follow-up rather than blocking this narrower comms/Telegram item.</p>
+<p>Syntax/doc sanity:</p>
+<ul>
+<li><code>python -m compileall src/abstractruntime/integrations/abstractcore</code></li>
+<li><code>mkdocs build -q --site-dir /tmp/abstractruntime-0032-docs</code></li>
+</ul>
+<h2 id="completion-report">Completion Report<a class="headerlink" href="#completion-report" title="Permanent link">&para;</a></h2>
+<h3 id="date">Date<a class="headerlink" href="#date" title="Permanent link">&para;</a></h3>
+<p>2026-05-21</p>
+<h3 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h3>
+<p><code>0030</code> solved the package-boundary problem for comms and Telegram, but it left
+direct host-wrapper sends nondurable. This item fixes that by making outbound
+email and Telegram sends first-class Runtime child runs through the existing
+<code>TOOL_CALLS</code> path and by giving hosts a public <code>resume_tool_calls(...)</code> helper
+for approval-gated or passthrough child runs.</p>
+<p>The result is narrower than “all comms go through one facade” and cleaner:</p>
+<ul>
+<li>read/bootstrap helpers remain host-local where that still makes sense</li>
+<li>outbound sends that belong to a run are now Runtime-authored truth</li>
+</ul>
+<h3 id="behavior-changes">Behavior Changes<a class="headerlink" href="#behavior-changes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Hosts can now use <code>get_abstractcore_run_facade(runtime).send_email(...)</code> for
+  a ledgered child run instead of performing an unrecorded host-local send.</li>
+<li>Hosts can now use
+  <code>get_abstractcore_run_facade(runtime).send_telegram_message(...)</code> for the
+  same durable behavior.</li>
+<li>Hosts can now use
+  <code>get_abstractcore_run_facade(runtime).resume_tool_calls(...)</code> to continue a
+  waiting comms/tool child run through the same public Runtime boundary.</li>
+<li>These durable send helpers use the configured Runtime tool executor:</li>
+<li>local/hybrid runtimes usually execute immediately</li>
+<li>approval-gated or passthrough executors still produce a durable wait that
+    Runtime can resume later</li>
+<li>Direct host-facade <code>send_email(...)</code> and direct
+  <code>telegram_facade.send_telegram_message(...)</code> still exist, but they are now
+  explicitly operator/local-helper paths rather than the preferred run-owned
+  send path</li>
+</ul>
+<h3 id="review-notes">Review Notes<a class="headerlink" href="#review-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No new Core seam was needed. Runtime already had the correct durable external
+  side-effect mechanism in <code>EffectType.TOOL_CALLS</code>.</li>
+<li>The important design correction was to put outbound sends on the existing run
+  facade rather than inventing another host wrapper or another execution model.</li>
+<li>The last practical gap was resumability for waiting tool child runs. That is
+  now part of the same public run-facade contract instead of a test-only
+  internal workflow reconstruction trick.</li>
+<li>This keeps replay semantics honest: recorded outcomes are replayed as data,
+  not re-executed as real external sends.</li>
+</ul>
+<h3 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>pytest -q tests/test_abstractcore_run_facade.py tests/test_abstractcore_host_facade.py tests/test_abstractcore_telegram_facade.py</code></li>
+<li>Result: <code>32 passed in 0.19s</code></li>
+<li><code>pytest -q tests/test_abstractcore_run_facade.py tests/test_abstractcore_host_facade.py tests/test_abstractcore_telegram_facade.py tests/test_prompt_cache_modules.py tests/test_model_residency_control_plane.py tests/test_packaging_extras.py</code></li>
+<li>Result: <code>61 passed in 0.21s</code></li>
+<li><code>python -m compileall src/abstractruntime/integrations/abstractcore</code></li>
+<li>Result: clean</li>
+<li><code>mkdocs build -q --site-dir /tmp/abstractruntime-0032-docs</code></li>
+<li>Result: docs build passed; upstream Material for MkDocs emitted a
+    non-blocking roadmap warning</li>
+</ul>
+<h3 id="docs">Docs<a class="headerlink" href="#docs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>README.md</code></li>
+<li><code>docs/integrations/abstractcore.md</code></li>
+<li><code>docs/api.md</code></li>
+<li><code>docs/faq.md</code></li>
+<li><code>docs/tools-comms.md</code></li>
+<li><code>llms.txt</code></li>
+<li><code>llms-full.txt</code></li>
+</ul>
+<h3 id="residual-risks">Residual Risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Remote runtimes still default to passthrough tools, so durable comms sends may
+  enter a wait instead of executing immediately unless the host configures an
+  executing or approval-resumable tool executor.</li>
+<li>Operator-only direct sends remain possible through the host-local wrappers.
+  That is intentional for maintenance/bootstrap flows, but hosts should use the
+  durable run facade when the send belongs to workflow truth.</li>
+</ul>
+<h3 id="practical-proof">Practical Proof<a class="headerlink" href="#practical-proof" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Immediate durable Telegram send smoke:</li>
+<li>child run status: <code>completed</code></li>
+<li>ledger effect records: <code>3</code></li>
+<li>output: <code>{"success": true, "transport": "bot_api", "message_ids": [42]}</code></li>
+<li>Approval-gated durable email smoke:</li>
+<li>initial child run status: <code>waiting</code></li>
+<li>wait reason: <code>user</code></li>
+<li>wait key prefix: <code>tool_approval</code></li>
+<li>resumed child run status: <code>completed</code></li>
+<li>output: <code>{"success": true, "message_id": "&lt;smoke-1&gt;", "account": "ops"}</code></li>
+</ul>
+<h3 id="follow-ups">Follow-Ups<a class="headerlink" href="#follow-ups" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Keep <code>0030</code> as the package-boundary cleanup record and this item as the
+  durability correction record; do not collapse them into one historical file.</li>
+<li>Keep <code>0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md</code> separate; this
+  change does not alter the tool-spec follow-up.</li>
+</ul>
 
 
 

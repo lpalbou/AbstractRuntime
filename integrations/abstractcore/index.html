@@ -519,6 +519,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#host-local-comms-and-telegram-wrappers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-local comms and Telegram wrappers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#discovery-snapshots" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -530,10 +541,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#durable-run-scoped-media-execution" class="md-nav__link">
+  <a href="#durable-run-scoped-media-and-comms-execution" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Durable run-scoped media execution
+        Durable run-scoped media and comms execution
       
     </span>
   </a>
@@ -1172,6 +1183,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#host-local-comms-and-telegram-wrappers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-local comms and Telegram wrappers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#discovery-snapshots" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1183,10 +1205,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#durable-run-scoped-media-execution" class="md-nav__link">
+  <a href="#durable-run-scoped-media-and-comms-execution" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Durable run-scoped media execution
+        Durable run-scoped media and comms execution
       
     </span>
   </a>
@@ -1649,6 +1671,65 @@ hello
 <li><code>delete_bloc_kv_artifact(...)</code> deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.</li>
 <li><code>delete_bloc(...)</code> removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass <code>delete_kv=False</code> only if you intentionally want to leave those artifacts behind.</li>
 </ul>
+<h2 id="host-local-comms-and-telegram-wrappers">Host-local comms and Telegram wrappers<a class="headerlink" href="#host-local-comms-and-telegram-wrappers" title="Permanent link">&para;</a></h2>
+<p>Runtime also exposes the remaining Gateway-facing host/operator wrappers for
+email and Telegram:</p>
+<ul>
+<li><code>get_abstractcore_host_facade(runtime)</code> now includes:</li>
+<li><code>list_email_accounts(...)</code></li>
+<li><code>list_emails(...)</code></li>
+<li><code>read_email(...)</code></li>
+<li><code>send_email(...)</code></li>
+<li><code>abstractruntime.integrations.abstractcore.telegram_facade</code> exposes:</li>
+<li><code>TelegramTdlibNotAvailable</code></li>
+<li><code>bootstrap_telegram_auth_from_env(...)</code></li>
+<li><code>get_global_telegram_client(start=False)</code></li>
+<li><code>stop_global_telegram_client()</code></li>
+<li><code>send_telegram_message(...)</code></li>
+</ul>
+<p>Contract notes:</p>
+<ul>
+<li>These are <strong>host-local</strong> wrappers over current public AbstractCore tool
+  modules. They do not proxy through the remote AbstractCore server.</li>
+<li>They are intentionally <strong>nondurable</strong>. They do not write Runtime run history
+  on their own.</li>
+<li>Direct <code>send_email(...)</code> on the host facade and direct
+  <code>telegram_facade.send_telegram_message(...)</code> are for operator-owned
+  host-local flows only. If the outbound send belongs to a workflow/run, prefer
+  the durable run facade methods shown below.</li>
+<li>Even for <strong>remote</strong> and <strong>hybrid</strong> runtimes, they still use the current host
+  process env/config, local TDLib installation, and the host's own outbound
+  network access.</li>
+<li>The Telegram global client is process-wide, not runtime-instance scoped.</li>
+</ul>
+<p>Host-side operator example:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">create_local_runtime</span><span class="p">,</span>
+    <span class="n">get_abstractcore_host_facade</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore.telegram_facade</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">TelegramTdlibNotAvailable</span><span class="p">,</span>
+    <span class="n">bootstrap_telegram_auth_from_env</span><span class="p">,</span>
+    <span class="n">send_telegram_message</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">)</span>
+<span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">accounts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_email_accounts</span><span class="p">()</span>
+<span class="n">sent</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_email</span><span class="p">(</span>
+    <span class="p">[</span><span class="s2">&quot;ops@example.com&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;Runtime status&quot;</span><span class="p">,</span>
+    <span class="n">body_text</span><span class="o">=</span><span class="s2">&quot;All green.&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">bootstrap</span> <span class="o">=</span> <span class="n">bootstrap_telegram_auth_from_env</span><span class="p">(</span><span class="n">timeout_s</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">TelegramTdlibNotAvailable</span><span class="p">:</span>
+    <span class="n">bootstrap</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;TDLib is not installed on this host.&quot;</span><span class="p">}</span>
+
+<span class="n">notify</span> <span class="o">=</span> <span class="n">send_telegram_message</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="mi">123456</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s2">&quot;Runtime check complete.&quot;</span><span class="p">)</span>
+</code></pre></div>
 <h2 id="discovery-snapshots">Discovery snapshots<a class="headerlink" href="#discovery-snapshots" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:</p>
 <ul>
@@ -1703,19 +1784,23 @@ hello
 <span class="n">music</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_music_providers</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_music&quot;</span><span class="p">)</span>
 <span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_image&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
-<h2 id="durable-run-scoped-media-execution">Durable run-scoped media execution<a class="headerlink" href="#durable-run-scoped-media-execution" title="Permanent link">&para;</a></h2>
-<p>Hosts sometimes need to trigger image/TTS/music/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
+<h2 id="durable-run-scoped-media-and-comms-execution">Durable run-scoped media and comms execution<a class="headerlink" href="#durable-run-scoped-media-and-comms-execution" title="Permanent link">&para;</a></h2>
+<p>Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
 <p>Public durable entry points:</p>
 <ul>
 <li><code>get_abstractcore_run_facade(runtime)</code></li>
 <li><code>AbstractCoreRunFacade</code></li>
 <li><code>execute_llm_call(...)</code></li>
+<li><code>execute_tool_calls(...)</code></li>
+<li><code>resume_tool_calls(...)</code></li>
 <li><code>generate_image(...)</code></li>
 <li><code>generate_voice(...)</code></li>
 <li><code>generate_music(...)</code></li>
 <li><code>transcribe_audio(...)</code></li>
+<li><code>send_email(...)</code></li>
+<li><code>send_telegram_message(...)</code></li>
 </ul>
-<p>These helpers create child runs under an existing parent run and execute the real <code>LLM_CALL</code> through Runtime rather than doing media work in host/controller code.</p>
+<p>These helpers create child runs under an existing parent run and execute the real <code>LLM_CALL</code> or <code>TOOL_CALLS</code> through Runtime rather than doing external work in host/controller code.</p>
 <p>Example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">create_local_runtime</span><span class="p">,</span>
@@ -1735,6 +1820,28 @@ hello
 <span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">]</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;media_model&quot;</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
 </code></pre></div>
+<p>Outbound comms sends that belong to a run should use the same durable child-run surface:</p>
+<div class="highlight"><pre><span></span><code><span class="n">email_child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_email</span><span class="p">(</span>
+    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
+    <span class="n">to</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ops@example.com&quot;</span><span class="p">],</span>
+    <span class="n">subject</span><span class="o">=</span><span class="s2">&quot;Workflow alert&quot;</span><span class="p">,</span>
+    <span class="n">body_text</span><span class="o">=</span><span class="s2">&quot;The workflow completed.&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">telegram_child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_telegram_message</span><span class="p">(</span>
+    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
+    <span class="n">chat_id</span><span class="o">=</span><span class="mi">123456</span><span class="p">,</span>
+    <span class="n">text</span><span class="o">=</span><span class="s2">&quot;Workflow completed.&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Contract notes for durable comms sends:</p>
+<ul>
+<li>Runtime records the send request and the send outcome in the child run ledger.</li>
+<li>Replay should show the recorded result; it should <strong>not</strong> resend the external email or Telegram message.</li>
+<li>Local and hybrid runtimes usually execute those sends immediately when the configured tool executor can run them.</li>
+<li>Remote runtimes may still enter a durable tool wait if the configured tool executor is passthrough/delegated or approval-gated. That wait/resume path is still Runtime-authored truth.</li>
+<li>To resume a waiting durable comms/tool child run through the same public boundary, use <code>get_abstractcore_run_facade(runtime).resume_tool_calls(child_run_id, payload=...)</code>.</li>
+</ul>
 <h2 id="attachment-registration-limits">Attachment registration limits<a class="headerlink" href="#attachment-registration-limits" title="Permanent link">&para;</a></h2>
 <p>When local <code>read_file</code> tool outputs are captured as session attachments, Runtime bounds the file bytes it stores. The limit is resolved in this order:</p>
 <ul>

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-05-21
+
+### Added
+- Runtime now exposes the remaining Gateway-facing comms/Telegram package boundary through public Runtime wrappers:
+  - host-local email helpers on `get_abstractcore_host_facade(...)`
+  - host-local Telegram TDLib/bootstrap/global-client wrappers in `abstractruntime.integrations.abstractcore.telegram_facade`
+- Outbound email and Telegram sends can now execute as durable Runtime-authored child runs through `get_abstractcore_run_facade(...)`:
+  - `send_email(...)`
+  - `send_telegram_message(...)`
+  - `resume_tool_calls(...)` for approval-gated or passthrough tool waits
+
+### Changed
+- Runtime docs and AI-readable `llms.txt` / `llms-full.txt` now distinguish clearly between:
+  - host-local operator comms helpers
+  - durable run-owned outbound comms execution and replay semantics
+- Outbound comms replay now follows the Runtime-owned truth model: recorded send requests and outcomes are replayed as data, not re-executed as external sends.
+
 ## [0.4.17] - 2026-05-21
 
 ### Added
@@ -461,7 +478,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.17...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.18...HEAD
+[0.4.18]: https://github.com/lpalbou/abstractruntime/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/lpalbou/abstractruntime/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/lpalbou/abstractruntime/compare/v0.4.14...v0.4.15

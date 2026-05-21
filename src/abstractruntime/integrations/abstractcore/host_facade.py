@@ -8,6 +8,7 @@ Scope:
 - durable bloc/KV prompt-cache operations
 - durable bloc/KV lifecycle operations
 - model-residency control operations
+- host-local email/comms helper operations
 
 Non-goals:
 - durable Runtime effect execution (use `AbstractCoreRunFacade` / `get_abstractcore_run_facade(...)`)
@@ -298,6 +299,9 @@ class AbstractCoreHostFacade:
 
     This facade is intentionally narrow and operator-scoped. Its methods are
     synchronous helpers and do not create durable Runtime history on their own.
+    Most methods delegate through the configured Runtime client; the small
+    comms/email helpers intentionally remain host-local wrappers over
+    AbstractCore's public tool modules in phase 1.
     """
 
     __slots__ = ("_client",)
@@ -650,6 +654,85 @@ class AbstractCoreHostFacade:
             model=model,
             options=options,
             **kwargs,
+        )
+
+    def list_email_accounts(self) -> Dict[str, Any]:
+        from abstractcore.tools.comms_tools import list_email_accounts
+
+        return list_email_accounts()
+
+    def list_emails(
+        self,
+        *,
+        account: Optional[str] = None,
+        mailbox: Optional[str] = None,
+        since: Optional[str] = None,
+        status: str = "all",
+        limit: int = 20,
+        timeout_s: float = 30.0,
+    ) -> Dict[str, Any]:
+        from abstractcore.tools.comms_tools import list_emails
+
+        return list_emails(
+            account=account,
+            mailbox=mailbox,
+            since=since,
+            status=status,
+            limit=limit,
+            timeout_s=timeout_s,
+        )
+
+    def read_email(
+        self,
+        *,
+        uid: str,
+        account: Optional[str] = None,
+        mailbox: Optional[str] = None,
+        timeout_s: float = 30.0,
+        max_body_chars: int = 20000,
+    ) -> Dict[str, Any]:
+        from abstractcore.tools.comms_tools import read_email
+
+        return read_email(
+            uid=uid,
+            account=account,
+            mailbox=mailbox,
+            timeout_s=timeout_s,
+            max_body_chars=max_body_chars,
+        )
+
+    def send_email(
+        self,
+        to: Any,
+        subject: str,
+        *,
+        account: Optional[str] = None,
+        body_text: Optional[str] = None,
+        body_html: Optional[str] = None,
+        cc: Any = None,
+        bcc: Any = None,
+        timeout_s: float = 30.0,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Host-local operator send helper.
+
+        If the outbound send belongs to a workflow/run, use
+        `get_abstractcore_run_facade(runtime).send_email(...)` instead so
+        Runtime authors the durable child-run truth.
+        """
+
+        from abstractcore.tools.comms_tools import send_email
+
+        return send_email(
+            to=to,
+            subject=subject,
+            account=account,
+            body_text=body_text,
+            body_html=body_html,
+            cc=cc,
+            bcc=bcc,
+            timeout_s=timeout_s,
+            headers=headers,
         )
 
 

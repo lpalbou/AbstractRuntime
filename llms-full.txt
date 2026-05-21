@@ -10,7 +10,7 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.17
+- Version: 0.4.18
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
 - Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.24`
@@ -222,7 +222,9 @@ Notes:
 - Use `ApprovalToolExecutor(delegate=..., policy=ToolApprovalPolicy())` when a local host should auto-run safe tools but pause for user approval before write/command/unknown tools.
 - Remote `params.api_key` and `params.provider_api_key` are compatibility inputs; runtime converts them to `X-AbstractCore-Provider-API-Key` headers for current AbstractCore servers.
 - Gateway/hosts choose Core server URLs, Core server auth headers, provider/model defaults, tool executors, artifact stores, and any Gateway env/config translation before Runtime sees the call.
-- Hosts should bind `get_abstractcore_host_facade(rt)` for prompt-cache, durable bloc/KV, and model-residency control operations instead of reaching through the private `_abstractcore_llm_client` attachment directly.
+- Hosts should bind `get_abstractcore_host_facade(rt)` for prompt-cache, durable bloc/KV, model-residency, and host-local email helper operations instead of reaching through the private `_abstractcore_llm_client` attachment directly.
+- Hosts should use `abstractruntime.integrations.abstractcore.telegram_facade` for Telegram TDLib bootstrap/global-client/send helpers instead of importing `abstractcore.tools.telegram_tdlib` or `abstractcore.tools.telegram_tools` directly. These wrappers remain host-local and do not proxy through a remote Core server.
+- If an outbound email or Telegram send belongs to a run, hosts should prefer `get_abstractcore_run_facade(rt).send_email(...)` or `send_telegram_message(...)`. Those are durable `TOOL_CALLS` child runs: Runtime records the request and outcome, and replay should reuse the recorded result instead of resending the message. If the child run waits for approval or passthrough host execution, resume it through the same public boundary with `resume_tool_calls(...)`.
 - Use `pip install "abstractruntime[multimodal]"` for common AbstractCore media, vision, voice, audio, and music dependencies.
 - Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
 - Read-file session attachment registration is bounded by `TOOL_CALLS.payload.max_attachment_bytes`, `run.vars["_runtime"]["max_attachment_bytes"]`, `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`, then the 25 MiB default.

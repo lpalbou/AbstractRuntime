@@ -12,16 +12,16 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Next recommended work
 
-1. `planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md`
-   This is the narrow Runtime work that unblocks the last high-pressure direct
-   `abstractcore` imports in Gateway for comms/email and Telegram without
-   reopening the already-completed media/discovery boundary work.
-2. `planned/018_workspace_access_policy_for_media_and_tools.md`
+1. `planned/018_workspace_access_policy_for_media_and_tools.md`
    Keep workspace and tool policy explicit while Gateway extracts its local
    workspace helpers.
-3. `planned/014_remote_tool_worker_executor.md`
+2. `planned/014_remote_tool_worker_executor.md`
    The public ToolExecutor path is still the larger follow-on after the current
    Gateway boundary cleanup.
+3. `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md`
+   The comms/Telegram boundary cleanup is now complete; the remaining lower
+   pressure follow-up is a Runtime-owned tool-spec surface if Gateway or the
+   MCP worker still need one after adoption.
 
 ## Completed
 
@@ -50,6 +50,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 027 | `completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 | 028 | `completed/028_runtime_bloc_kv_lifecycle_and_pruning.md` |
 | 029 | `completed/029_runtime_music_generation_and_discovery_via_abstractcore.md` |
+| 0030 | `completed/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md` |
+| 0032 | `completed/0032_runtime_durable_outbound_comms_truth.md` |
 
 ## Planned
 
@@ -60,7 +62,6 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 017 | `planned/017_limit_warnings_and_observability.md` |
 | 018 | `planned/018_workspace_access_policy_for_media_and_tools.md` |
 | 025 | `planned/025_runtime_retention_and_purge_contract.md` |
-| 0030 | `planned/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md` |
 
 ## Proposed
 

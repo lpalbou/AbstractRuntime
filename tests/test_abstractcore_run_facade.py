@@ -9,6 +9,12 @@ from abstractruntime.integrations import abstractcore
 from abstractruntime.integrations.abstractcore import AbstractCoreRunFacade, get_abstractcore_run_facade
 from abstractruntime.integrations.abstractcore.effect_handlers import build_effect_handlers
 from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCoreLLMClient
+from abstractruntime.integrations.abstractcore.tool_executor import (
+    ApprovalToolExecutor,
+    MappingToolExecutor,
+    PassthroughToolExecutor,
+    ToolApprovalPolicy,
+)
 from abstractruntime.storage.artifacts import InMemoryArtifactStore
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 
@@ -245,3 +251,227 @@ def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backe
     assert artifact.content == b"wav-child"
     assert artifact.metadata.run_id == child.run_id
     assert artifact.metadata.tags["kind"] == "generated_media"
+
+
+def test_run_facade_send_telegram_message_creates_durable_child_tool_run() -> None:
+    seen: Dict[str, Any] = {}
+
+    def send_telegram_message(
+        *,
+        chat_id: int,
+        text: str,
+        parse_mode: str = "",
+        disable_web_page_preview: bool = False,
+        timeout_s: float = 20.0,
+        bot_token_env_var: str = "ABSTRACT_TELEGRAM_BOT_TOKEN",
+    ) -> Dict[str, Any]:
+        seen.update(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": disable_web_page_preview,
+                "timeout_s": timeout_s,
+                "bot_token_env_var": bot_token_env_var,
+            }
+        )
+        return {"success": True, "transport": "bot_api", "message_ids": [7]}
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers=build_effect_handlers(
+            llm=object(),
+            tools=MappingToolExecutor({"send_telegram_message": send_telegram_message}),
+        ),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(
+        workflow=parent,
+        session_id="sess-telegram",
+        vars={"_runtime": {"prompt_cache": {"enabled": True}}},
+    )
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.send_telegram_message(
+        parent_run_id,
+        chat_id=123,
+        text="Status green",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+        timeout_s=11,
+        bot_token_env_var="TG_TOKEN",
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert child.parent_run_id == parent_run_id
+    assert child.session_id == "sess-telegram"
+    assert child.vars["_runtime"]["prompt_cache"]["enabled"] is True
+    assert seen == {
+        "chat_id": 123,
+        "text": "Status green",
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+        "timeout_s": 11.0,
+        "bot_token_env_var": "TG_TOKEN",
+    }
+
+    result = child.output["result"]
+    assert result["mode"] == "executed"
+    results = result["results"]
+    assert isinstance(results, list) and len(results) == 1
+    assert results[0]["name"] == "send_telegram_message"
+    assert results[0]["success"] is True
+    assert results[0]["output"]["message_ids"] == [7]
+
+    ledger = runtime.get_ledger(child.run_id)
+    effect_types = [
+        effect.get("type")
+        for entry in ledger
+        if isinstance(entry, dict)
+        for effect in [entry.get("effect")]
+        if isinstance(effect, dict)
+    ]
+    assert "tool_calls" in effect_types
+
+
+def test_run_facade_send_email_waits_for_approval_and_resumes_durably() -> None:
+    seen: Dict[str, Any] = {}
+
+    def send_email(
+        *,
+        to: Any,
+        subject: str,
+        account: str | None = None,
+        body_text: str | None = None,
+        body_html: str | None = None,
+        cc: Any = None,
+        bcc: Any = None,
+        timeout_s: float = 30.0,
+        headers: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        seen.update(
+            {
+                "to": to,
+                "subject": subject,
+                "account": account,
+                "body_text": body_text,
+                "body_html": body_html,
+                "cc": cc,
+                "bcc": bcc,
+                "timeout_s": timeout_s,
+                "headers": headers,
+            }
+        )
+        return {"success": True, "message_id": "<m-1>", "account": account}
+
+    delegate = MappingToolExecutor({"send_email": send_email})
+    tools = ApprovalToolExecutor(delegate=delegate, policy=ToolApprovalPolicy())
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers=build_effect_handlers(llm=object(), tools=tools),
+    )
+    runtime.set_tool_executor_for_resume(tools)
+
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-email")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child_waiting = facade.send_email(
+        parent_run_id,
+        to=["ops@example.com"],
+        subject="Runtime status",
+        account="ops",
+        body_text="All green",
+        cc="cc@example.com",
+        timeout_s=12,
+        headers={"X-Test": "1"},
+    )
+
+    assert child_waiting.status == RunStatus.WAITING
+    assert child_waiting.waiting is not None
+    assert child_waiting.waiting.reason.value == "user"
+    assert child_waiting.waiting.details["mode"] == "approval_required"
+    wait_calls = child_waiting.waiting.details.get("tool_calls")
+    assert isinstance(wait_calls, list) and len(wait_calls) == 1
+    assert wait_calls[0]["name"] == "send_email"
+
+    child_done = facade.resume_tool_calls(
+        child_waiting.run_id,
+        payload={"approved": True},
+        max_steps=10,
+    )
+
+    assert child_done.status == RunStatus.COMPLETED
+    assert seen == {
+        "to": ["ops@example.com"],
+        "subject": "Runtime status",
+        "account": "ops",
+        "body_text": "All green",
+        "body_html": None,
+        "cc": "cc@example.com",
+        "bcc": None,
+        "timeout_s": 12.0,
+        "headers": {"X-Test": "1"},
+    }
+    result = child_done.output["result"]
+    assert result["mode"] == "executed"
+    results = result["results"]
+    assert isinstance(results, list) and len(results) == 1
+    assert results[0]["name"] == "send_email"
+    assert results[0]["success"] is True
+    assert results[0]["output"]["message_id"] == "<m-1>"
+
+
+def test_run_facade_resume_tool_calls_accepts_passthrough_results() -> None:
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers=build_effect_handlers(llm=object(), tools=PassthroughToolExecutor()),
+    )
+
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-tool-passthrough")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child_waiting = facade.send_telegram_message(
+        parent_run_id,
+        chat_id=789,
+        text="Needs host send",
+    )
+
+    assert child_waiting.status == RunStatus.WAITING
+    assert child_waiting.waiting is not None
+    assert child_waiting.waiting.details["mode"] == "passthrough"
+
+    child_done = facade.resume_tool_calls(
+        child_waiting.run_id,
+        payload={
+            "mode": "executed",
+            "results": [
+                {
+                    "call_id": "send_telegram_message",
+                    "runtime_call_id": "host-call-1",
+                    "name": "send_telegram_message",
+                    "success": True,
+                    "output": {"transport": "host", "message_ids": [99]},
+                    "error": None,
+                }
+            ],
+        },
+        max_steps=10,
+    )
+
+    assert child_done.status == RunStatus.COMPLETED
+    result = child_done.output["result"]
+    assert result["mode"] == "executed"
+    results = result["results"]
+    assert isinstance(results, list) and len(results) == 1
+    assert results[0]["name"] == "send_telegram_message"
+    assert results[0]["success"] is True
+    assert results[0]["output"]["message_ids"] == [99]

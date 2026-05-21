@@ -161,6 +161,33 @@ These are snapshot/query reads, not durable `LLM_CALL` effects, so replay should
 re-querying the current machine or server and pretending the answer is unchanged.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/discovery_facade.py`, `src/abstractruntime/integrations/abstractcore/discovery_queries.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
+## Should Gateway or another host import AbstractCore comms or Telegram helpers directly?
+
+No. For the remaining host/operator paths, use Runtime's public wrappers instead:
+
+- `get_abstractcore_host_facade(runtime).list_email_accounts(...)`
+- `...list_emails(...)`
+- `...read_email(...)`
+- `...send_email(...)`
+- `abstractruntime.integrations.abstractcore.telegram_facade.bootstrap_telegram_auth_from_env(...)`
+- `...get_global_telegram_client(...)`
+- `...stop_global_telegram_client()`
+- `...send_telegram_message(...)`
+
+Important nuance: the read/bootstrap wrappers are still **host-local**. They do not proxy through a remote Core
+server, and they do not write durable Runtime history on their own. They exist so hosts can depend
+on Runtime as the package boundary instead of importing `abstractcore.tools.comms_tools`,
+`abstractcore.tools.telegram_tdlib`, or `abstractcore.tools.telegram_tools` directly.
+
+For outbound sends that belong to a run, use the durable run facade instead:
+
+- `get_abstractcore_run_facade(runtime).send_email(...)`
+- `get_abstractcore_run_facade(runtime).send_telegram_message(...)`
+- `get_abstractcore_run_facade(runtime).resume_tool_calls(...)` when an approval-gated or passthrough tool child run needs to continue
+
+Those create child runs, record the send request and outcome in the ledger, and replay should show
+the recorded result rather than resending the external message.
+
 ## Should a host execute image / TTS / music / STT directly for an existing run?
 
 No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `generate_voice(...)`, `generate_music(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.

@@ -8,8 +8,9 @@ Provides:
 - Effect handlers wiring
 - Convenience runtime factories for local/remote/hybrid modes
 - Public discovery facade for provider/media/catalog snapshot queries
-- Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
-- Public durable run facade for run-scoped AbstractCore child runs
+- Public host facade for prompt-cache, durable bloc/KV, model-residency, and host-local email control operations
+- Public Telegram host wrappers for TDLib bootstrap/global-client/send parity
+- Public durable run facade for run-scoped AbstractCore LLM/tool child runs, including outbound comms sends
 - RuntimeConfig for limits and model capabilities
 
 Importing this module is the explicit opt-in to an AbstractCore dependency.
@@ -35,6 +36,13 @@ from .discovery_facade import (
 from .run_facade import (
     AbstractCoreRunFacade,
     get_abstractcore_run_facade,
+)
+from .telegram_facade import (
+    TelegramTdlibNotAvailable,
+    bootstrap_telegram_auth_from_env,
+    get_global_telegram_client,
+    send_telegram_message,
+    stop_global_telegram_client,
 )
 from .tool_executor import (
     AbstractCoreToolExecutor,
@@ -65,6 +73,7 @@ __all__ = [
     "RemoteAbstractCoreLLMClient",
     "AbstractCoreEmbeddingsClient",
     "EmbeddingsResult",
+    "TelegramTdlibNotAvailable",
     "RuntimeConfig",
     "ToolExecutor",
     "MappingToolExecutor",
@@ -74,14 +83,18 @@ __all__ = [
     "ApprovalToolExecutor",
 
     "build_effect_handlers",
+    "bootstrap_telegram_auth_from_env",
     "get_abstractcore_discovery_facade",
     "get_abstractcore_host_facade",
+    "get_global_telegram_client",
     "get_abstractcore_run_facade",
     "create_local_runtime",
     "create_remote_runtime",
     "create_hybrid_runtime",
     "create_local_file_runtime",
     "create_remote_file_runtime",
+    "send_telegram_message",
+    "stop_global_telegram_client",
     "attach_global_event_bus_bridge",
     "emit_step_record",
 ]

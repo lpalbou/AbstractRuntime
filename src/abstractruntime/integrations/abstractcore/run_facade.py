@@ -5,7 +5,9 @@ Runtime ledger instead of executing in host route/controller code.
 
 Current focus:
 - durable run-scoped `LLM_CALL` child runs
+- durable run-scoped `TOOL_CALLS` child runs
 - convenience wrappers for image generation, music generation, TTS, and STT/transcription
+- convenience wrappers for durable outbound comms sends
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import copy
 import re
 from typing import Any, Dict, Optional, Protocol
 
-from ...core.models import Effect, EffectType, RunState, StepPlan
+from ...core.models import Effect, EffectType, RunState, RunStatus, StepPlan
 from ...core.spec import WorkflowSpec
 
 _RESULT_KEY = "result"
@@ -41,6 +43,17 @@ class AbstractCoreRuntimeLike(Protocol):
     def get_state(self, run_id: str) -> RunState:
         ...
 
+    def resume(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        run_id: str,
+        wait_key: Optional[str],
+        payload: Dict[str, Any],
+        max_steps: int = 100,
+    ) -> RunState:
+        ...
+
 
 def _coerce_runtime(runtime: Any) -> AbstractCoreRuntimeLike:
     missing = [name for name in ("start", "tick", "get_state") if not callable(getattr(runtime, name, None))]
@@ -61,6 +74,72 @@ def _workflow_id_for_output(output: Any) -> str:
         suffix = task or modality or suffix
     safe = re.sub(r"[^a-z0-9_]+", "_", suffix).strip("_") or "llm_call"
     return f"{_WORKFLOW_PREFIX}_{safe}"
+
+
+def _workflow_id_for_tool_calls(tool_calls: list[Dict[str, Any]]) -> str:
+    suffix = "tool_calls"
+    if isinstance(tool_calls, list) and tool_calls:
+        first = tool_calls[0]
+        if isinstance(first, dict):
+            name = str(first.get("name") or "").strip().lower()
+            if name:
+                suffix = f"tool_{name}"
+    safe = re.sub(r"[^a-z0-9_]+", "_", suffix).strip("_") or "tool_calls"
+    return f"{_WORKFLOW_PREFIX}_{safe}"
+
+
+def _build_tool_calls_workflow(
+    *,
+    workflow_id: str,
+    payload: Dict[str, Any],
+    result_key: str,
+) -> WorkflowSpec:
+    def call(run: RunState, ctx: Any) -> StepPlan:
+        _ = ctx
+        return StepPlan(
+            node_id="call",
+            effect=Effect(
+                type=EffectType.TOOL_CALLS,
+                payload=copy.deepcopy(payload),
+                result_key=result_key,
+            ),
+            next_node="done",
+        )
+
+    def done(run: RunState, ctx: Any) -> StepPlan:
+        _ = ctx
+        return StepPlan(
+            node_id="done",
+            complete_output={"result": copy.deepcopy(run.vars.get(result_key))},
+        )
+
+    return WorkflowSpec(
+        workflow_id=workflow_id,
+        entry_node="call",
+        nodes={"call": call, "done": done},
+    )
+
+
+def _build_tool_calls_resume_workflow(
+    *,
+    workflow_id: str,
+    result_key: str,
+    resume_to_node: Optional[str],
+) -> WorkflowSpec:
+    node_id = str(resume_to_node or "done").strip() or "done"
+
+    def done(run: RunState, ctx: Any) -> StepPlan:
+        _ = ctx
+        return StepPlan(
+            node_id=node_id,
+            complete_output={"result": copy.deepcopy(run.vars.get(result_key))},
+        )
+
+    return WorkflowSpec(
+        workflow_id=workflow_id,
+        entry_node=node_id,
+        nodes={node_id: done},
+    )
 
 
 def _build_child_vars(*, parent: RunState, child_vars: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -181,6 +260,71 @@ class AbstractCoreRunFacade:
         )
         return self._runtime.tick(workflow=workflow, run_id=child_run_id)
 
+    def execute_tool_calls(
+        self,
+        run_id: str,
+        *,
+        tool_calls: list[Dict[str, Any]],
+        allowed_tools: Optional[list[str]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[str] = None,
+    ) -> RunState:
+        """Execute durable child `TOOL_CALLS` under an existing run."""
+
+        parent = self._runtime.get_state(run_id)
+        payload: Dict[str, Any] = {"tool_calls": copy.deepcopy(tool_calls or [])}
+        if isinstance(allowed_tools, list) and allowed_tools:
+            payload["allowed_tools"] = [str(name) for name in allowed_tools if isinstance(name, str) and name.strip()]
+
+        result_key = _RESULT_KEY
+        workflow = _build_tool_calls_workflow(
+            workflow_id=workflow_id or _workflow_id_for_tool_calls(payload["tool_calls"]),
+            payload=payload,
+            result_key=result_key,
+        )
+        child_run_id = self._runtime.start(
+            workflow=workflow,
+            vars=_build_child_vars(parent=parent, child_vars=child_vars),
+            actor_id=parent.actor_id,
+            session_id=parent.session_id,
+            parent_run_id=parent.run_id,
+        )
+        return self._runtime.tick(workflow=workflow, run_id=child_run_id)
+
+    def resume_tool_calls(
+        self,
+        child_run_id: str,
+        *,
+        payload: Dict[str, Any],
+        wait_key: Optional[str] = None,
+        max_steps: int = 100,
+    ) -> RunState:
+        """Resume a waiting durable `TOOL_CALLS` child run.
+
+        Typical payloads are:
+        - `{"approved": true}` for approval-gated execution
+        - `{"mode": "executed", "results": [...]}` for passthrough/delegated execution
+        """
+
+        child = self._runtime.get_state(child_run_id)
+        waiting = child.waiting
+        if child.status != RunStatus.WAITING or waiting is None:
+            raise ValueError(f"Run '{child_run_id}' is not waiting")
+
+        result_key = str(waiting.result_key or _RESULT_KEY).strip() or _RESULT_KEY
+        workflow = _build_tool_calls_resume_workflow(
+            workflow_id=str(child.workflow_id or _workflow_id_for_tool_calls([])),
+            result_key=result_key,
+            resume_to_node=waiting.resume_to_node,
+        )
+        return self._runtime.resume(
+            workflow=workflow,
+            run_id=child.run_id,
+            wait_key=wait_key if wait_key is not None else waiting.wait_key,
+            payload=copy.deepcopy(payload),
+            max_steps=max_steps,
+        )
+
     def generate_image(
         self,
         run_id: str,
@@ -273,6 +417,82 @@ class AbstractCoreRunFacade:
             output=spec,
             params=params,
             child_vars=child_vars,
+        )
+
+    def send_email(
+        self,
+        run_id: str,
+        *,
+        to: Any,
+        subject: str,
+        account: Optional[str] = None,
+        body_text: Optional[str] = None,
+        body_html: Optional[str] = None,
+        cc: Any = None,
+        bcc: Any = None,
+        timeout_s: float = 30.0,
+        headers: Optional[Dict[str, str]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[str] = None,
+    ) -> RunState:
+        """Create a durable child run for one outbound email send."""
+
+        tool_call = {
+            "name": "send_email",
+            "call_id": "send_email",
+            "arguments": {
+                "to": copy.deepcopy(to),
+                "subject": str(subject),
+                "account": account,
+                "body_text": body_text,
+                "body_html": body_html,
+                "cc": copy.deepcopy(cc),
+                "bcc": copy.deepcopy(bcc),
+                "timeout_s": float(timeout_s),
+                "headers": copy.deepcopy(headers) if isinstance(headers, dict) else headers,
+            },
+        }
+        return self.execute_tool_calls(
+            run_id,
+            tool_calls=[tool_call],
+            allowed_tools=["send_email"],
+            child_vars=child_vars,
+            workflow_id=workflow_id,
+        )
+
+    def send_telegram_message(
+        self,
+        run_id: str,
+        *,
+        chat_id: int,
+        text: str,
+        parse_mode: str = "",
+        disable_web_page_preview: bool = False,
+        timeout_s: float = 20.0,
+        bot_token_env_var: str = "ABSTRACT_TELEGRAM_BOT_TOKEN",
+        child_vars: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[str] = None,
+    ) -> RunState:
+        """Create a durable child run for one outbound Telegram message."""
+
+        tool_call = {
+            "name": "send_telegram_message",
+            "call_id": "send_telegram_message",
+            "arguments": {
+                "chat_id": int(chat_id),
+                "text": str(text),
+                "parse_mode": str(parse_mode),
+                "disable_web_page_preview": bool(disable_web_page_preview),
+                "timeout_s": float(timeout_s),
+                "bot_token_env_var": str(bot_token_env_var),
+            },
+        }
+        return self.execute_tool_calls(
+            run_id,
+            tool_calls=[tool_call],
+            allowed_tools=["send_telegram_message"],
+            child_vars=child_vars,
+            workflow_id=workflow_id,
         )
 
 

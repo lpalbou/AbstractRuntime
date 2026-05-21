@@ -483,6 +483,69 @@ Effect(
 - `delete_bloc_kv_artifact(...)` deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.
 - `delete_bloc(...)` removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass `delete_kv=False` only if you intentionally want to leave those artifacts behind.
 
+## Host-local comms and Telegram wrappers
+
+Runtime also exposes the remaining Gateway-facing host/operator wrappers for
+email and Telegram:
+
+- `get_abstractcore_host_facade(runtime)` now includes:
+  - `list_email_accounts(...)`
+  - `list_emails(...)`
+  - `read_email(...)`
+  - `send_email(...)`
+- `abstractruntime.integrations.abstractcore.telegram_facade` exposes:
+  - `TelegramTdlibNotAvailable`
+  - `bootstrap_telegram_auth_from_env(...)`
+  - `get_global_telegram_client(start=False)`
+  - `stop_global_telegram_client()`
+  - `send_telegram_message(...)`
+
+Contract notes:
+
+- These are **host-local** wrappers over current public AbstractCore tool
+  modules. They do not proxy through the remote AbstractCore server.
+- They are intentionally **nondurable**. They do not write Runtime run history
+  on their own.
+- Direct `send_email(...)` on the host facade and direct
+  `telegram_facade.send_telegram_message(...)` are for operator-owned
+  host-local flows only. If the outbound send belongs to a workflow/run, prefer
+  the durable run facade methods shown below.
+- Even for **remote** and **hybrid** runtimes, they still use the current host
+  process env/config, local TDLib installation, and the host's own outbound
+  network access.
+- The Telegram global client is process-wide, not runtime-instance scoped.
+
+Host-side operator example:
+
+```python
+from abstractruntime.integrations.abstractcore import (
+    create_local_runtime,
+    get_abstractcore_host_facade,
+)
+from abstractruntime.integrations.abstractcore.telegram_facade import (
+    TelegramTdlibNotAvailable,
+    bootstrap_telegram_auth_from_env,
+    send_telegram_message,
+)
+
+rt = create_local_runtime(provider="ollama", model="qwen3:4b")
+facade = get_abstractcore_host_facade(rt)
+
+accounts = facade.list_email_accounts()
+sent = facade.send_email(
+    ["ops@example.com"],
+    "Runtime status",
+    body_text="All green.",
+)
+
+try:
+    bootstrap = bootstrap_telegram_auth_from_env(timeout_s=30)
+except TelegramTdlibNotAvailable:
+    bootstrap = {"success": False, "error": "TDLib is not installed on this host."}
+
+notify = send_telegram_message(chat_id=123456, text="Runtime check complete.")
+```
+
 ## Discovery snapshots
 
 AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:
@@ -541,21 +604,25 @@ music = facade.list_music_providers(task="text_to_music")
 vision = facade.list_vision_provider_models(task="text_to_image", providers_only=True)
 ```
 
-## Durable run-scoped media execution
+## Durable run-scoped media and comms execution
 
-Hosts sometimes need to trigger image/TTS/music/STT work for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
+Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
 
 Public durable entry points:
 
 - `get_abstractcore_run_facade(runtime)`
 - `AbstractCoreRunFacade`
 - `execute_llm_call(...)`
+- `execute_tool_calls(...)`
+- `resume_tool_calls(...)`
 - `generate_image(...)`
 - `generate_voice(...)`
 - `generate_music(...)`
 - `transcribe_audio(...)`
+- `send_email(...)`
+- `send_telegram_message(...)`
 
-These helpers create child runs under an existing parent run and execute the real `LLM_CALL` through Runtime rather than doing media work in host/controller code.
+These helpers create child runs under an existing parent run and execute the real `LLM_CALL` or `TOOL_CALLS` through Runtime rather than doing external work in host/controller code.
 
 Example:
 
@@ -578,6 +645,31 @@ assert child.status.value == "completed"
 result = child.output["result"]
 print(child.run_id, result["media_model"], result["outputs"]["image"][0]["artifact_id"])
 ```
+
+Outbound comms sends that belong to a run should use the same durable child-run surface:
+
+```python
+email_child = facade.send_email(
+    "existing-parent-run-id",
+    to=["ops@example.com"],
+    subject="Workflow alert",
+    body_text="The workflow completed.",
+)
+
+telegram_child = facade.send_telegram_message(
+    "existing-parent-run-id",
+    chat_id=123456,
+    text="Workflow completed.",
+)
+```
+
+Contract notes for durable comms sends:
+
+- Runtime records the send request and the send outcome in the child run ledger.
+- Replay should show the recorded result; it should **not** resend the external email or Telegram message.
+- Local and hybrid runtimes usually execute those sends immediately when the configured tool executor can run them.
+- Remote runtimes may still enter a durable tool wait if the configured tool executor is passthrough/delegated or approval-gated. That wait/resume path is still Runtime-authored truth.
+- To resume a waiting durable comms/tool child run through the same public boundary, use `get_abstractcore_run_facade(runtime).resume_tool_calls(child_run_id, payload=...)`.
 
 ## Attachment registration limits
 

@@ -418,6 +418,108 @@ def test_host_facade_delegates_prompt_cache_operations() -> None:
     ]
 
 
+def test_host_facade_email_helpers_delegate_to_local_comms_tools_even_for_remote_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = abstractcore.create_remote_runtime(
+        server_base_url="http://core.test/v1",
+        model="qwen3:4b",
+        timeout_s=45,
+    )
+    facade = get_abstractcore_host_facade(runtime)
+    sender = _RecordingRequestSender()
+    setattr(getattr(runtime, "_abstractcore_llm_client"), "_sender", sender)
+
+    from abstractcore.tools import comms_tools as core_comms_tools
+
+    calls: List[Tuple[str, Dict[str, Any]]] = []
+
+    def _record(name: str, payload: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        calls.append((name, dict(payload)))
+        return result
+
+    monkeypatch.setattr(
+        core_comms_tools,
+        "list_email_accounts",
+        lambda: _record(
+            "list_email_accounts",
+            {},
+            {"success": True, "accounts": [{"account": "ops"}]},
+        ),
+    )
+    monkeypatch.setattr(
+        core_comms_tools,
+        "list_emails",
+        lambda **kwargs: _record(
+            "list_emails",
+            kwargs,
+            {"success": True, "messages": [{"uid": "42"}]},
+        ),
+    )
+    monkeypatch.setattr(
+        core_comms_tools,
+        "read_email",
+        lambda **kwargs: _record(
+            "read_email",
+            kwargs,
+            {"success": True, "uid": "42", "subject": "Ops"},
+        ),
+    )
+    monkeypatch.setattr(
+        core_comms_tools,
+        "send_email",
+        lambda **kwargs: _record(
+            "send_email",
+            kwargs,
+            {"success": True, "message_id": "<m-1>"},
+        ),
+    )
+
+    accounts = facade.list_email_accounts()
+    messages = facade.list_emails(account="ops", since="7d", status="unread", limit=5, timeout_s=12)
+    email = facade.read_email(uid="42", account="ops", mailbox="INBOX", timeout_s=10, max_body_chars=8000)
+    sent = facade.send_email(
+        ["ops@example.com"],
+        "Status",
+        account="ops",
+        body_text="All green",
+        cc="cc@example.com",
+        timeout_s=20,
+        headers={"X-Test": "1"},
+    )
+
+    assert accounts == {"success": True, "accounts": [{"account": "ops"}]}
+    assert messages == {"success": True, "messages": [{"uid": "42"}]}
+    assert email == {"success": True, "uid": "42", "subject": "Ops"}
+    assert sent == {"success": True, "message_id": "<m-1>"}
+    assert calls == [
+        ("list_email_accounts", {}),
+        (
+            "list_emails",
+            {"account": "ops", "mailbox": None, "since": "7d", "status": "unread", "limit": 5, "timeout_s": 12},
+        ),
+        (
+            "read_email",
+            {"uid": "42", "account": "ops", "mailbox": "INBOX", "timeout_s": 10, "max_body_chars": 8000},
+        ),
+        (
+            "send_email",
+            {
+                "to": ["ops@example.com"],
+                "subject": "Status",
+                "account": "ops",
+                "body_text": "All green",
+                "body_html": None,
+                "cc": "cc@example.com",
+                "bcc": None,
+                "timeout_s": 20,
+                "headers": {"X-Test": "1"},
+            },
+        ),
+    ]
+    assert sender.calls == []
+
+
 def test_host_facade_delegates_model_residency_operations() -> None:
     client = _RecordingHostClient()
     facade = AbstractCoreHostFacade(SimpleNamespace(_abstractcore_llm_client=client))

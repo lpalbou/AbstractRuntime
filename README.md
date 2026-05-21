@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.17 • **Python:** 3.10+
+**Version:** 0.4.18 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.17)
+## What’s included (v0.4.18)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -116,7 +116,8 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Optional integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, durable bloc prompt-cache controls, bindings, and lifecycle operations, media inputs, generated image/voice/music outputs, tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/voice/music outputs, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends
   such as LanceDB, SQLite, or in-memory stores.

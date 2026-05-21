@@ -76,6 +76,26 @@ class _RecordingHostClient:
             "prompt_cache_fork": {"ok": True, "operation": "fork"},
             "prompt_cache_clear": {"ok": True, "operation": "clear"},
             "prompt_cache_prepare_modules": {"ok": True, "operation": "prepare_modules"},
+            "list_prompt_cache_exports": {
+                "supported": True,
+                "ok": True,
+                "operation": "list_exports",
+                "items": [{"name": "orbit-cache", "artifact_filename": "orbit-cache.safetensors"}],
+            },
+            "prompt_cache_export": {
+                "supported": True,
+                "ok": True,
+                "operation": "export",
+                "name": "orbit-cache",
+                "artifact_filename": "orbit-cache.safetensors",
+            },
+            "prompt_cache_import": {
+                "supported": True,
+                "ok": True,
+                "operation": "import",
+                "name": "orbit-cache",
+                "key": "loaded:orbit",
+            },
             "upsert_text_bloc": {"ok": True, "operation": "upsert_text", "record": {"bloc_id": 7}},
             "get_bloc_record": {"ok": True, "operation": "record", "record": {"bloc_id": 7}},
             "list_blocs": {"ok": True, "operation": "list", "records": [{"bloc_id": 7}]},
@@ -107,9 +127,9 @@ class _RecordingHostClient:
             "unload_model_residency": {"ok": True, "operation": "unload"},
         }
 
-    def _record(self, name: str, **kwargs: Any) -> Dict[str, Any]:
-        self.calls.append((name, dict(kwargs)))
-        return self.responses[name]
+    def _record(self, method_name: str, **kwargs: Any) -> Dict[str, Any]:
+        self.calls.append((method_name, dict(kwargs)))
+        return self.responses[method_name]
 
     def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         return self._record("get_prompt_cache_capabilities", **kwargs)
@@ -182,6 +202,59 @@ class _RecordingHostClient:
             make_default=make_default,
             ttl_s=ttl_s,
             version=version,
+            **kwargs,
+        )
+
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record("list_prompt_cache_exports", provider=provider, model=model, **kwargs)
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Dict[str, Any] | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "prompt_cache_export",
+            name=name,
+            key=key,
+            q8=q8,
+            meta=meta,
+            provider=provider,
+            model=model,
+            **kwargs,
+        )
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: str | None = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        provider: str | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "prompt_cache_import",
+            name=name,
+            key=key,
+            make_default=make_default,
+            clear_existing=clear_existing,
+            provider=provider,
+            model=model,
             **kwargs,
         )
 
@@ -411,6 +484,58 @@ def test_host_facade_delegates_prompt_cache_operations() -> None:
                 "make_default": True,
                 "ttl_s": 120,
                 "version": 2,
+                "provider": "mlx",
+                "model": "qwen",
+            },
+        ),
+    ]
+
+
+def test_host_facade_delegates_prompt_cache_export_import_operations() -> None:
+    client = _RecordingHostClient()
+    facade = AbstractCoreHostFacade(SimpleNamespace(_abstractcore_llm_client=client))
+
+    listed = facade.list_prompt_cache_exports(provider="mlx", model="qwen")
+    exported = facade.prompt_cache_export(
+        name="orbit-cache",
+        key="sess:orbit",
+        q8=True,
+        meta={"tenant": "acme"},
+        provider="mlx",
+        model="qwen",
+    )
+    imported = facade.prompt_cache_import(
+        name="orbit-cache",
+        key="loaded:orbit",
+        make_default=False,
+        clear_existing=True,
+        provider="mlx",
+        model="qwen",
+    )
+
+    assert listed["operation"] == "list_exports"
+    assert exported["operation"] == "export"
+    assert imported["operation"] == "import"
+    assert client.calls == [
+        ("list_prompt_cache_exports", {"provider": "mlx", "model": "qwen"}),
+        (
+            "prompt_cache_export",
+            {
+                "name": "orbit-cache",
+                "key": "sess:orbit",
+                "q8": True,
+                "meta": {"tenant": "acme"},
+                "provider": "mlx",
+                "model": "qwen",
+            },
+        ),
+        (
+            "prompt_cache_import",
+            {
+                "name": "orbit-cache",
+                "key": "loaded:orbit",
+                "make_default": False,
+                "clear_existing": True,
                 "provider": "mlx",
                 "model": "qwen",
             },
@@ -1075,6 +1200,34 @@ def test_host_facade_wires_local_factory_runtime(monkeypatch: pytest.MonkeyPatch
     assert facade.get_prompt_cache_capabilities() == {"supported": True, "operation": "capabilities"}
     assert facade.get_bloc_record(bloc_id=7) == {"ok": True, "operation": "record", "record": {"bloc_id": 7}}
     assert getattr(runtime, "_abstractcore_llm_client") is stub_client
+
+
+def test_local_file_runtime_defaults_prompt_cache_export_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    stub_client = _FactoryLocalHostClient()
+    seen: Dict[str, Any] = {}
+
+    def _fake_multilocal(**kwargs: Any) -> _FactoryLocalHostClient:
+        seen.update(kwargs)
+        return stub_client
+
+    monkeypatch.setattr(abstractcore_factory, "MultiLocalAbstractCoreLLMClient", _fake_multilocal)
+    monkeypatch.setattr(
+        abstractcore_factory,
+        "AbstractCoreToolExecutor",
+        lambda timeout_s: _FactoryToolExecutor(timeout_s=timeout_s),
+    )
+    monkeypatch.setattr(abstractcore_factory, "AbstractCoreChatSummarizer", lambda **kwargs: object())
+    monkeypatch.setattr(abstractcore_factory, "build_effect_handlers", lambda **kwargs: {})
+
+    runtime = abstractcore.create_local_file_runtime(
+        base_dir=tmp_path,
+        provider="mlx",
+        model="mlx-community/Qwen3-4B-4bit",
+    )
+
+    assert getattr(runtime, "_abstractcore_llm_client") is stub_client
+    assert seen["prompt_cache_export_root_dir"] == tmp_path / "prompt_cache_exports"
+    assert seen["bloc_root_dir"] == tmp_path / "blocs"
 
 
 def test_host_facade_wires_hybrid_factory_runtime(monkeypatch: pytest.MonkeyPatch) -> None:

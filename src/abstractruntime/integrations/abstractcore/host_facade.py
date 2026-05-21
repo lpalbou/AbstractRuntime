@@ -5,6 +5,7 @@ Hosts should import this module instead of reaching through
 
 Scope:
 - prompt-cache control operations
+- host-local prompt-cache export/import admin operations
 - durable bloc/KV prompt-cache operations
 - durable bloc/KV lifecycle operations
 - model-residency control operations
@@ -13,7 +14,7 @@ Scope:
 Non-goals:
 - durable Runtime effect execution (use `AbstractCoreRunFacade` / `get_abstractcore_run_facade(...)`)
 - generated media / TTS / STT helpers
-- provider-private prompt-cache save/load behavior
+- provider-private prompt-cache export/import behavior
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ _HOST_CONTROL_METHODS = (
     "prompt_cache_fork",
     "prompt_cache_clear",
     "prompt_cache_prepare_modules",
+    "list_prompt_cache_exports",
+    "prompt_cache_export",
+    "prompt_cache_import",
     "upsert_text_bloc",
     "get_bloc_record",
     "list_blocs",
@@ -105,6 +109,41 @@ class AbstractCoreHostControlClient(Protocol):
         make_default: bool = False,
         ttl_s: Optional[float] = None,
         version: int = 1,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -400,6 +439,57 @@ class AbstractCoreHostFacade:
             make_default=make_default,
             ttl_s=ttl_s,
             version=version,
+            **kwargs,
+        )
+
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_prompt_cache_exports(provider=provider, model=model, **kwargs)
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.prompt_cache_export(
+            name=name,
+            key=key,
+            q8=q8,
+            meta=meta,
+            provider=provider,
+            model=model,
+            **kwargs,
+        )
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.prompt_cache_import(
+            name=name,
+            key=key,
+            make_default=make_default,
+            clear_existing=clear_existing,
+            provider=provider,
+            model=model,
             **kwargs,
         )
 

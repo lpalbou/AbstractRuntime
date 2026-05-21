@@ -3,7 +3,7 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.19
+- Version: 0.4.20
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
 - Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.24`
@@ -34,8 +34,8 @@
 
 ## Integrations
 
-- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS` / `MODEL_RESIDENCY`, local/remote/hybrid, prompt-cache and residency host controls, durable bloc/KV prompt-cache controls, discovery snapshot queries, durable run-scoped image/voice/music execution, media inputs, generated media outputs, provider-key headers, and tool approval waits
-- Prompt-cache tracks: use `LLM_CALL.params.prompt_cache_key`, `run.vars["_runtime"]["prompt_cache"]`, or `ABSTRACTRUNTIME_PROMPT_CACHE` for best-effort session reuse; use `LLM_CALL.params.prompt_cache_binding` for durable exact bloc-backed reuse. Local Runtime stores one content-addressed bloc per root plus provider/model-specific derived KV artifacts. Gateway prompt-cache env belongs in Gateway.
+- [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS` / `MODEL_RESIDENCY`, local/remote/hybrid, prompt-cache and residency host controls, local-only prompt-cache export/import admin, durable bloc/KV prompt-cache controls, discovery snapshot queries, durable run-scoped image/voice/music execution, media inputs, generated media outputs, provider-key headers, and tool approval waits
+- Prompt-cache tracks: use `LLM_CALL.params.prompt_cache_key`, `run.vars["_runtime"]["prompt_cache"]`, or `ABSTRACTRUNTIME_PROMPT_CACHE` for best-effort session reuse; use `LLM_CALL.params.prompt_cache_binding` for durable exact bloc-backed reuse; and use `get_abstractcore_host_facade(runtime).list_prompt_cache_exports(...)`, `prompt_cache_export(...)`, and `prompt_cache_import(...)` only for host-local operator/admin export-import workflows around live local provider caches. Local Runtime stores one content-addressed bloc per root plus provider/model-specific derived KV artifacts. Gateway prompt-cache env belongs in Gateway.
 - Durable bloc lifecycle: Runtime exposes `list_blocs(...)`, `list_bloc_kv_artifacts(...)`, `delete_bloc_kv_artifact(...)`, `prune_bloc_kv_artifacts(...)`, and `delete_bloc(...)`, with `dry_run`, `clear_loaded`, and `force` safety controls on the host facade.
 - Runtime-owned Core surfaces: `get_abstractcore_discovery_facade(...)`, `get_abstractcore_host_facade(...)`, and `get_abstractcore_run_facade(...)`
 - Host-local operator wrappers: the host facade and `abstractruntime.integrations.abstractcore.comms_facade` expose email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`), and `abstractruntime.integrations.abstractcore.telegram_facade` exposes Telegram bootstrap/global-client/send wrappers without requiring hosts to import AbstractCore directly.

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.20] - 2026-05-21
+
+### Added
+- Runtime now exposes a public host-local prompt-cache export/import admin surface on `get_abstractcore_host_facade(...)`:
+  - `list_prompt_cache_exports(...)`
+  - `prompt_cache_export(...)`
+  - `prompt_cache_import(...)`
+
+### Changed
+- Local Runtime now owns the prompt-cache export root/catalog policy:
+  - `~/.abstractruntime/prompt_cache_exports` by default
+  - `<base_dir>/prompt_cache_exports` for `create_local_file_runtime(...)`
+  - exact provider/model partitioning with Runtime-managed metadata sidecars
+- Remote and hybrid runtimes now fail honestly for prompt-cache export/import admin with a structured local-only response instead of implying server-side support.
+- Runtime docs and AI-readable `llms.txt` / `llms-full.txt` now document the secondary host-local export/import contract distinctly from the primary durable bloc/binding prompt-cache path.
+
 ## [0.4.19] - 2026-05-21
 
 ### Added
@@ -489,7 +505,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.19...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.20...HEAD
+[0.4.20]: https://github.com/lpalbou/abstractruntime/compare/v0.4.19...v0.4.20
 [0.4.19]: https://github.com/lpalbou/abstractruntime/compare/v0.4.18...v0.4.19
 [0.4.18]: https://github.com/lpalbou/abstractruntime/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/lpalbou/abstractruntime/compare/v0.4.16...v0.4.17

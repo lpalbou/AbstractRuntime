@@ -120,6 +120,29 @@ Gateway-specific prompt-cache environment variables should be consumed by Gatewa
 Hosts can inspect, prepare, and now clean up caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as `upsert_text_bloc(...)`, `ensure_bloc_kv_artifact(...)`, `load_bloc_kv_artifact(...)`, `list_bloc_kv_artifacts(...)`, `delete_bloc_kv_artifact(...)`, and `delete_bloc(...)` without depending on the private runtime attachment directly.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/host_facade.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
+## Can a host still export or import local provider prompt caches?
+
+Yes, but treat that as **host-local operator tooling**, not the main durable
+workflow memory model.
+
+Use the Runtime host facade:
+- `list_prompt_cache_exports(...)`
+- `prompt_cache_export(...)`
+- `prompt_cache_import(...)`
+
+Important limits:
+- this surface is **local-only**; remote and hybrid runtimes return
+  `prompt_cache_local_only`
+- Runtime owns the export root policy:
+  - `~/.abstractruntime/prompt_cache_exports` by default
+  - `<base_dir>/prompt_cache_exports` for `create_local_file_runtime(...)`
+- exports are partitioned per provider/model, so the same logical export name
+  can coexist cleanly across different local backends
+
+For durable replay-safe workflow reuse, prefer `prompt_cache_binding` from
+durable bloc/KV artifacts instead of host-local provider cache exports.
+Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/host_facade.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
+
 ## Does Runtime duplicate durable bloc text? How do per-model caches relate to it?
 
 For local runtimes, Runtime owns the bloc root and stores one durable **text snapshot** per SHA256 within that root. That bloc is the source of truth. The provider/model cache is a **derived artifact** under that bloc, not a second independent memory model.

@@ -322,6 +322,9 @@ AbstractRuntime's AbstractCore integration now exposes a public host-control fac
 - `prompt_cache_fork(...)`
 - `prompt_cache_clear(...)`
 - `prompt_cache_prepare_modules(...)`
+- `list_prompt_cache_exports(...)`
+- `prompt_cache_export(...)`
+- `prompt_cache_import(...)`
 - `upsert_text_bloc(...)`
 - `get_bloc_record(...)`
 - `list_blocs(...)`
@@ -359,7 +362,9 @@ Contract notes:
 - The three prompt-cache tracks are distinct:
   - session prompt cache: best-effort volatile reuse
   - durable bloc prompt cache: exact reuse through bloc/KV/binding
-  - snapshot prompt-cache admin: separate local-admin work, if enabled later
+  - host-local prompt-cache export/import admin: optional operator tooling
+    around live local provider cache state, separate from durable workflow
+    memory
 
 Host-side prompt-cache example:
 
@@ -415,6 +420,38 @@ loaded = facade.load_bloc_kv_artifact(
 
 binding = loaded["artifact"]["prompt_cache_binding"]
 ```
+
+Host-local prompt-cache export/import example:
+
+```python
+saved = facade.prompt_cache_export(
+    name="orbit-cache",
+    key="sess:orbit",
+    q8=True,
+)
+listed = facade.list_prompt_cache_exports()
+loaded_cache = facade.prompt_cache_import(
+    name="orbit-cache",
+    key="loaded:orbit",
+    clear_existing=True,
+)
+```
+
+Host-local export/import contract:
+
+- This surface is **local-only**. Remote and hybrid runtimes return structured
+  `prompt_cache_local_only` payloads instead of proxying host filesystem state
+  through Core Server.
+- Runtime owns the export root policy:
+  - default local root: `~/.abstractruntime/prompt_cache_exports`
+  - default file-runtime root: `<base_dir>/prompt_cache_exports`
+  - explicit `prompt_cache_export_root_dir=...` overrides are allowed when a
+    host needs a different local catalog root
+- Exports stay partitioned by provider/model under that root, so the same
+  logical export name can coexist safely across different local backends.
+- This is a **secondary operator/admin feature**, not the primary durable app
+  contract. For replay-safe exact reuse inside workflows, prefer
+  `prompt_cache_binding` from durable bloc/KV artifacts instead.
 
 Host-side durable bloc lifecycle example:
 

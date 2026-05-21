@@ -28,6 +28,9 @@ These were temporary implementation specs created in the abstractcore workspace 
 - `005_docs_updates.md` - Implemented
 - `README.md` - Original context document (preserved as-is)
 
+### From Current Numbered Backlog
+- `0034_agent_runtime_convenience_constructor.md` - Deprecated on 2026-05-21 because the convenience pattern is agent-shaped and belongs in `abstractagent` if it is needed at all
+
 ## Note
 
 Do not add new items here. Use `completed/` for finished work and `planned/` for future work.

@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -772,6 +773,41 @@ class AbstractCoreLLMClient(Protocol):
     ) -> Dict[str, Any]:
         """Prepare hierarchical prompt-cache modules."""
 
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """List host-local exported prompt-cache artifacts for one provider/model runtime target."""
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Export a live local provider prompt cache to a durable host-local artifact."""
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Import one previously exported host-local prompt-cache artifact."""
+
     def upsert_text_bloc(
         self,
         *,
@@ -1180,6 +1216,10 @@ def _prompt_cache_supports(provider: Any, operation: str) -> bool:
         return bool(caps.get("supports_fork"))
     if op in {"prepare", "prepare_modules", "modules"}:
         return bool(caps.get("supports_prepare_modules"))
+    if op == "save":
+        return bool(caps.get("supports_save"))
+    if op == "load":
+        return bool(caps.get("supports_load"))
     return False
 
 
@@ -1232,6 +1272,201 @@ def _coerce_bloc_root_dir(root_dir: Any) -> Path:
     if not raw:
         return _runtime_default_blocs_root_dir()
     return Path(raw).expanduser()
+
+
+_RUNTIME_PROMPT_CACHE_EXPORT_SCHEMA = "abstractruntime-prompt-cache-export/v1"
+_PROMPT_CACHE_EXPORT_META_SUFFIX = ".meta.json"
+
+
+def _runtime_default_prompt_cache_export_root_dir() -> Path:
+    return Path.home() / ".abstractruntime" / "prompt_cache_exports"
+
+
+def _coerce_prompt_cache_export_root_dir(root_dir: Any) -> Path:
+    if isinstance(root_dir, Path):
+        raw = str(root_dir).strip()
+    elif isinstance(root_dir, str):
+        raw = root_dir.strip()
+    else:
+        raw = ""
+    if not raw:
+        return _runtime_default_prompt_cache_export_root_dir()
+    return Path(raw).expanduser()
+
+
+def _prompt_cache_export_slug(value: Any, *, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    text = text.replace("/", "-").replace("\\", "-")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text)
+    text = text.strip("._-")
+    return text or fallback
+
+
+def _prompt_cache_export_partition_component(value: Any, *, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    return quote(text, safe="") or fallback
+
+
+def _prompt_cache_export_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("name is required")
+    return _prompt_cache_export_slug(text, fallback="prompt-cache-export")
+
+
+def _prompt_cache_export_token_count(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _prompt_cache_artifact_extension(provider: Any) -> str:
+    getter = getattr(provider, "prompt_cache_artifact_extension", None)
+    if callable(getter):
+        try:
+            value = str(getter() or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value if value.startswith(".") else f".{value}"
+    return ".bin"
+
+
+def _prompt_cache_artifact_format(provider: Any) -> Optional[str]:
+    getter = getattr(provider, "prompt_cache_artifact_format", None)
+    if callable(getter):
+        try:
+            value = str(getter() or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value
+    return None
+
+
+def _prompt_cache_export_dir(*, root_dir: Path, provider: str, model: str) -> Path:
+    return root_dir / _prompt_cache_export_partition_component(
+        provider, fallback="unknown-provider"
+    ) / _prompt_cache_export_partition_component(model, fallback="unknown-model")
+
+
+def _prompt_cache_export_paths(
+    *,
+    root_dir: Path,
+    provider: str,
+    model: str,
+    name: str,
+    extension: str,
+) -> Tuple[str, Path, Path]:
+    normalized_name = _prompt_cache_export_name(name)
+    artifact_extension = extension if str(extension or "").startswith(".") else f".{extension}"
+    directory = _prompt_cache_export_dir(root_dir=root_dir, provider=provider, model=model)
+    artifact_filename = f"{normalized_name}{artifact_extension}"
+    artifact_path = directory / artifact_filename
+    meta_path = directory / f"{artifact_filename}{_PROMPT_CACHE_EXPORT_META_SUFFIX}"
+    return normalized_name, artifact_path, meta_path
+
+
+def _prompt_cache_export_item_from_record(meta: Dict[str, Any], *, artifact_path: Path, meta_path: Path) -> Dict[str, Any]:
+    item = dict(meta)
+    artifact_filename = str(item.get("artifact_filename") or artifact_path.name).strip() or artifact_path.name
+    name = str(item.get("name") or artifact_path.stem).strip() or artifact_path.stem
+    token_count = _prompt_cache_export_token_count(item.get("token_count"))
+    if token_count is not None:
+        item["token_count"] = token_count
+    item.update(
+        {
+            "name": name,
+            "provider": str(item.get("provider") or "").strip() or None,
+            "model": str(item.get("model") or "").strip() or None,
+            "artifact_filename": artifact_filename,
+            "artifact_path": str(artifact_path),
+            "artifact_exists": artifact_path.exists(),
+            "artifact_extension": str(item.get("artifact_extension") or artifact_path.suffix or "").strip() or None,
+            "artifact_format": str(item.get("artifact_format") or "").strip() or None,
+            "meta_path": str(meta_path),
+        }
+    )
+    return {
+        "name": item["name"],
+        "provider": item["provider"],
+        "model": item["model"],
+        "saved_at": item.get("saved_at"),
+        "token_count": item.get("token_count"),
+        "key": item.get("key"),
+        "artifact_filename": item["artifact_filename"],
+        "artifact_path": item["artifact_path"],
+        "artifact_exists": item["artifact_exists"],
+        "artifact_extension": item["artifact_extension"],
+        "artifact_format": item["artifact_format"],
+        "meta_path": item["meta_path"],
+        "meta": item,
+    }
+
+
+def _read_prompt_cache_export_record(meta_path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    artifact_filename = str(raw.get("artifact_filename") or "").strip()
+    if not artifact_filename:
+        if not meta_path.name.endswith(_PROMPT_CACHE_EXPORT_META_SUFFIX):
+            return None
+        artifact_filename = meta_path.name[: -len(_PROMPT_CACHE_EXPORT_META_SUFFIX)]
+    artifact_path = meta_path.parent / artifact_filename
+    return _prompt_cache_export_item_from_record(raw, artifact_path=artifact_path, meta_path=meta_path)
+
+
+def _list_prompt_cache_exports_local(
+    *,
+    root_dir: Path,
+    provider: Any,
+    provider_name: str,
+    model: str,
+) -> Dict[str, Any]:
+    export_dir = _prompt_cache_export_dir(root_dir=root_dir, provider=provider_name, model=model)
+    items: List[Dict[str, Any]] = []
+    if export_dir.exists():
+        for meta_path in sorted(export_dir.glob(f"*{_PROMPT_CACHE_EXPORT_META_SUFFIX}")):
+            item = _read_prompt_cache_export_record(meta_path)
+            if isinstance(item, dict):
+                items.append(item)
+    items.sort(key=lambda item: str(item.get("saved_at") or item.get("name") or ""), reverse=True)
+    return {
+        "supported": True,
+        "ok": True,
+        "operation": "list_exports",
+        "local_only": True,
+        "provider": provider_name,
+        "model": model,
+        "root_dir": str(root_dir),
+        "items": items,
+        "capabilities": _prompt_cache_capabilities_dict(provider),
+    }
+
+
+def _prompt_cache_export_local_only_payload(*, operation: str) -> Dict[str, Any]:
+    return {
+        "supported": False,
+        "operation": str(operation or "").strip(),
+        "code": "prompt_cache_local_only",
+        "error": (
+            "Prompt cache export/import admin is local-only. "
+            "Remote and hybrid runtimes do not expose a host-local prompt-cache export root."
+        ),
+        "capabilities": {"supported": False, "mode": "none"},
+    }
 
 
 def _load_abstractcore_bloc_api() -> Dict[str, Any]:
@@ -2761,6 +2996,7 @@ class LocalAbstractCoreLLMClient:
         llm_kwargs: Optional[Dict[str, Any]] = None,
         artifact_store: Optional[Any] = None,
         bloc_root_dir: Optional[str | Path] = None,
+        prompt_cache_export_root_dir: Optional[str | Path] = None,
     ):
         # In this monorepo layout, `import abstractcore` can resolve to a namespace package
         # (the outer project directory) when running from the repo root. In that case, the
@@ -2779,6 +3015,7 @@ class LocalAbstractCoreLLMClient:
         self._model = model
         self._artifact_store = artifact_store
         self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
+        self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
         self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
         if self._generate_lock is not None:
             _warn_local_generate_lock_once(provider=self._provider, model=self._model)
@@ -3761,6 +3998,268 @@ class LocalAbstractCoreLLMClient:
         except Exception as e:
             return _prompt_cache_error_payload(provider, operation="prepare_modules", error=e)
 
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        root_dir = _coerce_prompt_cache_export_root_dir(
+            kwargs.pop("prompt_cache_export_root_dir", self._prompt_cache_export_root_dir)
+        )
+        if isinstance(provider, str) and provider.strip() and provider.strip().lower() != self._provider:
+            return {
+                "supported": True,
+                "ok": True,
+                "operation": "list_exports",
+                "local_only": True,
+                "provider": provider.strip().lower(),
+                "model": model or self._model,
+                "root_dir": str(root_dir),
+                "items": [],
+                "capabilities": _prompt_cache_capabilities_dict(getattr(self, "_llm", None)),
+            }
+        if isinstance(model, str) and model.strip() and model.strip() != self._model:
+            return {
+                "supported": True,
+                "ok": True,
+                "operation": "list_exports",
+                "local_only": True,
+                "provider": self._provider,
+                "model": model.strip(),
+                "root_dir": str(root_dir),
+                "items": [],
+                "capabilities": _prompt_cache_capabilities_dict(getattr(self, "_llm", None)),
+            }
+        return _list_prompt_cache_exports_local(
+            root_dir=root_dir,
+            provider=getattr(self, "_llm", None),
+            provider_name=self._provider,
+            model=self._model,
+        )
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider = getattr(self, "_llm", None)
+        target_provider = str(kwargs.pop("provider", "") or "").strip().lower()
+        target_model = str(kwargs.pop("model", "") or "").strip()
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="export",
+                error="Runtime LLM client has no provider instance",
+            )
+        if (target_provider and target_provider != self._provider) or (target_model and target_model != self._model):
+            return {
+                "supported": False,
+                "operation": "export",
+                "code": "invalid_target",
+                "error": (
+                    "Local prompt-cache export is bound to the active runtime provider/model "
+                    f"{self._provider}/{self._model}; requested "
+                    f"{target_provider or self._provider}/{target_model or self._model}."
+                ),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        if not _prompt_cache_supports(provider, "save") or not hasattr(provider, "prompt_cache_save"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="export",
+                error="Provider does not support host-local prompt cache export",
+            )
+        export_root_dir = _coerce_prompt_cache_export_root_dir(
+            kwargs.pop("prompt_cache_export_root_dir", self._prompt_cache_export_root_dir)
+        )
+        try:
+            normalized_name, artifact_path, meta_path = _prompt_cache_export_paths(
+                root_dir=export_root_dir,
+                provider=self._provider,
+                model=self._model,
+                name=name,
+                extension=_prompt_cache_artifact_extension(provider),
+            )
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            provider_result = provider.prompt_cache_save(
+                str(key or "").strip(),
+                str(artifact_path),
+                q8=bool(q8),
+                meta=dict(meta or {}),
+            )
+            if isinstance(provider_result, dict) and provider_result.get("supported") is False:
+                return provider_result
+            provider_meta = (
+                dict(provider_result.get("meta") or {})
+                if isinstance(provider_result, dict) and isinstance(provider_result.get("meta"), dict)
+                else {}
+            )
+            record: Dict[str, Any] = {
+                "schema": _RUNTIME_PROMPT_CACHE_EXPORT_SCHEMA,
+                "name": normalized_name,
+                "provider": self._provider,
+                "model": self._model,
+                "saved_at": str(provider_meta.get("saved_at") or datetime.now(timezone.utc).isoformat()),
+                "key": str(key or "").strip(),
+                "artifact_filename": artifact_path.name,
+                "artifact_extension": artifact_path.suffix,
+                "artifact_format": _prompt_cache_artifact_format(provider),
+                "provider_meta": provider_meta,
+            }
+            token_count = _prompt_cache_export_token_count(provider_meta.get("token_count"))
+            if token_count is not None:
+                record["token_count"] = token_count
+            quantized = provider_meta.get("quantized")
+            if quantized is not None:
+                record["quantized"] = quantized
+            meta_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            return {
+                "supported": True,
+                "ok": True,
+                "operation": "export",
+                "local_only": True,
+                "provider": self._provider,
+                "model": self._model,
+                "name": normalized_name,
+                "artifact_filename": artifact_path.name,
+                "artifact_path": str(artifact_path),
+                "meta_path": str(meta_path),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+                "meta": record,
+                "provider_response": provider_result if isinstance(provider_result, dict) else {"result": provider_result},
+            }
+        except Exception as e:
+            return _prompt_cache_error_payload(provider, operation="export", error=e)
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider = getattr(self, "_llm", None)
+        target_provider = str(kwargs.pop("provider", "") or "").strip().lower()
+        target_model = str(kwargs.pop("model", "") or "").strip()
+        if provider is None:
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="import",
+                error="Runtime LLM client has no provider instance",
+            )
+        if (target_provider and target_provider != self._provider) or (target_model and target_model != self._model):
+            return {
+                "supported": False,
+                "operation": "import",
+                "code": "invalid_target",
+                "error": (
+                    "Local prompt-cache import is bound to the active runtime provider/model "
+                    f"{self._provider}/{self._model}; requested "
+                    f"{target_provider or self._provider}/{target_model or self._model}."
+                ),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        if not _prompt_cache_supports(provider, "load") or not hasattr(provider, "prompt_cache_load"):
+            return _prompt_cache_unsupported_payload(
+                provider,
+                operation="import",
+                error="Provider does not support host-local prompt cache import",
+            )
+        export_root_dir = _coerce_prompt_cache_export_root_dir(
+            kwargs.pop("prompt_cache_export_root_dir", self._prompt_cache_export_root_dir)
+        )
+        listed = _list_prompt_cache_exports_local(
+            root_dir=export_root_dir,
+            provider=provider,
+            provider_name=self._provider,
+            model=self._model,
+        )
+        if not listed.get("ok"):
+            return listed
+        normalized_name = _prompt_cache_export_name(name)
+        items = [dict(item) for item in list(listed.get("items") or []) if isinstance(item, dict)]
+        matches = [item for item in items if str(item.get("name") or "").strip() == normalized_name]
+        if not matches:
+            return {
+                "supported": False,
+                "operation": "import",
+                "code": "not_found",
+                "error": f"Prompt cache export '{normalized_name}' was not found for {self._provider}/{self._model}.",
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        record = matches[0]
+        artifact_path = Path(str(record.get("artifact_path") or "")).expanduser()
+        if not artifact_path.exists():
+            return {
+                "supported": False,
+                "operation": "import",
+                "code": "not_found",
+                "error": f"Prompt cache export artifact is missing: {artifact_path}",
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+            }
+        warnings: List[str] = []
+        requested_key = str(key).strip() if isinstance(key, str) and key.strip() else None
+        try:
+            if clear_existing:
+                if _prompt_cache_supports(provider, "clear") and hasattr(provider, "prompt_cache_clear"):
+                    probe_key = f"import-probe:{uuid.uuid4().hex[:12]}"
+                    provider.prompt_cache_load(
+                        str(artifact_path),
+                        key=probe_key,
+                        make_default=False,
+                    )
+                    try:
+                        provider.prompt_cache_clear(None)
+                    except Exception as clear_error:
+                        warnings.append(f"best-effort clear_existing failed: {clear_error}")
+                else:
+                    warnings.append("clear_existing requested, but this provider does not support prompt cache clear.")
+            provider_result = provider.prompt_cache_load(
+                str(artifact_path),
+                key=requested_key,
+                make_default=bool(make_default),
+            )
+            if isinstance(provider_result, dict) and provider_result.get("supported") is False:
+                return provider_result
+            effective_key = requested_key
+            if isinstance(provider_result, dict):
+                provider_key = provider_result.get("key")
+                if isinstance(provider_key, str) and provider_key.strip():
+                    effective_key = provider_key.strip()
+            out = {
+                "supported": True,
+                "ok": True,
+                "operation": "import",
+                "local_only": True,
+                "provider": self._provider,
+                "model": self._model,
+                "name": normalized_name,
+                "key": effective_key,
+                "make_default": bool(make_default),
+                "clear_existing": bool(clear_existing),
+                "artifact_filename": artifact_path.name,
+                "artifact_path": str(artifact_path),
+                "capabilities": _prompt_cache_capabilities_dict(provider),
+                "meta": record.get("meta") if isinstance(record.get("meta"), dict) else record,
+                "provider_response": provider_result if isinstance(provider_result, dict) else {"result": provider_result},
+            }
+            if warnings:
+                out["warnings"] = warnings
+            return out
+        except Exception as e:
+            payload = _prompt_cache_error_payload(provider, operation="import", error=e)
+            if warnings:
+                payload["warnings"] = warnings
+            return payload
+
     def upsert_text_bloc(
         self,
         *,
@@ -3991,12 +4490,14 @@ class MultiLocalAbstractCoreLLMClient:
         llm_kwargs: Optional[Dict[str, Any]] = None,
         artifact_store: Optional[Any] = None,
         bloc_root_dir: Optional[str | Path] = None,
+        prompt_cache_export_root_dir: Optional[str | Path] = None,
     ):
         self._llm_kwargs = dict(llm_kwargs or {})
         self._default_provider = provider.strip().lower()
         self._default_model = model.strip()
         self._artifact_store = artifact_store
         self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
+        self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
         self._default_client = self._get_client(self._default_provider, self._default_model)
 
@@ -4017,16 +4518,29 @@ class MultiLocalAbstractCoreLLMClient:
                     llm_kwargs=self._llm_kwargs,
                     artifact_store=self._artifact_store,
                     bloc_root_dir=self._bloc_root_dir,
+                    prompt_cache_export_root_dir=self._prompt_cache_export_root_dir,
                 )
             except TypeError as exc:
-                if "bloc_root_dir" not in str(exc):
+                message = str(exc)
+                if "prompt_cache_export_root_dir" not in message and "bloc_root_dir" not in message:
                     raise
-                client = LocalAbstractCoreLLMClient(
-                    provider=key[0],
-                    model=key[1],
-                    llm_kwargs=self._llm_kwargs,
-                    artifact_store=self._artifact_store,
-                )
+                try:
+                    client = LocalAbstractCoreLLMClient(
+                        provider=key[0],
+                        model=key[1],
+                        llm_kwargs=self._llm_kwargs,
+                        artifact_store=self._artifact_store,
+                        bloc_root_dir=self._bloc_root_dir,
+                    )
+                except TypeError as fallback_exc:
+                    if "bloc_root_dir" not in str(fallback_exc):
+                        raise
+                    client = LocalAbstractCoreLLMClient(
+                        provider=key[0],
+                        model=key[1],
+                        llm_kwargs=self._llm_kwargs,
+                        artifact_store=self._artifact_store,
+                    )
             self._clients[key] = client
         return client
 
@@ -4535,6 +5049,81 @@ class MultiLocalAbstractCoreLLMClient:
             make_default=make_default,
             ttl_s=ttl_s,
             version=version,
+            **kwargs,
+        )
+
+    def list_prompt_cache_exports(
+        self,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        loaded_client = self._clients.get((provider_str, model_str))
+        provider_obj = getattr(loaded_client, "_llm", None) if loaded_client is not None else None
+        root_dir = _coerce_prompt_cache_export_root_dir(
+            kwargs.pop("prompt_cache_export_root_dir", self._prompt_cache_export_root_dir)
+        )
+        return _list_prompt_cache_exports_local(
+            root_dir=root_dir,
+            provider=provider_obj,
+            provider_name=provider_str,
+            model=model_str,
+        )
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_export(
+            name=name,
+            key=key,
+            q8=q8,
+            meta=meta,
+            provider=provider_str,
+            model=model_str,
+            **kwargs,
+        )
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+        client = self._get_client(provider_str, model_str)
+        return client.prompt_cache_import(
+            name=name,
+            key=key,
+            make_default=make_default,
+            clear_existing=clear_existing,
+            provider=provider_str,
+            model=model_str,
             **kwargs,
         )
 
@@ -5798,6 +6387,34 @@ class RemoteAbstractCoreLLMClient:
             body=body,
             kwargs=kwargs,
         )
+
+    def list_prompt_cache_exports(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _prompt_cache_export_local_only_payload(operation="list_exports")
+
+    def prompt_cache_export(
+        self,
+        *,
+        name: str,
+        key: str,
+        q8: bool = False,
+        meta: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (name, key, q8, meta, kwargs)
+        return _prompt_cache_export_local_only_payload(operation="export")
+
+    def prompt_cache_import(
+        self,
+        *,
+        name: str,
+        key: Optional[str] = None,
+        make_default: bool = True,
+        clear_existing: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ = (name, key, make_default, clear_existing, kwargs)
+        return _prompt_cache_export_local_only_payload(operation="import")
 
     def _default_bloc_target_fields(self) -> Dict[str, Any]:
         provider = None

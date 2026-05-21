@@ -10,6 +10,14 @@ This folder contains a structured backlog used during development. Items are gro
 
 If you are new to the project, start with `../README.md` and `../architecture.md` instead.
 
+## Counts
+
+- Planned: 5
+- Proposed: 1
+- Completed: 26
+- Deprecated: 13
+- Recurrent: 0
+
 ## Next recommended work
 
 1. `planned/018_workspace_access_policy_for_media_and_tools.md`
@@ -52,6 +60,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 029 | `completed/029_runtime_music_generation_and_discovery_via_abstractcore.md` |
 | 0030 | `completed/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md` |
 | 0032 | `completed/0032_runtime_durable_outbound_comms_truth.md` |
+| 0033 | `completed/0033_runtime_host_local_prompt_cache_export_import_surface.md` |
 
 ## Planned
 
@@ -67,10 +76,10 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 | ID | Item |
 |----|------|
-| 2026-05-20 | `proposed/2026-05-20_agent_runtime_convenience_constructor.md` |
-| 2026-05-20 | `proposed/2026-05-20_runtime_local_admin_prompt_cache_save_load.md` |
 | 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
 
 ## Deprecated
 
 See `deprecated/DEPRECATED_README.md` for context on the deprecated backlog set.
+Recent deprecation:
+- `deprecated/0034_agent_runtime_convenience_constructor.md`

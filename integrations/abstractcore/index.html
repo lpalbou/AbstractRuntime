@@ -1522,6 +1522,9 @@ hello
 <li><code>prompt_cache_fork(...)</code></li>
 <li><code>prompt_cache_clear(...)</code></li>
 <li><code>prompt_cache_prepare_modules(...)</code></li>
+<li><code>list_prompt_cache_exports(...)</code></li>
+<li><code>prompt_cache_export(...)</code></li>
+<li><code>prompt_cache_import(...)</code></li>
 <li><code>upsert_text_bloc(...)</code></li>
 <li><code>get_bloc_record(...)</code></li>
 <li><code>list_blocs(...)</code></li>
@@ -1559,7 +1562,9 @@ hello
 <li>The three prompt-cache tracks are distinct:</li>
 <li>session prompt cache: best-effort volatile reuse</li>
 <li>durable bloc prompt cache: exact reuse through bloc/KV/binding</li>
-<li>snapshot prompt-cache admin: separate local-admin work, if enabled later</li>
+<li>host-local prompt-cache export/import admin: optional operator tooling
+    around live local provider cache state, separate from durable workflow
+    memory</li>
 </ul>
 <p>Host-side prompt-cache example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -1610,6 +1615,35 @@ hello
 
 <span class="n">binding</span> <span class="o">=</span> <span class="n">loaded</span><span class="p">[</span><span class="s2">&quot;artifact&quot;</span><span class="p">][</span><span class="s2">&quot;prompt_cache_binding&quot;</span><span class="p">]</span>
 </code></pre></div>
+<p>Host-local prompt-cache export/import example:</p>
+<div class="highlight"><pre><span></span><code><span class="n">saved</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_export</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;orbit-cache&quot;</span><span class="p">,</span>
+    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;sess:orbit&quot;</span><span class="p">,</span>
+    <span class="n">q8</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">listed</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_prompt_cache_exports</span><span class="p">()</span>
+<span class="n">loaded_cache</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_import</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;orbit-cache&quot;</span><span class="p">,</span>
+    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;loaded:orbit&quot;</span><span class="p">,</span>
+    <span class="n">clear_existing</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Host-local export/import contract:</p>
+<ul>
+<li>This surface is <strong>local-only</strong>. Remote and hybrid runtimes return structured
+  <code>prompt_cache_local_only</code> payloads instead of proxying host filesystem state
+  through Core Server.</li>
+<li>Runtime owns the export root policy:</li>
+<li>default local root: <code>~/.abstractruntime/prompt_cache_exports</code></li>
+<li>default file-runtime root: <code>&lt;base_dir&gt;/prompt_cache_exports</code></li>
+<li>explicit <code>prompt_cache_export_root_dir=...</code> overrides are allowed when a
+    host needs a different local catalog root</li>
+<li>Exports stay partitioned by provider/model under that root, so the same
+  logical export name can coexist safely across different local backends.</li>
+<li>This is a <strong>secondary operator/admin feature</strong>, not the primary durable app
+  contract. For replay-safe exact reuse inside workflows, prefer
+  <code>prompt_cache_binding</code> from durable bloc/KV artifacts instead.</li>
+</ul>
 <p>Host-side durable bloc lifecycle example:</p>
 <div class="highlight"><pre><span></span><code><span class="n">records</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_blocs</span><span class="p">()</span>
 <span class="n">artifacts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_bloc_kv_artifacts</span><span class="p">(</span><span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">])</span>

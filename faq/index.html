@@ -773,6 +773,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#can-a-host-still-export-or-import-local-provider-prompt-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can a host still export or import local provider prompt caches?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1391,6 +1402,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#can-a-host-still-export-or-import-local-provider-prompt-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can a host still export or import local provider prompt caches?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1689,6 +1711,24 @@ Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime
 <p>If a binding includes <code>key</code>, Runtime uses it as the effective prompt-cache key and does not derive a competing session key. Do not store provider session objects, cache handles, clients, or warm-cache state in <code>RunState.vars</code>. AbstractCore clients/servers own those objects, and runtime correctness should still hold when a cache is cold.</p>
 <p>Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.</p>
 <p>Hosts can inspect, prepare, and now clean up caches through <code>abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)</code>, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as <code>upsert_text_bloc(...)</code>, <code>ensure_bloc_kv_artifact(...)</code>, <code>load_bloc_kv_artifact(...)</code>, <code>list_bloc_kv_artifacts(...)</code>, <code>delete_bloc_kv_artifact(...)</code>, and <code>delete_bloc(...)</code> without depending on the private runtime attachment directly.
+Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
+<h2 id="can-a-host-still-export-or-import-local-provider-prompt-caches">Can a host still export or import local provider prompt caches?<a class="headerlink" href="#can-a-host-still-export-or-import-local-provider-prompt-caches" title="Permanent link">&para;</a></h2>
+<p>Yes, but treat that as <strong>host-local operator tooling</strong>, not the main durable
+workflow memory model.</p>
+<p>Use the Runtime host facade:
+- <code>list_prompt_cache_exports(...)</code>
+- <code>prompt_cache_export(...)</code>
+- <code>prompt_cache_import(...)</code></p>
+<p>Important limits:
+- this surface is <strong>local-only</strong>; remote and hybrid runtimes return
+  <code>prompt_cache_local_only</code>
+- Runtime owns the export root policy:
+  - <code>~/.abstractruntime/prompt_cache_exports</code> by default
+  - <code>&lt;base_dir&gt;/prompt_cache_exports</code> for <code>create_local_file_runtime(...)</code>
+- exports are partitioned per provider/model, so the same logical export name
+  can coexist cleanly across different local backends</p>
+<p>For durable replay-safe workflow reuse, prefer <code>prompt_cache_binding</code> from
+durable bloc/KV artifacts instead of host-local provider cache exports.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
 <h2 id="does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it">Does Runtime duplicate durable bloc text? How do per-model caches relate to it?<a class="headerlink" href="#does-runtime-duplicate-durable-bloc-text-how-do-per-model-caches-relate-to-it" title="Permanent link">&para;</a></h2>
 <p>For local runtimes, Runtime owns the bloc root and stores one durable <strong>text snapshot</strong> per SHA256 within that root. That bloc is the source of truth. The provider/model cache is a <strong>derived artifact</strong> under that bloc, not a second independent memory model.</p>

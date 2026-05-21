@@ -105,6 +105,10 @@
          <lastmod>2026-05-21</lastmod>
     </url>
     <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/0033_runtime_host_local_prompt_cache_export_import_surface/</loc>
+         <lastmod>2026-05-21</lastmod>
+    </url>
+    <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/003_wait_primitives/</loc>
          <lastmod>2026-05-21</lastmod>
     </url>
@@ -209,6 +213,10 @@
          <lastmod>2026-05-21</lastmod>
     </url>
     <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/0034_agent_runtime_convenience_constructor/</loc>
+         <lastmod>2026-05-21</lastmod>
+    </url>
+    <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/003_provenance_ledger_chain/</loc>
          <lastmod>2026-05-21</lastmod>
     </url>
@@ -266,14 +274,6 @@
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp/</loc>
-         <lastmod>2026-05-21</lastmod>
-    </url>
-    <url>
-         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-20_agent_runtime_convenience_constructor/</loc>
-         <lastmod>2026-05-21</lastmod>
-    </url>
-    <url>
-         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/2026-05-20_runtime_local_admin_prompt_cache_save_load/</loc>
          <lastmod>2026-05-21</lastmod>
     </url>
     <url>

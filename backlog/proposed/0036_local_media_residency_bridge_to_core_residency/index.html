@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/002_persistence_and_ledger/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0036_local_media_residency_bridge_to_core_residency/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>002 persistence and ledger - AbstractRuntime</title>
+        <title>Local Media Residency Bridge To Core Residency - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#002_persistence_and_ledger-completed-for-v01" class="md-skip">
+        <a href="#local-media-residency-bridge-to-core-residency" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              002 persistence and ledger
+              Local Media Residency Bridge To Core Residency
             
           </span>
         </div>
@@ -829,6 +829,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -837,63 +839,112 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#002_persistence_and_ledger-completed-for-v01" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        002_persistence_and_ledger (completed for v0.1)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="002_persistence_and_ledger (completed for v0.1)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Goal
+        Metadata
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#what-shipped" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#adr-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What shipped
+        ADR status
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#acceptance-criteria-met" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Acceptance criteria (met)
+        Summary
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deferred-planned" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deferred / planned
+        Current Code Reality
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed Direction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acceptance Criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
   
 </li>
       
@@ -917,31 +968,137 @@
   
 
 
-  <h1>002 persistence and ledger</h1>
-
-<h2 id="002_persistence_and_ledger-completed-for-v01">002_persistence_and_ledger (completed for v0.1)<a class="headerlink" href="#002_persistence_and_ledger-completed-for-v01" title="Permanent link">&para;</a></h2>
-<h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
-<p>Add durability primitives:
-- RunStore (checkpoints)
-- LedgerStore (journal d’exécution)</p>
-<h3 id="what-shipped">What shipped<a class="headerlink" href="#what-shipped" title="Permanent link">&para;</a></h3>
+<h1 id="local-media-residency-bridge-to-core-residency">Local Media Residency Bridge To Core Residency<a class="headerlink" href="#local-media-residency-bridge-to-core-residency" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Interfaces: <code>src/abstractruntime/storage/base.py</code></li>
-<li>In-memory stores: <code>src/abstractruntime/storage/in_memory.py</code></li>
-<li>File stores:</li>
-<li><code>JsonFileRunStore</code> (JSON per run)</li>
-<li><code>JsonlLedgerStore</code> (append-only JSONL)</li>
-<li><code>src/abstractruntime/storage/json_files.py</code></li>
+<li>Created: 2026-05-21</li>
+<li>Status: Proposed</li>
 </ul>
-<h3 id="acceptance-criteria-met">Acceptance criteria (met)<a class="headerlink" href="#acceptance-criteria-met" title="Permanent link">&para;</a></h3>
+<h2 id="adr-status">ADR status<a class="headerlink" href="#adr-status" title="Permanent link">&para;</a></h2>
 <ul>
-<li>After restarting the process, a paused run can be loaded and resumed.</li>
-<li>The ledger contains step records with timestamps + status + effect/result.</li>
+<li>Governing ADRs:</li>
+<li><code>docs/adr/0004_runtime_owns_run_scoped_media_execution_truth.md</code></li>
+<li><code>docs/adr/0007_runtime_relays_core_owned_model_residency_truth.md</code></li>
+<li><code>../abstractcore/docs/adr/0008-provider-owned-model-residency-truth.md</code></li>
+<li>ADR impact: None for this proposal after correction. Any implementation must preserve the accepted rule that provider
+  communication and residency truth are Core-owned.</li>
 </ul>
-<h3 id="deferred-planned">Deferred / planned<a class="headerlink" href="#deferred-planned" title="Permanent link">&para;</a></h3>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
+<p>AbstractCore now owns task-aware residency control for <code>text_generation</code>, <code>image_generation</code>, <code>tts</code>, and <code>stt</code>.
+Runtime should not make independent residency claims; it should ask the configured AbstractCore backend what is loaded
+now and relay that live, ephemeral truth to Gateway/Flow.</p>
+<p>This proposal is only about the remaining local Runtime gap. It is not a Core-server-pool or UUID-affinity design.
+Future multi-Core routing and per-server residency affinity is tracked separately in
+<code>0038_core_server_pool_residency_affinity.md</code>.</p>
+<p>Observed live through AbstractFlow/Gateway:</p>
 <ul>
-<li>ArtifactStore (large payloads by reference) — implemented later in <code>009_artifact_store.md</code></li>
-<li>Advanced indexing/search for ledgers</li>
+<li><code>POST /api/gateway/models/load</code></li>
+<li>payload: <code>{"task":"image_generation","provider":"huggingface","model":"..."}</code></li>
+<li>response: <code>ok:false</code>, <code>supported:false</code>, <code>code:"model_residency_unsupported"</code></li>
+<li>Runtime message: <code>MultiLocalAbstractCoreLLMClient can keep text-generation clients warm only. Media warmup requires a long-lived remote AbstractCore server.</code></li>
+</ul>
+<h2 id="current-code-reality">Current Code Reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Gateway forwards <code>/api/gateway/models/load</code> to Runtime host facade
+  <code>load_model_residency</code>; Flow is not bypassing Gateway.</li>
+<li><code>RemoteAbstractCoreLLMClient.load_model_residency(...)</code> forwards supported media
+  residency to <code>/acore/models/load</code>, where AbstractCore server owns the provider/backend truth.</li>
+<li>Runtime exposes <code>get_model_residency_capabilities(...)</code> on the host facade and client layer. Local mode reports
+  text-generation residency support only; remote mode reports Core-server relay support for text/image/TTS/STT and
+  marks <code>music_generation</code> unsupported until Core exposes that model-residency task.</li>
+<li><code>MultiLocalAbstractCoreLLMClient.load_model_residency(...)</code> short-circuits any
+  non-text task with <code>model_residency_unsupported</code>, <code>status_hint="warning"</code>, and <code>degraded=true</code>.</li>
+<li>Local Runtime image generation normally uses
+  <code>media_subprocess.py</code> with <code>execution_mode="local_one_shot_subprocess"</code>, so a
+  parent-process warm cache would not currently be reused by the worker.</li>
+<li>Runtime remote image edits now route through AbstractCore Server <code>/v1/images/edits</code> and provider-scoped
+  <code>/{provider}/v1/images/edits</code>; this is execution support, not residency support.</li>
+<li>Lower-layer packages provide local load/preload/unload primitives, but Runtime must not call provider packages
+  directly for residency truth. Any local media residency implementation must be exposed through an AbstractCore
+  contract or facade that Runtime can relay.</li>
+<li>AbstractCore local vision cache/catalog helpers describe available or cached model assets; they must not be treated as
+  loaded/resident model truth unless Core's residency contract says so.</li>
+<li>Runtime does not currently model a pool of AbstractCore servers. In remote mode it stores one configured
+  <code>server_base_url</code> and relays control/execution calls to that endpoint. Loaded state is ephemeral by design and should
+  be checked live rather than persisted across Core restarts.</li>
+</ul>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>The architectural abstraction exists below Runtime, but Runtime's local media
+execution mode is not fully connected to Core-owned media residency. The result is contradictory behavior:</p>
+<ul>
+<li>Gateway discovery can advertise media residency support that local Runtime cannot actually honor.</li>
+<li>Runtime local execution rejects the same media residency request by design unless a shared Core-owned backend exists.</li>
+<li>Flow can only show an unsupported ledger result even though Core can report live media residency in a compatible
+  long-lived process.</li>
+<li>Remote Core-server mode should not be treated as blocked by this proposal: Runtime can simply ask that configured
+  Core server which models are loaded right now.</li>
+</ul>
+<h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Make local Runtime media residency genuinely usable by relaying Core-owned live residency truth, or make Gateway
+  discovery truthfully advertise that only configured Core-server mode supports the task.</li>
+<li>Keep Flow thin: no direct AbstractCore or AbstractVision imports from Flow.</li>
+<li>Preserve ledger truth: workflow warmup must remain a <code>model_residency</code> effect,
+  not a hidden operator call.</li>
+<li>Preserve provider truth: Runtime must never infer media loaded state from catalogs, default configuration, process
+  cache, or direct provider/native API calls.</li>
+<li>Preserve ephemeral semantics: a loaded model is a live Core state, not durable configuration, and Runtime should check
+  it live after restarts instead of trying to recover stale loaded-state records.</li>
+</ul>
+<h2 id="proposed-direction">Proposed Direction<a class="headerlink" href="#proposed-direction" title="Permanent link">&para;</a></h2>
+<p>Choose one explicit runtime mode and make all three surfaces agree:</p>
+<ol>
+<li>Remote Core server mode: keep current behavior, but Gateway should use Runtime's
+   <code>get_model_residency_capabilities(...)</code> plus actual <code>/acore/models/*</code> responses
+   before advertising media residency. Runtime relays <code>/acore/models/*</code> truth from that configured server.</li>
+<li>Local Core-facade mode: if Runtime instantiates or receives a Core-owned local facade that exposes media residency
+   and also performs the media generation, Runtime may relay that Core contract for <code>image_generation</code>, <code>tts</code>, and
+   <code>stt</code>.</li>
+<li>Local one-shot mode: if generated media still runs through a fresh subprocess or any path that cannot share Core's
+   live resident state, Runtime should keep local media residency unsupported.</li>
+</ol>
+<p>This is not about guaranteeing a loaded model forever. It is about avoiding a false claim at the moment Runtime answers:
+Runtime should answer from Core's current state, and after a Core restart that answer may legitimately become empty.</p>
+<h2 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A local Runtime deployment that advertises <code>supports.image_generation=true</code>
+  can successfully load, list, use, and unload a Hugging Face/Diffusers image
+  model through <code>model_residency</code> with loaded state supplied by Core-owned
+  residency truth.</li>
+<li>Equivalent task-specific truth is available for <code>tts</code> and <code>stt</code> before Runtime advertises those local tasks as
+  supported.</li>
+<li><code>music_generation</code> residency remains unsupported until AbstractCore exposes an equivalent residency contract for that
+  task.</li>
+<li><code>model_residency</code> load/list/unload and generated-image execution share the
+  same Core-owned facade, server, or persistent worker when local media residency is
+  enabled.</li>
+<li>If local media residency is not enabled, Gateway discovery reports media
+  residency unsupported rather than relying on Flow to discover it after a run.</li>
+<li>Loaded state is checked live from Core; Runtime does not persist and replay loaded-state claims across AbstractCore
+  restarts.</li>
+<li>Tests cover both local unsupported/truthful mode and local supported/warm-cache
+  mode.</li>
+</ul>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Do not make Runtime query AbstractVision, Diffusers, provider servers, or provider-native APIs directly for residency
+  truth.</li>
+<li>Do not treat local model catalogs, downloaded weights, or cache directories as loaded/resident model state.</li>
+<li>Do not advertise local media residency until generation and residency controls share the same Core-owned backend.</li>
+<li>Do not solve multi-Core server pools, <code>core_uuid -&gt; server</code> routing, or pool-wide warmup here; see
+  <code>0038_core_server_pool_residency_affinity.md</code>.</li>
+</ul>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Runtime unit tests for <code>MultiLocalAbstractCoreLLMClient.load_model_residency</code>
+  with <code>task=image_generation</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code>, including unsupported truth for tasks without a
+  Core residency contract.</li>
+<li>Integration test proving a model loaded by <code>model_residency</code> is reused by a
+  subsequent local generated-image <code>LLM_CALL</code>.</li>
+<li>Gateway contract test proving support flags match Runtime behavior for local
+  and remote modes.</li>
+<li>Runtime capability tests proving unsupported local media tasks are visible before hosts decide which warmup controls to show.</li>
+<li>Restart/liveness check proving Runtime asks Core for current loaded state instead of replaying a stale loaded result.</li>
 </ul>
 
 

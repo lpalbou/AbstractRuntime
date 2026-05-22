@@ -16,7 +16,7 @@
         <link rel="prev" href="../../architecture/">
       
       
-        <link rel="next" href="../../tools-comms/">
+        <link rel="next" href="../../troubleshooting/">
       
       
         
@@ -599,6 +599,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../tools-comms/" class="md-nav__link">
         
   
@@ -850,10 +877,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
         
           
-          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
             
   
   
@@ -871,8 +898,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_15">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1280,11 +1307,11 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.24 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight <code>abstractmusic&gt;=0.1.4</code> remote ACE path surfaced through Runtime music generation.</p>
+<p>This extra installs AbstractCore 2.13.25 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight <code>abstractmusic&gt;=0.1.8</code> remote ACE path surfaced through Runtime music generation.</p>
 <p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[remote,vision,voice,audio,music]&gt;=2.13.24</code>. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With <code>abstractmusic&gt;=0.1.4</code>, the base music extra now includes the lightweight remote ACE Music backend without local model-runtime extras.</p>
+<p>This installs <code>abstractcore[remote,vision,voice,audio,music]&gt;=2.13.25</code>. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With <code>abstractmusic&gt;=0.1.8</code>, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.</p>
 <p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
 </code></pre></div>
@@ -1433,15 +1460,15 @@ hello
 <li><code>media_provider</code> / <code>media_model</code>: the actual image/voice/music backend identity surfaced from the generated output</li>
 </ul>
 <p>For local one-shot subprocess image generation, runtime metadata also records <code>execution_mode="local_one_shot_subprocess"</code>.</p>
-<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits require one source image media item and may include one mask item, both resolving to local paths or artifact-backed temporary files. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
-<p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>tts</code>, and <code>stt</code> return:</p>
+<p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> return:</p>
 <ul>
 <li><code>code="model_residency_unsupported"</code></li>
-<li><code>execution_mode="local_one_shot_subprocess"</code></li>
 <li><code>requires_long_lived_server=true</code></li>
 <li><code>config_hint</code> pointing to <code>ABSTRACTCORE_SERVER_BASE_URL</code></li>
 </ul>
+<p>Image-generation residency responses also include <code>execution_mode="local_one_shot_subprocess"</code> because local image generation is isolated into one-shot workers unless a long-lived Core server owns the media backend.</p>
 <p>When the workflow marks residency as optional (<code>required=false</code>), the effect still completes durably but includes <code>status_hint="warning"</code> and <code>degraded=true</code> so hosts can render the no-op honestly.</p>
 <p>Remote auth example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_remote_runtime</span>
@@ -1535,6 +1562,7 @@ hello
 <li><code>delete_bloc_kv_artifact(...)</code></li>
 <li><code>prune_bloc_kv_artifacts(...)</code></li>
 <li><code>delete_bloc(...)</code></li>
+<li><code>get_model_residency_capabilities(...)</code></li>
 <li><code>list_model_residency(...)</code></li>
 <li><code>load_model_residency(...)</code></li>
 <li><code>unload_model_residency(...)</code></li>
@@ -1542,7 +1570,7 @@ hello
 <p>Behavior by execution mode:</p>
 <ul>
 <li><strong>Local</strong> (<code>MultiLocalAbstractCoreLLMClient</code> / <code>LocalAbstractCoreLLMClient</code>): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.</li>
-<li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/acore/prompt_cache/*</code> on the configured AbstractCore server.</li>
+<li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/acore/prompt_cache/*</code> and <code>/acore/models/*</code> on the configured AbstractCore server.</li>
 <li>When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream <code>base_url</code> through these prompt-cache methods. Per-request provider key overrides supplied as <code>api_key</code> / <code>provider_api_key</code> are converted to <code>X-AbstractCore-Provider-API-Key</code> headers, not request bodies or query strings.</li>
 <li>For durable bloc/KV methods, <code>base_url</code> takes precedence over local loaded-runtime selectors. Runtime omits <code>provider</code>, <code>model</code>, and <code>runtime_id</code> when <code>base_url</code> is supplied so Core takes the upstream endpoint branch cleanly.</li>
 </ul>
@@ -1555,6 +1583,7 @@ hello
 <li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.</li>
 <li>Automatic per-session prompt-cache keys are enabled by <code>run.vars["_runtime"]["prompt_cache"]</code>, <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default. Gateway-specific prompt-cache env vars should be translated by Gateway into <code>_runtime.prompt_cache</code>.</li>
 <li>Durable exact reuse uses <code>LLM_CALL.params.prompt_cache_binding</code>. If a binding includes <code>key</code>, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.</li>
+<li>Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit <code>prompt_cache_binding</code>, but Runtime does not derive a session cache key for them.</li>
 <li>Local Runtime owns the bloc store root policy:</li>
 <li>default local root: <code>~/.abstractruntime/blocs</code></li>
 <li>default file-runtime root: <code>&lt;base_dir&gt;/blocs</code></li>
@@ -1836,6 +1865,7 @@ email and Telegram:</p>
 <li><code>execute_tool_calls(...)</code></li>
 <li><code>resume_tool_calls(...)</code></li>
 <li><code>generate_image(...)</code></li>
+<li><code>edit_image(...)</code></li>
 <li><code>generate_voice(...)</code></li>
 <li><code>generate_music(...)</code></li>
 <li><code>transcribe_audio(...)</code></li>

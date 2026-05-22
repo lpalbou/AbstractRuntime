@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/002_persistence_and_ledger/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0038_core_server_pool_residency_affinity/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>002 persistence and ledger - AbstractRuntime</title>
+        <title>Proposed: Core Server Pool Residency Affinity - AbstractRuntime</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#002_persistence_and_ledger-completed-for-v01" class="md-skip">
+        <a href="#proposed-core-server-pool-residency-affinity" class="md-skip">
           Skip to content
         </a>
       
@@ -100,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              002 persistence and ledger
+              Proposed: Core Server Pool Residency Affinity
             
           </span>
         </div>
@@ -829,6 +829,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -837,63 +839,123 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#002_persistence_and_ledger-completed-for-v01" class="md-nav__link">
+  <a href="#metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        002_persistence_and_ledger (completed for v0.1)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="002_persistence_and_ledger (completed for v0.1)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Goal
+        Metadata
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#what-shipped" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#adr-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What shipped
+        ADR status
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#acceptance-criteria-met" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Acceptance criteria (met)
+        Context
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deferred-planned" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deferred / planned
+        Current code reality
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#problem-or-opportunity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem or opportunity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed direction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-it-might-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why it might matter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#promotion-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Promotion criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-ideas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation ideas
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guidance-for-future-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guidance for future agents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -917,32 +979,82 @@
   
 
 
-  <h1>002 persistence and ledger</h1>
-
-<h2 id="002_persistence_and_ledger-completed-for-v01">002_persistence_and_ledger (completed for v0.1)<a class="headerlink" href="#002_persistence_and_ledger-completed-for-v01" title="Permanent link">&para;</a></h2>
-<h3 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h3>
-<p>Add durability primitives:
-- RunStore (checkpoints)
-- LedgerStore (journal d’exécution)</p>
-<h3 id="what-shipped">What shipped<a class="headerlink" href="#what-shipped" title="Permanent link">&para;</a></h3>
+<h1 id="proposed-core-server-pool-residency-affinity">Proposed: Core Server Pool Residency Affinity<a class="headerlink" href="#proposed-core-server-pool-residency-affinity" title="Permanent link">&para;</a></h1>
+<h2 id="metadata">Metadata<a class="headerlink" href="#metadata" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Interfaces: <code>src/abstractruntime/storage/base.py</code></li>
-<li>In-memory stores: <code>src/abstractruntime/storage/in_memory.py</code></li>
-<li>File stores:</li>
-<li><code>JsonFileRunStore</code> (JSON per run)</li>
-<li><code>JsonlLedgerStore</code> (append-only JSONL)</li>
-<li><code>src/abstractruntime/storage/json_files.py</code></li>
+<li>Created: 2026-05-22</li>
+<li>Status: Proposed</li>
+<li>Completed: N/A</li>
 </ul>
-<h3 id="acceptance-criteria-met">Acceptance criteria (met)<a class="headerlink" href="#acceptance-criteria-met" title="Permanent link">&para;</a></h3>
+<h2 id="adr-status">ADR status<a class="headerlink" href="#adr-status" title="Permanent link">&para;</a></h2>
 <ul>
-<li>After restarting the process, a paused run can be loaded and resumed.</li>
-<li>The ledger contains step records with timestamps + status + effect/result.</li>
+<li>Governing ADRs:</li>
+<li><code>docs/adr/0007_runtime_relays_core_owned_model_residency_truth.md</code></li>
+<li>ADR impact: Needs new ADR if promoted. Pool routing and residency affinity would become durable cross-package
+  behavior and should not live only in backlog prose.</li>
 </ul>
-<h3 id="deferred-planned">Deferred / planned<a class="headerlink" href="#deferred-planned" title="Permanent link">&para;</a></h3>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>Runtime currently treats AbstractCore residency as live, ephemeral state owned by the configured Core backend. That is
+enough while a Runtime instance talks to one Core server or one local Core facade at a time. A future deployment may run
+a pool of AbstractCore servers where model residency is not globally true: a model can be loaded on one Core server and
+not on another.</p>
+<p>This proposal preserves that future concern without blocking the current <code>0036</code> work. Today, Runtime should simply ask
+the configured Core backend which models are loaded now and relay that answer.</p>
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li>ArtifactStore (large payloads by reference) — implemented later in <code>009_artifact_store.md</code></li>
-<li>Advanced indexing/search for ledgers</li>
+<li><code>RemoteAbstractCoreLLMClient</code> stores one <code>server_base_url</code> and relays residency control to
+  <code>/acore/models/loaded</code>, <code>/acore/models/load</code>, and <code>/acore/models/unload</code>.</li>
+<li><code>RemoteAbstractCoreLLMClient</code> also sends media execution requests to the same configured Core server root for
+  <code>/v1/images/*</code>, <code>/audio/speech</code>, <code>/audio/transcriptions</code>, and <code>/audio/music</code>.</li>
+<li>Runtime has no <code>core_uuid -&gt; server</code> registry, Core-server pool abstraction, pool-wide warmup contract, or routing
+  affinity token.</li>
+<li>Loaded model state is ephemeral. After an AbstractCore restart, Runtime cannot recover a previous in-memory residency
+  state; it must ask Core again.</li>
 </ul>
+<h2 id="problem-or-opportunity">Problem or opportunity<a class="headerlink" href="#problem-or-opportunity" title="Permanent link">&para;</a></h2>
+<p>If Runtime later supports multiple AbstractCore servers behind one Runtime or Gateway surface, a plain statement like
+<code>model X is loaded</code> becomes ambiguous. It may mean loaded on one server, loaded on every server in a pool, or loaded on
+the server that will handle the next generation request. Those are different contracts.</p>
+<h2 id="proposed-direction">Proposed direction<a class="headerlink" href="#proposed-direction" title="Permanent link">&para;</a></h2>
+<p>When Runtime grows Core-pool support, make residency target identity explicit:</p>
+<ul>
+<li>Core servers should expose a stable runtime/server identity for the current process lifetime, such as <code>core_uuid</code>.</li>
+<li>Residency records should identify the Core backend that supplied the answer.</li>
+<li>Runtime should either route generation to the Core backend that has the resident model, or advertise only pool-level
+  residency that a Core-side or pool-side controller guarantees.</li>
+<li>Gateway and higher-level apps should not collapse per-Core loaded state into a global loaded flag unless the pool
+  contract explicitly says it is global.</li>
+</ul>
+<h2 id="why-it-might-matter">Why it might matter<a class="headerlink" href="#why-it-might-matter" title="Permanent link">&para;</a></h2>
+<p>Pooling can improve capacity and isolation, but it makes loaded-state truth less obvious. Preserving this as a proposed
+item keeps the future design from contaminating the simpler current rule: ask the configured Core backend for live
+truth.</p>
+<h2 id="promotion-criteria">Promotion criteria<a class="headerlink" href="#promotion-criteria" title="Permanent link">&para;</a></h2>
+<p>Promote this item only when at least one of these becomes true:</p>
+<ul>
+<li>Runtime or Gateway is asked to route requests across multiple AbstractCore servers.</li>
+<li>AbstractCore exposes a server identity or pool membership contract that Runtime should relay.</li>
+<li>Users need warmup/load controls that target a specific Core server or an entire Core pool.</li>
+<li>A real bug shows a model loaded on one Core backend while generation is sent to another.</li>
+</ul>
+<h2 id="validation-ideas">Validation ideas<a class="headerlink" href="#validation-ideas" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Contract tests for per-Core residency records including server identity.</li>
+<li>Routing tests proving generation is sent to the Core server that reported the resident model.</li>
+<li>Pool-level tests proving <code>loaded=true</code> means either per-server truth or explicitly guaranteed pool-wide truth.</li>
+<li>Restart tests proving Runtime does not treat an old Core identity's loaded state as current after a Core process
+  restarts.</li>
+</ul>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Do not implement Core-pool routing now.</li>
+<li>Do not block single-Core residency behavior on server UUID support.</li>
+<li>Do not make Runtime query providers directly for loaded-state truth.</li>
+<li>Do not make loaded-state durable; residency remains live and ephemeral.</li>
+</ul>
+<h2 id="guidance-for-future-agents">Guidance for future agents<a class="headerlink" href="#guidance-for-future-agents" title="Permanent link">&para;</a></h2>
+<p>Re-check the current Core and Runtime server contracts before promoting this. If the work creates durable rules for
+server identity, routing affinity, or pool-wide warmup semantics, write or update an ADR first.</p>
 
 
 

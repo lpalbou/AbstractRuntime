@@ -38,6 +38,7 @@ nav:
   - API Reference: api.md
   - Architecture: architecture.md
   - AbstractCore Integration: integrations/abstractcore.md
+  - Troubleshooting: troubleshooting.md
   - Tools and Comms: tools-comms.md
   - MCP Worker: mcp-worker.md
   - Workflow Bundles: workflow-bundles.md

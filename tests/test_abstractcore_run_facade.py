@@ -140,6 +140,70 @@ def test_run_facade_generate_image_creates_durable_child_run_with_truthful_media
     assert "llm_call" in effect_types
 
 
+def test_run_facade_edit_image_creates_durable_child_run_with_media() -> None:
+    store = InMemoryArtifactStore()
+    source = store.store(b"png-source", content_type="image/png", tags={"filename": "source.png"})
+    seen: Dict[str, Any] = {}
+
+    class _ImageEditProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                outputs={
+                    "image": [
+                        GeneratedItem(
+                            modality="image",
+                            task="image_edit",
+                            data=b"png-edited",
+                            content_type="image/png",
+                            format="png",
+                            provider="openai-compatible",
+                            model="gpt-image-1",
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _ImageEditProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-edit")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.edit_image(
+        parent_run_id,
+        prompt="Make the jacket red.",
+        media={"$artifact": source.artifact_id, "filename": "source.png"},
+        output={"provider": "openai-compatible", "model": "gpt-image-1", "format": "png"},
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert seen["prompt"] == "Make the jacket red."
+    assert seen["output"]["task"] == "image_edit"
+    assert seen["media"][0]["artifact_id"] == source.artifact_id
+    result = child.output["result"]
+    item = result["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edited"
+    assert artifact.metadata.run_id == child.run_id
+
+
 def test_run_facade_transcribe_audio_inherits_runtime_media_defaults() -> None:
     store = InMemoryArtifactStore()
     meta = store.store(b"fake-wav", content_type="audio/wav", tags={"filename": "speech.wav"})

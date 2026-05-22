@@ -156,6 +156,10 @@ VisualFlow compiler helpers are available from `abstractruntime.visualflow_compi
 - `visual_to_flow(...)` lowers VisualFlow into the internal Flow IR.
 - `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
 
+VisualFlow authoring note (media nodes):
+- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
+- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
+
 Public bundle APIs are exported from `src/abstractruntime/workflow_bundle/__init__.py` and re-exported in `src/abstractruntime/__init__.py`:
 - open: `open_workflow_bundle(...)`
 - registry: `WorkflowBundleRegistry`
@@ -176,7 +180,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.24 or newer).
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.25 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -190,10 +194,10 @@ Entry points:
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`)
-- host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
+- host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `get_model_residency_capabilities`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
 - host-facade email helpers delegate to Runtime's host-local comms facade/export layer (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
-- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
 - `prompt`, `messages`, `system_prompt`, and convenience `text`
@@ -204,17 +208,18 @@ Entry points:
 Multimodal support:
 - install `abstractruntime[multimodal]` for common AbstractCore media, vision, voice, audio, and music dependencies
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
-- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`, while unsupported local media warmup also reports `execution_mode="local_one_shot_subprocess"` and `requires_long_lived_server=true`
+- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and image generation also reports `execution_mode="local_one_shot_subprocess"`
 - Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
 - `LLM_CALL.params.prompt_cache_binding` is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes `key`, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
+- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
 - `get_abstractcore_host_facade(...)` also exposes durable bloc helpers (`upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`)
 - local Runtime owns the bloc root policy: `~/.abstractruntime/blocs` by default, `<base_dir>/blocs` for `create_local_file_runtime(...)`, and explicit `bloc_root_dir=...` overrides when needed
 - provider cache/session handles are not durable runtime state and should not be stored in `RunState.vars`

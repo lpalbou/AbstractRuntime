@@ -13,8 +13,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 ## Counts
 
 - Planned: 5
-- Proposed: 1
-- Completed: 26
+- Proposed: 3
+- Completed: 28
 - Deprecated: 13
 - Recurrent: 0
 
@@ -26,10 +26,15 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 2. `planned/014_remote_tool_worker_executor.md`
    The public ToolExecutor path is still the larger follow-on after the current
    Gateway boundary cleanup.
-3. `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md`
+3. `proposed/0036_local_media_residency_bridge_to_core_residency.md`
+   Local Runtime media residency should relay live Core-owned truth for image/TTS/STT or stay unsupported when no
+   Core-owned local media residency facade is wired.
+4. `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md`
    The comms/Telegram boundary cleanup is now complete; the remaining lower
    pressure follow-up is a Runtime-owned tool-spec surface if Gateway or the
    MCP worker still need one after adoption.
+5. `proposed/0038_core_server_pool_residency_affinity.md`
+   Future-only topology item for multiple AbstractCore servers, server identity, and residency routing affinity.
 
 ## Completed
 
@@ -61,6 +66,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0030 | `completed/0030_runtime_host_facades_for_comms_telegram_and_tool_specs.md` |
 | 0032 | `completed/0032_runtime_durable_outbound_comms_truth.md` |
 | 0033 | `completed/0033_runtime_host_local_prompt_cache_export_import_surface.md` |
+| 0035 | `completed/0035_model_residency_provider_truth_for_local_http_clients.md` |
+| 0037 | `completed/0037_visualflow_generate_music_node_compiler_parity.md` |
 
 ## Planned
 
@@ -77,6 +84,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | ID | Item |
 |----|------|
 | 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
+| 0036 | `proposed/0036_local_media_residency_bridge_to_core_residency.md` |
+| 0038 | `proposed/0038_core_server_pool_residency_affinity.md` |
 
 ## Deprecated
 

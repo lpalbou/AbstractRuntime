@@ -50,6 +50,6 @@ Specifically:
 - Follow-up backlog work in hosts should remove direct Core discovery bypasses where the facade now covers them.
 
 ### See Also
-- Implementation: [`../backlog/planned/026_runtime_host_discovery_facade_for_core_catalogs.md`](../backlog/planned/026_runtime_host_discovery_facade_for_core_catalogs.md)
+- Implementation: [`../backlog/completed/026_runtime_host_discovery_facade_for_core_catalogs.md`](../backlog/completed/026_runtime_host_discovery_facade_for_core_catalogs.md)
 - Existing operator controls: [`0004_runtime_owns_run_scoped_media_execution_truth.md`](0004_runtime_owns_run_scoped_media_execution_truth.md)
 - Integration guide: [`../integrations/abstractcore.md`](../integrations/abstractcore.md)

@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.24 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings, and lifecycle operations, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.4` remote ACE path surfaced through Runtime music generation.
+This extra installs AbstractCore 2.13.25 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.8` remote ACE path surfaced through Runtime music generation.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.24`. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.4`, the base music extra now includes the lightweight remote ACE Music backend without local model-runtime extras.
+This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.25`. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.8`, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -215,16 +215,17 @@ Media-only normalized results now distinguish orchestration identity from the ac
 
 For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. For image edits, input-media image generation, voice clone/register, or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits require one source image media item and may include one mask item, both resolving to local paths or artifact-backed temporary files. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
-Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `tts`, and `stt` return:
+Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `tts`, `stt`, and `music_generation` return:
 
 - `code="model_residency_unsupported"`
-- `execution_mode="local_one_shot_subprocess"`
 - `requires_long_lived_server=true`
 - `config_hint` pointing to `ABSTRACTCORE_SERVER_BASE_URL`
+
+Image-generation residency responses also include `execution_mode="local_one_shot_subprocess"` because local image generation is isolated into one-shot workers unless a long-lived Core server owns the media backend.
 
 When the workflow marks residency as optional (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true` so hosts can render the no-op honestly.
 
@@ -335,6 +336,7 @@ AbstractRuntime's AbstractCore integration now exposes a public host-control fac
 - `delete_bloc_kv_artifact(...)`
 - `prune_bloc_kv_artifacts(...)`
 - `delete_bloc(...)`
+- `get_model_residency_capabilities(...)`
 - `list_model_residency(...)`
 - `load_model_residency(...)`
 - `unload_model_residency(...)`
@@ -342,7 +344,7 @@ AbstractRuntime's AbstractCore integration now exposes a public host-control fac
 Behavior by execution mode:
 
 - **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.
-- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` on the configured AbstractCore server.
+- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` and `/acore/models/*` on the configured AbstractCore server.
   - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream `base_url` through these prompt-cache methods. Per-request provider key overrides supplied as `api_key` / `provider_api_key` are converted to `X-AbstractCore-Provider-API-Key` headers, not request bodies or query strings.
   - For durable bloc/KV methods, `base_url` takes precedence over local loaded-runtime selectors. Runtime omits `provider`, `model`, and `runtime_id` when `base_url` is supplied so Core takes the upstream endpoint branch cleanly.
 
@@ -355,6 +357,7 @@ Contract notes:
 - This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 - Durable exact reuse uses `LLM_CALL.params.prompt_cache_binding`. If a binding includes `key`, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.
+- Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
 - Local Runtime owns the bloc store root policy:
   - default local root: `~/.abstractruntime/blocs`
   - default file-runtime root: `<base_dir>/blocs`
@@ -661,6 +664,7 @@ Public durable entry points:
 - `execute_tool_calls(...)`
 - `resume_tool_calls(...)`
 - `generate_image(...)`
+- `edit_image(...)`
 - `generate_voice(...)`
 - `generate_music(...)`
 - `transcribe_audio(...)`

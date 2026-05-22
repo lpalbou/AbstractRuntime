@@ -408,6 +408,45 @@ def test_llm_call_derives_prompt_cache_key_from_effective_client_identity() -> N
     )
 
 
+def test_llm_call_does_not_derive_prompt_cache_key_for_generated_media_outputs() -> None:
+    from abstractruntime.core.models import Effect, EffectType, RunState
+    from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
+    from abstractruntime.storage.artifacts import InMemoryArtifactStore
+
+    class _CapturingLLM:
+        def __init__(self) -> None:
+            self.calls: List[Dict[str, Any]] = []
+
+        def default_prompt_cache_identity(self) -> Tuple[str, str]:
+            return "stub-provider", "default-model"
+
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
+            self.calls.append({"params": dict(params or {})})
+            return {"outputs": {"music": []}, "metadata": {}}
+
+    llm = _CapturingLLM()
+    handler = make_llm_call_handler(llm=llm, artifact_store=InMemoryArtifactStore())
+    run = RunState.new(
+        workflow_id="wf-cache",
+        entry_node="node-a",
+        session_id="sess-cache",
+        vars={"_runtime": {"prompt_cache": True}},
+    )
+    run.current_node = "node-a"
+
+    outcome = handler(
+        run,
+        Effect(
+            type=EffectType.LLM_CALL,
+            payload={"prompt": "make music", "params": {"output": {"modality": "music", "task": "music_generation"}}},
+        ),
+        None,
+    )
+
+    assert outcome.status == "completed"
+    assert "prompt_cache_key" not in llm.calls[-1]["params"]
+
+
 def test_llm_call_ignores_gateway_prompt_cache_env(monkeypatch) -> None:
     from abstractruntime.core.models import Effect, EffectType, RunState
     from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler

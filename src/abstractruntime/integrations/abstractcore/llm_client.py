@@ -941,6 +941,9 @@ class AbstractCoreLLMClient(Protocol):
 class AbstractCoreControlClient(Protocol):
     """Runtime/provider control-plane calls exposed by AbstractCore-capable clients."""
 
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        """Return task-level model residency support truth for this client."""
+
     def list_model_residency(
         self,
         *,
@@ -2139,19 +2142,29 @@ def _normalize_residency_task(task: Any) -> str:
         "completions": "text_generation",
         "image": "image_generation",
         "images": "image_generation",
+        "vision": "image_generation",
         "t2i": "image_generation",
         "text_to_image": "image_generation",
+        "i2i": "image_generation",
+        "image_to_image": "image_generation",
+        "image_edit": "image_generation",
+        "edit_image": "image_generation",
         "voice": "tts",
         "speech": "tts",
         "audio_speech": "tts",
+        "text_to_speech": "tts",
+        "audio": "tts",
         "music": "music_generation",
         "song": "music_generation",
         "t2m": "music_generation",
         "text_to_music": "music_generation",
         "lyrics_to_music": "music_generation",
         "transcription": "stt",
+        "transcriptions": "stt",
         "transcribe": "stt",
+        "speech_to_text": "stt",
         "audio_transcription": "stt",
+        "audio_transcriptions": "stt",
     }
     return aliases.get(raw, raw)
 
@@ -2175,32 +2188,266 @@ def _model_residency_unsupported_payload(
         "code": "model_residency_unsupported",
         "error": str(error),
         "warnings": [str(error)],
+        "status_hint": "warning",
+        "degraded": True,
         "diagnostics": {"source": "abstractruntime"},
     }
-    if task_s in {"image_generation", "tts", "stt"}:
+    if task_s == "image_generation":
         payload["execution_mode"] = "local_one_shot_subprocess"
+        payload["local_media_residency_backend"] = "none"
+        payload["requires_long_lived_core_backend"] = True
         payload["requires_long_lived_server"] = True
         payload["config_hint"] = (
             "Set ABSTRACTCORE_SERVER_BASE_URL to a long-lived AbstractCore server to enable media warmup."
         )
+    elif task_s in {"tts", "stt", "music_generation"}:
+        payload["local_media_residency_backend"] = "none"
+        payload["requires_long_lived_core_backend"] = True
+        payload["requires_long_lived_server"] = True
+        payload["config_hint"] = (
+            "Set ABSTRACTCORE_SERVER_BASE_URL to a long-lived AbstractCore server that exposes this media "
+            "residency task, or keep local Runtime media residency unsupported."
+        )
     return payload
 
 
-def _local_residency_record(*, provider: str, model: str, default: bool = False) -> Dict[str, Any]:
+def _model_residency_capability_task(
+    *,
+    task: str,
+    supported: bool,
+    reason: str = "",
+    operations: Optional[List[str]] = None,
+    truth_source: str = "abstractcore",
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "task": _normalize_residency_task(task),
+        "supported": bool(supported),
+        "operations": list(operations or ["list_loaded", "load", "unload"]) if supported else [],
+        "truth_source": str(truth_source or "abstractcore"),
+    }
+    if reason:
+        item["reason"] = reason
+    if isinstance(extra, dict):
+        item.update({str(k): _jsonable(v) for k, v in extra.items() if v is not None})
+    return item
+
+
+def _local_model_residency_capabilities(*, mode: str, source: str, text_loads_other_models: bool) -> Dict[str, Any]:
+    media_reason = (
+        "Local Runtime has no long-lived Core-owned media residency backend wired to generation. "
+        "Use remote AbstractCore server mode for media residency."
+    )
+    tasks = {
+        "text_generation": _model_residency_capability_task(
+            task="text_generation",
+            supported=True,
+            truth_source="abstractcore.provider.get_model_residency",
+            extra={
+                "runtime_cache_supported": True,
+                "loads_other_models": bool(text_loads_other_models),
+                "provider_residency_required_for_loaded_true": True,
+            },
+        ),
+        "image_generation": _model_residency_capability_task(
+            task="image_generation",
+            supported=False,
+            truth_source="abstractcore",
+            reason=media_reason,
+            extra={
+                "execution_mode": "local_one_shot_subprocess",
+                "local_media_residency_backend": "none",
+                "requires_long_lived_core_backend": True,
+            },
+        ),
+        "tts": _model_residency_capability_task(
+            task="tts",
+            supported=False,
+            truth_source="abstractcore",
+            reason=media_reason,
+            extra={"local_media_residency_backend": "none", "requires_long_lived_core_backend": True},
+        ),
+        "stt": _model_residency_capability_task(
+            task="stt",
+            supported=False,
+            truth_source="abstractcore",
+            reason=media_reason,
+            extra={"local_media_residency_backend": "none", "requires_long_lived_core_backend": True},
+        ),
+        "music_generation": _model_residency_capability_task(
+            task="music_generation",
+            supported=False,
+            truth_source="abstractcore",
+            reason=media_reason,
+            extra={"local_media_residency_backend": "none", "requires_long_lived_core_backend": True},
+        ),
+    }
+    return {
+        "ok": True,
+        "supported": True,
+        "operation": "capabilities",
+        "mode": mode,
+        "source": source,
+        "tasks": tasks,
+        "supported_tasks": [task for task, info in tasks.items() if info.get("supported") is True],
+        "unsupported_tasks": [task for task, info in tasks.items() if info.get("supported") is not True],
+        "diagnostics": {"source": source},
+    }
+
+
+def _residency_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _unknown_provider_residency_claim(*, provider: str, model: str, warning: str) -> Dict[str, Any]:
+    _ = provider, model
+    return {
+        "provider_residency_verified": False,
+        "provider_resident": None,
+        "provider_residency_source": "abstractcore.provider",
+        "provider_state": "provider_residency_unknown",
+        "warnings": [warning],
+    }
+
+
+def _local_provider_residency_claim(
+    *,
+    provider: str,
+    model: str,
+    provider_instance: Any = None,
+) -> Dict[str, Any]:
     provider_s = str(provider or "").strip().lower()
     model_s = str(model or "").strip()
+    method = getattr(provider_instance, "get_model_residency", None)
+    if not callable(method):
+        return _unknown_provider_residency_claim(
+            provider=provider_s,
+            model=model_s,
+            warning="AbstractCore provider does not expose verified model residency.",
+        )
+
+    try:
+        raw_claim = method(task="text_generation", model=model_s)
+    except Exception as exc:  # noqa: BLE001
+        return _unknown_provider_residency_claim(
+            provider=provider_s,
+            model=model_s,
+            warning=f"AbstractCore provider residency query failed: {exc}",
+        )
+    if not isinstance(raw_claim, dict):
+        return _unknown_provider_residency_claim(
+            provider=provider_s,
+            model=model_s,
+            warning="AbstractCore provider residency query returned a non-mapping response.",
+        )
+
+    verified = _residency_bool(raw_claim.get("provider_residency_verified")) is True
+    provider_resident = _residency_bool(raw_claim.get("provider_resident"))
+    if provider_resident is None and verified:
+        provider_resident = _residency_bool(raw_claim.get("resident"))
+    if provider_resident is None and verified:
+        provider_resident = _residency_bool(raw_claim.get("loaded"))
+
+    source = raw_claim.get("provider_residency_source") or raw_claim.get("source") or "abstractcore.provider"
+    claim: Dict[str, Any] = {
+        "provider_residency_verified": verified,
+        "provider_resident": provider_resident,
+        "provider_residency_source": str(source),
+    }
+    provider_state = raw_claim.get("provider_state") or raw_claim.get("state")
+    if isinstance(provider_state, str) and provider_state.strip():
+        claim["provider_state"] = provider_state.strip()
+
+    blocked = {
+        "task",
+        "provider",
+        "model",
+        "runtime_id",
+        "resident",
+        "loaded",
+        "state",
+        "source",
+        "isolation",
+        "default",
+        "pinned",
+        "cache_state",
+        "runtime_cached",
+        "provider_residency_verified",
+        "provider_resident",
+        "provider_residency_source",
+        "provider_state",
+    }
+    for key, value in raw_claim.items():
+        if key in blocked or value is None:
+            continue
+        claim[str(key)] = value
+    return claim
+
+
+def _local_residency_record(
+    *,
+    provider: str,
+    model: str,
+    default: bool = False,
+    runtime_cached: bool = True,
+    provider_instance: Any = None,
+    include_provider_state: bool = True,
+) -> Dict[str, Any]:
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    provider_claim = (
+        _local_provider_residency_claim(
+            provider=provider_s,
+            model=model_s,
+            provider_instance=provider_instance,
+        )
+        if include_provider_state and runtime_cached
+        else {
+            "provider_residency_verified": False,
+            "provider_resident": None,
+            "provider_residency_source": "abstractcore.provider",
+            "provider_state": "provider_residency_unknown",
+        }
+    )
+
+    verified = bool(provider_claim.get("provider_residency_verified"))
+    provider_resident_raw = provider_claim.get("provider_resident")
+    provider_resident = provider_resident_raw if isinstance(provider_resident_raw, bool) else None
+
+    if verified:
+        resident = bool(provider_resident)
+        state = "provider_loaded" if resident else "provider_not_loaded"
+    else:
+        resident = False
+        state = "provider_residency_unknown" if runtime_cached else "not_found"
+
+    if not runtime_cached:
+        resident = False
+        state = "not_found"
+
     return {
         "task": "text_generation",
         "provider": provider_s,
         "model": model_s,
         "runtime_id": f"local:text_generation:{provider_s}:{model_s}",
-        "resident": True,
-        "loaded": True,
-        "state": "loaded",
+        "resident": resident,
+        "loaded": resident,
+        "state": state,
+        "runtime_cached": bool(runtime_cached),
+        "cache_state": "runtime_client_cached" if runtime_cached else "not_cached",
         "pinned": bool(default),
         "default": bool(default),
         "source": "abstractruntime.local",
         "isolation": "in_process",
+        **provider_claim,
     }
 
 
@@ -2318,17 +2565,21 @@ def _resolve_media_artifacts(
             # often use extensionless content paths, so a raw path can lose the
             # modality and make downstream transcription reject valid audio.
             resolved: Dict[str, Any] = {"file_path": str(file_path)}
+            for key in ("role", "purpose", "kind"):
+                raw_role = item.get(key)
+                if isinstance(raw_role, str) and raw_role.strip():
+                    resolved[key] = raw_role.strip()
             if content_type:
                 resolved["content_type"] = str(content_type)
-                base_type = str(content_type).split(";", 1)[0].strip().lower()
-                if base_type.startswith("audio/"):
-                    resolved["type"] = "audio"
-                elif base_type.startswith("image/"):
-                    resolved["type"] = "image"
-                elif base_type.startswith("video/"):
-                    resolved["type"] = "video"
-                elif base_type.startswith("text/"):
-                    resolved["type"] = "text"
+            base_type = str(content_type or "").split(";", 1)[0].strip().lower()
+            if base_type.startswith("audio/"):
+                resolved["type"] = "audio"
+            elif base_type.startswith("image/"):
+                resolved["type"] = "image"
+            elif base_type.startswith("video/"):
+                resolved["type"] = "video"
+            elif base_type.startswith("text/"):
+                resolved["type"] = "text"
             resolved["artifact_id"] = str(aid)
             resolved["$artifact"] = str(aid)
             out.append(resolved)
@@ -3034,6 +3285,14 @@ class LocalAbstractCoreLLMClient:
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._provider, self._model
 
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _local_model_residency_capabilities(
+            mode="local_single_client",
+            source="abstractruntime.local",
+            text_loads_other_models=False,
+        )
+
     def list_model_residency(
         self,
         *,
@@ -3055,7 +3314,12 @@ class LocalAbstractCoreLLMClient:
                     "client; local image subprocess execution is one-shot and cannot stay warm."
                 ),
             )
-        record = _local_residency_record(provider=self._provider, model=self._model, default=True)
+        record = _local_residency_record(
+            provider=self._provider,
+            model=self._model,
+            default=True,
+            provider_instance=getattr(self, "_llm", None),
+        )
         if isinstance(provider, str) and provider.strip() and provider.strip().lower() != self._provider:
             records: List[Dict[str, Any]] = []
         elif isinstance(model, str) and model.strip() and model.strip() != self._model:
@@ -3102,8 +3366,18 @@ class LocalAbstractCoreLLMClient:
             "operation": "load",
             "task": "text_generation",
             "loaded_new": False,
-            "runtime": _local_residency_record(provider=self._provider, model=self._model, default=True),
-            "diagnostics": {"source": "abstractruntime.local", "loaded_new": False},
+            "runtime_cache_loaded_new": False,
+            "runtime": _local_residency_record(
+                provider=self._provider,
+                model=self._model,
+                default=True,
+                provider_instance=getattr(self, "_llm", None),
+            ),
+            "diagnostics": {
+                "source": "abstractruntime.local",
+                "loaded_new": False,
+                "runtime_cache_loaded_new": False,
+            },
         }
 
     def unload_model_residency(
@@ -3129,17 +3403,30 @@ class LocalAbstractCoreLLMClient:
                 error="Local one-shot media execution does not support model unload residency controls.",
             )
         if provider_s != self._provider or model_s != self._model:
-            requested = _local_residency_record(provider=provider_s, model=model_s, default=False)
+            requested = _local_residency_record(
+                provider=provider_s,
+                model=model_s,
+                default=False,
+                runtime_cached=False,
+                include_provider_state=False,
+            )
             return {
                 "ok": True,
                 "supported": True,
                 "operation": "unload",
                 "task": "text_generation",
                 "unloaded": False,
-                "runtime": dict(requested, resident=False, loaded=False, state="not_found"),
+                "runtime_cache_unloaded": False,
+                "runtime": requested,
                 "warnings": ["Requested local runtime was not resident in this client."],
                 "diagnostics": {"source": "abstractruntime.local", "reason": "not_found"},
             }
+        record = _local_residency_record(
+            provider=self._provider,
+            model=self._model,
+            default=True,
+            provider_instance=getattr(self, "_llm", None),
+        )
         warning = "The active local default text-generation client cannot be unloaded from itself."
         return {
             "ok": True,
@@ -3147,7 +3434,8 @@ class LocalAbstractCoreLLMClient:
             "operation": "unload",
             "task": "text_generation",
             "unloaded": False,
-            "runtime": _local_residency_record(provider=self._provider, model=self._model, default=True),
+            "runtime_cache_unloaded": False,
+            "runtime": record,
             "warnings": [warning],
             "diagnostics": {"source": "abstractruntime.local", "reason": "active_default_client"},
         }
@@ -4553,6 +4841,14 @@ class MultiLocalAbstractCoreLLMClient:
         """Return (provider, model) pairs loaded in this process (best-effort)."""
         return list(self._clients.keys())
 
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _local_model_residency_capabilities(
+            mode="local_multi_client",
+            source="abstractruntime.multilocal",
+            text_loads_other_models=True,
+        )
+
     def list_model_residency(
         self,
         *,
@@ -4583,11 +4879,13 @@ class MultiLocalAbstractCoreLLMClient:
                 continue
             if model_filter and model_s != model_filter:
                 continue
+            cached_client = self._clients.get((provider_s, model_s))
             records.append(
                 _local_residency_record(
                     provider=provider_s,
                     model=model_s,
                     default=(provider_s, model_s) == (self._default_provider, self._default_model),
+                    provider_instance=getattr(cached_client, "_llm", None),
                 )
             )
         return {
@@ -4636,21 +4934,28 @@ class MultiLocalAbstractCoreLLMClient:
                 "warnings": ["model_residency load requires provider and model"],
             }
         key = (provider_s, model_s)
-        loaded_new = key not in self._clients
-        self._get_client(provider_s, model_s)
+        runtime_cache_loaded_new = key not in self._clients
+        client = self._get_client(provider_s, model_s)
         record = _local_residency_record(
             provider=provider_s,
             model=model_s,
             default=key == (self._default_provider, self._default_model),
+            provider_instance=getattr(client, "_llm", None),
         )
+        loaded_new = bool(runtime_cache_loaded_new and record.get("loaded") is True)
         return {
             "ok": True,
             "supported": True,
             "operation": "load",
             "task": "text_generation",
             "loaded_new": loaded_new,
+            "runtime_cache_loaded_new": runtime_cache_loaded_new,
             "runtime": record,
-            "diagnostics": {"source": "abstractruntime.multilocal", "loaded_new": loaded_new},
+            "diagnostics": {
+                "source": "abstractruntime.multilocal",
+                "loaded_new": loaded_new,
+                "runtime_cache_loaded_new": runtime_cache_loaded_new,
+            },
         }
 
     def unload_model_residency(
@@ -4696,19 +5001,31 @@ class MultiLocalAbstractCoreLLMClient:
             }
 
         key = (provider_s, model_s)
+        client = self._clients.get(key)
         record = _local_residency_record(
             provider=provider_s,
             model=model_s,
             default=key == (self._default_provider, self._default_model),
+            runtime_cached=client is not None,
+            provider_instance=getattr(client, "_llm", None),
+            include_provider_state=client is not None,
         )
         if key == (self._default_provider, self._default_model):
-            warning = "The default local text-generation client remains resident for runtime services."
+            record = _local_residency_record(
+                provider=provider_s,
+                model=model_s,
+                default=True,
+                runtime_cached=client is not None,
+                provider_instance=getattr(client, "_llm", None),
+            )
+            warning = "The default local text-generation client remains cached for runtime services."
             return {
                 "ok": True,
                 "supported": True,
                 "operation": "unload",
                 "task": "text_generation",
                 "unloaded": False,
+                "runtime_cache_unloaded": False,
                 "runtime": record,
                 "warnings": [warning],
                 "diagnostics": {"source": "abstractruntime.multilocal", "reason": "default_client"},
@@ -4722,18 +5039,32 @@ class MultiLocalAbstractCoreLLMClient:
                 "operation": "unload",
                 "task": "text_generation",
                 "unloaded": False,
-                "runtime": dict(record, resident=False, loaded=False, state="not_found"),
+                "runtime_cache_unloaded": False,
+                "runtime": record,
                 "warnings": ["Requested local runtime was not resident."],
                 "diagnostics": {"source": "abstractruntime.multilocal", "reason": "not_found"},
             }
+        record_after_unload = _local_residency_record(
+            provider=provider_s,
+            model=model_s,
+            default=False,
+            runtime_cached=False,
+            include_provider_state=False,
+        )
+        record_after_unload["state"] = "unloaded"
         return {
             "ok": True,
             "supported": True,
             "operation": "unload",
             "task": "text_generation",
-            "unloaded": True,
-            "runtime": dict(record, resident=False, loaded=False, state="unloaded"),
-            "diagnostics": {"source": "abstractruntime.multilocal"},
+            "unloaded": False,
+            "runtime_cache_unloaded": True,
+            "runtime": record_after_unload,
+            "diagnostics": {
+                "source": "abstractruntime.multilocal",
+                "runtime_cache_unloaded": True,
+                "provider_unload": "not_requested",
+            },
         }
 
     def generate(
@@ -5743,6 +6074,31 @@ def _is_audio_media_item(item: Any) -> bool:
     return False
 
 
+def _is_image_media_item(item: Any) -> bool:
+    mime = _media_mime_from_item(item)
+    if mime.startswith("image/"):
+        return True
+    if isinstance(item, dict):
+        raw_type = item.get("type") or item.get("media_type") or item.get("mediaType")
+        if isinstance(raw_type, str) and raw_type.strip().lower() == "image":
+            return True
+    path = _media_path_from_item(item)
+    if path:
+        guessed = _mime_type_for_path(path, fallback="")
+        return guessed.startswith("image/")
+    return False
+
+
+def _media_role_from_item(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("role", "purpose", "kind"):
+        raw = item.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().lower()
+    return ""
+
+
 def _text_from_message_content(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
@@ -5814,6 +6170,49 @@ class RemoteAbstractCoreLLMClient:
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return "remote", self._model
+
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        tasks = {
+            "text_generation": _model_residency_capability_task(
+                task="text_generation",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
+            "image_generation": _model_residency_capability_task(
+                task="image_generation",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
+            "tts": _model_residency_capability_task(
+                task="tts",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
+            "stt": _model_residency_capability_task(
+                task="stt",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
+            "music_generation": _model_residency_capability_task(
+                task="music_generation",
+                supported=False,
+                truth_source="abstractcore.server./acore/models",
+                reason="The current AbstractCore server residency control plane does not implement music_generation.",
+            ),
+        }
+        return {
+            "ok": True,
+            "supported": True,
+            "operation": "capabilities",
+            "mode": "remote_core_server",
+            "source": "abstractruntime.remote",
+            "relay_only": True,
+            "tasks": tasks,
+            "supported_tasks": [task for task, info in tasks.items() if info.get("supported") is True],
+            "unsupported_tasks": [task for task, info in tasks.items() if info.get("supported") is not True],
+            "diagnostics": {"source": "abstractruntime.remote", "server_base_url": self._server_base_url},
+        }
 
     def _prompt_cache_proxy_fields(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
@@ -6964,6 +7363,21 @@ class RemoteAbstractCoreLLMClient:
             raise ValueError("Remote multipart media output requires a request sender with post_multipart().")
         return _unwrap_http_response(raw)
 
+    def _post_multipart_files(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        data: Dict[str, Any],
+        files: Dict[str, tuple[str, bytes, str]],
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        sender = self._sender
+        post_multipart = getattr(sender, "post_multipart", None)
+        if not callable(post_multipart):
+            raise ValueError("Remote multipart media output requires a request sender with post_multipart().")
+        raw = post_multipart(url, headers=headers, data=data, files=files, timeout=self._timeout_s)
+        return _unwrap_http_response(raw)
+
     def _remote_image_generation(
         self,
         *,
@@ -7078,6 +7492,127 @@ class RemoteAbstractCoreLLMClient:
         )
         return _normalize_multimodal_response(
             {"outputs": {"image": outputs}, "metadata": {"model": body.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
+    def _remote_image_edit(
+        self,
+        *,
+        spec: Dict[str, Any],
+        prompt: str,
+        media: Optional[List[Any]],
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        image_item: Any = None
+        mask_item: Any = None
+        for item in list(media or []):
+            role = _media_role_from_item(item)
+            if role == "mask":
+                if mask_item is not None:
+                    raise ValueError("Remote image edit accepts at most one mask media item.")
+                mask_item = item
+                continue
+            if _is_image_media_item(item):
+                if image_item is not None:
+                    raise ValueError("Remote image edit requires exactly one source image media item.")
+                image_item = item
+
+        if image_item is None:
+            raise ValueError("Remote image edit requires exactly one source image media item.")
+
+        def _file_tuple(field: str, item: Any) -> tuple[str, bytes, str]:
+            path = _media_path_from_item(item)
+            if not path:
+                raise ValueError(f"Remote image edit {field} media must resolve to a local file path.")
+            if path.lower().startswith("data:") or path.startswith(("http://", "https://")):
+                raise ValueError(f"Remote image edit {field} media must be a local file path or artifact-backed file.")
+            filename = os.path.basename(path) or f"{field}.bin"
+            mime = _media_mime_from_item(item) or _mime_type_for_path(path)
+            with open(path, "rb") as f:
+                file_bytes = f.read()
+            return filename, file_bytes, mime
+
+        endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        data: Dict[str, Any] = {
+            "prompt": prompt,
+            "response_format": "b64_json",
+        }
+        if endpoint_model:
+            data["model"] = endpoint_model
+        if endpoint_provider:
+            data["provider"] = endpoint_provider
+        for key in ("size", "negative_prompt", "seed", "steps", "guidance_scale"):
+            if key in spec and spec.get(key) is not None:
+                data[key] = spec.get(key)
+        extra = dict(spec.get("extra")) if isinstance(spec.get("extra"), dict) else {}
+        for key in (
+            "quality",
+            "style",
+            "strength",
+            "background",
+            "output_format",
+            "output_compression",
+            "moderation",
+        ):
+            if key in spec and spec.get(key) is not None:
+                extra.setdefault(key, spec.get(key))
+        if extra:
+            data["extra_json"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            data["base_url"] = base_url.strip()
+
+        files: Dict[str, tuple[str, bytes, str]] = {"image": _file_tuple("image", image_item)}
+        if mask_item is not None:
+            files["mask"] = _file_tuple("mask", mask_item)
+
+        if endpoint_provider:
+            data.pop("provider", None)
+            url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/images/edits")
+        else:
+            url = _join_core_v1_url(self._server_base_url, "/images/edits")
+        resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files)
+
+        data_items = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data_items, list) or not data_items:
+            raise ValueError("Remote image edit returned no data items.")
+
+        fmt = str(spec.get("format") or spec.get("output_format") or "png").strip().lower() or "png"
+        content_type = f"image/{fmt}"
+        outputs: List[Dict[str, Any]] = []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            raw_b64 = item.get("b64_json") or item.get("image") or item.get("data")
+            if not isinstance(raw_b64, str) or not raw_b64.strip():
+                continue
+            image_bytes = base64.b64decode("".join(raw_b64.strip().split()), validate=True)
+            outputs.append(
+                {
+                    "modality": "image",
+                    "task": "image_edit",
+                    "data": image_bytes,
+                    "content_type": content_type,
+                    "format": fmt,
+                    "provider": endpoint_provider or "abstractcore-server",
+                    "model": str(data.get("model") or "") or None,
+                    "metadata": {"_provider_request": {"url": url, "payload": data}},
+                }
+            )
+        if not outputs:
+            raise ValueError("Remote image edit response did not contain b64_json data.")
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="image_edit",
+            modality="image",
+            model=str(data.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {"outputs": {"image": outputs}, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
@@ -7304,10 +7839,16 @@ class RemoteAbstractCoreLLMClient:
                     break
 
         if modality == "image":
-            if task and task not in {"image_generation", "t2i"}:
-                raise ValueError("Remote image edits are not supported through this client yet; use local execution.")
+            image_edit_tasks = {"image_edit", "image_to_image", "i2i", "edit_image"}
+            image_generation_tasks = {"", "image_generation", "t2i", "text_to_image"}
+            if task in image_edit_tasks:
+                if not text:
+                    raise ValueError("Remote image edit requires prompt or text.")
+                return self._remote_image_edit(spec=spec, prompt=text, media=media, headers=headers, params=params)
+            if task not in image_generation_tasks:
+                raise ValueError(f"Unsupported remote image task: {task!r}")
             if media:
-                raise ValueError("Remote image output does not accept input media yet; use local execution for image edits.")
+                raise ValueError("Remote image generation does not accept input media; use task='image_edit' for image edits.")
             if not text:
                 raise ValueError("Remote image generation requires prompt or text.")
             return self._remote_image_generation(spec=spec, prompt=text, headers=headers, params=params)

@@ -19,6 +19,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0004 | [Runtime Owns Run-Scoped Media Execution Truth](0004_runtime_owns_run_scoped_media_execution_truth.md) | Accepted | 2026-05-20 | Hosts must route run-scoped media execution through Runtime |
 | 0005 | [Runtime Owns AbstractCore Host Discovery Queries](0005_runtime_owns_abstractcore_host_discovery_queries.md) | Accepted | 2026-05-20 | Hosts should ask Runtime for Core discovery/catalog snapshots |
 | 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
+| 0007 | [Runtime Relays Core-Owned Model Residency Truth](0007_runtime_relays_core_owned_model_residency_truth.md) | Accepted | 2026-05-21 | Runtime reports loaded state only from AbstractCore residency truth |
 
 ## Relationship to Backlog
 
@@ -32,6 +33,7 @@ ADRs explain *why*. Backlog items explain *what* and *how*.
 | 0004 | `backlog/completed/023_truthful_local_media_residency_boundaries.md`, `backlog/completed/024_runtime_owned_run_scoped_media_execution.md` |
 | 0005 | `backlog/completed/026_runtime_host_discovery_facade_for_core_catalogs.md` |
 | 0006 | `backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
+| 0007 | `backlog/completed/0035_model_residency_provider_truth_for_local_http_clients.md`, `backlog/proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 
 ## Adding New ADRs
 

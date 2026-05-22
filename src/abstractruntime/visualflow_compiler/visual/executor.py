@@ -209,7 +209,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "model_residency",
         "llm_call",
         "generate_image",
+        "edit_image",
+        "image_to_image",
         "generate_voice",
+        "generate_music",
         "transcribe_audio",
         "listen_voice",
         "tool_calls",
@@ -968,6 +971,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 out["temperature"] = input_data.get("temperature")
             if isinstance(input_data, dict) and "seed" in input_data:
                 out["seed"] = input_data.get("seed")
+            if isinstance(input_data, dict) and "prompt_cache_binding" in input_data:
+                binding = input_data.get("prompt_cache_binding")
+                if isinstance(binding, dict) and binding:
+                    out["prompt_cache_binding"] = dict(binding)
+                elif isinstance(binding, str) and binding.strip():
+                    out["prompt_cache_binding"] = binding.strip()
 
             if isinstance(input_data, dict) and ("resp_schema" in input_data or "response_schema" in input_data):
                 schema = _normalize_response_schema(
@@ -1376,8 +1385,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_llm_call_handler(data, effect_config)
         if effect_type == "generate_image":
             return _create_generate_image_handler(data, effect_config)
+        if effect_type in {"edit_image", "image_to_image"}:
+            return _create_edit_image_handler(data, effect_config)
         if effect_type == "generate_voice":
             return _create_generate_voice_handler(data, effect_config)
+        if effect_type == "generate_music":
+            return _create_generate_music_handler(data, effect_config)
         if effect_type == "transcribe_audio":
             return _create_transcribe_audio_handler(data, effect_config)
         if effect_type == "listen_voice":
@@ -1572,6 +1585,25 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 return config.get(key)
         return default
 
+    def _image_media_item(value: Any, *, role: str) -> Any:
+        if isinstance(value, dict):
+            item = dict(value)
+            item.setdefault("type", "image")
+            if role and not any(key in item for key in ("role", "purpose", "kind")):
+                item["role"] = role
+            return item
+        if isinstance(value, str) and value.strip():
+            ref = value.strip()
+            item: Dict[str, Any] = {"type": "image", "role": role}
+            if ref.lower().startswith("data:") or ref.startswith(("http://", "https://")):
+                item["url"] = ref
+            elif ref.startswith(("/", "~")):
+                item["file_path"] = ref
+            else:
+                item["$artifact"] = ref
+            return item
+        return None
+
     def _create_generate_image_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data: Any):
             payload = _dict_input(input_data)
@@ -1608,6 +1640,76 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "system_prompt": "",
                 "tools": [],
                 "params": {},
+                "output": output_spec,
+            }
+            return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_edit_image_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", "text", default="") or "")
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="png") or "png").strip().lower() or "png"
+            output_spec: Dict[str, Any] = {"modality": "image", "task": "image_edit", "format": fmt}
+            for key in ("size", "negative_prompt", "quality", "style"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            for key in ("width", "height", "seed", "steps"):
+                value = _coerce_int(_input_or_config(payload, config, key))
+                if value is not None:
+                    output_spec[key] = value
+            guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
+            if guidance is not None:
+                output_spec["guidance_scale"] = guidance
+            strength = _coerce_float(_input_or_config(payload, config, "strength"))
+            if strength is not None:
+                output_spec["strength"] = strength
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            image_provider = _nonempty_str(
+                _input_or_config(payload, config, "image_provider", "imageProvider", "provider_image")
+            )
+            image_model = _nonempty_str(
+                _input_or_config(payload, config, "image_model", "imageModel", "model_image")
+            )
+            if image_provider:
+                output_spec["provider"] = image_provider
+            if image_model:
+                output_spec["model"] = image_model
+
+            source_ref = _input_or_config(
+                payload,
+                config,
+                "image_artifact",
+                "source_image",
+                "sourceImage",
+                "input_image",
+                "inputImage",
+                "image",
+                "artifact",
+                "file_path",
+                "filePath",
+                "source",
+            )
+            mask_ref = _input_or_config(payload, config, "mask_artifact", "mask_image", "maskImage", "image_mask", "mask")
+            media = []
+            source_item = _image_media_item(source_ref, role="source")
+            if source_item:
+                media.append(source_item)
+            mask_item = _image_media_item(mask_ref, role="mask")
+            if mask_item:
+                media.append(mask_item)
+
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": prompt,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "media": media,
                 "output": output_spec,
             }
             return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
@@ -1704,6 +1806,103 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "output": output_spec,
             }
             return {"audio_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_generate_music_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", "text", default="") or "")
+            fmt = (
+                str(_input_or_config(payload, config, "format", "response_format", default="wav") or "wav")
+                .strip()
+                .lower()
+                or "wav"
+            )
+            output_spec: Dict[str, Any] = {"modality": "music", "task": "music_generation", "format": fmt}
+
+            for key in (
+                "lyrics",
+                "structure_prompt",
+                "text_planner_mode",
+                "vocal_language",
+                "negative_prompt",
+                "keyscale",
+                "timesignature",
+            ):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+
+            duration_s = _coerce_float(_input_or_config(payload, config, "duration_s", "duration", "durationS"))
+            if duration_s is not None:
+                output_spec["duration_s"] = duration_s
+
+            bpm = _coerce_float(_input_or_config(payload, config, "bpm"))
+            if bpm is not None:
+                output_spec["bpm"] = bpm
+
+            seed = _coerce_int(_input_or_config(payload, config, "seed"))
+            if seed is not None:
+                output_spec["seed"] = seed
+
+            sample_rate = _coerce_int(_input_or_config(payload, config, "sample_rate", "sampleRate"))
+            if sample_rate is not None:
+                output_spec["sample_rate"] = sample_rate
+
+            num_steps = _coerce_int(_input_or_config(payload, config, "num_inference_steps", "numInferenceSteps"))
+            if num_steps is not None:
+                output_spec["num_inference_steps"] = num_steps
+
+            guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
+            if guidance is not None:
+                output_spec["guidance_scale"] = guidance
+
+            for key in ("instrumental", "enhance_prompt", "auto_lyrics", "planning"):
+                raw_value = _input_or_config(payload, config, key, default=None)
+                if raw_value is not None:
+                    output_spec[key] = _coerce_bool(raw_value)
+
+            music_provider = _nonempty_str(
+                _input_or_config(payload, config, "music_provider", "musicProvider", "provider_music")
+            )
+            music_model = _nonempty_str(
+                _input_or_config(payload, config, "music_model", "musicModel", "model_music")
+            )
+            music_backend = _nonempty_str(
+                _input_or_config(payload, config, "music_backend", "musicBackend", "backend_music")
+            )
+            if music_provider:
+                output_spec["provider"] = music_provider
+            if music_model:
+                output_spec["model"] = music_model
+            if music_backend:
+                output_spec["backend"] = music_backend
+
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            for key in ("composition_plan", "positive_styles", "negative_styles"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, (dict, list)) and value:
+                    output_spec[key] = value
+
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": prompt,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "output": output_spec,
+            }
+            return {
+                "music_artifact": None,
+                "audio_artifact": None,
+                "artifact_ref": None,
+                "artifact_id": "",
+                "success": None,
+                "_pending_effect": pending,
+            }
 
         return handler
 
@@ -2081,6 +2280,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 params["seed"] = seed_value
             if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
                 params["max_output_tokens"] = int(max_output_tokens_value)
+            if isinstance(input_data, dict) and "prompt_cache_binding" in input_data:
+                binding = input_data.get("prompt_cache_binding")
+                if isinstance(binding, dict) and binding:
+                    params["prompt_cache_binding"] = dict(binding)
+                elif isinstance(binding, str) and binding.strip():
+                    params["prompt_cache_binding"] = binding.strip()
 
             output_specified = False
             output_request: Any = None

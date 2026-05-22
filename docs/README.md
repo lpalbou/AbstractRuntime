@@ -18,11 +18,13 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `getting-started.md` — first steps (recommended)
 - `api.md` — public API surface (imports + pointers)
 - `architecture.md` — how the runtime is structured (with diagrams)
+- `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
 - `proposal.md` — design goals and scope boundaries
 
 ## Guides
 
 - `faq.md` — common questions (recommended)
+- `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions, durable bloc prompt-cache control, media inputs, generated media outputs, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
@@ -39,6 +41,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 ## Maintainers
 
 - `../CHANGELOG.md` — release notes
+- `../CODE_OF_CONDUCT.md` — contributor conduct expectations
 - `../CONTRIBUTING.md` — how to build/test and submit changes
 - `../SECURITY.md` — responsible vulnerability reporting
 - `../ACKNOWLEDGMENTS.md` — credits

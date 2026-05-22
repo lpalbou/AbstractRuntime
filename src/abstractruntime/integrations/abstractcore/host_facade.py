@@ -43,6 +43,7 @@ _HOST_CONTROL_METHODS = (
     "delete_bloc_kv_artifact",
     "prune_bloc_kv_artifacts",
     "delete_bloc",
+    "get_model_residency_capabilities",
     "list_model_residency",
     "load_model_residency",
     "unload_model_residency",
@@ -277,6 +278,9 @@ class AbstractCoreHostControlClient(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        ...
+
     def list_model_residency(
         self,
         *,
@@ -359,6 +363,9 @@ class AbstractCoreHostFacade:
 
     def get_prompt_cache_stats(self, **kwargs: Any) -> Dict[str, Any]:
         return self._client.get_prompt_cache_stats(**kwargs)
+
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._client.get_model_residency_capabilities(**kwargs)
 
     def prompt_cache_set(
         self,

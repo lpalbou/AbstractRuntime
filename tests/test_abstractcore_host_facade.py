@@ -122,6 +122,11 @@ class _RecordingHostClient:
                 "results": [{"deleted": True, "artifact_path": "/tmp/orbit.kv"}],
             },
             "delete_bloc": {"ok": True, "operation": "delete", "result": {"deleted": True, "record": {"bloc_id": 7}}},
+            "get_model_residency_capabilities": {
+                "ok": True,
+                "operation": "capabilities",
+                "tasks": {"text_generation": {"supported": True}},
+            },
             "list_model_residency": {"ok": True, "operation": "list_loaded", "models": []},
             "load_model_residency": {"ok": True, "operation": "load"},
             "unload_model_residency": {"ok": True, "operation": "unload"},
@@ -287,6 +292,9 @@ class _RecordingHostClient:
 
     def delete_bloc(self, **kwargs: Any) -> Dict[str, Any]:
         return self._record("delete_bloc", **kwargs)
+
+    def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("get_model_residency_capabilities", **kwargs)
 
     def list_model_residency(
         self,
@@ -649,6 +657,7 @@ def test_host_facade_delegates_model_residency_operations() -> None:
     client = _RecordingHostClient()
     facade = AbstractCoreHostFacade(SimpleNamespace(_abstractcore_llm_client=client))
 
+    capabilities = facade.get_model_residency_capabilities(scope="host")
     listed = facade.list_model_residency(task="text_generation", provider="mlx", model="qwen")
     loaded = facade.load_model_residency(
         task="image_generation",
@@ -668,10 +677,16 @@ def test_host_facade_delegates_model_residency_operations() -> None:
         provider_api_key="sekret",
     )
 
+    assert capabilities == {
+        "ok": True,
+        "operation": "capabilities",
+        "tasks": {"text_generation": {"supported": True}},
+    }
     assert listed == {"ok": True, "operation": "list_loaded", "models": []}
     assert loaded == {"ok": True, "operation": "load"}
     assert unloaded == {"ok": True, "operation": "unload"}
     assert client.calls == [
+        ("get_model_residency_capabilities", {"scope": "host"}),
         ("list_model_residency", {"task": "text_generation", "provider": "mlx", "model": "qwen"}),
         (
             "load_model_residency",

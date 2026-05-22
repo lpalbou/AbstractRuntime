@@ -170,7 +170,15 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
         )
-    elif effect_type in {"llm_call", "generate_image", "generate_voice", "transcribe_audio"}:
+    elif effect_type in {
+        "llm_call",
+        "generate_image",
+        "edit_image",
+        "image_to_image",
+        "generate_voice",
+        "generate_music",
+        "transcribe_audio",
+    }:
         base_handler = create_llm_call_handler(
             node_id=node_id,
             next_node=next_node,
@@ -963,6 +971,7 @@ def _create_visual_agent_effect_handler(
         max_iterations: Optional[int] = None,
         max_input_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        prompt_cache_binding: Any = None,
         extra_messages: Optional[list[Dict[str, Any]]] = None,
         include_session_attachments_index: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -1128,6 +1137,10 @@ def _create_visual_agent_effect_handler(
             # We keep the canonical ReAct system prompt (iteration framing + evidence/tool-use rules)
             # and append this extra guidance so tool-followthrough remains robust.
             runtime_ns["system_prompt_extra"] = system_prompt
+        if isinstance(prompt_cache_binding, dict) and prompt_cache_binding:
+            runtime_ns["prompt_cache_binding"] = dict(prompt_cache_binding)
+        elif isinstance(prompt_cache_binding, str) and prompt_cache_binding.strip():
+            runtime_ns["prompt_cache_binding"] = prompt_cache_binding.strip()
 
         return {
             "context": ctx_ns,
@@ -1392,6 +1405,18 @@ def _create_visual_agent_effect_handler(
         else:
             seed_raw = agent_config.get("seed", -1)
         seed = _coerce_seed(seed_raw, default=-1)
+
+        prompt_cache_binding: Any = None
+        if isinstance(resolved_inputs, dict) and "prompt_cache_binding" in resolved_inputs:
+            prompt_cache_binding = resolved_inputs.get("prompt_cache_binding")
+        elif isinstance(agent_config, dict) and "prompt_cache_binding" in agent_config:
+            prompt_cache_binding = agent_config.get("prompt_cache_binding")
+        if isinstance(prompt_cache_binding, dict):
+            prompt_cache_binding = dict(prompt_cache_binding) if prompt_cache_binding else None
+        elif isinstance(prompt_cache_binding, str):
+            prompt_cache_binding = prompt_cache_binding.strip() or None
+        else:
+            prompt_cache_binding = None
 
         # Tools selection:
         # - If the resolved inputs explicitly include `tools` (e.g. tools pin connected),
@@ -1719,6 +1744,7 @@ def _create_visual_agent_effect_handler(
                             max_iterations=max_iterations_override,
                             max_input_tokens=max_input_tokens_override,
                             max_output_tokens=max_output_tokens_override,
+                            prompt_cache_binding=prompt_cache_binding,
                             extra_messages=extra_messages or None,
                             include_session_attachments_index=use_session_attachments,
                         ),
@@ -1984,6 +2010,11 @@ def _create_visual_agent_effect_handler(
                         ),
                     }
                 ]
+                params: Dict[str, Any] = {"temperature": temperature, "seed": seed} if seed >= 0 else {"temperature": temperature}
+                if isinstance(prompt_cache_binding, dict) and prompt_cache_binding:
+                    params["prompt_cache_binding"] = dict(prompt_cache_binding)
+                elif isinstance(prompt_cache_binding, str) and prompt_cache_binding.strip():
+                    params["prompt_cache_binding"] = prompt_cache_binding.strip()
                 return StepPlan(
                     node_id=node_id,
                     effect=Effect(
@@ -1995,7 +2026,7 @@ def _create_visual_agent_effect_handler(
                             "model": model,
                             "response_schema": schema,
                             "response_schema_name": f"Agent_{node_id}",
-                            "params": {"temperature": temperature, "seed": seed} if seed >= 0 else {"temperature": temperature},
+                            "params": params,
                         },
                         result_key=f"_temp.agent.{node_id}.structured",
                     ),
@@ -2594,9 +2625,17 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 if (node_id, "ttft_ms") in referenced_source_pins:
                     current["ttft_ms"] = ttft_ms
                 mapped_value = response_text
-        elif effect_type in {"generate_image", "generate_voice"}:
+        elif effect_type in {"generate_image", "edit_image", "image_to_image", "generate_voice", "generate_music"}:
             if isinstance(raw, dict):
-                modality = "image" if effect_type == "generate_image" else "voice"
+                if effect_type in {"generate_image", "edit_image", "image_to_image"}:
+                    modality = "image"
+                    primary_artifact_key = "image_artifact"
+                elif effect_type == "generate_voice":
+                    modality = "voice"
+                    primary_artifact_key = "audio_artifact"
+                else:
+                    modality = "music"
+                    primary_artifact_key = "music_artifact"
                 outputs = raw.get("outputs")
                 current["outputs"] = outputs if isinstance(outputs, dict) else {}
                 resources = raw.get("resources")
@@ -2605,7 +2644,9 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 artifact_id, artifact_ref = _first_generated_artifact(raw)
                 if artifact_ref:
                     current["artifact_ref"] = artifact_ref
-                    current["image_artifact" if modality == "image" else "audio_artifact"] = artifact_ref
+                    current[primary_artifact_key] = artifact_ref
+                    if effect_type == "generate_music":
+                        current["audio_artifact"] = artifact_ref
                     ct = artifact_ref.get("content_type")
                     if isinstance(ct, str) and ct.strip():
                         current["content_type"] = ct.strip()

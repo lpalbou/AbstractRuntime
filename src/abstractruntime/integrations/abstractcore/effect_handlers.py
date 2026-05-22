@@ -29,6 +29,7 @@ from .llm_client import AbstractCoreLLMClient
 from .output_specs import (
     is_abstractcore_output_request,
     output_request_has_generated_media,
+    output_request_has_non_text_result,
     normalize_output_specs_for_runtime,
 )
 from .tool_executor import ToolExecutor
@@ -654,6 +655,19 @@ def _maybe_inject_prompt_cache_key(
     )
 
 
+def _normalize_explicit_prompt_cache_binding_without_deriving(params: Dict[str, Any]) -> None:
+    binding = _normalize_prompt_cache_binding_request(params)
+    if not isinstance(binding, dict):
+        return
+    binding_key = binding.get("key")
+    if isinstance(binding_key, str) and binding_key.strip():
+        binding_key_s = binding_key.strip()
+        current_key = params.get("prompt_cache_key")
+        if isinstance(current_key, str) and current_key.strip() and current_key.strip() != binding_key_s:
+            raise ValueError("prompt_cache_key and prompt_cache_binding.key must match.")
+        params["prompt_cache_key"] = binding_key_s
+
+
 def _resolve_llm_call_media(
     media: Any,
     *,
@@ -965,12 +979,15 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             params["_model"] = model.strip()
 
         default_provider, default_model = _llm_prompt_cache_identity(llm)
-        _maybe_inject_prompt_cache_key(
-            run=run,
-            params=params,
-            default_provider=default_provider,
-            default_model=default_model,
-        )
+        if output_request is not _MISSING and output_request_has_non_text_result(output_request):
+            _normalize_explicit_prompt_cache_binding_without_deriving(params)
+        else:
+            _maybe_inject_prompt_cache_key(
+                run=run,
+                params=params,
+                default_provider=default_provider,
+                default_model=default_model,
+            )
         if "output" in params:
             params["output"] = _augment_output_request_for_runtime(params.get("output"), run=run)
 
@@ -2975,6 +2992,51 @@ def _model_residency_not_found(payload: Dict[str, Any]) -> bool:
     return False
 
 
+def _model_residency_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "on", "loaded", "resident"}:
+            return True
+        if raw in {"0", "false", "no", "off", "not_loaded", "unloaded", "not_found"}:
+            return False
+    return None
+
+
+def _model_residency_load_verified(result: Dict[str, Any]) -> Optional[bool]:
+    runtime = result.get("runtime")
+    if isinstance(runtime, dict):
+        for key in ("loaded", "resident", "provider_resident"):
+            parsed = _model_residency_bool(runtime.get(key))
+            if parsed is not None:
+                return parsed
+        state = str(runtime.get("state") or runtime.get("provider_state") or "").strip().lower()
+        if state in {"loaded", "resident", "provider_loaded"}:
+            return True
+        if state in {"not_loaded", "provider_not_loaded", "provider_residency_unknown", "unloaded", "not_found"}:
+            return False
+
+    for key in ("loaded", "resident", "unloaded"):
+        parsed = _model_residency_bool(result.get(key))
+        if parsed is not None:
+            return (not parsed) if key == "unloaded" else parsed
+    return None
+
+
+def _append_model_residency_warning(result: Dict[str, Any], warning: str) -> None:
+    existing = result.get("warnings")
+    if isinstance(existing, list):
+        warnings = existing
+    else:
+        warnings = []
+        result["warnings"] = warnings
+    if warning not in [str(item) for item in warnings]:
+        warnings.append(warning)
+
+
 def _soft_model_residency_failure(*, operation: str, message: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "ok": False,
@@ -3073,6 +3135,19 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
                 result["models"] = result.get("data")
         elif operation == "load":
             result.setdefault("ok", True)
+            if result.get("ok") is not False:
+                loaded = _model_residency_load_verified(result)
+                if loaded is not True:
+                    warning = (
+                        "model_residency load did not verify loaded provider residency"
+                        if loaded is None
+                        else "model_residency load completed without a loaded model"
+                    )
+                    result["ok"] = False
+                    result.setdefault("error", warning)
+                    _append_model_residency_warning(result, warning)
+                    result.setdefault("status_hint", "warning")
+                    result.setdefault("degraded", True)
         elif operation == "unload":
             result.setdefault("unloaded", False)
             if result.get("ok") is False and _model_residency_not_found(result) and not required:

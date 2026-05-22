@@ -27,6 +27,8 @@ def _plan_for_node(node_type: str, effect_config: dict, input_data: dict | None 
         current_node="node",
         vars={"_temp": {}},
     )
+    if isinstance(input_data, dict):
+        run.vars["_last_output"] = dict(input_data)
     return spec.nodes["node"](run, input_data)
 
 
@@ -96,6 +98,53 @@ def test_generate_image_does_not_treat_runtime_provider_input_as_image_provider(
     assert output["model"] == "gpt-image-1-mini"
 
 
+def test_edit_image_node_compiles_to_llm_call_image_edit_selector() -> None:
+    plan = _plan_for_node(
+        "edit_image",
+        {
+            "prompt": "Make the jacket red.",
+            "image_artifact": {"$artifact": "source-img", "content_type": "image/png"},
+            "mask_artifact": "mask-img",
+            "image_provider": "openai-compatible",
+            "image_model": "gpt-image-1",
+            "format": "png",
+            "size": "1024x1024",
+            "strength": 0.65,
+        },
+    )
+
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.LLM_CALL
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    media = list(payload.get("media") or [])
+    assert payload["prompt"] == "Make the jacket red."
+    assert output["modality"] == "image"
+    assert output["task"] == "image_edit"
+    assert output["provider"] == "openai-compatible"
+    assert output["model"] == "gpt-image-1"
+    assert output["size"] == "1024x1024"
+    assert output["strength"] == 0.65
+    assert media[0]["$artifact"] == "source-img"
+    assert media[0]["type"] == "image"
+    assert media[0]["role"] == "source"
+    assert media[1]["$artifact"] == "mask-img"
+    assert media[1]["role"] == "mask"
+
+
+def test_image_to_image_alias_compiles_to_image_edit_selector() -> None:
+    plan = _plan_for_node(
+        "image_to_image",
+        {"prompt": "Add clouds.", "source_image": "img-1"},
+    )
+
+    assert plan.effect is not None
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert output["task"] == "image_edit"
+    assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
+
+
 def test_generate_voice_node_compiles_to_llm_call_tts_selector() -> None:
     plan = _plan_for_node(
         "generate_voice",
@@ -122,6 +171,98 @@ def test_generate_voice_node_compiles_to_llm_call_tts_selector() -> None:
     assert output["model"] == "en_US-lessac-medium.onnx"
     assert output["format"] == "wav"
     assert output["speed"] == 1.1
+
+
+def test_generate_music_node_compiles_to_llm_call_music_selector() -> None:
+    plan = _plan_for_node(
+        "generate_music",
+        {
+            "prompt": "Warm lo-fi piano with brushed drums.",
+            "music_provider": "acemusic",
+            "music_model": "ace-step",
+            "music_backend": "acemusic",
+            "format": "wav",
+            "duration_s": 12,
+            "seed": 7,
+            "num_inference_steps": 20,
+            "guidance_scale": 1.5,
+            "instrumental": True,
+            "lyrics": "no lyrics",
+            "vocal_language": "en",
+            "negative_prompt": "distortion",
+            "sample_rate": 44100,
+            "bpm": 92,
+            "keyscale": "C minor",
+            "timesignature": "4/4",
+            "composition_plan": {"sections": ["intro", "loop"]},
+            "positive_styles": ["lo-fi", "piano"],
+            "negative_styles": ["metal"],
+            "planning": False,
+        },
+    )
+
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.LLM_CALL
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert payload["prompt"] == "Warm lo-fi piano with brushed drums."
+    assert "provider" not in payload
+    assert "model" not in payload
+    assert output["modality"] == "music"
+    assert output["task"] == "music_generation"
+    assert output["format"] == "wav"
+    assert output["provider"] == "acemusic"
+    assert output["model"] == "ace-step"
+    assert output["backend"] == "acemusic"
+    assert output["duration_s"] == 12.0
+    assert output["seed"] == 7
+    assert output["num_inference_steps"] == 20
+    assert output["guidance_scale"] == 1.5
+    assert output["instrumental"] is True
+    assert output["lyrics"] == "no lyrics"
+    assert output["vocal_language"] == "en"
+    assert output["negative_prompt"] == "distortion"
+    assert output["sample_rate"] == 44100
+    assert output["bpm"] == 92.0
+    assert output["keyscale"] == "C minor"
+    assert output["timesignature"] == "4/4"
+    assert output["composition_plan"] == {"sections": ["intro", "loop"]}
+    assert output["positive_styles"] == ["lo-fi", "piano"]
+    assert output["negative_styles"] == ["metal"]
+    assert output["planning"] is False
+
+
+def test_generate_music_legacy_provider_model_are_not_media_fallbacks() -> None:
+    plan = _plan_for_node(
+        "generate_music",
+        {
+            "prompt": "a beat",
+            "provider": "acemusic",
+            "model": "ace-step",
+        },
+    )
+
+    assert plan.effect is not None
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert "provider" not in payload
+    assert "model" not in payload
+    assert "provider" not in output
+    assert "model" not in output
+
+
+def test_generate_music_does_not_treat_runtime_provider_input_as_music_provider() -> None:
+    plan = _plan_for_node(
+        "generate_music",
+        {"prompt": "a beat", "music_model": "ace-step"},
+        {"provider": "lmstudio", "model": "chat-model"},
+    )
+
+    assert plan.effect is not None
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert "provider" not in output
+    assert output["model"] == "ace-step"
 
 
 def test_transcribe_audio_node_compiles_to_llm_call_media_selector() -> None:

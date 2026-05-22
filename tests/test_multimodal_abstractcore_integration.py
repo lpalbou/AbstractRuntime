@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -441,6 +442,19 @@ class _RemoteImageSender:
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
         return {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-remote").decode("ascii")}]}
 
+    def post_multipart(self, url, *, headers, data, files, timeout):
+        self.calls.append(
+            {
+                "method": "MULTIPART",
+                "url": url,
+                "headers": headers,
+                "data": dict(data),
+                "files": {name: (value[0], value[1], value[2]) for name, value in files.items()},
+                "timeout": timeout,
+            }
+        )
+        return {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-edited").decode("ascii")}]}
+
 
 def test_remote_image_output_uses_abstractcore_server_endpoint_and_stores_artifact() -> None:
     store = InMemoryArtifactStore()
@@ -529,6 +543,61 @@ def test_remote_image_output_rejects_input_media_instead_of_ignoring_it(tmp_path
         client.generate(prompt="make it watercolor", media=[str(image_path)], params={"output": "image"})
 
     assert sender.calls == []
+
+
+def test_remote_image_edit_uses_abstractcore_images_edits_endpoint_and_stores_artifact(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    mask_path = tmp_path / "mask.png"
+    mask_path.write_bytes(b"png-mask")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="Make the jacket red.",
+        media=[
+            {"file_path": str(image_path), "type": "image", "role": "source"},
+            {"file_path": str(mask_path), "type": "image", "role": "mask"},
+        ],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_edit",
+                "provider": "openai-compatible",
+                "model": "gpt-image-1",
+                "format": "png",
+                "size": "1024x1024",
+                "quality": "low",
+                "extra": {"background": "auto"},
+            },
+            "base_url": "http://provider.test/v1",
+            "trace_metadata": {"run_id": "run-edit", "node_id": "n-edit"},
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["method"] == "MULTIPART"
+    assert call["url"] == "http://core.test/openai-compatible/v1/images/edits"
+    assert call["data"]["prompt"] == "Make the jacket red."
+    assert call["data"]["model"] == "gpt-image-1"
+    assert call["data"]["size"] == "1024x1024"
+    assert call["data"]["base_url"] == "http://provider.test/v1"
+    assert "provider" not in call["data"]
+    assert json.loads(call["data"]["extra_json"]) == {"background": "auto", "quality": "low"}
+    assert call["files"]["image"][1] == b"png-input"
+    assert call["files"]["mask"][1] == b"png-mask"
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edited"
+    assert artifact.metadata.run_id == "run-edit"
+    assert artifact.metadata.tags["node_id"] == "n-edit"
 
 
 def test_remote_generated_media_requires_artifact_store_before_provider_call() -> None:

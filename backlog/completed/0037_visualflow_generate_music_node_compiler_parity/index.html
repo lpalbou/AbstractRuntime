@@ -1074,7 +1074,7 @@
 <ul>
 <li>Added first-class VisualFlow lowering support for <code>nodeType="generate_music"</code> in Runtime:</li>
 <li>compiles into an <code>EffectType.LLM_CALL</code> pending effect with output selector <code>{modality: "music", task: "music_generation"}</code></li>
-<li>accepts <code>prompt</code>, <code>music_provider</code>, <code>music_model</code>, <code>music_backend</code>, <code>lyrics</code>, <code>duration_s</code>, <code>format</code>, <code>seed</code>, <code>num_inference_steps</code>, <code>guidance_scale</code>, <code>instrumental</code>, <code>enhance_prompt</code>, <code>auto_lyrics</code>, <code>structure_prompt</code>, <code>text_planner_mode</code>, and <code>extra</code> from pins or <code>effectConfig</code></li>
+<li>accepts <code>prompt</code>, <code>music_provider</code>, <code>music_model</code>, <code>lyrics</code>, <code>duration_s</code>, <code>format</code>, <code>seed</code>, <code>num_inference_steps</code>, <code>guidance_scale</code>, <code>instrumental</code>, <code>enhance_prompt</code>, <code>auto_lyrics</code>, <code>structure_prompt</code>, <code>text_planner_mode</code>, and <code>extra</code> from pins or <code>effectConfig</code> (<code>music_backend</code> is a legacy alias and is rejected; use <code>music_provider</code>)</li>
 <li>keeps runtime LLM <code>provider</code>/<code>model</code> separate from music provider/model selectors (no legacy fallback)</li>
 <li>Extended VisualFlow compiler routing so <code>generate_music</code> is treated as an LLM-call-backed effect node (like <code>generate_image</code> / <code>generate_voice</code> / <code>transcribe_audio</code>).</li>
 <li>Extended VisualFlow effect-result mapping so completed <code>generate_music</code> nodes populate:</li>

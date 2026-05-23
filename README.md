@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.21 • **Python:** 3.10+
+**Version:** 0.4.22 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.25 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, task-aware model residency for text/image/TTS/STT, the public local vision-cache catalog helper used by Runtime discovery, and the lightweight `abstractmusic>=0.1.8` ACE-remote path used by Runtime music generation are available. Use `abstractruntime[multimodal]` when you need common media, vision, voice, audio, or music dependencies.
+The `abstractcore` extra installs AbstractCore 2.13.27 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, task-aware model residency for text/image/TTS/STT, and the public local vision-cache catalog helper used by Runtime discovery remain aligned. Use `abstractruntime[multimodal]` when you need common media dependencies and capability plugins (installs `abstractcore[remote,vision,voice,audio,music]>=2.13.27`, including `abstractmusic>=0.1.12`).
 
 Hardware profile cascades are available for native Python installs:
 `abstractruntime[apple]`, `abstractruntime[gpu]`, `abstractruntime[all-apple]`,
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.21)
+## What’s included (v0.4.22)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)

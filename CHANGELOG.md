@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.22] - 2026-05-23
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.27` (and matching `multimodal`, `mcp-worker`, and hardware-profile cascade extras), aligning Runtime with the latest Core capability plugin floors and server contracts.
+
+### Fixed
+- Remote and VisualFlow music generation now fail closed on legacy `backend` / `music_backend` selectors and require `provider` / `music_provider` as the backend selector, matching AbstractCore Server `/v1/audio/music` validation.
+- VisualFlow `generate_music` lowering now preserves boolean `structure_prompt` values (including explicit `False`) in the pending output selector, keeping the Flow/Gateway/Core contract consistent.
+
 ## [0.4.21] - 2026-05-22
 
 ### Added
@@ -523,7 +532,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.21...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...HEAD
+[0.4.22]: https://github.com/lpalbou/abstractruntime/compare/v0.4.21...v0.4.22
 [0.4.21]: https://github.com/lpalbou/abstractruntime/compare/v0.4.20...v0.4.21
 [0.4.20]: https://github.com/lpalbou/abstractruntime/compare/v0.4.19...v0.4.20
 [0.4.19]: https://github.com/lpalbou/abstractruntime/compare/v0.4.18...v0.4.19

@@ -25,7 +25,7 @@ AbstractFlow now ships a `generate_music` authoring node. Runtime must recognize
 ## What shipped
 - Added first-class VisualFlow lowering support for `nodeType="generate_music"` in Runtime:
   - compiles into an `EffectType.LLM_CALL` pending effect with output selector `{modality: "music", task: "music_generation"}`
-  - accepts `prompt`, `music_provider`, `music_model`, `music_backend`, `lyrics`, `duration_s`, `format`, `seed`, `num_inference_steps`, `guidance_scale`, `instrumental`, `enhance_prompt`, `auto_lyrics`, `structure_prompt`, `text_planner_mode`, and `extra` from pins or `effectConfig`
+  - accepts `prompt`, `music_provider`, `music_model`, `lyrics`, `duration_s`, `format`, `seed`, `num_inference_steps`, `guidance_scale`, `instrumental`, `enhance_prompt`, `auto_lyrics`, `structure_prompt`, `text_planner_mode`, and `extra` from pins or `effectConfig` (`music_backend` is a legacy alias and is rejected; use `music_provider`)
   - keeps runtime LLM `provider`/`model` separate from music provider/model selectors (no legacy fallback)
 - Extended VisualFlow compiler routing so `generate_music` is treated as an LLM-call-backed effect node (like `generate_image` / `generate_voice` / `transcribe_audio`).
 - Extended VisualFlow effect-result mapping so completed `generate_music` nodes populate:

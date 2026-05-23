@@ -76,6 +76,17 @@ def _workflow_id_for_output(output: Any) -> str:
     return f"{_WORKFLOW_PREFIX}_{safe}"
 
 
+def _validate_music_output_spec(output: Any) -> None:
+    if not isinstance(output, dict):
+        return
+    legacy_backend = str(output.get("backend") or output.get("music_backend") or "").strip()
+    if legacy_backend:
+        raise ValueError(
+            "Music output uses `provider` as the backend selector; "
+            "`backend` and `music_backend` are not supported."
+        )
+
+
 def _workflow_id_for_tool_calls(tool_calls: list[Dict[str, Any]]) -> str:
     suffix = "tool_calls"
     if isinstance(tool_calls, list) and tool_calls:
@@ -410,6 +421,7 @@ class AbstractCoreRunFacade:
 
         spec = {"modality": "music", "task": "music_generation"}
         if isinstance(output, dict):
+            _validate_music_output_spec(output)
             spec.update(copy.deepcopy(output))
         return self.execute_llm_call(
             run_id,

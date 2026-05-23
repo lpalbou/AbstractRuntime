@@ -1823,7 +1823,6 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             for key in (
                 "lyrics",
-                "structure_prompt",
                 "text_planner_mode",
                 "vocal_language",
                 "negative_prompt",
@@ -1858,7 +1857,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if guidance is not None:
                 output_spec["guidance_scale"] = guidance
 
-            for key in ("instrumental", "enhance_prompt", "auto_lyrics", "planning"):
+            for key in ("instrumental", "enhance_prompt", "structure_prompt", "auto_lyrics", "planning"):
                 raw_value = _input_or_config(payload, config, key, default=None)
                 if raw_value is not None:
                     output_spec[key] = _coerce_bool(raw_value)
@@ -1869,15 +1868,18 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             music_model = _nonempty_str(
                 _input_or_config(payload, config, "music_model", "musicModel", "model_music")
             )
-            music_backend = _nonempty_str(
+            legacy_music_backend = _nonempty_str(
                 _input_or_config(payload, config, "music_backend", "musicBackend", "backend_music")
             )
             if music_provider:
                 output_spec["provider"] = music_provider
             if music_model:
                 output_spec["model"] = music_model
-            if music_backend:
-                output_spec["backend"] = music_backend
+            if legacy_music_backend:
+                raise ValueError(
+                    "generate_music uses `music_provider` as the backend selector; "
+                    "`music_backend` is not supported."
+                )
 
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:

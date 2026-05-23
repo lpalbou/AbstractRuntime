@@ -737,6 +737,25 @@ def test_remote_music_output_uses_music_endpoint_and_stores_artifact() -> None:
     assert out["media_model"] == "ace-step"
 
 
+def test_remote_music_output_rejects_legacy_backend_fields() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteMusicSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    with pytest.raises(ValueError, match="provider.*backend selector"):
+        client.generate(
+            prompt="Warm lo-fi piano with brushed drums.",
+            params={"output": {"modality": "music", "backend": "acemusic", "format": "wav"}},
+        )
+
+    assert sender.calls == []
+
+
 def test_remote_voice_output_uses_speech_endpoint_and_stores_artifact() -> None:
     store = InMemoryArtifactStore()
     sender = _RemoteTtsSender()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from abstractruntime.core.models import EffectType, RunState, RunStatus
 from abstractruntime.visualflow_compiler import compile_visualflow
 
@@ -180,13 +182,13 @@ def test_generate_music_node_compiles_to_llm_call_music_selector() -> None:
             "prompt": "Warm lo-fi piano with brushed drums.",
             "music_provider": "acemusic",
             "music_model": "ace-step",
-            "music_backend": "acemusic",
             "format": "wav",
             "duration_s": 12,
             "seed": 7,
             "num_inference_steps": 20,
             "guidance_scale": 1.5,
             "instrumental": True,
+            "structure_prompt": True,
             "lyrics": "no lyrics",
             "vocal_language": "en",
             "negative_prompt": "distortion",
@@ -213,12 +215,12 @@ def test_generate_music_node_compiles_to_llm_call_music_selector() -> None:
     assert output["format"] == "wav"
     assert output["provider"] == "acemusic"
     assert output["model"] == "ace-step"
-    assert output["backend"] == "acemusic"
     assert output["duration_s"] == 12.0
     assert output["seed"] == 7
     assert output["num_inference_steps"] == 20
     assert output["guidance_scale"] == 1.5
     assert output["instrumental"] is True
+    assert output["structure_prompt"] is True
     assert output["lyrics"] == "no lyrics"
     assert output["vocal_language"] == "en"
     assert output["negative_prompt"] == "distortion"
@@ -230,6 +232,29 @@ def test_generate_music_node_compiles_to_llm_call_music_selector() -> None:
     assert output["positive_styles"] == ["lo-fi", "piano"]
     assert output["negative_styles"] == ["metal"]
     assert output["planning"] is False
+
+
+def test_generate_music_node_rejects_legacy_music_backend_field() -> None:
+    with pytest.raises(ValueError, match="music_provider"):
+        _plan_for_node(
+            "generate_music",
+            {
+                "prompt": "Warm lo-fi piano with brushed drums.",
+                "music_backend": "acemusic",
+            },
+        )
+
+
+def test_generate_music_node_preserves_false_structure_prompt_bool() -> None:
+    plan = _plan_for_node(
+        "generate_music",
+        {"prompt": "a beat", "structure_prompt": True},
+        {"structure_prompt": False},
+    )
+
+    assert plan.effect is not None
+    output = dict((plan.effect.payload or {}).get("output") or {})
+    assert output["structure_prompt"] is False
 
 
 def test_generate_music_legacy_provider_model_are_not_media_fallbacks() -> None:

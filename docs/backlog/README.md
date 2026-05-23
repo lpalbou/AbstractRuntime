@@ -14,7 +14,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 - Planned: 5
 - Proposed: 3
-- Completed: 28
+- Completed: 29
 - Deprecated: 13
 - Recurrent: 0
 
@@ -68,6 +68,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0033 | `completed/0033_runtime_host_local_prompt_cache_export_import_surface.md` |
 | 0035 | `completed/0035_model_residency_provider_truth_for_local_http_clients.md` |
 | 0037 | `completed/0037_visualflow_generate_music_node_compiler_parity.md` |
+| 0039 | `completed/0039_runtime_music_structure_prompt_bool_contract.md` |
 
 ## Planned
 

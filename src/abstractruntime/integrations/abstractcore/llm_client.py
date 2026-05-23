@@ -7692,12 +7692,17 @@ class RemoteAbstractCoreLLMClient:
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
         fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
+        legacy_backend = str(spec.get("backend") or spec.get("music_backend") or "").strip()
+        if legacy_backend:
+            raise ValueError(
+                "Music output routing uses `provider` as the backend selector; "
+                "`backend` and `music_backend` are not supported."
+            )
         body: Dict[str, Any] = {
             "prompt": str(prompt or ""),
             "task": str(spec.get("task") or "music_generation"),
             "format": fmt,
         }
-        route_selector = str(spec.get("backend") or spec.get("music_backend") or "").strip().lower().replace("_", "-")
         for key, value in spec.items():
             if key in {
                 "modality",
@@ -7722,15 +7727,10 @@ class RemoteAbstractCoreLLMClient:
         if isinstance(base_url, str) and base_url.strip():
             body["base_url"] = base_url.strip()
 
-        if route_selector:
-            url = _join_core_provider_v1_url(self._server_base_url, route_selector, "/audio/music")
-        else:
-            url = _join_core_v1_url(self._server_base_url, "/audio/music")
+        url = _join_core_v1_url(self._server_base_url, "/audio/music")
         audio_bytes, resp_headers = self._post_bytes(url, headers=headers, json_body=body)
         content_type = str(resp_headers.get("content-type") or f"audio/{fmt}").split(";", 1)[0].strip() or f"audio/{fmt}"
-        media_provider = (
-            str(body.get("provider") or route_selector or "abstractcore-server").strip() or "abstractcore-server"
-        )
+        media_provider = str(body.get("provider") or "abstractcore-server").strip() or "abstractcore-server"
         run_id, tags = self._trace_run_id_and_tags(
             params,
             task="music_generation",

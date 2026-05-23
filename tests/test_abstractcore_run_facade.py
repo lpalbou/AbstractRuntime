@@ -285,7 +285,7 @@ def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backe
     parent_run_id = runtime.start(
         workflow=parent,
         session_id="sess-music",
-        vars={"_runtime": {"music_backend": "acemusic"}},
+        vars={"_runtime": {"prompt_cache": {"enabled": True}}},
     )
     runtime.tick(workflow=parent, run_id=parent_run_id)
 
@@ -315,6 +315,23 @@ def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backe
     assert artifact.content == b"wav-child"
     assert artifact.metadata.run_id == child.run_id
     assert artifact.metadata.tags["kind"] == "generated_media"
+
+
+def test_run_facade_generate_music_rejects_legacy_backend_fields() -> None:
+    class _StubRuntime:
+        def start(self, **kwargs):
+            raise AssertionError("legacy music backend fields should be rejected before runtime start")
+
+        def tick(self, **kwargs):
+            raise AssertionError("legacy music backend fields should be rejected before runtime tick")
+
+        def get_state(self, run_id: str):
+            raise AssertionError(f"unexpected get_state({run_id})")
+
+    facade = AbstractCoreRunFacade(_StubRuntime())
+
+    with pytest.raises(ValueError, match="provider.*backend selector"):
+        facade.generate_music("run-1", prompt="Warm lo-fi piano.", output={"backend": "acemusic"})
 
 
 def test_run_facade_send_telegram_message_creates_durable_child_tool_run() -> None:

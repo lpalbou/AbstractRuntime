@@ -572,7 +572,6 @@ def _runtime_capability_owner_config(
         "ABSTRACTVISION_MFLUX_MODEL": "vision_mflux_model",
         "ABSTRACTVISION_MFLUX_BASE_MODEL": "vision_mflux_base_model",
         "ABSTRACTVISION_MODEL_DIR": "vision_model_dir",
-        "ABSTRACTVISION_MFLUX_QUANTIZE": "vision_mflux_quantize",
         "ABSTRACTVISION_MFLUX_ALLOW_DOWNLOAD": "vision_mflux_allow_download",
         "ABSTRACTVISION_DIFFUSERS_DEVICE": "vision_device",
         "ABSTRACTVISION_DIFFUSERS_TORCH_DTYPE": "vision_torch_dtype",

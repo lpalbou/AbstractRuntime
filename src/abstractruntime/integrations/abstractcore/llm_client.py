@@ -2149,6 +2149,14 @@ def _normalize_residency_task(task: Any) -> str:
         "image_to_image": "image_generation",
         "image_edit": "image_generation",
         "edit_image": "image_generation",
+        "video": "video_generation",
+        "videos": "video_generation",
+        "video_generation": "video_generation",
+        "t2v": "text_to_video",
+        "text_to_video": "text_to_video",
+        "i2v": "image_to_video",
+        "image_to_video": "image_to_video",
+        "video_from_image": "image_to_video",
         "voice": "tts",
         "speech": "tts",
         "audio_speech": "tts",
@@ -2179,7 +2187,15 @@ def _residency_task_filter(task: Any) -> Optional[str]:
     return task_s
 
 
-_LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = ("image_generation", "tts", "stt", "music_generation")
+_LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = (
+    "image_generation",
+    "video_generation",
+    "text_to_video",
+    "image_to_video",
+    "tts",
+    "stt",
+    "music_generation",
+)
 
 
 def _model_residency_unsupported_payload(
@@ -2207,7 +2223,7 @@ def _model_residency_unsupported_payload(
         "diagnostics": {"source": "abstractruntime"},
         "affected_models": [],
     }
-    if task_s == "image_generation":
+    if task_s in {"image_generation", "video_generation", "text_to_video", "image_to_video"}:
         payload["execution_mode"] = "local_one_shot_subprocess"
         payload["local_media_residency_backend"] = "none"
         payload["requires_long_lived_core_backend"] = True
@@ -2262,6 +2278,34 @@ def _local_model_residency_capabilities(*, mode: str, source: str, text_loads_ot
         ),
         "image_generation": _model_residency_capability_task(
             task="image_generation",
+            supported=True,
+            truth_source="abstractcore.capability_plugin",
+            extra={
+                "local_media_residency_backend": "capability_plugin",
+                "requires_installed_capability_plugin": True,
+            },
+        ),
+        "text_to_video": _model_residency_capability_task(
+            task="text_to_video",
+            supported=True,
+            truth_source="abstractcore.capability_plugin",
+            extra={
+                "local_media_residency_backend": "capability_plugin",
+                "requires_installed_capability_plugin": True,
+            },
+        ),
+        "video_generation": _model_residency_capability_task(
+            task="video_generation",
+            supported=True,
+            truth_source="abstractcore.capability_plugin",
+            extra={
+                "local_media_residency_backend": "capability_plugin",
+                "requires_installed_capability_plugin": True,
+                "includes_tasks": ["text_to_video", "image_to_video"],
+            },
+        ),
+        "image_to_video": _model_residency_capability_task(
+            task="image_to_video",
             supported=True,
             truth_source="abstractcore.capability_plugin",
             extra={
@@ -3305,6 +3349,8 @@ def _normalize_generated_item(
     if not isinstance(content_type, str) or not content_type.strip():
         if modality == "image":
             content_type = f"image/{str(fmt or 'png').strip().lower() or 'png'}"
+        elif modality == "video":
+            content_type = f"video/{str(fmt or 'mp4').strip().lower() or 'mp4'}"
         elif modality in {"voice", "audio", "music"}:
             content_type = f"audio/{str(fmt or 'wav').strip().lower() or 'wav'}"
         else:
@@ -7039,6 +7085,22 @@ class RemoteAbstractCoreLLMClient:
                 supported=True,
                 truth_source="abstractcore.server./acore/models",
             ),
+            "text_to_video": _model_residency_capability_task(
+                task="text_to_video",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
+            "video_generation": _model_residency_capability_task(
+                task="video_generation",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+                extra={"includes_tasks": ["text_to_video", "image_to_video"]},
+            ),
+            "image_to_video": _model_residency_capability_task(
+                task="image_to_video",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+            ),
             "tts": _model_residency_capability_task(
                 task="tts",
                 supported=True,
@@ -8492,7 +8554,14 @@ class RemoteAbstractCoreLLMClient:
                 derived = f"{int(width)}x{int(height)}" if isinstance(width, int) and isinstance(height, int) else ""
                 body["size"] = derived if derived in allowed_sizes else "auto"
             body.pop("response_format", None)
-            for local_only_key in ("width", "height", "seed", "steps", "guidance_scale", "negative_prompt"):
+            for local_only_key in (
+                "width",
+                "height",
+                "seed",
+                "steps",
+                "guidance_scale",
+                "negative_prompt",
+            ):
                 body.pop(local_only_key, None)
         base_url = params.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
@@ -8659,6 +8728,252 @@ class RemoteAbstractCoreLLMClient:
         )
         return _normalize_multimodal_response(
             {"outputs": {"image": outputs}, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
+    def _remote_video_generation(
+        self,
+        *,
+        spec: Dict[str, Any],
+        prompt: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        body: Dict[str, Any] = {"prompt": prompt}
+        if endpoint_provider:
+            body["provider"] = endpoint_provider
+        if endpoint_model:
+            body["model"] = endpoint_model
+        for key in ("n", "width", "height", "fps", "seed", "steps", "guidance_scale", "negative_prompt", "extra"):
+            if key in spec and spec.get(key) is not None:
+                body[key] = spec.get(key)
+        num_frames = spec.get("num_frames")
+        if num_frames is None:
+            num_frames = spec.get("frames")
+        if num_frames is not None:
+            body["num_frames"] = num_frames
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            body["base_url"] = base_url.strip()
+
+        progress_callback = params.get("on_progress")
+        if callable(progress_callback):
+            url = _join_core_v1_url(self._server_base_url, "/vision/jobs/videos/generations")
+            raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+            start_resp, _resp_headers = _unwrap_http_response(raw)
+            job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
+            if not job_id:
+                raise ValueError("Remote video generation job did not return job_id.")
+            resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
+        else:
+            url = _join_core_v1_url(self._server_base_url, "/videos/generations")
+            raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+            resp, _resp_headers = _unwrap_http_response(raw)
+
+        data_items = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data_items, list) or not data_items:
+            raise ValueError("Remote video generation returned no data items.")
+
+        fmt = str(spec.get("format") or spec.get("output_format") or "mp4").strip().lower() or "mp4"
+        content_type = f"video/{fmt}"
+        outputs: List[Dict[str, Any]] = []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            raw_b64 = item.get("b64_json") or item.get("video") or item.get("data")
+            if not isinstance(raw_b64, str) or not raw_b64.strip():
+                continue
+            video_bytes = base64.b64decode("".join(raw_b64.strip().split()), validate=True)
+            outputs.append(
+                {
+                    "modality": "video",
+                    "task": "text_to_video",
+                    "data": video_bytes,
+                    "content_type": content_type,
+                    "format": fmt,
+                    "provider": endpoint_provider or "abstractcore-server",
+                    "model": str(body.get("model") or "") or None,
+                    "metadata": {"_provider_request": {"url": url, "payload": body}},
+                }
+            )
+        if not outputs:
+            raise ValueError("Remote video generation response did not contain b64_json data.")
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="text_to_video",
+            modality="video",
+            model=str(body.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {"outputs": {"video": outputs}, "metadata": {"model": body.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+        )
+
+    def _poll_remote_vision_job(
+        self,
+        *,
+        job_id: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        callback = params.get("on_progress")
+        poll_interval_s = params.get("progress_poll_interval_s")
+        if poll_interval_s is None:
+            poll_interval_s = params.get("poll_interval_s")
+        try:
+            interval = float(poll_interval_s) if poll_interval_s is not None else 1.0
+        except Exception:
+            interval = 1.0
+        interval = max(0.05, min(interval, 10.0))
+        deadline = time.time() + max(1.0, float(self._timeout_s or 1.0))
+        last_progress_key = ""
+        while True:
+            url = f"{_join_core_v1_url(self._server_base_url, f'/vision/jobs/{quote(job_id)}')}?consume=true"
+            raw = self._sender.get(url, headers=headers, timeout=self._timeout_s)
+            job, _resp_headers = _unwrap_http_response(raw)
+            if not isinstance(job, dict):
+                raise ValueError("Remote vision job poll returned a non-object response.")
+            progress = job.get("progress")
+            if callable(callback) and isinstance(progress, dict):
+                progress_payload = dict(progress)
+                progress_payload.setdefault("job_id", job_id)
+                try:
+                    progress_key = json.dumps(progress_payload, sort_keys=True, default=str)
+                except Exception:
+                    progress_key = str(progress_payload)
+                if progress_key != last_progress_key:
+                    callback(progress_payload)
+                    last_progress_key = progress_key
+            state = str(job.get("state") or "").strip().lower()
+            if state == "succeeded":
+                result = job.get("result")
+                if not isinstance(result, dict):
+                    raise ValueError("Remote vision job succeeded without a result object.")
+                return result
+            if state == "failed":
+                raise ValueError(str(job.get("error") or "Remote vision job failed."))
+            if time.time() >= deadline:
+                raise TimeoutError(f"Timed out waiting for remote vision job {job_id}.")
+            time.sleep(interval)
+
+    def _remote_image_to_video(
+        self,
+        *,
+        spec: Dict[str, Any],
+        prompt: str,
+        media: Optional[List[Any]],
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        image_item: Any = None
+        for item in list(media or []):
+            if _is_image_media_item(item):
+                if image_item is not None:
+                    raise ValueError("Remote image-to-video requires exactly one source image media item.")
+                image_item = item
+        if image_item is None:
+            raise ValueError("Remote image-to-video requires exactly one source image media item.")
+
+        path = _media_path_from_item(image_item)
+        if not path:
+            raise ValueError("Remote image-to-video media must resolve to a local file path.")
+        if path.lower().startswith("data:") or path.startswith(("http://", "https://")):
+            raise ValueError("Remote image-to-video media must be a local file path or artifact-backed file.")
+        filename = os.path.basename(path) or "image.bin"
+        mime = _media_mime_from_item(image_item) or _mime_type_for_path(path)
+        with open(path, "rb") as f:
+            file_bytes = f.read()
+
+        endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        data: Dict[str, Any] = {"prompt": prompt}
+        if endpoint_model:
+            data["model"] = endpoint_model
+        if endpoint_provider:
+            data["provider"] = endpoint_provider
+        for key in ("width", "height", "fps", "seed", "steps", "guidance_scale", "negative_prompt"):
+            if key in spec and spec.get(key) is not None:
+                data[key] = spec.get(key)
+        num_frames = spec.get("num_frames")
+        if num_frames is None:
+            num_frames = spec.get("frames")
+        if num_frames is not None:
+            data["num_frames"] = num_frames
+        extra = dict(spec.get("extra")) if isinstance(spec.get("extra"), dict) else {}
+        if extra:
+            data["extra_json"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            data["base_url"] = base_url.strip()
+
+        progress_callback = params.get("on_progress")
+        if callable(progress_callback):
+            url = _join_core_v1_url(self._server_base_url, "/vision/jobs/videos/edits")
+            start_resp, _resp_headers = self._post_multipart_files(
+                url,
+                headers=headers,
+                data=data,
+                files={"image": (filename, file_bytes, mime)},
+            )
+            job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
+            if not job_id:
+                raise ValueError("Remote image-to-video job did not return job_id.")
+            resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
+        else:
+            if endpoint_provider:
+                data.pop("provider", None)
+                url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/videos/edits")
+            else:
+                url = _join_core_v1_url(self._server_base_url, "/videos/edits")
+            resp, _resp_headers = self._post_multipart_files(
+                url,
+                headers=headers,
+                data=data,
+                files={"image": (filename, file_bytes, mime)},
+            )
+
+        data_items = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data_items, list) or not data_items:
+            raise ValueError("Remote image-to-video returned no data items.")
+
+        fmt = str(spec.get("format") or spec.get("output_format") or "mp4").strip().lower() or "mp4"
+        content_type = f"video/{fmt}"
+        outputs: List[Dict[str, Any]] = []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            raw_b64 = item.get("b64_json") or item.get("video") or item.get("data")
+            if not isinstance(raw_b64, str) or not raw_b64.strip():
+                continue
+            video_bytes = base64.b64decode("".join(raw_b64.strip().split()), validate=True)
+            outputs.append(
+                {
+                    "modality": "video",
+                    "task": "image_to_video",
+                    "data": video_bytes,
+                    "content_type": content_type,
+                    "format": fmt,
+                    "provider": endpoint_provider or "abstractcore-server",
+                    "model": str(data.get("model") or "") or None,
+                    "metadata": {"_provider_request": {"url": url, "payload": data}},
+                }
+            )
+        if not outputs:
+            raise ValueError("Remote image-to-video response did not contain b64_json data.")
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="image_to_video",
+            modality="video",
+            model=str(data.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {"outputs": {"video": outputs}, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
@@ -8898,6 +9213,23 @@ class RemoteAbstractCoreLLMClient:
             if not text:
                 raise ValueError("Remote image generation requires prompt or text.")
             return self._remote_image_generation(spec=spec, prompt=text, headers=headers, params=params)
+
+        if modality == "video":
+            image_to_video_tasks = {"image_to_video", "i2v", "video_from_image", "video_edit"}
+            text_to_video_tasks = {"", "video_generation", "text_to_video", "t2v"}
+            if task in image_to_video_tasks:
+                if not text:
+                    raise ValueError("Remote image-to-video requires prompt or text.")
+                return self._remote_image_to_video(spec=spec, prompt=text, media=media, headers=headers, params=params)
+            if task not in text_to_video_tasks:
+                raise ValueError(f"Unsupported remote video task: {task!r}")
+            if media:
+                raise ValueError(
+                    "Remote text-to-video does not accept input media; use task='image_to_video' for image-to-video."
+                )
+            if not text:
+                raise ValueError("Remote text-to-video requires prompt or text.")
+            return self._remote_video_generation(spec=spec, prompt=text, headers=headers, params=params)
 
         if modality == "voice":
             if task in {"voice_clone", "clone"}:

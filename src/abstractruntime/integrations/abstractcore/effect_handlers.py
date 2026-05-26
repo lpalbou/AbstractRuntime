@@ -143,6 +143,19 @@ def _jsonable(value: Any) -> Any:
         return str(value)
 
 
+def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Return params safe for persisted runtime observability traces."""
+
+    callback_keys = {"on_progress", "progress_callback", "progress_event_callback"}
+    out: Dict[str, Any] = {}
+    for key, value in dict(params or {}).items():
+        key_s = str(key)
+        if key_s in callback_keys or callable(value):
+            continue
+        out[key_s] = value
+    return out
+
+
 _MISSING = object()
 
 
@@ -1328,7 +1341,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         "system_prompt": system_prompt,
                         "media": media_for_call,
                         "tools": tools,
-                        "params": params_for_call,
+                        "params": _observability_params(params_for_call),
                         "structured_output_fallback": fallback_enabled,
                     }
                 ),
@@ -1560,7 +1573,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                             "system_prompt": system_prompt,
                             "media": media_for_call,
                             "tools": tools,
-                            "params": params_attempt,
+                            "params": _observability_params(params_attempt),
                             "structured_output_fallback": fallback_enabled,
                             "truncation_attempts": truncation_attempts,
                         }

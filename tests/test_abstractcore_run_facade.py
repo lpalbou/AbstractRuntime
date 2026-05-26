@@ -204,6 +204,143 @@ def test_run_facade_edit_image_creates_durable_child_run_with_media() -> None:
     assert artifact.metadata.run_id == child.run_id
 
 
+def test_run_facade_generate_video_creates_durable_child_run_with_progress() -> None:
+    store = InMemoryArtifactStore()
+    ledger = InMemoryLedgerStore()
+    seen: Dict[str, Any] = {}
+
+    class _VideoProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            callback = kwargs.get("on_progress")
+            assert callable(callback)
+            callback({"phase": "frames", "frame": 2, "total_frames": 4, "progress": 0.5})
+            return MultimodalGenerateResponse(
+                outputs={
+                    "video": [
+                        GeneratedItem(
+                            modality="video",
+                            task="text_to_video",
+                            data=b"mp4-child",
+                            content_type="video/mp4",
+                            format="mp4",
+                            provider="mlx-gen",
+                            model="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _VideoProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=ledger,
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-video")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.generate_video(
+        parent_run_id,
+        prompt="A logo reveal.",
+        output={
+            "provider": "mlx-gen",
+            "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+            "format": "mp4",
+            "num_frames": 4,
+        },
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert seen["output"]["modality"] == "video"
+    assert seen["output"]["task"] == "text_to_video"
+    assert seen["output"]["provider"] == "mlx-gen"
+    result = child.output["result"]
+    item = result["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-child"
+    progress = [
+        r for r in ledger.list(child.run_id)
+        if ((r.get("effect") or {}).get("payload") or {}).get("name") == "abstract.progress"
+    ]
+    assert progress
+
+
+def test_run_facade_image_to_video_creates_durable_child_run_with_media() -> None:
+    store = InMemoryArtifactStore()
+    source = store.store(b"png-source", content_type="image/png", tags={"filename": "source.png"})
+    seen: Dict[str, Any] = {}
+
+    class _ImageToVideoProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                outputs={
+                    "video": [
+                        GeneratedItem(
+                            modality="video",
+                            task="image_to_video",
+                            data=b"mp4-i2v",
+                            content_type="video/mp4",
+                            format="mp4",
+                            provider="mlx-gen",
+                            model="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _ImageToVideoProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-i2v")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.image_to_video(
+        parent_run_id,
+        prompt="Add a slow camera orbit.",
+        media={"$artifact": source.artifact_id, "filename": "source.png"},
+        output={"provider": "mlx-gen", "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers", "format": "mp4"},
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert seen["output"]["task"] == "image_to_video"
+    assert seen["media"][0]["artifact_id"] == source.artifact_id
+    item = child.output["result"]["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-i2v"
+    assert artifact.metadata.run_id == child.run_id
+
+
 def test_run_facade_transcribe_audio_inherits_runtime_media_defaults() -> None:
     store = InMemoryArtifactStore()
     meta = store.store(b"fake-wav", content_type="audio/wav", tags={"filename": "speech.wav"})

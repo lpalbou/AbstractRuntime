@@ -872,6 +872,9 @@ def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> No
     assert local_caps["tasks"]["text_generation"]["truth_source"] == "abstractcore.provider.get_model_residency"
     assert local_caps["tasks"]["image_generation"]["supported"] is True
     assert local_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.capability_plugin"
+    assert local_caps["tasks"]["video_generation"]["supported"] is True
+    assert local_caps["tasks"]["text_to_video"]["supported"] is True
+    assert local_caps["tasks"]["image_to_video"]["supported"] is True
     assert local_caps["tasks"]["tts"]["supported"] is True
     assert local_caps["tasks"]["stt"]["supported"] is True
     assert local_caps["tasks"]["music_generation"]["supported"] is True
@@ -879,6 +882,9 @@ def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> No
     assert multi_caps["tasks"]["tts"]["local_media_residency_backend"] == "capability_plugin"
     assert remote_caps["relay_only"] is True
     assert remote_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.server./acore/models"
+    assert remote_caps["tasks"]["video_generation"]["truth_source"] == "abstractcore.server./acore/models"
+    assert remote_caps["tasks"]["text_to_video"]["supported"] is True
+    assert remote_caps["tasks"]["image_to_video"]["supported"] is True
     assert remote_caps["tasks"]["music_generation"]["supported"] is False
 
 

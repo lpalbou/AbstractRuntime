@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
 > Updated: 2026-05-23
-> Version: 0.4.23
+> Version: 0.4.24
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -28,7 +28,7 @@ Key invariants (enforced by code, not convention):
 
 ## AbstractCore capability boundary
 
-AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, voice/audio generation, music generation, transcription, and future modalities such as video.
+AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, video generation, voice/audio generation, music generation, and transcription.
 
 The boundary is intentionally narrow:
 - Workflow nodes request model work with `EffectType.LLM_CALL`; the runtime persists the request/result and delegates execution to the configured AbstractCore client.
@@ -169,7 +169,7 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
-- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control, discovery/catalog snapshots, model residency, durable run-scoped media child runs, media inputs, generated media outputs, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control, discovery/catalog snapshots, model residency, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
 ### Reliability: retries + idempotency

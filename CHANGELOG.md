@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.24] - 2026-05-26
+
+### Added
+- Runtime now surfaces AbstractCore/AbstractVision video generation through the existing generated-media boundary:
+  - `LLM_CALL` output selectors for `{"modality":"video","task":"text_to_video"}` and `{"modality":"video","task":"image_to_video"}`
+  - remote Core Server routing for `/v1/videos/generations` and `/v1/videos/edits`
+  - durable run-facade helpers `generate_video(...)` and `image_to_video(...)`
+  - VisualFlow node lowering for `generate_video` / `text_to_video` and `image_to_video`
+- Provider progress callbacks are converted into JSON-safe `abstract.progress` ledger events during `LLM_CALL` execution without persisting Python callback objects.
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.29` (and matching `multimodal`, `mcp-worker`, and hardware-profile cascade extras), aligning Runtime with Core video endpoints, video residency tasks, and AbstractVision 0.3.16 progress-capable generation.
+- Runtime docs and AI-readable `llms.txt` / `llms-full.txt` now document text-to-video, image-to-video, and generated-media progress events.
+
 ## [0.4.23] - 2026-05-26
 
 ### Added
@@ -544,7 +558,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.24...HEAD
+[0.4.24]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...v0.4.24
 [0.4.23]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...v0.4.23
 [0.4.22]: https://github.com/lpalbou/abstractruntime/compare/v0.4.21...v0.4.22
 [0.4.21]: https://github.com/lpalbou/abstractruntime/compare/v0.4.20...v0.4.21

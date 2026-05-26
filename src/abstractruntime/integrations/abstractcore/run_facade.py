@@ -6,7 +6,7 @@ Runtime ledger instead of executing in host route/controller code.
 Current focus:
 - durable run-scoped `LLM_CALL` child runs
 - durable run-scoped `TOOL_CALLS` child runs
-- convenience wrappers for image generation, music generation, TTS, and STT/transcription
+- convenience wrappers for image/video generation, music generation, TTS, and STT/transcription
 - convenience wrappers for durable outbound comms sends
 """
 
@@ -373,6 +373,52 @@ class AbstractCoreRunFacade:
         """Create a durable child run for image-to-image editing."""
 
         spec = {"modality": "image", "task": "image_edit"}
+        if isinstance(output, dict):
+            spec.update(copy.deepcopy(output))
+        return self.execute_llm_call(
+            run_id,
+            prompt=prompt,
+            media=media,
+            output=spec,
+            params=params,
+            child_vars=child_vars,
+        )
+
+    def generate_video(
+        self,
+        run_id: str,
+        *,
+        prompt: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ) -> RunState:
+        """Create a durable child run for text-to-video generation."""
+
+        spec = {"modality": "video", "task": "text_to_video"}
+        if isinstance(output, dict):
+            spec.update(copy.deepcopy(output))
+        return self.execute_llm_call(
+            run_id,
+            prompt=prompt,
+            output=spec,
+            params=params,
+            child_vars=child_vars,
+        )
+
+    def image_to_video(
+        self,
+        run_id: str,
+        *,
+        prompt: str,
+        media: Any,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ) -> RunState:
+        """Create a durable child run for image-to-video generation."""
+
+        spec = {"modality": "video", "task": "image_to_video"}
         if isinstance(output, dict):
             spec.update(copy.deepcopy(output))
         return self.execute_llm_call(

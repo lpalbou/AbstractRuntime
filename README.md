@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.23 • **Python:** 3.10+
+**Version:** 0.4.24 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -38,7 +38,7 @@ AbstractCore integration (LLM + tools):
 pip install "abstractruntime[abstractcore]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.28 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, task-aware model residency for text/image/TTS/STT, and the public local vision-cache catalog helper used by Runtime discovery remain aligned. Use `abstractruntime[multimodal]` when you need common media dependencies and capability plugins (installs `abstractcore[remote,vision,voice,audio,music]>=2.13.28`, including `abstractmusic>=0.1.12`).
+The `abstractcore` extra installs AbstractCore 2.13.29 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, task-aware model residency for text/image/video/TTS/STT, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery remain aligned. Use `abstractruntime[multimodal]` when you need common media dependencies and capability plugins (installs `abstractcore[remote,vision,voice,audio,music]>=2.13.29`, including `abstractmusic>=0.1.12`).
 
 Hardware profile cascades are available for native Python installs:
 `abstractruntime[apple]`, `abstractruntime[gpu]`, `abstractruntime[all-apple]`,
@@ -92,7 +92,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.23)
+## What’s included (v0.4.24)
 
 Kernel (dependency-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -116,7 +116,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Optional integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/voice/music outputs, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends

@@ -147,6 +147,66 @@ def test_image_to_image_alias_compiles_to_image_edit_selector() -> None:
     assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
 
 
+def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
+    plan = _plan_for_node(
+        "generate_video",
+        {
+            "prompt": "A logo reveal.",
+            "video_provider": "mlx-gen",
+            "video_model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+            "format": "mp4",
+            "width": 1280,
+            "height": 704,
+            "frames": 121,
+            "fps": 24,
+            "steps": 50,
+            "guidance_scale": 5.0,
+        },
+    )
+
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.LLM_CALL
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert payload["prompt"] == "A logo reveal."
+    assert "provider" not in payload
+    assert "model" not in payload
+    assert output["modality"] == "video"
+    assert output["task"] == "text_to_video"
+    assert output["provider"] == "mlx-gen"
+    assert output["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    assert output["format"] == "mp4"
+    assert output["width"] == 1280
+    assert output["height"] == 704
+    assert output["num_frames"] == 121
+    assert output["fps"] == 24
+    assert output["steps"] == 50
+    assert output["guidance_scale"] == 5.0
+
+
+def test_image_to_video_node_compiles_to_llm_call_video_selector() -> None:
+    plan = _plan_for_node(
+        "image_to_video",
+        {
+            "prompt": "Add a slow camera orbit.",
+            "source_image": "img-1",
+            "video_provider": "mlx-gen",
+            "video_model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+            "frames": 41,
+        },
+    )
+
+    assert plan.effect is not None
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert output["modality"] == "video"
+    assert output["task"] == "image_to_video"
+    assert output["provider"] == "mlx-gen"
+    assert output["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    assert output["num_frames"] == 41
+    assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
+
+
 def test_generate_voice_node_compiles_to_llm_call_tts_selector() -> None:
     plan = _plan_for_node(
         "generate_voice",

@@ -206,6 +206,89 @@ def test_generated_media_artifact_identity_is_step_scoped() -> None:
     assert artifact2.metadata.tags["step_id"] == "step-2"
 
 
+def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> None:
+    from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+    store = InMemoryArtifactStore()
+    ledger = InMemoryLedgerStore()
+    seen: dict[str, object] = {}
+
+    class _ProgressLLM:
+        def generate(self, **kwargs):
+            params = dict(kwargs.get("params") or {})
+            seen["params"] = params
+            callback = kwargs.get("on_progress") or params.get("on_progress")
+            assert callable(callback)
+            callback({"phase": "denoise", "step": 2, "total_steps": 4, "progress": 0.5})
+            return MultimodalGenerateResponse(
+                outputs={
+                    "video": [
+                        GeneratedItem(
+                            modality="video",
+                            task="text_to_video",
+                            data=b"mp4-bytes",
+                            content_type="video/mp4",
+                            format="mp4",
+                        )
+                    ]
+                }
+            )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "openai"
+    client._model = "gpt-4o-mini"
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _ProgressLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=ledger,
+        effect_handlers=build_effect_handlers(llm=client, artifact_store=store),
+        artifact_store=store,
+    )
+
+    def start(run, ctx):
+        del run, ctx
+        return StepPlan(
+            node_id="video",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={
+                    "prompt": "A logo reveal.",
+                    "output": {"modality": "video", "task": "text_to_video", "format": "mp4"},
+                },
+                result_key="result",
+            ),
+            next_node="done",
+        )
+
+    def done(run, ctx):
+        del ctx
+        return StepPlan(node_id="done", complete_output={"result": run.vars.get("result")})
+
+    workflow = WorkflowSpec(workflow_id="progress_video", entry_node="video", nodes={"video": start, "done": done})
+    run_id = runtime.start(workflow=workflow, vars={})
+    state = runtime.tick(workflow=workflow, run_id=run_id)
+
+    assert state.status.value == "completed"
+    assert seen["params"] == {}
+    records = ledger.list(run_id)
+    llm_records = [r for r in records if (r.get("effect") or {}).get("type") == "llm_call"]
+    assert llm_records
+    assert "on_progress" not in ((llm_records[0].get("effect") or {}).get("payload") or {}).get("params", {})
+    progress_records = [r for r in records if ((r.get("effect") or {}).get("payload") or {}).get("name") == "abstract.progress"]
+    assert progress_records
+    progress_payload = ((progress_records[0].get("effect") or {}).get("payload") or {}).get("payload") or {}
+    assert progress_payload["phase"] == "denoise"
+    assert progress_payload["step"] == 2
+    assert progress_payload["total_steps"] == 4
+    assert progress_payload["progress"] == 0.5
+    item = (state.vars["result"]["outputs"]["video"])[0]
+    assert store.load(item["artifact_id"]) is not None
+
+
 def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(monkeypatch) -> None:
     store = InMemoryArtifactStore()
     calls = []
@@ -226,7 +309,7 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
                         "content_type": "image/png",
                         "format": "png",
                         "provider": "mflux",
-                        "model": "flux2-klein-4b",
+                        "model": "AbstractFramework/flux.2-klein-4b-4bit",
                     }
                 ]
             },
@@ -259,7 +342,7 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
             "output": {
                 "modality": "image",
                 "provider": "mflux",
-                "model": "flux2-klein-4b",
+                "model": "AbstractFramework/flux.2-klein-4b-4bit",
                 "run_id": "run-img",
                 "tags": {"node_id": "n-img"},
             },
@@ -271,7 +354,7 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
     assert calls[0]["provider"] == "mlx"
     assert calls[0]["model"] == "qwen3.5-2b"
     assert calls[0]["specs"][0]["provider"] == "mflux"
-    assert calls[0]["specs"][0]["model"] == "flux2-klein-4b"
+    assert calls[0]["specs"][0]["model"] == "AbstractFramework/flux.2-klein-4b-4bit"
     item = out["outputs"]["image"][0]
     artifact = store.load(item["artifact_id"])
     assert artifact is not None
@@ -282,8 +365,8 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
     assert out["runtime_provider"] == "mlx"
     assert out["runtime_model"] == "qwen3.5-2b"
     assert out["media_provider"] == "mflux"
-    assert out["media_model"] == "flux2-klein-4b"
-    assert out["model"] == "flux2-klein-4b"
+    assert out["media_model"] == "AbstractFramework/flux.2-klein-4b-4bit"
+    assert out["model"] == "AbstractFramework/flux.2-klein-4b-4bit"
 
 
 def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -> None:
@@ -497,6 +580,8 @@ class _RemoteImageSender:
 
     def post(self, url, *, headers, json, timeout):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
+        if "/videos/" in url:
+            return {"created": 1, "data": [{"b64_json": base64.b64encode(b"mp4-remote").decode("ascii")}]}
         return {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-remote").decode("ascii")}]}
 
     def post_multipart(self, url, *, headers, data, files, timeout):
@@ -510,7 +595,37 @@ class _RemoteImageSender:
                 "timeout": timeout,
             }
         )
+        if "/videos/" in url:
+            return {"created": 1, "data": [{"b64_json": base64.b64encode(b"mp4-edited").decode("ascii")}]}
         return {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-edited").decode("ascii")}]}
+
+
+class _RemoteVideoJobSender(_RemoteImageSender):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return {
+                "id": "job-video",
+                "state": "running",
+                "progress": {"phase": "denoise", "step": 1, "total_steps": 2, "progress": 0.5},
+            }
+        return {
+            "id": "job-video",
+            "state": "succeeded",
+            "progress": {"phase": "done", "step": 2, "total_steps": 2, "progress": 1.0},
+            "result": {"created": 1, "data": [{"b64_json": base64.b64encode(b"mp4-job").decode("ascii")}]},
+        }
+
+    def post(self, url, *, headers, json, timeout):
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
+        if url.endswith("/v1/vision/jobs/videos/generations"):
+            return {"job_id": "job-video"}
+        return super().post(url, headers=headers, json=json, timeout=timeout)
 
 
 def test_remote_image_output_uses_abstractcore_server_endpoint_and_stores_artifact() -> None:
@@ -572,7 +687,7 @@ def test_remote_image_output_preserves_mflux_provider_and_model_separately() -> 
             "output": {
                 "modality": "image",
                 "provider": "mflux",
-                "model": "flux2-klein-4b",
+                "model": "AbstractFramework/flux.2-klein-4b-4bit",
                 "format": "png",
             }
         },
@@ -580,7 +695,7 @@ def test_remote_image_output_preserves_mflux_provider_and_model_separately() -> 
 
     assert sender.calls[0]["url"] == "http://core.test/v1/images/generations"
     assert sender.calls[0]["json"]["provider"] == "mflux"
-    assert sender.calls[0]["json"]["model"] == "flux2-klein-4b"
+    assert sender.calls[0]["json"]["model"] == "AbstractFramework/flux.2-klein-4b-4bit"
     assert not str(sender.calls[0]["json"]["model"]).startswith("diffusers/")
 
 
@@ -655,6 +770,132 @@ def test_remote_image_edit_uses_abstractcore_images_edits_endpoint_and_stores_ar
     assert artifact.content == b"png-edited"
     assert artifact.metadata.run_id == "run-edit"
     assert artifact.metadata.tags["node_id"] == "n-edit"
+
+
+def test_remote_video_output_uses_abstractcore_server_endpoint_and_stores_artifact() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="A logo reveal.",
+        params={
+            "output": {
+                "modality": "video",
+                "task": "text_to_video",
+                "provider": "mlx-gen",
+                "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                "format": "mp4",
+                "frames": 41,
+                "fps": 24,
+                "steps": 10,
+            },
+            "trace_metadata": {"run_id": "run-video", "node_id": "n-video"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "POST"
+    assert sender.calls[0]["url"] == "http://core.test/v1/videos/generations"
+    assert sender.calls[0]["json"]["provider"] == "mlx-gen"
+    assert sender.calls[0]["json"]["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    assert sender.calls[0]["json"]["num_frames"] == 41
+    item = out["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-remote"
+    assert artifact.metadata.content_type == "video/mp4"
+    assert artifact.metadata.run_id == "run-video"
+    assert artifact.metadata.tags["node_id"] == "n-video"
+
+
+def test_remote_video_output_with_progress_uses_core_job_endpoint() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteVideoJobSender()
+    events = []
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="A logo reveal.",
+        params={
+            "output": {
+                "modality": "video",
+                "task": "text_to_video",
+                "provider": "mlx-gen",
+                "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                "format": "mp4",
+            },
+            "on_progress": events.append,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-video-job", "node_id": "n-video-job"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "POST"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/videos/generations"
+    assert sender.calls[1]["method"] == "GET"
+    assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-video?consume=true"
+    assert events[0]["phase"] == "denoise"
+    assert events[-1]["progress"] == 1.0
+    item = out["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-job"
+
+
+def test_remote_image_to_video_uses_abstractcore_videos_edits_endpoint_and_stores_artifact(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="Add a slow camera orbit.",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "video",
+                "task": "image_to_video",
+                "provider": "mlx-gen",
+                "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                "format": "mp4",
+                "num_frames": 41,
+                "extra": {"motion": "orbit"},
+            },
+            "trace_metadata": {"run_id": "run-i2v", "node_id": "n-i2v"},
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["method"] == "MULTIPART"
+    assert call["url"] == "http://core.test/mlx-gen/v1/videos/edits"
+    assert call["data"]["prompt"] == "Add a slow camera orbit."
+    assert call["data"]["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    assert call["data"]["num_frames"] == 41
+    assert json.loads(call["data"]["extra_json"]) == {"motion": "orbit"}
+    assert call["files"]["image"][1] == b"png-input"
+    item = out["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-edited"
+    assert artifact.metadata.content_type == "video/mp4"
+    assert artifact.metadata.run_id == "run-i2v"
+    assert artifact.metadata.tags["node_id"] == "n-i2v"
 
 
 def test_remote_generated_media_requires_artifact_store_before_provider_call() -> None:

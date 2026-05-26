@@ -168,6 +168,110 @@ def _effect_with_invocation_trace(
     return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
 
+def _progress_event_payload(
+    event: Any = None,
+    *args: Any,
+    run: RunState,
+    node_id: str,
+    step_id: str,
+    idempotency_key: str,
+    attempt: int,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "run_id": str(run.run_id),
+        "workflow_id": str(run.workflow_id),
+        "node_id": str(node_id),
+        "step_id": str(step_id),
+        "idempotency_key": str(idempotency_key),
+        "attempt": int(attempt),
+    }
+    if event is not None:
+        if isinstance(event, dict):
+            payload.update(_jsonable(event))
+        else:
+            event_data: Dict[str, Any] = {}
+            for name in (
+                "phase",
+                "stage",
+                "status",
+                "message",
+                "current",
+                "total",
+                "step",
+                "total_steps",
+                "frame",
+                "total_frames",
+                "progress",
+                "percent",
+                "eta_s",
+            ):
+                try:
+                    value = getattr(event, name)
+                except Exception:
+                    continue
+                if value is not None:
+                    event_data[name] = value
+            if event_data:
+                payload.update(_jsonable(event_data))
+            else:
+                payload["event"] = _jsonable(event)
+    if args:
+        if len(args) == 1:
+            payload.setdefault("total", _jsonable(args[0]))
+        else:
+            payload.setdefault("current", _jsonable(args[0]))
+            payload.setdefault("total", _jsonable(args[1]))
+            if len(args) > 2:
+                payload["args"] = _jsonable(list(args[2:]))
+    if kwargs:
+        payload.update(_jsonable(kwargs))
+    return payload
+
+
+def _effect_accepts_progress_callback(effect: Effect) -> bool:
+    if effect.type != EffectType.LLM_CALL:
+        return False
+    payload = effect.payload if isinstance(effect.payload, dict) else {}
+    params = payload.get("params")
+    if isinstance(params, dict) and "output" in params:
+        return _output_request_accepts_progress_callback(params.get("output"))
+    if "output" in payload:
+        return _output_request_accepts_progress_callback(payload.get("output"))
+    if "outputs" in payload:
+        return _output_request_accepts_progress_callback(payload.get("outputs"))
+    return False
+
+
+def _output_request_accepts_progress_callback(output: Any) -> bool:
+    """Best-effort generated-media check without importing AbstractCore in the kernel."""
+
+    generated_modalities = {"image", "video", "voice", "audio", "music"}
+    generated_tasks = {
+        "image_generation",
+        "image_edit",
+        "image_to_image",
+        "text_to_image",
+        "text_to_video",
+        "image_to_video",
+        "video_generation",
+        "tts",
+        "text_to_speech",
+        "music_generation",
+        "text_to_music",
+    }
+    if isinstance(output, str):
+        raw = output.strip().lower().replace("-", "_")
+        return raw in generated_modalities or raw in generated_tasks
+    if isinstance(output, dict):
+        modality = str(output.get("modality") or "").strip().lower().replace("-", "_")
+        task = str(output.get("task") or "").strip().lower().replace("-", "_")
+        return modality in generated_modalities or task in generated_tasks
+    if isinstance(output, (list, tuple)):
+        return any(_output_request_accepts_progress_callback(item) for item in output)
+    return False
+
+
 def _step_record_effect_payload(effect: Optional[Effect]) -> Optional[Dict[str, Any]]:
     if effect is None:
         return None
@@ -1075,6 +1179,83 @@ class Runtime:
             # Observability must never compromise durability/execution.
             return
 
+    def _append_progress_event(
+        self,
+        *,
+        run: RunState,
+        node_id: str,
+        step_id: str,
+        idempotency_key: str,
+        attempt: int,
+        event: Any = None,
+        args: tuple[Any, ...] = (),
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Best-effort durable progress event for long-running generated-media work."""
+
+        try:
+            payload = _progress_event_payload(
+                event,
+                *tuple(args or ()),
+                run=run,
+                node_id=node_id,
+                step_id=step_id,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+                **dict(kwargs or {}),
+            )
+            eff = Effect(
+                type=EffectType.EMIT_EVENT,
+                payload={"name": "abstract.progress", "scope": "run", "payload": payload},
+            )
+            rec = StepRecord.start(
+                run=run,
+                node_id=node_id,
+                effect=eff,
+                idempotency_key=f"system:progress:{step_id}:{len(self._ledger_store.list(run.run_id))}",
+            )
+            rec.finish_success({"emitted": True, "name": "abstract.progress", "payload": payload})
+            self._ledger_store.append(rec)
+        except Exception:
+            return
+
+    def _effect_with_runtime_progress_callback(
+        self,
+        effect: Effect,
+        *,
+        run: RunState,
+        node_id: str,
+        step_id: str,
+        idempotency_key: str,
+        attempt: int,
+    ) -> Effect:
+        if not _effect_accepts_progress_callback(effect):
+            return effect
+        if not isinstance(effect.payload, dict):
+            return effect
+
+        payload = copy.deepcopy(effect.payload)
+        params = payload.get("params")
+        params = dict(params) if isinstance(params, dict) else {}
+        if callable(params.get("on_progress")):
+            return effect
+
+        def _on_progress(event: Any = None, *args: Any, **kwargs: Any) -> None:
+            self._append_progress_event(
+                run=run,
+                node_id=node_id,
+                step_id=step_id,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+                event=event,
+                args=tuple(args),
+                kwargs=kwargs,
+            )
+
+        params["on_progress"] = _on_progress
+        payload["params"] = params
+        return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
+
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
         # Terminal runs never progress.
@@ -1917,10 +2098,18 @@ class Runtime:
             if effect_for_attempt is not effect:
                 rec.effect = _step_record_effect_payload(effect_for_attempt)
             self._ledger_store.append(rec)
+            effect_for_execution = self._effect_with_runtime_progress_callback(
+                effect_for_attempt,
+                run=run,
+                node_id=node_id,
+                step_id=rec.step_id,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+            )
 
             # Execute the effect (catch exceptions as failures)
             try:
-                outcome = self._execute_effect(run, effect_for_attempt, default_next_node)
+                outcome = self._execute_effect(run, effect_for_execution, default_next_node)
             except Exception as e:
                 outcome = EffectOutcome.failed(f"Effect handler raised exception: {e}")
 

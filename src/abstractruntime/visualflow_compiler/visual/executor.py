@@ -232,6 +232,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "generate_image",
         "edit_image",
         "image_to_image",
+        "generate_video",
+        "text_to_video",
+        "image_to_video",
         "generate_voice",
         "generate_music",
         "transcribe_audio",
@@ -1408,6 +1411,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_generate_image_handler(data, effect_config)
         if effect_type in {"edit_image", "image_to_image"}:
             return _create_edit_image_handler(data, effect_config)
+        if effect_type in {"generate_video", "text_to_video"}:
+            return _create_generate_video_handler(data, effect_config)
+        if effect_type == "image_to_video":
+            return _create_image_to_video_handler(data, effect_config)
         if effect_type == "generate_voice":
             return _create_generate_voice_handler(data, effect_config)
         if effect_type == "generate_music":
@@ -1734,6 +1741,112 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "output": output_spec,
             }
             return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_generate_video_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", "text", default="") or "")
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="mp4") or "mp4").strip().lower() or "mp4"
+            output_spec: Dict[str, Any] = {"modality": "video", "task": "text_to_video", "format": fmt}
+            for key in ("size", "negative_prompt"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            for key in ("width", "height", "seed", "steps", "fps"):
+                value = _coerce_int(_input_or_config(payload, config, key))
+                if value is not None:
+                    output_spec[key] = value
+            frames = _coerce_int(_input_or_config(payload, config, "num_frames", "numFrames", "frames"))
+            if frames is not None:
+                output_spec["num_frames"] = frames
+            guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
+            if guidance is not None:
+                output_spec["guidance_scale"] = guidance
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            video_provider = _nonempty_str(
+                _input_or_config(payload, config, "video_provider", "videoProvider", "provider_video")
+            )
+            video_model = _nonempty_str(_input_or_config(payload, config, "video_model", "videoModel", "model_video"))
+            if video_provider:
+                output_spec["provider"] = video_provider
+            if video_model:
+                output_spec["model"] = video_model
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": prompt,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "output": output_spec,
+            }
+            return {"video_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
+    def _create_image_to_video_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            prompt = str(_input_or_config(payload, config, "prompt", "text", default="") or "")
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="mp4") or "mp4").strip().lower() or "mp4"
+            output_spec: Dict[str, Any] = {"modality": "video", "task": "image_to_video", "format": fmt}
+            for key in ("size", "negative_prompt"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            for key in ("width", "height", "seed", "steps", "fps"):
+                value = _coerce_int(_input_or_config(payload, config, key))
+                if value is not None:
+                    output_spec[key] = value
+            frames = _coerce_int(_input_or_config(payload, config, "num_frames", "numFrames", "frames"))
+            if frames is not None:
+                output_spec["num_frames"] = frames
+            guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
+            if guidance is not None:
+                output_spec["guidance_scale"] = guidance
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            video_provider = _nonempty_str(
+                _input_or_config(payload, config, "video_provider", "videoProvider", "provider_video")
+            )
+            video_model = _nonempty_str(_input_or_config(payload, config, "video_model", "videoModel", "model_video"))
+            if video_provider:
+                output_spec["provider"] = video_provider
+            if video_model:
+                output_spec["model"] = video_model
+
+            source_ref = _input_or_config(
+                payload,
+                config,
+                "image_artifact",
+                "source_image",
+                "sourceImage",
+                "input_image",
+                "inputImage",
+                "image",
+                "artifact",
+                "file_path",
+                "filePath",
+                "source",
+            )
+            media = []
+            source_item = _image_media_item(source_ref, role="source")
+            if source_item:
+                media.append(source_item)
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": prompt,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "media": media,
+                "output": output_spec,
+            }
+            return {"video_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
 
         return handler
 

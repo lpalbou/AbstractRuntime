@@ -175,6 +175,9 @@ def _create_effect_node_handler(
         "generate_image",
         "edit_image",
         "image_to_image",
+        "generate_video",
+        "text_to_video",
+        "image_to_video",
         "generate_voice",
         "generate_music",
         "transcribe_audio",
@@ -2650,11 +2653,23 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 if (node_id, "ttft_ms") in referenced_source_pins:
                     current["ttft_ms"] = ttft_ms
                 mapped_value = response_text
-        elif effect_type in {"generate_image", "edit_image", "image_to_image", "generate_voice", "generate_music"}:
+        elif effect_type in {
+            "generate_image",
+            "edit_image",
+            "image_to_image",
+            "generate_video",
+            "text_to_video",
+            "image_to_video",
+            "generate_voice",
+            "generate_music",
+        }:
             if isinstance(raw, dict):
                 if effect_type in {"generate_image", "edit_image", "image_to_image"}:
                     modality = "image"
                     primary_artifact_key = "image_artifact"
+                elif effect_type in {"generate_video", "text_to_video", "image_to_video"}:
+                    modality = "video"
+                    primary_artifact_key = "video_artifact"
                 elif effect_type == "generate_voice":
                     modality = "voice"
                     primary_artifact_key = "audio_artifact"

@@ -21,7 +21,7 @@ Fix:
   - `abstractruntime[abstractcore]` for LLM/tools integration.
   - `abstractruntime[multimodal]` for common image, voice, audio, and music dependencies.
   - `abstractruntime[mcp-worker]` for the MCP worker entry point.
-- The current AbstractCore integration expects `abstractcore>=2.13.28`.
+- The current AbstractCore integration expects `abstractcore>=2.13.29`.
 
 Verify:
 
@@ -84,7 +84,7 @@ Docs:
 ## Local media residency returns `model_residency_unsupported`
 
 Symptom:
-- A local `MODEL_RESIDENCY` load for `image_generation`, `tts`, `stt`, or `music_generation` returns `ok=false` with
+- A local `MODEL_RESIDENCY` load for `image_generation`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, or `music_generation` returns `ok=false` with
   `code="model_residency_unsupported"`.
 
 Meaning:
@@ -133,4 +133,3 @@ abstractruntime-mcp-worker --help
 
 Docs:
 - `mcp-worker.md`
-

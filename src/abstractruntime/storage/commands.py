@@ -84,6 +84,14 @@ class CommandStore(Protocol):
 
 
 @runtime_checkable
+class DeletableCommandStore(Protocol):
+    """Optional CommandStore extension for deleting commands tied to one run."""
+
+    def delete_by_run(self, run_id: str) -> int:
+        """Delete commands for one run and return the number removed."""
+
+
+@runtime_checkable
 class CommandCursorStore(Protocol):
     """Durable consumer cursor for CommandStore replay."""
 
@@ -137,6 +145,24 @@ class InMemoryCommandStore(CommandStore):
     def get_last_seq(self) -> int:
         with self._lock:
             return int(self._seq or 0)
+
+    def delete_by_run(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        with self._lock:
+            kept: List[CommandRecord] = []
+            by_id: Dict[str, CommandRecord] = {}
+            deleted = 0
+            for rec in self._ordered:
+                if str(rec.run_id or "").strip() == rid:
+                    deleted += 1
+                    continue
+                kept.append(rec)
+                by_id[str(rec.command_id)] = rec
+            self._ordered = kept
+            self._by_id = by_id
+            return deleted
 
 
 class InMemoryCommandCursorStore(CommandCursorStore):
@@ -336,4 +362,38 @@ class JsonlCommandStore(CommandStore):
         with self._lock:
             return int(self._seq or 0)
 
-
+    def delete_by_run(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        with self._lock:
+            if not self._path.exists():
+                return 0
+            kept: list[str] = []
+            deleted = 0
+            with self._path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.rstrip("\n")
+                    if not raw.strip():
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except Exception:
+                        kept.append(raw)
+                        continue
+                    if str(obj.get("run_id") or "").strip() == rid:
+                        deleted += 1
+                        continue
+                    kept.append(raw)
+            tmp = self._path.with_name(f"{self._path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+                tmp.replace(self._path)
+            finally:
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except Exception:
+                    pass
+            self._rebuild_index()
+            return deleted

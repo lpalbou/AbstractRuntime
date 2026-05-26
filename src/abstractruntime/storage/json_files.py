@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, StepRecord, RunStatus, WaitState, WaitReason
+from ..core.run_lifecycle import run_lifecycle_index_fields
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,21 @@ class JsonFileRunStore(RunStore):
         if not p.exists():
             return None
         return self._load_from_path(p)
+
+    def delete(self, run_id: str) -> bool:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        p = self._path(rid)
+        existed = p.exists()
+        try:
+            if existed:
+                p.unlink()
+        finally:
+            self._drop_from_children_index(rid)
+            with self._run_cache_lock:
+                self._run_cache.pop(rid, None)
+        return bool(existed)
 
     def _load_from_path(self, p: Path) -> Optional[RunState]:
         """Load a RunState from a file path."""
@@ -303,6 +319,7 @@ class JsonFileRunStore(RunStore):
                     "session_id": str(run.session_id) if run.session_id else None,
                     "created_at": str(run.created_at) if run.created_at else None,
                     "updated_at": str(run.updated_at) if run.updated_at else None,
+                    **run_lifecycle_index_fields(run.vars),
                 }
             )
             if len(out) >= lim:
@@ -440,3 +457,13 @@ class JsonlLedgerStore(LedgerStore):
                 if line.strip():
                     n += 1
         return n
+
+    def delete(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        p = self._path(rid)
+        count = len(self.list(rid))
+        if p.exists():
+            p.unlink()
+        return count

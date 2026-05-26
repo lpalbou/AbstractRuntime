@@ -17,6 +17,34 @@ logger = get_logger(__name__)
 _VISION_TASKS = {"text_to_image", "image_to_image", "text_to_video", "image_to_video"}
 
 
+def _embedding_provider_details(provider: Optional[str] = None) -> list[Dict[str, Any]]:
+    wanted = str(provider or "").strip().lower()
+    out: list[Dict[str, Any]] = []
+    try:
+        from abstractcore.embeddings.models import list_provider_details
+    except Exception as exc:
+        logger.warning("#FALLBACK: AbstractCore embedding provider discovery unavailable: %s", exc)
+        return out
+
+    for raw_item in list_provider_details(wanted or None):
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        provider_id = str(item.get("provider") or item.get("id") or "").strip()
+        if not provider_id:
+            continue
+        if wanted and provider_id.lower() != wanted:
+            continue
+        item.setdefault("id", provider_id)
+        item["provider"] = provider_id
+        out.append(dict(item))
+    return out
+
+
+def _embedding_provider_ids(provider: Optional[str] = None) -> list[str]:
+    return [str(item["provider"]) for item in _embedding_provider_details(provider)]
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -682,6 +710,123 @@ def local_list_provider_models(
     )
 
 
+def local_list_embedding_models(
+    *,
+    base_url: Optional[str] = None,
+    provider_api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+    providers_only: bool = False,
+    timeout_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    provider_text = str(provider or "").strip().lower()
+    provider_details = _embedding_provider_details(provider_text or None)
+    providers = _embedding_provider_ids(provider_text or None)
+    if provider_text and not provider_details:
+        return _with_status(
+            {
+                "kind": "embedding_providers" if providers_only else "embedding_models",
+                "scope": "embedding.text",
+                "provider": provider_text,
+                "providers": [],
+                "available_providers": [],
+                "embedding_providers": [],
+                "provider_details": [],
+                "models": [],
+                "embedding_models": [],
+                "models_by_provider": {},
+                "embedding_models_by_provider": {},
+                "provider_models": [],
+            },
+            source="abstractcore.embeddings",
+            available=False,
+            error=f"Unsupported embedding provider: {provider_text}",
+        )
+
+    if providers_only:
+        return _with_status(
+            {
+                "kind": "embedding_providers",
+                "scope": "embedding.text",
+                "provider": provider_text or None,
+                "providers": providers,
+                "available_providers": providers,
+                "embedding_providers": providers,
+                "provider_details": provider_details,
+                "models": [],
+                "embedding_models": [],
+                "models_by_provider": {},
+                "embedding_models_by_provider": {},
+                "provider_models": [],
+            },
+            source="abstractcore.embeddings",
+            available=bool(providers),
+            error=None,
+        )
+
+    models_by_provider: Dict[str, list[str]] = {}
+    errors: list[str] = []
+
+    def add_models(provider_id: str, values: list[str]) -> None:
+        cleaned = _dedupe_strings([str(item).strip() for item in values if isinstance(item, str) and str(item).strip()])
+        if cleaned:
+            models_by_provider[provider_id] = cleaned
+
+    if provider_text in {"", "huggingface"}:
+        try:
+            from abstractcore.embeddings import list_available_models
+
+            add_models("huggingface", list(list_available_models() or []))
+        except Exception as exc:
+            errors.append(f"huggingface: {exc}")
+
+    remote_like = [p for p in providers if p != "huggingface"]
+    if provider_text and provider_text != "huggingface":
+        remote_like = [provider_text]
+    for provider_id in remote_like:
+        try:
+            from abstractcore.providers.model_capabilities import ModelOutputCapability
+            from abstractcore.providers.registry import get_available_models_for_provider
+
+            kwargs: Dict[str, Any] = {"output_capabilities": [ModelOutputCapability.EMBEDDINGS]}
+            if isinstance(base_url, str) and base_url.strip():
+                kwargs["base_url"] = base_url.strip()
+            if isinstance(provider_api_key, str) and provider_api_key.strip():
+                kwargs["api_key"] = provider_api_key.strip()
+            if timeout_s is not None:
+                kwargs["timeout"] = float(timeout_s)
+            add_models(provider_id, list(get_available_models_for_provider(provider_id, **kwargs) or []))
+        except Exception as exc:
+            errors.append(f"{provider_id}: {exc}")
+
+    if provider_text:
+        models_by_provider = {
+            key: value
+            for key, value in models_by_provider.items()
+            if key.strip().lower() == provider_text
+        }
+    models = _dedupe_strings([model for values in models_by_provider.values() for model in values])
+    model_providers = _dedupe_strings(list(models_by_provider.keys()))
+    return _with_status(
+        {
+            "kind": "embedding_models",
+            "scope": "embedding.text",
+            "provider": provider_text or None,
+            "providers": model_providers or providers,
+            "available_providers": providers,
+            "embedding_providers": providers,
+            "provider_details": provider_details,
+            "models": models,
+            "embedding_models": models,
+            "models_by_provider": models_by_provider,
+            "embedding_models_by_provider": models_by_provider,
+            "provider_models": _provider_models_from_mapping(models_by_provider),
+        },
+        source="abstractcore.embeddings",
+        available=bool(models_by_provider),
+        error="; ".join(errors) if errors and not models_by_provider else None,
+    )
+
+
 def local_get_model_capabilities(model_name: str) -> Dict[str, Any]:
     model_text = str(model_name or "").strip()
     if not model_text:
@@ -725,7 +870,11 @@ def local_get_voice_catalog(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
         ).voice
-        catalog = voice.voice_catalog() if hasattr(voice, "voice_catalog") else {}
+        catalog = (
+            voice.voice_catalog(provider=provider, model=model, providers_only=providers_only)
+            if hasattr(voice, "voice_catalog")
+            else {}
+        )
     except Exception as exc:
         payload = _with_status(
             {
@@ -784,8 +933,8 @@ def local_list_tts_models(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
         ).voice
-        catalog = voice.voice_catalog() if hasattr(voice, "voice_catalog") else {}
-        models = voice.list_tts_models()
+        catalog = voice.voice_catalog(provider=provider) if hasattr(voice, "voice_catalog") else {}
+        models = voice.list_tts_models(provider=provider)
     except Exception as exc:
         return _filter_provider_model_catalog_response(
             _with_status(
@@ -1149,6 +1298,7 @@ def local_list_cached_vision_models(
 
 __all__ = [
     "local_get_model_capabilities",
+    "local_list_embedding_models",
     "local_list_music_models",
     "local_list_music_providers",
     "local_get_voice_catalog",

@@ -131,6 +131,53 @@ def _jsonable(value: Any, *, _path: Optional[set[int]] = None, _depth: int = 0) 
         return str(value)
 
 
+def _effect_with_invocation_trace(
+    effect: Effect,
+    *,
+    step_id: str,
+    idempotency_key: str,
+    attempt: int,
+) -> Effect:
+    """Attach durable per-attempt identity to effect trace metadata.
+
+    The idempotency key is computed before this metadata is added, so replay
+    dedupe still uses the authored effect payload. The extra metadata is only
+    for observability and artifact provenance.
+    """
+
+    if effect.type != EffectType.LLM_CALL:
+        return effect
+    if not isinstance(effect.payload, dict):
+        return effect
+    payload = copy.deepcopy(effect.payload)
+    params = payload.get("params")
+    if isinstance(params, dict):
+        params = dict(params)
+    else:
+        params = {}
+    trace_metadata = params.get("trace_metadata")
+    if isinstance(trace_metadata, dict):
+        trace_metadata = dict(trace_metadata)
+    else:
+        trace_metadata = {}
+    trace_metadata["step_id"] = str(step_id)
+    trace_metadata["effect_idempotency_key"] = str(idempotency_key)
+    trace_metadata["attempt"] = int(attempt)
+    params["trace_metadata"] = trace_metadata
+    payload["params"] = params
+    return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
+
+
+def _step_record_effect_payload(effect: Optional[Effect]) -> Optional[Dict[str, Any]]:
+    if effect is None:
+        return None
+    return {
+        "type": effect.type.value,
+        "payload": effect.payload,
+        "result_key": effect.result_key,
+    }
+
+
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -1861,11 +1908,19 @@ class Runtime:
                 attempt=attempt,
                 idempotency_key=idempotency_key,
             )
+            effect_for_attempt = _effect_with_invocation_trace(
+                effect,
+                step_id=rec.step_id,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+            )
+            if effect_for_attempt is not effect:
+                rec.effect = _step_record_effect_payload(effect_for_attempt)
             self._ledger_store.append(rec)
 
             # Execute the effect (catch exceptions as failures)
             try:
-                outcome = self._execute_effect(run, effect, default_next_node)
+                outcome = self._execute_effect(run, effect_for_attempt, default_next_node)
             except Exception as e:
                 outcome = EffectOutcome.failed(f"Effect handler raised exception: {e}")
 

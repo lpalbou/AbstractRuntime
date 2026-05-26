@@ -3,11 +3,11 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.22
+- Version: 0.4.23
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.27`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[remote,vision,voice,audio,music]>=2.13.27`
+- Current AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.28`
+- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[remote,vision,voice,audio,music]>=2.13.28`
 - Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned config should be translated into explicit Runtime inputs or Runtime-owned env names.
 
 ## Start here

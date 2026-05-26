@@ -29,6 +29,7 @@ class _RecordingDiscoveryClient:
         self.responses: Dict[str, Dict[str, Any]] = {
             "list_providers": {"items": [{"name": "mlx"}]},
             "list_provider_models": {"provider": "mlx", "models": ["qwen"]},
+            "list_embedding_models": {"providers": ["huggingface"], "models": ["all-minilm-l6-v2"]},
             "lookup_model_capabilities": {"model": "qwen", "capabilities": {"max_tokens": 4096}},
             "get_voice_catalog": {"providers": ["openai"], "profiles": []},
             "list_tts_models": {"providers": ["openai"], "models": ["tts-1"]},
@@ -48,6 +49,25 @@ class _RecordingDiscoveryClient:
 
     def list_provider_models(self, provider_name: str, **kwargs: Any) -> Dict[str, Any]:
         return self._record("list_provider_models", provider_name, **kwargs)
+
+    def list_embedding_models(
+        self,
+        *,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_embedding_models",
+            None,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            providers_only=providers_only,
+            **kwargs,
+        )
 
     def lookup_model_capabilities(self, model_name: str | None = None) -> Dict[str, Any]:
         return self._record("lookup_model_capabilities", model_name)
@@ -209,6 +229,43 @@ class _RecordingRequestSender:
                     ],
                 }
             )
+        if url == "http://core.test/v1/models?provider=lmstudio&output_type=embeddings&base_url=http%3A%2F%2Fprovider.test%2Fv1":
+            return _HttpResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": "lmstudio/bge-small-en-v1.5", "owned_by": "lmstudio"},
+                        {"id": "lmstudio/text-embedding-nomic-embed-text-v1.5", "owned_by": "lmstudio"},
+                    ],
+                }
+            )
+        if url == "http://core.test/v1/embeddings/providers?provider=lmstudio":
+            return _HttpResponse(
+                {
+                    "kind": "embedding_providers",
+                    "scope": "embedding.text",
+                    "provider": "lmstudio",
+                    "providers": ["lmstudio"],
+                    "available_providers": ["lmstudio"],
+                    "embedding_providers": ["lmstudio"],
+                    "provider_details": [
+                        {
+                            "id": "lmstudio",
+                            "provider": "lmstudio",
+                            "label": "LMStudio",
+                            "transport": "openai_compatible_http",
+                            "base_url_configurable": True,
+                            "base_url_env_vars": ["LMSTUDIO_BASE_URL"],
+                            "default_base_url": "http://localhost:1234/v1",
+                        },
+                    ],
+                    "models": [],
+                    "embedding_models": [],
+                    "models_by_provider": {},
+                    "embedding_models_by_provider": {},
+                    "provider_models": [],
+                }
+            )
         if url == "http://core.test/v1/audio/voices?base_url=http%3A%2F%2Fprovider.test%2Fv1&provider=openai&providers_only=true":
             return _HttpResponse(
                 {
@@ -368,6 +425,12 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
 
     providers = facade.list_providers(include_models=True)
     provider_models = facade.list_provider_models("mlx", base_url="http://provider.test/v1")
+    embeddings = facade.list_embedding_models(
+        base_url="http://provider.test/v1",
+        provider_api_key="secret",
+        provider="huggingface",
+        providers_only=True,
+    )
     capabilities = facade.get_model_capabilities("mlx/qwen")
     voices = facade.get_voice_catalog(
         base_url="http://provider.test/v1",
@@ -394,6 +457,7 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
 
     assert providers == {"items": [{"name": "mlx"}]}
     assert provider_models == {"provider": "mlx", "models": ["qwen"]}
+    assert embeddings == {"providers": ["huggingface"], "models": ["all-minilm-l6-v2"]}
     assert capabilities == {"model": "qwen", "capabilities": {"max_tokens": 4096}}
     assert voices == {"providers": ["openai"], "profiles": []}
     assert tts == {"providers": ["openai"], "models": ["tts-1"]}
@@ -406,6 +470,16 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
     assert client.calls == [
         ("list_providers", True, {}),
         ("list_provider_models", "mlx", {"base_url": "http://provider.test/v1"}),
+        (
+            "list_embedding_models",
+            None,
+            {
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": "secret",
+                "provider": "huggingface",
+                "providers_only": True,
+            },
+        ),
         ("lookup_model_capabilities", "mlx/qwen", {}),
         (
             "get_voice_catalog",
@@ -510,6 +584,17 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_embedding_models",
+        lambda *, base_url=None, provider_api_key=None, provider=None, providers_only=False, timeout_s=None: {
+            "provider": provider,
+            "providers_only": providers_only,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+            "timeout_s": timeout_s,
+            "models": ["bge-small-en-v1.5"],
+        },
+    )
+    monkeypatch.setattr(
         "abstractcore.architectures.detection.get_model_capabilities",
         lambda model_name: {"model_id": model_name, "max_tokens": 123},
     )
@@ -593,6 +678,14 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         "provider_api_key": "secret",
         "timeout_s": None,
     }
+    assert client.list_embedding_models(base_url="http://provider.test/v1", api_key="secret", provider="lmstudio") == {
+        "provider": "lmstudio",
+        "providers_only": False,
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+        "timeout_s": None,
+        "models": ["bge-small-en-v1.5"],
+    }
     assert client.get_model_capabilities("ollama/qwen") == {
         "model_id": "ollama/qwen",
         "max_tokens": 123,
@@ -649,7 +742,13 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     class _FakeVoice:
         backend_id = "voice-backend"
 
-        def voice_catalog(self) -> Dict[str, Any]:
+        def voice_catalog(
+            self,
+            provider: str | None = None,
+            model: str | None = None,
+            providers_only: bool = False,
+        ) -> Dict[str, Any]:
+            _ = provider, model, providers_only
             return {
                 "profiles": [{"id": "alloy", "provider": "openai", "model": "tts-1"}],
                 "tts_providers": ["openai"],
@@ -658,7 +757,8 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
                 "stt_models_by_provider": {"openai": ["whisper-1"]},
             }
 
-        def list_tts_models(self) -> List[str]:
+        def list_tts_models(self, provider: str | None = None) -> List[str]:
+            _ = provider
             return ["tts-1"]
 
         def list_stt_models(self) -> List[str]:
@@ -711,6 +811,10 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
         lambda provider_name, **_kwargs: ["qwen", "llama"] if provider_name == "ollama" else [],
     )
     monkeypatch.setattr(
+        "abstractcore.embeddings.list_available_models",
+        lambda: ["all-MiniLM-L6-v2", "bge-small-en-v1.5"],
+    )
+    monkeypatch.setattr(
         "abstractcore.architectures.detection.get_model_capabilities",
         lambda model_name: {"model_id": model_name, "max_tokens": 2048},
     )
@@ -742,12 +846,16 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     music_models = client.list_music_models(task="text_to_music", provider="acemusic")
     vision = client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
     cached = client.list_cached_vision_models(task="text_to_image", provider="mflux")
+    embeddings = client.list_embedding_models(provider="huggingface")
 
     assert providers["items"] == [{"name": "mlx", "include_models": True}]
     assert providers["default_provider"] == "mlx"
     assert providers["default_model"] == "qwen"
     assert provider_models["provider"] == "ollama"
     assert provider_models["models"] == ["llama", "qwen"]
+    assert embeddings["provider"] == "huggingface"
+    assert embeddings["models"]
+    assert embeddings["models_by_provider"]["huggingface"] == embeddings["models"]
     assert capabilities == {"model_id": "ollama/qwen", "max_tokens": 2048}
     assert voices["providers"] == ["openai"]
     assert voices["profiles"] == []
@@ -760,6 +868,38 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     assert vision["providers"] == ["mflux"]
     assert vision["models"] == []
     assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
+
+
+def test_local_embedding_provider_catalog_comes_from_core(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    monkeypatch.setattr(
+        "abstractcore.embeddings.models.list_provider_details",
+        lambda provider=None: [
+            {
+                "id": "customembed",
+                "provider": "customembed",
+                "label": "Custom Embeddings",
+                "transport": "openai_compatible_http",
+            }
+        ]
+        if provider in (None, "customembed")
+        else [],
+    )
+
+    payload = discovery_queries.local_list_embedding_models(provider="customembed", providers_only=True)
+
+    assert not hasattr(discovery_queries, "_EMBEDDING_PROVIDER_DETAILS")
+    assert payload["providers"] == ["customembed"]
+    assert payload["embedding_providers"] == ["customembed"]
+    assert payload["provider_details"] == [
+        {
+            "id": "customembed",
+            "provider": "customembed",
+            "label": "Custom Embeddings",
+            "transport": "openai_compatible_http",
+        }
+    ]
 
 
 def test_local_cached_vision_models_do_not_import_core_server_helper(monkeypatch) -> None:
@@ -839,6 +979,16 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         base_url="http://provider.test/v1",
         api_key="secret",
     )
+    embeddings = facade.list_embedding_models(
+        provider="lmstudio",
+        base_url="http://provider.test/v1",
+        api_key="secret",
+    )
+    embedding_providers = facade.list_embedding_models(
+        provider="lmstudio",
+        providers_only=True,
+        api_key="secret",
+    )
     capabilities = facade.get_model_capabilities("openai/gpt-4o-mini")
     voices = facade.get_voice_catalog(
         base_url="http://provider.test/v1",
@@ -873,6 +1023,23 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
     assert provider_models["models"] == ["llama", "qwen"]
     assert provider_models["source"] == "abstractcore.remote"
     assert provider_models["available"] is True
+    assert embeddings["provider"] == "lmstudio"
+    assert embeddings["models"] == ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]
+    assert embeddings["models_by_provider"] == {"lmstudio": ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]}
+    assert embeddings["source"] == "abstractcore.remote"
+    assert embedding_providers["providers"] == ["lmstudio"]
+    assert embedding_providers["provider_details"] == [
+        {
+            "id": "lmstudio",
+            "provider": "lmstudio",
+            "label": "LMStudio",
+            "transport": "openai_compatible_http",
+            "base_url_configurable": True,
+            "base_url_env_vars": ["LMSTUDIO_BASE_URL"],
+            "default_base_url": "http://localhost:1234/v1",
+        },
+    ]
+    assert embedding_providers["source"] == "abstractcore.remote"
     assert capabilities["model"] == "openai/gpt-4o-mini"
     assert capabilities["capabilities"] == {"model_id": "openai/gpt-4o-mini", "max_tokens": 777}
     assert capabilities["available"] is True
@@ -900,6 +1067,18 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         {
             "method": "GET",
             "url": "http://core.test/v1/models?provider=ollama&base_url=http%3A%2F%2Fprovider.test%2Fv1",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/models?provider=lmstudio&output_type=embeddings&base_url=http%3A%2F%2Fprovider.test%2Fv1",
+            "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/embeddings/providers?provider=lmstudio",
             "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
             "timeout": 12.0,
         },

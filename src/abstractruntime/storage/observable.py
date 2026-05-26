@@ -74,6 +74,12 @@ class ObservableLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
 
+    def delete(self, run_id: str) -> int:
+        fn = getattr(self._inner, "delete", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner LedgerStore does not support delete")
+        return int(fn(run_id))
+
     def count(self, run_id: str) -> int:
         """Best-effort record count for run_id.
 

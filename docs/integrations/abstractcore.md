@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install "abstractruntime[abstractcore]"
 ```
 
-This extra installs AbstractCore 2.13.27 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
+This extra installs AbstractCore 2.13.28 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, and the public local vision-cache catalog helper used by Runtime discovery.
 
 For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
 
@@ -24,7 +24,7 @@ For AbstractCore's multimodal `generate(..., output=...)` path, use the newer ba
 pip install "abstractruntime[multimodal]"
 ```
 
-This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.27`. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.12`, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.
+This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.28`. Local image/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.12`, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.
 
 The MCP worker entrypoint uses the `mcp-worker` extra:
 
@@ -687,7 +687,7 @@ facade = get_abstractcore_run_facade(rt)
 child = facade.generate_image(
     "existing-parent-run-id",
     prompt="A red mug on a white table.",
-    output={"provider": "mflux", "model": "flux-dev", "format": "png"},
+    output={"provider": "mlx-gen", "model": "flux2-klein-4b", "format": "png"},
 )
 
 assert child.status.value == "completed"

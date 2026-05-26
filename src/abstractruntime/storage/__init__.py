@@ -1,6 +1,6 @@
 """Storage backends for durability."""
 
-from .base import RunStore, LedgerStore, QueryableRunStore
+from .base import DeletableLedgerStore, DeletableRunStore, LedgerStore, QueryableRunStore, RunStore
 from .in_memory import InMemoryRunStore, InMemoryLedgerStore
 from .json_files import JsonFileRunStore, JsonlLedgerStore
 from .ledger_chain import HashChainedLedgerStore, verify_ledger_chain
@@ -12,6 +12,8 @@ __all__ = [
     "RunStore",
     "LedgerStore",
     "QueryableRunStore",
+    "DeletableRunStore",
+    "DeletableLedgerStore",
     "InMemoryRunStore",
     "InMemoryLedgerStore",
     "JsonFileRunStore",

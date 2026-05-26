@@ -112,6 +112,18 @@ class QueryableRunIndexStore(Protocol):
         ...
 
 
+@runtime_checkable
+class DeletableRunStore(Protocol):
+    """Optional RunStore extension for deleting one run checkpoint."""
+
+    def delete(self, run_id: str) -> bool:
+        """Delete a run checkpoint.
+
+        Returns True when a run existed and was removed, False when it was absent.
+        """
+        ...
+
+
 class LedgerStore(ABC):
     """Append-only journal store."""
 
@@ -121,3 +133,11 @@ class LedgerStore(ABC):
     @abstractmethod
     def list(self, run_id: str) -> List[Dict[str, Any]]: ...
 
+
+@runtime_checkable
+class DeletableLedgerStore(Protocol):
+    """Optional LedgerStore extension for deleting one run ledger."""
+
+    def delete(self, run_id: str) -> int:
+        """Delete ledger records for one run and return the number removed."""
+        ...

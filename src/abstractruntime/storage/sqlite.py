@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason, WaitState
+from ..core.run_lifecycle import run_lifecycle_index_fields
 from .base import LedgerStore, RunStore
 from .commands import CommandAppendResult, CommandCursorStore, CommandRecord, CommandStore
 
@@ -344,6 +345,16 @@ class SqliteRunStore(RunStore):
         except Exception:
             return None
 
+    def delete(self, run_id: str) -> bool:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        conn = self._db.connection()
+        with conn:
+            cur = conn.execute("DELETE FROM runs WHERE run_id = ?;", (rid,))
+            conn.execute("DELETE FROM wait_index WHERE run_id = ?;", (rid,))
+        return int(getattr(cur, "rowcount", 0) or 0) > 0
+
     # --- QueryableRunStore methods ---
 
     def list_runs(
@@ -424,7 +435,8 @@ class SqliteRunStore(RunStore):
               run_id, workflow_id, status,
               wait_reason, wait_until,
               parent_run_id, actor_id, session_id,
-              created_at, updated_at
+              created_at, updated_at,
+              run_json
             FROM runs
             {where}
             ORDER BY updated_at DESC
@@ -435,6 +447,11 @@ class SqliteRunStore(RunStore):
 
         out: List[Dict[str, Any]] = []
         for row in rows or []:
+            try:
+                run_payload = json.loads(str(row["run_json"] or "{}"))
+            except Exception:
+                run_payload = {}
+            vars_obj = run_payload.get("vars") if isinstance(run_payload, dict) else None
             out.append(
                 {
                     "run_id": str(row["run_id"] or ""),
@@ -447,6 +464,7 @@ class SqliteRunStore(RunStore):
                     "session_id": str(row["session_id"] or "") or None,
                     "created_at": str(row["created_at"] or "") or None,
                     "updated_at": str(row["updated_at"] or "") or None,
+                    **run_lifecycle_index_fields(vars_obj),
                 }
             )
         return out
@@ -587,6 +605,16 @@ class SqliteLedgerStore(LedgerStore):
             if isinstance(obj, dict):
                 out.append(obj)
         return out
+
+    def delete(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        conn = self._db.connection()
+        with conn:
+            cur = conn.execute("DELETE FROM ledger WHERE run_id = ?;", (rid,))
+            conn.execute("DELETE FROM ledger_heads WHERE run_id = ?;", (rid,))
+        return int(getattr(cur, "rowcount", 0) or 0)
 
     def count(self, run_id: str) -> int:
         rid = str(run_id or "").strip()
@@ -798,6 +826,15 @@ class SqliteCommandStore(CommandStore):
             return int(row["max_seq"] or 0)
         except Exception:
             return 0
+
+    def delete_by_run(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        conn = self._db.connection()
+        with conn:
+            cur = conn.execute("DELETE FROM commands WHERE run_id = ?;", (rid,))
+        return int(getattr(cur, "rowcount", 0) or 0)
 
 
 class SqliteCommandCursorStore(CommandCursorStore):

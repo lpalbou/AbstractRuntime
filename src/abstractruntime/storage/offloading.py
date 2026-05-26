@@ -341,6 +341,12 @@ class OffloadingRunStore(RunStore):
     def load(self, run_id: str) -> Optional[RunState]:
         return self._inner.load(run_id)
 
+    def delete(self, run_id: str) -> bool:
+        fn = getattr(self._inner, "delete", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner RunStore does not support delete")
+        return bool(fn(run_id))
+
     # --- QueryableRunStore passthrough (best-effort) ---
 
     def list_runs(self, *, status=None, wait_reason=None, workflow_id=None, limit: int = 100):  # type: ignore[override]
@@ -392,6 +398,15 @@ class OffloadingLedgerStore(LedgerStore):
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
+
+    def delete(self, run_id: str) -> int:
+        fn = getattr(self._inner, "delete", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner LedgerStore does not support delete")
+        try:
+            return int(fn(run_id))
+        except Exception:
+            raise
 
     def subscribe(self, callback, *, run_id: Optional[str] = None):  # type: ignore[override]
         fn = getattr(self._inner, "subscribe", None)

@@ -2199,9 +2199,27 @@ def _create_visual_function_handler(
         except Exception as e:
             run.vars["_flow_error"] = str(e)
             run.vars["_flow_error_node"] = node_id
+            node_output = getattr(func, "_last_node_output", None)
+            if isinstance(node_output, dict):
+                complete_output = dict(node_output)
+                complete_output.setdefault("success", False)
+                complete_output.setdefault("error", str(e))
+                complete_output.setdefault("node", node_id)
+            else:
+                complete_output = {"error": str(e), "success": False, "node": node_id}
+
+            temp = run.vars.get("_temp")
+            if not isinstance(temp, dict):
+                temp = {}
+                run.vars["_temp"] = temp
+            persisted_outputs = temp.get("node_outputs")
+            if not isinstance(persisted_outputs, dict):
+                persisted_outputs = {}
+                temp["node_outputs"] = persisted_outputs
+            persisted_outputs[node_id] = complete_output
             return StepPlan(
                 node_id=node_id,
-                complete_output={"error": str(e), "success": False, "node": node_id},
+                complete_output=complete_output,
             )
 
         # Store result in _last_output for downstream nodes
@@ -2221,7 +2239,14 @@ def _create_visual_function_handler(
         if not isinstance(persisted_outputs, dict):
             persisted_outputs = {}
             temp["node_outputs"] = persisted_outputs
-        persisted_outputs[node_id] = result
+        cache_output = result
+        try:
+            node_outputs = getattr(flow, "_node_outputs", None)
+            if isinstance(node_outputs, dict) and node_id in node_outputs:
+                cache_output = node_outputs[node_id]
+        except Exception:
+            cache_output = result
+        persisted_outputs[node_id] = cache_output
 
         # Also store in output_key if specified
         if output_key:
@@ -2699,6 +2724,55 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 mapped_value = current.get("audio_artifact") or raw
             else:
                 current["event_data"] = raw
+                mapped_value = raw
+        elif effect_type == "model_residency":
+            if isinstance(raw, dict):
+                success_raw = raw.get("success")
+                if isinstance(success_raw, bool):
+                    success = success_raw
+                elif isinstance(raw.get("ok"), bool):
+                    success = bool(raw.get("ok"))
+                else:
+                    success = not bool(raw.get("error"))
+
+                affected_raw = raw.get("affected_models")
+                if isinstance(affected_raw, list):
+                    affected_models = affected_raw
+                elif isinstance(raw.get("runtime"), dict):
+                    affected_models = [raw.get("runtime")]
+                elif isinstance(raw.get("models"), list):
+                    affected_models = raw.get("models")
+                else:
+                    affected_models = []
+
+                models_raw = raw.get("models")
+                models = models_raw if isinstance(models_raw, list) else affected_models
+                warnings_raw = raw.get("warnings")
+                warnings = warnings_raw if isinstance(warnings_raw, list) else []
+                error_raw = raw.get("error")
+
+                current["success"] = success
+                current["affected_models"] = affected_models
+                current["models"] = models
+                current["error"] = str(error_raw) if error_raw else ""
+                current["warnings"] = warnings
+                current["result"] = raw
+
+                # Legacy pins for older saved flows.
+                if (node_id, "runtime") in referenced_source_pins and isinstance(raw.get("runtime"), dict):
+                    current["runtime"] = raw.get("runtime")
+                if (node_id, "loaded_new") in referenced_source_pins:
+                    current["loaded_new"] = raw.get("loaded_new")
+                if (node_id, "unloaded") in referenced_source_pins:
+                    current["unloaded"] = raw.get("unloaded")
+                mapped_value = raw
+            else:
+                current["success"] = False
+                current["affected_models"] = []
+                current["models"] = []
+                current["error"] = str(raw)
+                current["warnings"] = [str(raw)] if raw is not None else []
+                current["result"] = raw
                 mapped_value = raw
         elif effect_type == "tool_calls":
             # Effect outcome is produced by AbstractRuntime TOOL_CALLS handler:

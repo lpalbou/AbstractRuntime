@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason
+from ..core.run_lifecycle import run_lifecycle_index_fields
 
 
 class InMemoryRunStore(RunStore):
@@ -27,6 +28,12 @@ class InMemoryRunStore(RunStore):
 
     def load(self, run_id: str) -> Optional[RunState]:
         return self._runs.get(run_id)
+
+    def delete(self, run_id: str) -> bool:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        return self._runs.pop(rid, None) is not None
 
     # --- QueryableRunStore methods ---
 
@@ -93,6 +100,7 @@ class InMemoryRunStore(RunStore):
                     "session_id": str(run.session_id) if run.session_id else None,
                     "created_at": str(run.created_at) if run.created_at else None,
                     "updated_at": str(run.updated_at) if run.updated_at else None,
+                    **run_lifecycle_index_fields(run.vars),
                 }
             )
 
@@ -157,3 +165,9 @@ class InMemoryLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return list(self._records.get(run_id, []))
 
+    def delete(self, run_id: str) -> int:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return 0
+        records = self._records.pop(rid, [])
+        return len(records)

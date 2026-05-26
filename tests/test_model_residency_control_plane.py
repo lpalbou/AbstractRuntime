@@ -276,23 +276,218 @@ def test_completed_model_residency_effect_replays_ledger_result_without_recallin
     assert isinstance(state2.output["residency"]["diagnostics"]["token"], str)
 
 
-@pytest.mark.parametrize("task", ["image_generation", "tts", "stt", "music_generation"])
-def test_local_media_residency_reports_unsupported_instead_of_fake_warmup(task: str) -> None:
+class _FakeResidentCapability:
+    def __init__(self) -> None:
+        self.loads: List[Dict[str, Any]] = []
+        self.unloads: List[Dict[str, Any]] = []
+        self.loaded = False
+
+    def load_resident_model(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        self.loads.append(dict(request))
+        self.loaded = True
+        return {
+            "task": request["task"],
+            "provider": request.get("provider"),
+            "model": request.get("model"),
+            "load_id": f"local:{request['task']}:{request.get('provider')}:{request.get('model')}",
+            "loaded": True,
+            "loaded_new": True,
+            "resident": True,
+            "state": "resident",
+        }
+
+    def list_loaded_models(self, filters: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+        _ = filters
+        if not self.loaded:
+            return []
+        last = self.loads[-1]
+        return [
+            {
+                "task": last["task"],
+                "provider": last.get("provider"),
+                "model": last.get("model"),
+                "load_id": f"local:{last['task']}:{last.get('provider')}:{last.get('model')}",
+                "loaded": True,
+                "state": "resident",
+            }
+        ]
+
+    def unload_resident_model(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        self.unloads.append(dict(request))
+        self.loaded = False
+        return {
+            "task": request["task"],
+            "provider": request.get("provider"),
+            "model": request.get("model"),
+            "load_id": request.get("load_id") or request.get("runtime_id"),
+            "loaded": False,
+            "unloaded": True,
+            "state": "unloaded",
+        }
+
+
+class _FakeCapabilityCore:
+    def __init__(self) -> None:
+        self.voice = _FakeResidentCapability()
+        self.audio = _FakeResidentCapability()
+        self.music = _FakeResidentCapability()
+        self.vision = _FakeResidentCapability()
+
+
+def test_local_media_residency_delegates_to_abstractcore_capability_plugins() -> None:
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "mlx"
     client._model = "qwen"
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
 
-    result = client.load_model_residency(task=task, provider="mflux", model="flux")
+    loaded = client.load_model_residency(
+        task="tts",
+        provider="omnivoice",
+        model="supertonic-3",
+        options={"voice": "M1"},
+        pin=True,
+    )
+    listed = client.list_model_residency(task="tts", provider="omnivoice", model="supertonic-3")
+    unloaded = client.unload_model_residency(task="tts", provider="omnivoice", model="supertonic-3", runtime_id="rid")
+
+    assert loaded["ok"] is True
+    assert loaded["supported"] is True
+    assert loaded["operation"] == "load"
+    assert loaded["task"] == "tts"
+    assert loaded["runtime"]["provider"] == "omnivoice"
+    assert loaded["runtime"]["model"] == "supertonic-3"
+    assert loaded["affected_models"][0]["action"] == "loaded"
+    assert fake_core.voice.loads == [
+        {
+            "task": "tts",
+            "provider": "omnivoice",
+            "model": "supertonic-3",
+            "options": {"voice": "M1"},
+            "pin": True,
+        }
+    ]
+    assert listed["ok"] is True
+    assert listed["models"][0]["provider"] == "omnivoice"
+    assert unloaded["ok"] is True
+    assert unloaded["unloaded"] is True
+    assert fake_core.voice.unloads[-1]["runtime_id"] == "rid"
+
+
+def test_local_media_residency_does_not_inherit_text_model_default() -> None:
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "lmstudio"
+    client._model = "qwen/qwen3.6-35b-a3b"
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
+
+    result = client.load_model_residency(task="tts", provider="omnivoice")
+
+    assert result["ok"] is True
+    assert fake_core.voice.loads[-1]["provider"] == "omnivoice"
+    assert fake_core.voice.loads[-1]["model"] is None
+    assert result["runtime"]["model"] is None
+
+
+def test_local_residency_list_without_task_includes_media_capability_rows() -> None:
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "lmstudio"
+    client._model = "qwen/qwen3.6-35b-a3b"
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
+
+    client.load_model_residency(task="tts", provider="omnivoice")
+    listed = client.list_model_residency()
+
+    rows = listed["models"]
+    voice_rows = [row for row in rows if row.get("task") == "tts" and row.get("provider") == "omnivoice"]
+    assert voice_rows
+    assert voice_rows[0]["loaded"] is True
+    assert voice_rows[0]["resident"] is True
+    assert voice_rows[0]["provider_resident"] is True
+    assert voice_rows[0]["provider_residency_verified"] is True
+    assert listed["diagnostics"]["task_counts"]["tts"] == 1
+
+
+def test_multilocal_media_residency_delegates_to_abstractcore_capability_plugins() -> None:
+    client = object.__new__(MultiLocalAbstractCoreLLMClient)
+    client._default_provider = "lmstudio"
+    client._default_model = "qwen"
+    client._clients = {}
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
+
+    result = client.load_model_residency(task="music_generation", provider="acestep", model="acestep-v15")
+
+    assert result["ok"] is True
+    assert result["supported"] is True
+    assert result["diagnostics"]["source"] == "abstractruntime.multilocal"
+    assert fake_core.music.loads[-1]["task"] == "music_generation"
+
+
+def test_multilocal_media_residency_does_not_inherit_text_model_default() -> None:
+    client = object.__new__(MultiLocalAbstractCoreLLMClient)
+    client._default_provider = "lmstudio"
+    client._default_model = "qwen/qwen3.6-35b-a3b"
+    client._clients = {}
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
+
+    result = client.load_model_residency(task="tts", provider="omnivoice")
+
+    assert result["ok"] is True
+    assert fake_core.voice.loads[-1]["provider"] == "omnivoice"
+    assert fake_core.voice.loads[-1]["model"] is None
+    assert result["runtime"]["model"] is None
+
+
+def test_multilocal_residency_list_without_task_includes_media_capability_rows() -> None:
+    client = object.__new__(MultiLocalAbstractCoreLLMClient)
+    client._default_provider = "lmstudio"
+    client._default_model = "qwen/qwen3.6-35b-a3b"
+    client._clients = {}
+    fake_core = _FakeCapabilityCore()
+    client._capability_residency_core = fake_core
+
+    client.load_model_residency(task="tts", provider="omnivoice")
+    listed = client.list_model_residency()
+
+    assert any(
+        row.get("task") == "tts"
+        and row.get("provider") == "omnivoice"
+        and row.get("loaded") is True
+        and row.get("provider_resident") is True
+        for row in listed["models"]
+    )
+    assert listed["diagnostics"]["task_counts"]["tts"] == 1
+
+
+def test_local_media_residency_fails_truthfully_when_capability_plugin_does_not_load() -> None:
+    class _FailingResidentCapability(_FakeResidentCapability):
+        def load_resident_model(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            self.loads.append(dict(request))
+            return {
+                "task": request["task"],
+                "provider": request.get("provider"),
+                "model": request.get("model"),
+                "loaded": False,
+                "state": "failed",
+                "error": {"code": "load_failed", "message": "provider extra is missing"},
+            }
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen"
+    client._capability_residency_core = SimpleNamespace(voice=_FailingResidentCapability())
+
+    result = client.load_model_residency(task="tts", provider="omnivoice", model="supertonic-3")
 
     assert result["ok"] is False
-    assert result["code"] == "model_residency_unsupported"
+    assert result["supported"] is True
     assert result["status_hint"] == "warning"
     assert result["degraded"] is True
-    assert result["requires_long_lived_core_backend"] is True
-    assert result["requires_long_lived_server"] is True
-    if task == "image_generation":
-        assert result["execution_mode"] == "local_one_shot_subprocess"
-    assert "ABSTRACTCORE_SERVER_BASE_URL" in result["config_hint"]
+    assert result["runtime"]["state"] == "failed"
+    assert "provider extra is missing" in result["error"]
 
 
 class _CoreResidencyProvider:
@@ -303,6 +498,39 @@ class _CoreResidencyProvider:
     def get_model_residency(self, **kwargs: Any) -> Dict[str, Any]:
         self.calls.append(dict(kwargs))
         return dict(self.payload)
+
+
+class _LoadableCoreResidencyProvider:
+    def __init__(self, *, provider: str = "lmstudio", model: str = "model", loaded: bool = False) -> None:
+        self.provider = provider
+        self.model = model
+        self.loaded = loaded
+        self.residency_calls: List[Dict[str, Any]] = []
+        self.load_model_calls: List[Dict[str, Any]] = []
+        self.unload_model_calls: List[Dict[str, Any]] = []
+
+    def get_model_residency(self, **kwargs: Any) -> Dict[str, Any]:
+        self.residency_calls.append(dict(kwargs))
+        return {
+            "task": str(kwargs.get("task") or "text_generation"),
+            "provider": self.provider,
+            "model": str(kwargs.get("model") or self.model),
+            "provider_residency_verified": True,
+            "provider_resident": bool(self.loaded),
+            "loaded": bool(self.loaded),
+            "state": "loaded" if self.loaded else "not_loaded",
+            "source": "abstractcore.provider.test",
+        }
+
+    def load_model(self, model_name: str, **kwargs: Any) -> Dict[str, Any]:
+        self.loaded = True
+        self.load_model_calls.append({"model": str(model_name), "kwargs": dict(kwargs)})
+        return {"supported": True, "operation": "load", "model": str(model_name)}
+
+    def unload_model(self, model_name: str, **kwargs: Any) -> Dict[str, Any]:
+        self.loaded = False
+        self.unload_model_calls.append({"model": str(model_name), "kwargs": dict(kwargs)})
+        return {"supported": True, "operation": "unload", "model": str(model_name)}
 
 
 def test_local_residency_uses_abstractcore_contract_loaded() -> None:
@@ -361,6 +589,32 @@ def test_local_residency_uses_abstractcore_contract_not_loaded() -> None:
     assert record["state"] == "provider_not_loaded"
 
 
+def test_local_text_load_invokes_provider_load_when_not_resident() -> None:
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "lmstudio"
+    client._model = "gemma-3-1b-it"
+    client._llm_kwargs = {}
+    provider = _LoadableCoreResidencyProvider(model="gemma-3-1b-it", loaded=False)
+    client._llm = provider
+
+    result = client.load_model_residency(
+        task="text_generation",
+        provider="lmstudio",
+        model="gemma-3-1b-it",
+        options={"keep_alive": "1h"},
+        pin=True,
+    )
+
+    assert result["ok"] is True
+    assert result["loaded_new"] is True
+    assert result["provider_loaded_new"] is True
+    assert result["runtime"]["loaded"] is True
+    assert result["runtime"]["provider_resident"] is True
+    assert provider.load_model_calls == [
+        {"model": "gemma-3-1b-it", "kwargs": {"keep_alive": "1h", "pin": True}}
+    ]
+
+
 def test_local_residency_without_core_contract_fails_closed() -> None:
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "mlx"
@@ -380,36 +634,24 @@ def test_local_residency_without_core_contract_fails_closed() -> None:
     assert "does not expose" in record["warnings"][0]
 
 
-def test_local_lmstudio_default_unload_does_not_call_provider_directly() -> None:
-    class _Provider:
-        base_url = "http://127.0.0.1:1234/v1"
-
-        def get_model_residency(self, **kwargs: Any) -> Dict[str, Any]:
-            _ = kwargs
-            return {
-                "provider_residency_verified": True,
-                "provider_resident": False,
-                "source": "abstractcore.provider.lmstudio.native_rest",
-                "state": "not_loaded",
-            }
-
-        def unload_model(self, model_name: str) -> None:
-            _ = model_name
-            raise AssertionError("Runtime must not call provider unload directly")
-
+def test_local_lmstudio_default_unload_calls_provider_and_keeps_runtime_cache() -> None:
     client = object.__new__(LocalAbstractCoreLLMClient)
     client._provider = "lmstudio"
     client._model = "qwen/qwen3.5-35b-a3b"
     client._llm_kwargs = {}
-    client._llm = _Provider()
+    provider = _LoadableCoreResidencyProvider(model="qwen/qwen3.5-35b-a3b", loaded=True)
+    client._llm = provider
 
     result = client.unload_model_residency(task="text_generation", provider="lmstudio", model="qwen/qwen3.5-35b-a3b")
 
     assert result["ok"] is True
-    assert result["unloaded"] is False
+    assert result["success"] is True
+    assert result["unloaded"] is True
     assert result["runtime_cache_unloaded"] is False
-    assert result["runtime"]["provider_residency_source"] == "abstractcore.provider.lmstudio.native_rest"
+    assert result["runtime"]["provider_residency_verified"] is True
     assert result["runtime"]["loaded"] is False
+    assert result["affected_models"][0]["action"] == "unloaded"
+    assert provider.unload_model_calls == [{"model": "qwen/qwen3.5-35b-a3b", "kwargs": {}}]
 
 
 def test_local_openai_compatible_residency_does_not_infer_from_base_url() -> None:
@@ -431,19 +673,15 @@ def test_local_openai_compatible_residency_does_not_infer_from_base_url() -> Non
 def test_multilocal_text_residency_lists_loads_and_unloads_cached_clients(monkeypatch) -> None:
     import abstractruntime.integrations.abstractcore.llm_client as llm_mod
 
+    created: Dict[tuple[str, str], Any] = {}
+
     class _DummyLocal:
         def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
             _ = llm_kwargs, artifact_store
             self._provider = provider
             self._model = model
-            self._llm = _CoreResidencyProvider(
-                {
-                    "provider_residency_verified": True,
-                    "provider_resident": True,
-                    "state": "loaded",
-                    "source": "abstractcore.provider.test",
-                }
-            )
+            self._llm = _LoadableCoreResidencyProvider(provider=provider, model=model, loaded=True)
+            created[(provider, model)] = self
 
         def get_model_capabilities(self) -> Dict[str, Any]:
             return {}
@@ -455,22 +693,170 @@ def test_multilocal_text_residency_lists_loads_and_unloads_cached_clients(monkey
     listed = client.list_model_residency(task="text_generation", provider="mlx")
     unloaded = client.unload_model_residency(task="text_generation", provider="mlx", model="other")
     missing = client.unload_model_residency(task="text_generation", provider="mlx", model="other")
-    image = client.load_model_residency(task="image_generation", provider="mflux", model="flux")
 
     assert loaded["ok"] is True
     assert loaded["loaded_new"] is True
     assert loaded["runtime_cache_loaded_new"] is True
     assert {m["model"] for m in listed["models"]} == {"default", "other"}
-    assert unloaded["unloaded"] is False
+    assert unloaded["ok"] is True
+    assert unloaded["success"] is True
+    assert unloaded["unloaded"] is True
     assert unloaded["runtime_cache_unloaded"] is True
     assert unloaded["runtime"]["runtime_cached"] is False
-    assert unloaded["runtime"]["provider_residency_verified"] is False
-    assert unloaded["runtime"]["provider_resident"] is None
+    assert unloaded["runtime"]["provider_residency_verified"] is True
+    assert unloaded["runtime"]["provider_resident"] is False
     assert unloaded["runtime"]["loaded"] is False
-    assert unloaded["runtime"]["state"] == "unloaded"
+    assert unloaded["runtime"]["state"] == "provider_not_loaded"
+    assert unloaded["affected_models"][0]["action"] == "unloaded"
+    assert created[("mlx", "other")]._llm.unload_model_calls == [{"model": "other", "kwargs": {}}]
     assert missing["ok"] is True
     assert missing["unloaded"] is False
-    assert image["ok"] is False
+    assert missing["affected_models"][0]["action"] == "not_found"
+
+
+def test_multilocal_text_load_invokes_provider_load_when_runtime_cache_is_not_provider_resident(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_mod
+
+    created: List[Any] = []
+
+    class _DummyLocal:
+        def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
+            _ = llm_kwargs, artifact_store
+            self._provider = provider
+            self._model = model
+            self._llm = _LoadableCoreResidencyProvider(provider=provider, model=model, loaded=False)
+            created.append(self)
+
+        def get_model_capabilities(self) -> Dict[str, Any]:
+            return {}
+
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    client = MultiLocalAbstractCoreLLMClient(provider="lmstudio", model="default")
+
+    result = client.load_model_residency(
+        task="text_generation",
+        provider="lmstudio",
+        model="gemma-3-1b-it",
+        options={"keep_alive": "1h"},
+        pin=True,
+    )
+
+    assert result["ok"] is True
+    assert result["loaded_new"] is True
+    assert result["provider_loaded_new"] is True
+    assert result["runtime_cache_loaded_new"] is True
+    assert result["runtime"]["loaded"] is True
+    loaded_provider = created[-1]._llm
+    assert loaded_provider.load_model_calls == [
+        {"model": "gemma-3-1b-it", "kwargs": {"keep_alive": "1h", "pin": True}}
+    ]
+
+
+def test_multilocal_uncached_server_control_unload_calls_provider_without_runtime_cache(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_mod
+
+    created: List[Any] = []
+
+    class _DummyLocal:
+        def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
+            _ = llm_kwargs, artifact_store
+            self._provider = provider
+            self._model = model
+            self._llm = _LoadableCoreResidencyProvider(provider=provider, model=model, loaded=True)
+            created.append(self)
+
+        def get_model_capabilities(self) -> Dict[str, Any]:
+            return {}
+
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    monkeypatch.setattr(llm_mod, "_provider_supports_uncached_text_residency", lambda provider: provider == "lmstudio")
+    client = MultiLocalAbstractCoreLLMClient(provider="mlx", model="default")
+
+    result = client.unload_model_residency(
+        task="text_generation",
+        provider="lmstudio",
+        model="gemma-3-1b-it",
+    )
+    listed = client.list_model_residency(task="text_generation", provider="lmstudio")
+
+    assert result["ok"] is True
+    assert result["success"] is True
+    assert result["unloaded"] is True
+    assert result["runtime_cache_unloaded"] is False
+    assert result["runtime"]["runtime_cached"] is False
+    assert result["runtime"]["provider_residency_verified"] is True
+    assert result["runtime"]["provider_resident"] is False
+    assert result["runtime"]["state"] == "provider_not_loaded"
+    assert result["affected_models"][0]["action"] == "unloaded"
+    assert created[-1]._provider == "lmstudio"
+    assert created[-1]._llm.unload_model_calls == [{"model": "gemma-3-1b-it", "kwargs": {}}]
+    assert listed["models"] == []
+
+
+def test_multilocal_default_unload_calls_provider_but_keeps_runtime_cache(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_mod
+
+    class _DummyLocal:
+        def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
+            _ = llm_kwargs, artifact_store
+            self._provider = provider
+            self._model = model
+            self._llm = _LoadableCoreResidencyProvider(provider=provider, model=model, loaded=True)
+
+        def get_model_capabilities(self) -> Dict[str, Any]:
+            return {}
+
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    client = MultiLocalAbstractCoreLLMClient(provider="lmstudio", model="default")
+    provider = client._default_client._llm
+
+    result = client.unload_model_residency(task="text_generation", provider="lmstudio", model="default")
+    listed = client.list_model_residency(task="text_generation", provider="lmstudio")
+
+    assert result["ok"] is True
+    assert result["success"] is True
+    assert result["unloaded"] is True
+    assert result["runtime_cache_unloaded"] is False
+    assert result["runtime"]["runtime_cached"] is True
+    assert result["runtime"]["loaded"] is False
+    assert result["affected_models"][0]["action"] == "unloaded"
+    assert provider.unload_model_calls == [{"model": "default", "kwargs": {}}]
+    assert listed["models"][0]["model"] == "default"
+    assert listed["models"][0]["loaded"] is False
+
+
+def test_multilocal_text_load_fails_truthfully_when_provider_cannot_load(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_mod
+
+    class _DummyLocal:
+        def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
+            _ = llm_kwargs, artifact_store
+            self._provider = provider
+            self._model = model
+            self._llm = _CoreResidencyProvider(
+                {
+                    "provider_residency_verified": True,
+                    "provider_resident": False,
+                    "state": "not_loaded",
+                    "source": "abstractcore.provider.test",
+                }
+            )
+
+        def get_model_capabilities(self) -> Dict[str, Any]:
+            return {}
+
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    client = MultiLocalAbstractCoreLLMClient(provider="mlx", model="default")
+
+    result = client.load_model_residency(task="text_generation", provider="lmstudio", model="gemma-3-1b-it")
+    listed = client.list_model_residency(task="text_generation", provider="lmstudio")
+
+    assert result["ok"] is False
+    assert result["runtime_cache_loaded_new"] is True
+    assert result["runtime"]["runtime_cached"] is False
+    assert result["runtime"]["loaded"] is False
+    assert "load_model" in result["error"]
+    assert listed["models"] == []
 
 
 def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> None:
@@ -484,9 +870,13 @@ def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> No
 
     assert local_caps["tasks"]["text_generation"]["supported"] is True
     assert local_caps["tasks"]["text_generation"]["truth_source"] == "abstractcore.provider.get_model_residency"
-    assert local_caps["tasks"]["image_generation"]["supported"] is False
-    assert local_caps["tasks"]["music_generation"]["supported"] is False
+    assert local_caps["tasks"]["image_generation"]["supported"] is True
+    assert local_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.capability_plugin"
+    assert local_caps["tasks"]["tts"]["supported"] is True
+    assert local_caps["tasks"]["stt"]["supported"] is True
+    assert local_caps["tasks"]["music_generation"]["supported"] is True
     assert multi_caps["tasks"]["text_generation"]["loads_other_models"] is True
+    assert multi_caps["tasks"]["tts"]["local_media_residency_backend"] == "capability_plugin"
     assert remote_caps["relay_only"] is True
     assert remote_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.server./acore/models"
     assert remote_caps["tasks"]["music_generation"]["supported"] is False

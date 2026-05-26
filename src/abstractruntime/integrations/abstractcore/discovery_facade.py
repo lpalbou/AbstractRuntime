@@ -26,6 +26,7 @@ _RUNTIME_ABSTRACTCORE_CLIENT_ATTR = "_abstractcore_llm_client"
 _DISCOVERY_METHODS = (
     "list_providers",
     "list_provider_models",
+    "list_embedding_models",
     "get_voice_catalog",
     "list_tts_models",
     "list_stt_models",
@@ -50,6 +51,17 @@ class AbstractCoreDiscoveryClient(Protocol):
     def list_provider_models(
         self,
         provider_name: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_embedding_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -194,6 +206,23 @@ class AbstractCoreDiscoveryFacade:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._client.list_provider_models(provider_name, **kwargs)
+
+    def list_embedding_models(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        providers_only: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_embedding_models(
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            providers_only=providers_only,
+            **kwargs,
+        )
 
     def get_model_capabilities(
         self,

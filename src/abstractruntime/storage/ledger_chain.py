@@ -84,6 +84,16 @@ class HashChainedLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
 
+    def delete(self, run_id: str) -> int:
+        fn = getattr(self._inner, "delete", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner LedgerStore does not support delete")
+        rid = str(run_id or "").strip()
+        deleted = int(fn(rid))
+        if rid:
+            self._head_by_run.pop(rid, None)
+        return deleted
+
 
 def verify_ledger_chain(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Verify a list of stored ledger records.
@@ -150,4 +160,3 @@ def verify_ledger_chain(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     report["computed_head_hash"] = computed_head
     return report
-

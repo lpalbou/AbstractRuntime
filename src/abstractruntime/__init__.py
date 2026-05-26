@@ -29,7 +29,7 @@ from .core.policy import (
     NoRetryPolicy,
     compute_idempotency_key,
 )
-from .storage.base import QueryableRunStore
+from .storage.base import DeletableLedgerStore, DeletableRunStore, QueryableRunStore
 from .storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from .storage.json_files import JsonFileRunStore, JsonlLedgerStore
 from .storage.sqlite import (
@@ -44,6 +44,7 @@ from .storage.commands import (
     CommandCursorStore,
     CommandRecord,
     CommandStore,
+    DeletableCommandStore,
     InMemoryCommandCursorStore,
     InMemoryCommandStore,
     JsonFileCommandCursorStore,
@@ -117,6 +118,8 @@ __all__ = [
     "create_scheduled_runtime",
     # Storage backends
     "QueryableRunStore",
+    "DeletableRunStore",
+    "DeletableLedgerStore",
     "InMemoryRunStore",
     "InMemoryLedgerStore",
     "JsonFileRunStore",
@@ -127,6 +130,7 @@ __all__ = [
     "CommandRecord",
     "CommandAppendResult",
     "CommandStore",
+    "DeletableCommandStore",
     "CommandCursorStore",
     "InMemoryCommandStore",
     "JsonlCommandStore",

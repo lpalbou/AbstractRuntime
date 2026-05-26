@@ -180,7 +180,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.27 or newer).
+Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.28 or newer).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 

@@ -149,6 +149,63 @@ def test_local_image_output_keeps_runtime_metadata_out_of_core_kwargs() -> None:
     assert artifact.metadata.tags["tenant"] == "demo"
 
 
+def test_generated_media_artifact_identity_is_step_scoped() -> None:
+    from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+    store = InMemoryArtifactStore()
+
+    class _FakeLLM:
+        def generate(self, **_kwargs):
+            return MultimodalGenerateResponse(
+                outputs={
+                    "voice": [
+                        GeneratedItem(
+                            modality="voice",
+                            task="tts",
+                            data=b"same-wav-bytes",
+                            content_type="audio/wav",
+                            format="wav",
+                        )
+                    ]
+                }
+            )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "openai"
+    client._model = "gpt-4o-mini"
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _FakeLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out1 = client.generate(
+        prompt="Say this.",
+        params={
+            "output": {"modality": "voice", "format": "wav"},
+            "trace_metadata": {"run_id": "run-loop", "node_id": "voice", "step_id": "step-1"},
+        },
+    )
+    out2 = client.generate(
+        prompt="Say this.",
+        params={
+            "output": {"modality": "voice", "format": "wav"},
+            "trace_metadata": {"run_id": "run-loop", "node_id": "voice", "step_id": "step-2"},
+        },
+    )
+
+    item1 = out1["outputs"]["voice"][0]
+    item2 = out2["outputs"]["voice"][0]
+    assert item1["artifact_id"] != item2["artifact_id"]
+    artifact1 = store.load(item1["artifact_id"])
+    artifact2 = store.load(item2["artifact_id"])
+    assert artifact1 is not None
+    assert artifact2 is not None
+    assert artifact1.content == artifact2.content == b"same-wav-bytes"
+    assert artifact1.metadata.blob_id == artifact2.metadata.blob_id
+    assert artifact1.metadata.tags["step_id"] == "step-1"
+    assert artifact2.metadata.tags["step_id"] == "step-2"
+
+
 def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(monkeypatch) -> None:
     store = InMemoryArtifactStore()
     calls = []

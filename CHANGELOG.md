@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.23] - 2026-05-26
+
+### Added
+- Run lifecycle helpers and execution metric surfaces for VisualFlow execution and Gateway run retention workflows.
+- Storage deletion primitives for durable run cleanup across the Runtime storage backends.
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.28` (and matching `multimodal`, `mcp-worker`, and hardware-profile cascade extras), aligning Runtime with the latest Core capability defaults, MLX-Gen catalog, and OmniVoice discovery contracts.
+
+### Fixed
+- Effect invocation tracing now records generated-media and code-node execution details consistently across local and Gateway-hosted runs.
+
 ## [0.4.22] - 2026-05-23
 
 ### Changed
@@ -532,7 +544,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...HEAD
+[0.4.23]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...v0.4.23
 [0.4.22]: https://github.com/lpalbou/abstractruntime/compare/v0.4.21...v0.4.22
 [0.4.21]: https://github.com/lpalbou/abstractruntime/compare/v0.4.20...v0.4.21
 [0.4.20]: https://github.com/lpalbou/abstractruntime/compare/v0.4.19...v0.4.20

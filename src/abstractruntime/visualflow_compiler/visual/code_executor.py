@@ -8,6 +8,7 @@ without importing the web backend implementation.
 from __future__ import annotations
 
 import ast
+import os
 from typing import Any, Callable, Dict
 
 # Try to import RestrictedPython, fall back to basic execution if not available
@@ -23,6 +24,74 @@ except ImportError:  # pragma: no cover
 
 class CodeExecutionError(Exception):
     """Error during code execution."""
+
+
+def normalize_code_permissions(permissions: Any = "sandbox") -> str:
+    """Return the canonical Code node execution permission mode."""
+    raw = str(permissions or "sandbox").strip().lower().replace("-", "_")
+    if raw in {"", "safe", "protected", "restricted", "sandboxed"}:
+        return "sandbox"
+    if raw in {"sandbox", "full_access"}:
+        return raw
+    if raw in {"full", "unrestricted"}:
+        return "full_access"
+    raise CodeExecutionError(f"Unsupported code execution permissions: {permissions!r}")
+
+
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _full_access_enabled() -> bool:
+    return _truthy_env("ABSTRACTRUNTIME_CODE_FULL_ACCESS")
+
+
+def ensure_code_permissions_allowed(permissions: Any = "sandbox") -> str:
+    """Return the canonical mode after enforcing the current host policy."""
+    mode = normalize_code_permissions(permissions)
+    if mode == "full_access" and not _full_access_enabled():
+        raise CodeExecutionError(
+            "full_access code execution is disabled by host policy. "
+            "Set ABSTRACTRUNTIME_CODE_FULL_ACCESS=1 only for trusted local deployments."
+        )
+    return mode
+
+
+def get_code_execution_policy() -> Dict[str, Any]:
+    """Return the effective Code-node execution policy for thin-client discovery."""
+    full_access = _full_access_enabled()
+    return {
+        "contract": "code_execution_policy_v1",
+        "version": 1,
+        "available": True,
+        "default_mode": "sandbox",
+        "modes": [
+            {
+                "id": "sandbox",
+                "label": "Sandbox",
+                "available": True,
+                "default": True,
+                "safety": "restricted_python",
+                "description": "Protected Python execution with imports and unsafe constructs disabled.",
+            },
+            {
+                "id": "full_access",
+                "label": "Full access",
+                "available": full_access,
+                "requires_host_policy": True,
+                "safety": "trusted_host",
+                **(
+                    {}
+                    if full_access
+                    else {
+                        "disabled_reason": "Disabled by execution-host policy.",
+                        "config_hint": "Set ABSTRACTRUNTIME_CODE_FULL_ACCESS=1 only for trusted local deployments.",
+                    }
+                ),
+            },
+        ],
+    }
 
 
 def validate_code(code: str) -> None:
@@ -51,16 +120,48 @@ def validate_code(code: str) -> None:
             raise CodeExecutionError(f"Access to dunder attributes ('{node.attr}') is not allowed")
 
 
-def create_code_handler(code: str, function_name: str = "transform") -> Callable[[Any], Any]:
+def create_code_handler(code: str, function_name: str = "transform", *, permissions: Any = "sandbox") -> Callable[[Any], Any]:
     """Create a handler function from user-provided Python code.
 
     The code should define a function that takes input data and returns a result.
     """
+    mode = ensure_code_permissions_allowed(permissions)
+    if mode == "full_access":
+        return _create_full_access_handler(code, function_name)
+
     validate_code(code)
 
     if RESTRICTED_PYTHON_AVAILABLE:
         return _create_restricted_handler(code, function_name)
     return _create_basic_handler(code, function_name)
+
+
+def _create_full_access_handler(code: str, function_name: str) -> Callable[[Any], Any]:
+    """Create a full Python handler for explicitly trusted local deployments."""
+    try:
+        byte_code = compile(code, filename="<user_code>", mode="exec")
+    except SyntaxError as e:
+        raise CodeExecutionError(f"Syntax error: {e}") from e
+
+    def handler(input_data: Any) -> Any:
+        module_globals: Dict[str, Any] = {"__builtins__": __builtins__}
+        try:
+            exec(byte_code, module_globals, module_globals)
+        except Exception as e:
+            raise CodeExecutionError(f"Execution error: {e}") from e
+
+        func = module_globals.get(function_name)
+        if func is None:
+            raise CodeExecutionError(f"Function '{function_name}' not defined in code")
+        if not callable(func):
+            raise CodeExecutionError(f"'{function_name}' is not a callable function")
+
+        try:
+            return func(input_data)
+        except Exception as e:
+            raise CodeExecutionError(f"Runtime error: {e}") from e
+
+    return handler
 
 
 def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any], Any]:

@@ -3040,11 +3040,13 @@ def _append_model_residency_warning(result: Dict[str, Any], warning: str) -> Non
 def _soft_model_residency_failure(*, operation: str, message: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "ok": False,
+        "success": False,
         "operation": operation,
         "error": message,
         "warnings": [message],
         "status_hint": "warning",
         "degraded": True,
+        "affected_models": [],
     }
     if payload:
         out["diagnostics"] = _jsonable(payload)
@@ -3133,6 +3135,8 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
             result.setdefault("ok", True)
             if "models" not in result and isinstance(result.get("data"), list):
                 result["models"] = result.get("data")
+            result.setdefault("success", result.get("ok") is not False)
+            result.setdefault("affected_models", result.get("models") if isinstance(result.get("models"), list) else [])
         elif operation == "load":
             result.setdefault("ok", True)
             if result.get("ok") is not False:
@@ -3148,23 +3152,32 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
                     _append_model_residency_warning(result, warning)
                     result.setdefault("status_hint", "warning")
                     result.setdefault("degraded", True)
+            result.setdefault("success", result.get("ok") is not False)
+            if "affected_models" not in result:
+                result["affected_models"] = [result["runtime"]] if isinstance(result.get("runtime"), dict) else []
         elif operation == "unload":
             result.setdefault("unloaded", False)
             if result.get("ok") is False and _model_residency_not_found(result) and not required:
                 warning = str(result.get("error") or "Requested runtime was not resident.")
                 result = {
                     "ok": True,
+                    "success": True,
                     "operation": "unload",
                     "unloaded": False,
                     "warnings": [warning],
+                    "affected_models": [],
                     "diagnostics": {"source": "abstractruntime", "not_found": True, "original": result},
                 }
             else:
                 result.setdefault("ok", True)
+                result.setdefault("success", result.get("ok") is not False)
+                if "affected_models" not in result:
+                    result["affected_models"] = [result["runtime"]] if isinstance(result.get("runtime"), dict) else []
 
         if result.get("ok") is False and not required:
             result.setdefault("status_hint", "warning")
             result.setdefault("degraded", True)
+            result["success"] = False
 
         if result.get("ok") is False and required:
             return EffectOutcome.failed(str(result.get("error") or "model_residency failed"))

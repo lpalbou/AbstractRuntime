@@ -9,19 +9,25 @@ Scope:
 
 from __future__ import annotations
 
+import json
+import keyword
+import re
+import textwrap
 from typing import Any, Dict, List, Optional
 
 from ..flow import Flow
 
 from .agent_ids import visual_react_workflow_id
 from .builtins import get_builtin_handler
-from .code_executor import create_code_handler
+from .code_executor import create_code_handler, ensure_code_permissions_allowed, normalize_code_permissions
+from .execution_metrics import capture_execution_start, finish_execution_metrics
 from .models import NodeType, VisualEdge, VisualFlow
 
 
 # Type alias for data edge mapping
 # Maps target_node_id -> { target_pin -> (source_node_id, source_pin) }
 DataEdgeMap = Dict[str, Dict[str, tuple[str, str]]]
+
 
 def _build_data_edge_map(edges: List[VisualEdge]) -> DataEdgeMap:
     """Build a mapping of data edges for input resolution."""
@@ -155,6 +161,21 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if get_builtin_handler(type_str) is not None:
             return False
         return True
+
+    def _input_pin_ids(node_data: Dict[str, Any]) -> set[str]:
+        pins = node_data.get("inputs") if isinstance(node_data, dict) else None
+        if not isinstance(pins, list):
+            return set()
+        out: set[str] = set()
+        for pin in pins:
+            if not isinstance(pin, dict):
+                continue
+            if pin.get("type") == "execution":
+                continue
+            pin_id = pin.get("id")
+            if isinstance(pin_id, str) and pin_id:
+                out.add(pin_id)
+        return out
 
     evaluating: set[str] = set()
     volatile_pure_node_ids: set[str] = getattr(flow, "_volatile_pure_node_ids", set())  # type: ignore[attr-defined]
@@ -1759,10 +1780,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             return {
                 "ok": None,
+                "success": None,
+                "affected_models": [],
                 "models": [],
-                "runtime": None,
-                "unloaded": None,
-                "loaded_new": None,
+                "error": "",
+                "warnings": [],
+                "result": None,
                 "_pending_effect": pending,
             }
 
@@ -3058,9 +3081,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _wrap_builtin(builtin, data)
 
         if type_str == "code":
-            code = data.get("code", "def transform(input):\n    return input")
-            function_name = data.get("functionName", "transform")
-            return create_code_handler(code, function_name)
+            return _create_code_runtime_handler(data)
 
         if type_str == "agent":
             return _create_agent_input_handler(data)
@@ -3140,9 +3161,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         wrapped_handler = _create_data_aware_handler(
             node_id=node.id,
+            node_type=type_str,
             base_handler=base_handler,
             data_edges=data_edge_map.get(node.id, {}),
             pin_defaults=pin_defaults_by_node_id.get(node.id),
+            input_pin_ids=_input_pin_ids(node.data),
             node_outputs=flow._node_outputs,  # type: ignore[attr-defined]
             ensure_node_output=_ensure_node_output,
             volatile_node_ids=volatile_pure_node_ids,
@@ -3282,11 +3305,86 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     return flow
 
 
+def _sanitize_python_identifier(raw: Any) -> str:
+    name = str(raw or "").strip()
+    if not name:
+        return "param"
+    out = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if not out:
+        out = "param"
+    if not re.match(r"^[A-Za-z_]", out):
+        out = f"p_{out}"
+    if keyword.iskeyword(out):
+        out = f"{out}_"
+    return out
+
+
+def _generate_code_from_body(data: Dict[str, Any], function_name: str) -> str:
+    body = textwrap.dedent(str(data.get("codeBody") or "")).strip()
+    lines = [f"def {function_name}(_input):"]
+
+    inputs = data.get("inputs")
+    if isinstance(inputs, list):
+        for pin in inputs:
+            if not isinstance(pin, dict):
+                continue
+            pin_id = pin.get("id")
+            if not isinstance(pin_id, str) or not pin_id:
+                continue
+            if pin_id == "permissions" or pin.get("type") == "execution":
+                continue
+            name = _sanitize_python_identifier(pin_id)
+            lines.append(f"    {name} = _input.get({json.dumps(pin_id)})")
+
+    if not body:
+        lines.append("    return _input")
+    else:
+        for line in body.replace("\r\n", "\n").split("\n"):
+            lines.append(f"    {line}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _create_code_runtime_handler(data: Dict[str, Any]):
+    """Create a Code-node handler that honors the resolved permissions pin."""
+    function_name = data.get("functionName", "transform")
+    if not isinstance(function_name, str) or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", function_name) or keyword.iskeyword(function_name):
+        function_name = "transform"
+    if isinstance(data.get("codeBody"), str):
+        code = _generate_code_from_body(data, function_name)
+    else:
+        code = data.get("code", "def transform(_input):\n    return _input")
+    pin_defaults = data.get("pinDefaults") if isinstance(data.get("pinDefaults"), dict) else {}
+    configured_permissions = pin_defaults.get("permissions") if isinstance(pin_defaults, dict) else None
+    handlers: Dict[str, Any] = {}
+
+    def handler(input_data: Any) -> Any:
+        setattr(handler, "_last_permissions", None)
+        permissions = configured_permissions or "sandbox"
+        payload = input_data
+        if isinstance(input_data, dict):
+            raw_permissions = input_data.get("permissions")
+            if raw_permissions is not None:
+                permissions = raw_permissions
+            payload = {k: v for k, v in input_data.items() if k != "permissions"}
+
+        key = normalize_code_permissions(permissions)
+        setattr(handler, "_last_permissions", key)
+        ensure_code_permissions_allowed(key)
+        if key not in handlers:
+            handlers[key] = create_code_handler(code, function_name, permissions=permissions)
+        return handlers[key](payload)
+
+    return handler
+
+
 def _create_data_aware_handler(
     node_id: str,
+    node_type: str,
     base_handler,
     data_edges: Dict[str, tuple[str, str]],
     pin_defaults: Optional[Dict[str, Any]],
+    input_pin_ids: Optional[set[str]],
     node_outputs: Dict[str, Dict[str, Any]],
     *,
     ensure_node_output=None,
@@ -3295,6 +3393,28 @@ def _create_data_aware_handler(
     """Wrap a handler to resolve data edge inputs before execution."""
 
     volatile: set[str] = volatile_node_ids if isinstance(volatile_node_ids, set) else set()
+    declared_input_pin_ids: set[str] = input_pin_ids if isinstance(input_pin_ids, set) else set()
+
+    def output_record_for_pins(
+        result: Any,
+        execution: Optional[Dict[str, Any]] = None,
+        *,
+        success: bool = True,
+        error: Optional[str] = None,
+    ) -> Any:
+        if node_type != "code":
+            return result
+        record: Dict[str, Any] = {}
+        if isinstance(result, dict):
+            record.update(result)
+        record["success"] = success
+        record["output"] = result
+        record["result"] = result
+        if error:
+            record["error"] = error
+        if execution is not None:
+            record["execution"] = execution
+        return record
 
     def wrapped_handler(input_data):
         resolved_input: Dict[str, Any] = {}
@@ -3317,20 +3437,44 @@ def _create_data_aware_handler(
                 # Connected pins always win (even if the upstream value is None).
                 if pin_id in data_edges:
                     continue
-                if pin_id not in resolved_input:
-                    # Clone object/array defaults so handlers can't mutate the shared default.
-                    if isinstance(value, (dict, list)):
-                        try:
-                            import copy
+                # Declared input-pin defaults are authored node configuration, so
+                # they override same-named keys carried by the ambient exec payload.
+                if pin_id not in declared_input_pin_ids and pin_id in resolved_input:
+                    continue
+                # Clone object/array defaults so handlers can't mutate the shared default.
+                if isinstance(value, (dict, list)):
+                    try:
+                        import copy
 
-                            resolved_input[pin_id] = copy.deepcopy(value)
-                        except Exception:
-                            resolved_input[pin_id] = value
-                    else:
+                        resolved_input[pin_id] = copy.deepcopy(value)
+                    except Exception:
                         resolved_input[pin_id] = value
+                else:
+                    resolved_input[pin_id] = value
 
-        result = base_handler(resolved_input if resolved_input else input_data)
-        node_outputs[node_id] = result
+        execution: Optional[Dict[str, Any]] = None
+        if node_type == "code":
+            execution_start = capture_execution_start()
+            try:
+                result = base_handler(resolved_input if resolved_input else input_data)
+                execution = finish_execution_metrics(execution_start)
+                permissions = getattr(base_handler, "_last_permissions", None)
+                if isinstance(permissions, str) and permissions:
+                    execution["permissions"] = permissions
+            except Exception as exc:
+                execution = finish_execution_metrics(execution_start)
+                permissions = getattr(base_handler, "_last_permissions", None)
+                if isinstance(permissions, str) and permissions:
+                    execution["permissions"] = permissions
+                failure_record = output_record_for_pins(None, execution, success=False, error=str(exc))
+                node_outputs[node_id] = failure_record
+                setattr(wrapped_handler, "_last_node_output", failure_record)
+                raise
+        else:
+            result = base_handler(resolved_input if resolved_input else input_data)
+        node_output = output_record_for_pins(result, execution)
+        node_outputs[node_id] = node_output
+        setattr(wrapped_handler, "_last_node_output", node_output)
         return result
 
     return wrapped_handler

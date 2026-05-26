@@ -55,9 +55,17 @@ def create_function_node_handler(
             # Store error and fail the flow
             run.vars["_flow_error"] = str(e)
             run.vars["_flow_error_node"] = node_id
+            node_output = getattr(func, "_last_node_output", None)
+            if isinstance(node_output, dict):
+                complete_output = dict(node_output)
+                complete_output.setdefault("success", False)
+                complete_output.setdefault("error", str(e))
+                complete_output.setdefault("node", node_id)
+            else:
+                complete_output = {"error": str(e), "success": False, "node": node_id}
             return StepPlan(
                 node_id=node_id,
-                complete_output={"error": str(e), "success": False, "node": node_id},
+                complete_output=complete_output,
             )
 
         # Store result in vars

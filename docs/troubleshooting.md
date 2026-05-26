@@ -21,7 +21,7 @@ Fix:
   - `abstractruntime[abstractcore]` for LLM/tools integration.
   - `abstractruntime[multimodal]` for common image, voice, audio, and music dependencies.
   - `abstractruntime[mcp-worker]` for the MCP worker entry point.
-- The current AbstractCore integration expects `abstractcore>=2.13.27`.
+- The current AbstractCore integration expects `abstractcore>=2.13.28`.
 
 Verify:
 

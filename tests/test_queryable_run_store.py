@@ -418,3 +418,33 @@ class TestSqliteRunStoreQuery:
         result = store2.list_due_wait_until(now_iso=utc_now_iso())
         assert len(result) == 1
         assert result[0].run_id == run.run_id
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "json", "sqlite"])
+def test_run_index_includes_sanitized_lifecycle(store_kind: str, tmp_path: Path):
+    if store_kind == "memory":
+        store = InMemoryRunStore()
+    elif store_kind == "json":
+        store = JsonFileRunStore(tmp_path / "runs")
+    else:
+        store = SqliteRunStore(SqliteDatabase(tmp_path / "gateway.sqlite3"))
+
+    run = make_run(status=RunStatus.COMPLETED)
+    run.session_id = "sess-lifecycle"
+    run.vars["_run_lifecycle"] = {
+        "source": "abstractflow.editor",
+        "purpose": "draft_test",
+        "visibility": "private",
+        "retention": {"mode": "ephemeral", "ttl_s": "120"},
+        "ignored": {"private": True},
+    }
+    store.save(run)
+
+    rows = store.list_run_index(session_id="sess-lifecycle", root_only=True, limit=10)
+    assert len(rows) == 1
+    assert rows[0]["run_lifecycle"] == {
+        "source": "abstractflow.editor",
+        "purpose": "draft_test",
+        "visibility": "private",
+        "retention": {"mode": "ephemeral", "ttl_s": 120},
+    }

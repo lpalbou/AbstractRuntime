@@ -767,10 +767,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-do-i-generate-images-voiceaudio-or-music" class="md-nav__link">
+  <a href="#how-do-i-generate-images-video-voiceaudio-or-music" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How do I generate images, voice/audio, or music?
+        How do I generate images, video, voice/audio, or music?
       
     </span>
   </a>
@@ -1396,10 +1396,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-do-i-generate-images-voiceaudio-or-music" class="md-nav__link">
+  <a href="#how-do-i-generate-images-video-voiceaudio-or-music" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How do I generate images, voice/audio, or music?
+        How do I generate images, video, voice/audio, or music?
       
     </span>
   </a>
@@ -1720,15 +1720,16 @@ Code: <code>src/abstractruntime/core/models.py</code> (<code>RunState</code>) an
 <p>Yes, when the configured AbstractCore provider/model supports the media. Pass <code>payload.media</code> as a path, a media dict, an artifact ref such as <code>{"$artifact": "..."}</code>, or a list of those. The runtime keeps the effect payload JSON-safe and materializes artifact refs into temporary provider-ready files for the call.</p>
 <p>Install <code>abstractruntime[multimodal]</code> for common media/vision/audio/music dependencies.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
-<h2 id="how-do-i-generate-images-voiceaudio-or-music">How do I generate images, voice/audio, or music?<a class="headerlink" href="#how-do-i-generate-images-voiceaudio-or-music" title="Permanent link">&para;</a></h2>
+<h2 id="how-do-i-generate-images-video-voiceaudio-or-music">How do I generate images, video, voice/audio, or music?<a class="headerlink" href="#how-do-i-generate-images-video-voiceaudio-or-music" title="Permanent link">&para;</a></h2>
 <p>Use <code>LLM_CALL</code> with AbstractCore's <code>output</code> selector:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;A red cube on a white table&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">}}</span>
+<span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;A logo reveal&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;video&quot;</span><span class="p">,</span> <span class="s2">&quot;task&quot;</span><span class="p">:</span> <span class="s2">&quot;text_to_video&quot;</span><span class="p">,</span> <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;Wan-AI/Wan2.2-TI2V-5B-Diffusers&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;mp4&quot;</span><span class="p">}}</span>
 <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello from Runtime&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;voice&quot;</span><span class="p">,</span> <span class="s2">&quot;voice&quot;</span><span class="p">:</span> <span class="s2">&quot;alloy&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">}}</span>
 <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Warm lo-fi piano with brushed drums&quot;</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;music&quot;</span><span class="p">,</span> <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;acemusic&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;ace-step&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">}}</span>
 </code></pre></div>
-<p>Generated bytes require a runtime <code>ArtifactStore</code>. The durable result contains <code>artifact_id</code> / <code>artifact_ref</code>, not inline binary data. Remote and hybrid runtimes support common AbstractCore Server endpoints for image generation, image edits, speech, music generation, transcription, and chat media. Local runtimes can use richer AbstractCore capability plugins for voice cloning, reference-guided generation, and local text-to-music when those AbstractCore capabilities are installed.</p>
+<p>Generated bytes require a runtime <code>ArtifactStore</code>. The durable result contains <code>artifact_id</code> / <code>artifact_ref</code>, not inline binary data. Remote and hybrid runtimes support common AbstractCore Server endpoints for image generation, image edits, text-to-video, image-to-video, speech, music generation, transcription, and chat media. Local runtimes can use richer AbstractCore capability plugins for voice cloning, reference-guided generation, local text-to-music, and local video generation when those AbstractCore capabilities are installed.</p>
 <h2 id="does-abstractruntime-implement-image-voice-music-or-video-engines">Does AbstractRuntime implement image, voice, music, or video engines?<a class="headerlink" href="#does-abstractruntime-implement-image-voice-music-or-video-engines" title="Permanent link">&para;</a></h2>
-<p>No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Music is already surfaced through that boundary with the same JSON-safe <code>output</code> selector plus artifact-backed result shape as image and voice. Video is still future work unless AbstractCore adds it and Runtime needs new workflow-level wait/effect semantics.</p>
+<p>No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Image, video, voice, transcription, and music all flow through the same JSON-safe <code>output</code> selector plus artifact-backed result shape; Runtime does not implement provider engines itself.</p>
 <h2 id="where-should-cached-session-or-prompt-cache-state-live">Where should cached session or prompt-cache state live?<a class="headerlink" href="#where-should-cached-session-or-prompt-cache-state-live" title="Permanent link">&para;</a></h2>
 <p>Store stable cache selectors or cache configuration in runtime-visible JSON. There are two main tracks:</p>
 <ul>
@@ -1855,6 +1856,7 @@ but it does not switch between local and remote AbstractCore backends. If you wa
 <h2 id="how-do-i-stream-progress-updates">How do I stream progress updates?<a class="headerlink" href="#how-do-i-stream-progress-updates" title="Permanent link">&para;</a></h2>
 <p>If your <code>LedgerStore</code> supports subscriptions (or is wrapped with <code>ObservableLedgerStore</code>), you can subscribe in-process:
 - <code>Runtime.subscribe_ledger(callback, run_id=...)</code></p>
+<p>Long-running generated media uses the same ledger stream. Runtime converts provider progress callbacks into <code>EMIT_EVENT</code> ledger records named <code>abstract.progress</code> with JSON-safe payloads such as <code>phase</code>, <code>step</code>, <code>total_steps</code>, <code>frame</code>, <code>total_frames</code>, and <code>progress</code>.</p>
 <p>Docs: <code>architecture.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code> (<code>subscribe_ledger</code>), <code>src/abstractruntime/storage/observable.py</code>.</p>
 <h2 id="what-is-evidence-capture">What is “evidence capture”?<a class="headerlink" href="#what-is-evidence-capture" title="Permanent link">&para;</a></h2>
 <p>Evidence capture records durable, artifact-backed evidence for selected external-boundary tools:

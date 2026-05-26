@@ -1007,6 +1007,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#2026-05-25-implementation-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-05-25 implementation note
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1030,7 +1041,7 @@
   <h1>025 runtime retention and purge contract</h1>
 
 <h2 id="025_runtime_retention_and_purge_contract-planned">025_runtime_retention_and_purge_contract (planned)<a class="headerlink" href="#025_runtime_retention_and_purge_contract-planned" title="Permanent link">&para;</a></h2>
-<p><strong>Status</strong>: Planned
+<p><strong>Status</strong>: Partially implemented
 <strong>Priority</strong>: Medium
 <strong>Depends on</strong>: 009_artifact_store (completed), 011_subworkflow_support (completed), 012_run_store_query_and_scheduler_support (completed), 024_runtime_owned_run_scoped_media_execution (completed)
 <strong>Related ADRs</strong>: 0003_provenance_tamper_evident_hash_chain, 0004_runtime_owns_run_scoped_media_execution_truth</p>
@@ -1040,12 +1051,18 @@
 <hr />
 <h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>RunStore</code> still exposes only <code>save()</code> / <code>load()</code>.</li>
+<li><code>RunStore</code> still exposes only <code>save()</code> / <code>load()</code> as its mandatory base interface.</li>
 <li><code>QueryableRunStore</code> already exposes <code>list_runs()</code>, <code>list_due_wait_until()</code>, and <code>list_children()</code>.</li>
 <li><code>QueryableRunIndexStore</code> already exposes <code>list_run_index(...)</code>, including <code>session_id</code> and <code>root_only</code>, so hosts can already hide child runs from top-level listings without inventing purge semantics first.</li>
-<li><code>LedgerStore</code> is still append-only with <code>append()</code> / <code>list()</code>.</li>
+<li><code>LedgerStore</code> is still append-only as its mandatory base interface with <code>append()</code> / <code>list()</code>.</li>
+<li>Optional deletion protocols now exist for host-owned cleanup paths:</li>
+<li><code>DeletableRunStore.delete(run_id)</code></li>
+<li><code>DeletableLedgerStore.delete(run_id)</code></li>
+<li><code>DeletableCommandStore.delete_by_run(run_id)</code></li>
+<li>In-memory, JSON-file/JSONL, SQLite, and storage wrapper implementations now support those deletion protocols where applicable.</li>
 <li><code>ArtifactStore</code> already supports <code>delete()</code> and <code>delete_by_run()</code>.</li>
 <li>Runtime already has private tree-walk precedents via <code>history_bundle._list_descendant_run_ids(...)</code> and scheduler child-run traversal, but no public host-facing purge helper.</li>
+<li>Gateway now uses these optional deletion capabilities in <code>abstractgateway.run_retention</code> to purge expired ephemeral draft-test run trees. Runtime still does not own the Gateway/Flow draft taxonomy.</li>
 <li>Runtime-owned child runs now include both classic subworkflows and media child runs, so cleanup is no longer only a Flow/Gateway concern.</li>
 <li>Provenance hash chains are implemented, which makes purge/archive semantics an explicit audit decision, not just a storage API detail.</li>
 </ul>
@@ -1112,7 +1129,7 @@
 <h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
 <ul>
 <li>[ ] Runtime documents a minimal retention metadata contract centered on <code>retention_class</code> and optional <code>expires_at</code>.</li>
-<li>[ ] Optional delete capabilities are defined without widening every storage base class.</li>
+<li>[x] Optional delete capabilities are defined without widening every storage base class.</li>
 <li>[ ] A host-facing purge helper can dry-run and execute run-tree cleanup when the configured stores support it.</li>
 <li>[ ] The helper refuses active runs by default and refuses durable runs unless explicitly forced.</li>
 <li>[ ] The helper reports descendant runs, deleted checkpoints, deleted ledgers, deleted artifacts, unsupported capabilities, and GC caveats in a structured result.</li>
@@ -1143,6 +1160,21 @@
 <hr />
 <h2 id="priority-note">Priority note<a class="headerlink" href="#priority-note" title="Permanent link">&para;</a></h2>
 <p>This matters more now that Runtime owns more child-run patterns, but it is still a medium-priority mechanics item, not the highest-priority runtime correctness gap.</p>
+<hr />
+<h2 id="2026-05-25-implementation-note">2026-05-25 implementation note<a class="headerlink" href="#2026-05-25-implementation-note" title="Permanent link">&para;</a></h2>
+<p>The AbstractFlow draft/published lifecycle slice added the storage-level deletion mechanics needed
+by Gateway-owned draft-test purge:</p>
+<ul>
+<li><code>abstractruntime.storage.base.DeletableRunStore</code></li>
+<li><code>abstractruntime.storage.base.DeletableLedgerStore</code></li>
+<li><code>abstractruntime.storage.commands.DeletableCommandStore</code></li>
+<li>concrete deletion support for memory, JSON/JSONL, SQLite, offloading, observable, and hash-chain
+  store wrappers</li>
+<li>focused coverage in <code>tests/test_storage_deletion.py</code></li>
+</ul>
+<p>The broader Runtime-owned host-facing purge helper remains open. Gateway currently owns the only
+concrete purge policy because <code>purpose: draft_test</code> and <code>retention.mode: ephemeral</code> are Gateway/Flow
+control-plane semantics, not Runtime taxonomy.</p>
 
 
 

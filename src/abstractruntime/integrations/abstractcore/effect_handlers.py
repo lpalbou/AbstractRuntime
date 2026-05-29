@@ -780,6 +780,11 @@ def _resolve_llm_call_media(
         except Exception as e:
             return None, f"Failed to materialize artifact '{artifact_id}': {e}"
         resolved: Dict[str, Any] = {"file_path": str(p), "$artifact": str(artifact_id), "artifact_id": str(artifact_id)}
+        if isinstance(item, dict):
+            for key in ("role", "purpose", "kind"):
+                raw_role = item.get(key)
+                if isinstance(raw_role, str) and raw_role.strip():
+                    resolved[key] = raw_role.strip()
         if content_type:
             resolved["content_type"] = content_type
             base_type = content_type.split(";", 1)[0].strip().lower()

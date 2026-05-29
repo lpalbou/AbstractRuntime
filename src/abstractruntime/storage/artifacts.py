@@ -273,6 +273,14 @@ class ArtifactStore(ABC):
         candidates.sort(key=lambda m: m.created_at, reverse=True)
         return candidates[:limit]
 
+    def content_path(self, artifact_id: str) -> Optional[Path]:
+        """Return a local content path when this store is file-backed.
+
+        Stores that cannot expose a stable local file path return ``None``; callers
+        should fall back to ``load()``.
+        """
+        return None
+
     # Convenience methods
 
     def store_text(
@@ -452,6 +460,10 @@ class FileArtifactStore(ArtifactStore):
         if isinstance(blob_id, str) and blob_id.strip():
             return self._blob_path(blob_id.strip())
         return self._legacy_content_path(artifact_id)
+
+    def content_path(self, artifact_id: str) -> Optional[Path]:
+        path = self._content_path(artifact_id)
+        return path if path.exists() else None
 
     def _metadata_path(self, artifact_id: str) -> Path:
         validate_artifact_id(artifact_id)

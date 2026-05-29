@@ -47,6 +47,8 @@ def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
             "width": 512,
             "height": 512,
             "steps": 8,
+            "seed": 1234,
+            "guidance_scale": 6.5,
         },
     )
 
@@ -65,6 +67,8 @@ def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
     assert output["width"] == 512
     assert output["height"] == 512
     assert output["steps"] == 8
+    assert output["seed"] == 1234
+    assert output["guidance_scale"] == 6.5
 
 
 def test_generate_image_legacy_provider_model_are_not_media_fallbacks() -> None:
@@ -112,6 +116,8 @@ def test_edit_image_node_compiles_to_llm_call_image_edit_selector() -> None:
             "format": "png",
             "size": "1024x1024",
             "strength": 0.65,
+            "seed": 1234,
+            "guidance_scale": 6.5,
         },
     )
 
@@ -127,6 +133,8 @@ def test_edit_image_node_compiles_to_llm_call_image_edit_selector() -> None:
     assert output["model"] == "gpt-image-1"
     assert output["size"] == "1024x1024"
     assert output["strength"] == 0.65
+    assert output["seed"] == 1234
+    assert output["guidance_scale"] == 6.5
     assert media[0]["$artifact"] == "source-img"
     assert media[0]["type"] == "image"
     assert media[0]["role"] == "source"
@@ -137,13 +145,15 @@ def test_edit_image_node_compiles_to_llm_call_image_edit_selector() -> None:
 def test_image_to_image_alias_compiles_to_image_edit_selector() -> None:
     plan = _plan_for_node(
         "image_to_image",
-        {"prompt": "Add clouds.", "source_image": "img-1"},
+        {"prompt": "Add clouds.", "source_image": "img-1", "seed": 42, "guidance_scale": 5.5},
     )
 
     assert plan.effect is not None
     payload = dict(plan.effect.payload or {})
     output = dict(payload.get("output") or {})
     assert output["task"] == "image_edit"
+    assert output["seed"] == 42
+    assert output["guidance_scale"] == 5.5
     assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
 
 
@@ -160,6 +170,7 @@ def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
             "frames": 121,
             "fps": 24,
             "steps": 50,
+            "seed": 4321,
             "guidance_scale": 5.0,
         },
     )
@@ -181,6 +192,7 @@ def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
     assert output["num_frames"] == 121
     assert output["fps"] == 24
     assert output["steps"] == 50
+    assert output["seed"] == 4321
     assert output["guidance_scale"] == 5.0
 
 
@@ -193,6 +205,8 @@ def test_image_to_video_node_compiles_to_llm_call_video_selector() -> None:
             "video_provider": "mlx-gen",
             "video_model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
             "frames": 41,
+            "seed": 4321,
+            "guidance_scale": 5.0,
         },
     )
 
@@ -204,6 +218,8 @@ def test_image_to_video_node_compiles_to_llm_call_video_selector() -> None:
     assert output["provider"] == "mlx-gen"
     assert output["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     assert output["num_frames"] == 41
+    assert output["seed"] == 4321
+    assert output["guidance_scale"] == 5.0
     assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
 
 

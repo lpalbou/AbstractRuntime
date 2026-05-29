@@ -2145,10 +2145,10 @@ def _normalize_residency_task(task: Any) -> str:
         "vision": "image_generation",
         "t2i": "image_generation",
         "text_to_image": "image_generation",
-        "i2i": "image_generation",
-        "image_to_image": "image_generation",
-        "image_edit": "image_generation",
-        "edit_image": "image_generation",
+        "i2i": "image_to_image",
+        "image_to_image": "image_to_image",
+        "image_edit": "image_to_image",
+        "edit_image": "image_to_image",
         "video": "video_generation",
         "videos": "video_generation",
         "video_generation": "video_generation",
@@ -2189,6 +2189,7 @@ def _residency_task_filter(task: Any) -> Optional[str]:
 
 _LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = (
     "image_generation",
+    "image_to_image",
     "video_generation",
     "text_to_video",
     "image_to_video",
@@ -2223,7 +2224,7 @@ def _model_residency_unsupported_payload(
         "diagnostics": {"source": "abstractruntime"},
         "affected_models": [],
     }
-    if task_s in {"image_generation", "video_generation", "text_to_video", "image_to_video"}:
+    if task_s in {"image_generation", "image_to_image", "video_generation", "text_to_video", "image_to_video"}:
         payload["execution_mode"] = "local_one_shot_subprocess"
         payload["local_media_residency_backend"] = "none"
         payload["requires_long_lived_core_backend"] = True
@@ -2283,6 +2284,16 @@ def _local_model_residency_capabilities(*, mode: str, source: str, text_loads_ot
             extra={
                 "local_media_residency_backend": "capability_plugin",
                 "requires_installed_capability_plugin": True,
+            },
+        ),
+        "image_to_image": _model_residency_capability_task(
+            task="image_to_image",
+            supported=True,
+            truth_source="abstractcore.capability_plugin",
+            extra={
+                "local_media_residency_backend": "capability_plugin",
+                "requires_installed_capability_plugin": True,
+                "shares_backend_cache_with": "image_generation",
             },
         ),
         "text_to_video": _model_residency_capability_task(
@@ -2680,7 +2691,7 @@ def _local_capability_residency_target(core: Any, task: str) -> Tuple[Any, str]:
         return getattr(core, "audio", None), "audio"
     if task_s == "music_generation":
         return getattr(core, "music", None), "music"
-    if task_s == "image_generation":
+    if task_s in {"image_generation", "image_to_image"}:
         return getattr(core, "vision", None), "vision"
     raise ValueError(f"Unsupported local capability residency task: {task!r}")
 
@@ -2762,7 +2773,22 @@ def _local_all_model_residency_result(
         if isinstance(result, dict) and result.get("ok") is False and result.get("error"):
             task_errors[task_s] = str(result.get("error"))
 
-    records = sorted(records, key=lambda item: str(item.get("runtime_id") or item.get("load_id") or ""))
+    deduped: List[Dict[str, Any]] = []
+    seen_record_keys: set[str] = set()
+    for record in records:
+        record_key = str(record.get("runtime_id") or record.get("load_id") or "").strip()
+        if not record_key:
+            record_key = "|".join(
+                str(record.get(key) or "").strip()
+                for key in ("task", "provider", "model")
+            )
+        if record_key and record_key in seen_record_keys:
+            continue
+        if record_key:
+            seen_record_keys.add(record_key)
+        deduped.append(record)
+
+    records = sorted(deduped, key=lambda item: str(item.get("runtime_id") or item.get("load_id") or ""))
     diagnostics: Dict[str, Any] = {"source": source, "count": len(records), "task_counts": task_counts}
     if task_errors:
         diagnostics["task_errors"] = task_errors
@@ -7084,6 +7110,12 @@ class RemoteAbstractCoreLLMClient:
                 task="image_generation",
                 supported=True,
                 truth_source="abstractcore.server./acore/models",
+            ),
+            "image_to_image": _model_residency_capability_task(
+                task="image_to_image",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+                extra={"shares_backend_cache_with": "image_generation"},
             ),
             "text_to_video": _model_residency_capability_task(
                 task="text_to_video",

@@ -235,6 +235,26 @@ class TestFileArtifactStore:
             artifact = store.load(metadata.artifact_id)
             assert artifact.content == content
 
+    def test_content_path_is_public_for_file_backed_store(self):
+        """File stores expose a stable content path; memory stores do not."""
+        memory_store = InMemoryArtifactStore()
+        memory_meta = memory_store.store(b"in memory", content_type="text/plain")
+        assert memory_store.content_path(memory_meta.artifact_id) is None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            metadata = store.store(b"Persistent content", content_type="text/plain", run_id="run-1")
+            path = store.content_path(metadata.artifact_id)
+            assert path is not None
+            assert path.exists()
+            assert path.read_bytes() == b"Persistent content"
+
+            restarted = FileArtifactStore(tmpdir)
+            restarted_path = restarted.content_path(metadata.artifact_id)
+            assert restarted_path is not None
+            assert restarted_path.exists()
+            assert restarted_path.read_bytes() == b"Persistent content"
+
     def test_persistence_across_instances(self):
         """Artifacts persist across store instances."""
         with tempfile.TemporaryDirectory() as tmpdir:

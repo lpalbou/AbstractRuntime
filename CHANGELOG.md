@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.25] - 2026-05-29
+
+### Added
+- File-backed artifact stores now expose `content_path(...)` for hosts that need a stable local path while in-memory stores continue to return `None`.
+
+### Changed
+- Minimum optional AbstractCore dependency floor is now `abstractcore>=2.13.30` (and matching `multimodal`, `mcp-worker`, and hardware-profile cascade extras), aligning Runtime with the latest Core media/plugin floors and image-to-image residency truth.
+
+### Fixed
+- Artifact-backed media resolution now preserves image roles such as `source` and `mask`, keeping image-edit and image-to-video requests wired correctly through AbstractCore.
+- Model-residency discovery now treats `image_to_image` as its own vision task and deduplicates shared loaded-model records when task is omitted.
+
 ## [0.4.24] - 2026-05-26
 
 ### Added
@@ -558,7 +570,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.24...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.25...HEAD
+[0.4.25]: https://github.com/lpalbou/abstractruntime/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...v0.4.24
 [0.4.23]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...v0.4.23
 [0.4.22]: https://github.com/lpalbou/abstractruntime/compare/v0.4.21...v0.4.22

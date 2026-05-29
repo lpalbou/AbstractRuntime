@@ -64,3 +64,36 @@ def test_effect_handler_materialized_audio_artifact_preserves_content_type(tmp_p
     assert item["type"] == "audio"
     assert Path(item["file_path"]).suffix == ".wav"
     assert BaseProvider._media_type(item) == "audio"
+
+
+def test_effect_handler_materialized_image_artifacts_preserve_roles(tmp_path: Path) -> None:
+    from abstractruntime.integrations.abstractcore.effect_handlers import _resolve_llm_call_media
+
+    class Artifact:
+        content = PNG_1X1 = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+            b"\x1f\x15\xc4\x89"
+        )
+        content_type = "image/png"
+        metadata = None
+
+    class Store:
+        def load(self, artifact_id: str) -> Artifact:
+            assert artifact_id in {"source-img", "mask-img"}
+            return Artifact()
+
+    resolved, error = _resolve_llm_call_media(
+        [
+            {"$artifact": "source-img", "content_type": "image/png", "role": "source"},
+            {"$artifact": "mask-img", "content_type": "image/png", "role": "mask"},
+        ],
+        artifact_store=Store(),
+        temp_dir=tmp_path,
+    )
+
+    assert error is None
+    assert isinstance(resolved, list)
+    assert [item.get("role") for item in resolved] == ["source", "mask"]
+    assert all(item.get("type") == "image" for item in resolved)
+    assert all(Path(str(item.get("file_path") or "")).is_file() for item in resolved)

@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.25 • **Python:** 3.10+
+**Version:** 0.4.26 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -26,30 +26,28 @@ flowchart LR
 
 ## Install
 
-Core runtime:
+Remote-light runtime:
 
 ```bash
 pip install abstractruntime
 ```
 
-AbstractCore integration (LLM + tools):
+The base install includes AbstractCore 2.13.31 or newer with remote provider,
+tool, media, vision, voice, audio, and music integration, plus the
+`abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
+default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
+sentence-transformer embeddings are not selected unless you choose a hardware
+profile or another package-specific local extra.
+
+Native Python hardware profiles add local inferencer stacks:
 
 ```bash
-pip install "abstractruntime[abstractcore]"
+pip install "abstractruntime[apple]"
+pip install "abstractruntime[gpu]"
 ```
 
-The `abstractcore` extra installs AbstractCore 2.13.30 or newer so the hardened server auth model, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings, lifecycle operations, public output-selector contract, async/sync text-generation output-selector parity, task-aware model residency for text/image/video/TTS/STT, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery remain aligned. Use `abstractruntime[multimodal]` when you need common media dependencies and capability plugins (installs `abstractcore[remote,vision,voice,audio,music]>=2.13.30`, including `abstractmusic>=0.1.12`).
-
-Hardware profile cascades are available for native Python installs:
-`abstractruntime[apple]`, `abstractruntime[gpu]`, `abstractruntime[all-apple]`,
-and `abstractruntime[all-gpu]` delegate to the matching AbstractCore profile
-without making the runtime kernel itself hardware-specific.
-
-MCP worker entrypoint (default toolsets over stdio):
-
-```bash
-pip install "abstractruntime[mcp-worker]"
-```
+`abstractruntime[apple]` delegates to AbstractCore's native Apple aggregate;
+`abstractruntime[gpu]` delegates to AbstractCore's GPU aggregate.
 
 ## Quick start (pause + resume)
 
@@ -92,9 +90,9 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.25)
+## What’s included (v0.4.26)
 
-Kernel (dependency-light):
+Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
 - durable execution: `Runtime.start/tick/resume` (`src/abstractruntime/core/runtime.py`)
 - durable waits/events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
@@ -115,7 +113,7 @@ Drivers + distribution:
 - VisualFlow multi-entry execution lowering for fan-in routes and per-entry input overrides (`docs/workflow-bundles.md`)
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
-Optional integrations:
+Runtime-owned integrations:
 - AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
@@ -179,7 +177,7 @@ sr = create_scheduled_runtime(
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e ".[abstractcore,mcp-worker,test,docs]"
+python -m pip install -e ".[test,docs]"
 python -m pytest -q
 ```
 

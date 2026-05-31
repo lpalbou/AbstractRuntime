@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.25"
+version = "0.4.26"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,53 +41,10 @@ dependencies = [
   # model types. Durable/vector backend dependencies such as LanceDB remain
   # package extras owned by AbstractMemory and selected by hosts such as Gateway.
   "AbstractMemory>=0.2.6",
-]
-
-[project.optional-dependencies]
-# Enables `abstractruntime.integrations.abstractcore.*` imports.
-abstractcore = [
-  "abstractcore>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
-]
-
-apple = [
-  "abstractcore[apple]>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
-  "setuptools<82.0.0,>=80.10.2",
-]
-
-gpu = [
-  "abstractcore[gpu]>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
-  "setuptools<82.0.0,>=80.10.2",
-]
-
-all-apple = [
-  "abstractcore[all-apple]>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
-  "setuptools<82.0.0,>=80.10.2",
-]
-
-all-gpu = [
-  "abstractcore[all-gpu]>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
-  "setuptools<82.0.0,>=80.10.2",
-]
-
-# Enables AbstractCore multimodal generation helpers with common image/voice/
-# audio/music capability packages.
-multimodal = [
-  "abstractcore[remote,vision,voice,audio,music]>=2.13.30",
+  # Runtime's base install is the remote-light workflow host: LLM/tool effects,
+  # MCP worker support, and multimodal routing are available without selecting
+  # local inference engines.
+  "abstractcore[remote,media,tools,vision,voice,audio,music]>=2.13.31",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -99,12 +56,15 @@ multimodal = [
   "pandas<3.0.0,>=1.0.0",
 ]
 
-# Enables `abstractruntime-mcp-worker` with the default toolsets (includes bs4/lxml).
-mcp-worker = [
-  "abstractcore[tools]>=2.13.30",
-  "openai<2.0.0,>=1.109.1",
-  "httpx<1.0.0,>=0.28.1",
-  "anyio<5.0.0,>=4.12.1",
+[project.optional-dependencies]
+apple = [
+  "abstractcore[all-apple]>=2.13.31",
+  "setuptools<82.0.0,>=80.10.2",
+]
+
+gpu = [
+  "abstractcore[all-gpu]>=2.13.31",
+  "setuptools<82.0.0,>=80.10.2",
 ]
 
 # CI/test dependencies. The workflow runs the basic contract suite plus focused

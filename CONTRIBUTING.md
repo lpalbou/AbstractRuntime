@@ -16,8 +16,8 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 
-# Full dev install (kernel + optional integrations used by tests/examples)
-python -m pip install -e ".[abstractcore,mcp-worker]"
+# Full dev install (runtime + docs/test tooling)
+python -m pip install -e ".[test,docs]"
 
 python -m pytest -q
 ```
@@ -30,7 +30,7 @@ If you cloned **only** this repo (without the AbstractFramework workspace), make
 - Core kernel (durable semantics): `src/abstractruntime/core/`
 - Durability backends: `src/abstractruntime/storage/`
 - Driver loop (in-process): `src/abstractruntime/scheduler/`
-- Optional integrations (extras): `src/abstractruntime/integrations/`
+- Runtime integrations: `src/abstractruntime/integrations/`
 - Tests: `tests/`
 
 Docs entrypoints:

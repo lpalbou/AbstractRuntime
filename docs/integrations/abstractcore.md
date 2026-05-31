@@ -13,24 +13,22 @@ Implementation pointers (this repo):
 ## Install
 
 ```bash
-pip install "abstractruntime[abstractcore]"
+pip install abstractruntime
 ```
 
-This extra installs AbstractCore 2.13.30 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.
+The base install includes AbstractCore 2.13.31 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.
 
-For AbstractCore's multimodal `generate(..., output=...)` path, use the newer baseline and optional media packages:
+The base install also includes the remote-light media/capability plugins needed
+for AbstractCore's multimodal `generate(..., output=...)` path. Local
+image/video/voice/music generation still depends on configured AbstractCore
+capability backends and hardware profiles:
 
 ```bash
-pip install "abstractruntime[multimodal]"
+pip install "abstractruntime[apple]"
+pip install "abstractruntime[gpu]"
 ```
 
-This installs `abstractcore[remote,vision,voice,audio,music]>=2.13.30`. Local image/video/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With `abstractmusic>=0.1.12`, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.
-
-The MCP worker entrypoint uses the `mcp-worker` extra:
-
-```bash
-pip install "abstractruntime[mcp-worker]"
-```
+With `abstractmusic>=0.1.12`, the base music integration includes the lightweight remote ACE Music backend without local model-runtime extras. The MCP worker entrypoint is included in the base Runtime install.
 
 ## Execution modes
 
@@ -114,7 +112,7 @@ print(state.output)
 Notes:
 - Remote mode supports per-request dynamic routing by forwarding `params.base_url` to the AbstractCore server request body (`src/abstractruntime/integrations/abstractcore/llm_client.py`).
 - Remote mode sends per-request provider key overrides from `params.api_key` / `params.provider_api_key` as `X-AbstractCore-Provider-API-Key` headers. Server/master auth should be supplied separately through the client's configured headers, usually `Authorization: Bearer <ABSTRACTCORE_SERVER_API_KEY>`.
-- Local mode treats `base_url` as a provider construction concern; the local client intentionally strips `params.base_url`.
+- Local mode treats `base_url` and provider API keys as provider-construction concerns. `MultiLocalAbstractCoreLLMClient` can construct a per-call client when a host injects `params.base_url` plus `params.api_key` or `params.provider_api_key` (for example from a Gateway provider endpoint profile), then strips those fields before calling the provider.
 - `media` accepts one item or a list. Durable artifact refs such as `{"$artifact": "...", "filename": "speech.wav"}` are materialized to temporary files for AbstractCore and never stored as raw bytes in `RunState`.
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.

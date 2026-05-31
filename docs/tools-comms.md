@@ -44,7 +44,7 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=too
 ```
 
 Notes:
-- Install extras: `pip install "abstractruntime[abstractcore]"` (or `abstractruntime[mcp-worker]`).
+- Install Runtime with `pip install abstractruntime`; AbstractCore tool integration and the MCP worker entry point are part of the base remote-light install.
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (`PassthroughToolExecutor` in `src/abstractruntime/integrations/abstractcore/tool_executor.py`).
 - For local bridge-owned delivery flows, `ApprovalToolExecutor` can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable `TOOL_CALLS` path, Runtime also exposes **host wrappers** for operator-owned email and Telegram surfaces:

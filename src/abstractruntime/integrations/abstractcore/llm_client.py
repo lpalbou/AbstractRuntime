@@ -22,6 +22,7 @@ import mimetypes
 import os
 from pathlib import Path
 import re
+import selectors
 import subprocess
 import sys
 import tempfile
@@ -1077,6 +1078,28 @@ def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional
     return True
 
 
+def _is_subprocess_safe_video_specs(specs: List[Dict[str, Any]], media: Optional[List[Any]]) -> bool:
+    if not _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS", default=True):
+        return False
+    if len(specs) != 1 or not isinstance(specs[0], dict):
+        return False
+    spec = specs[0]
+    modality = str(spec.get("modality") or "").strip().lower()
+    task = str(spec.get("task") or "").strip().lower()
+    if modality != "video":
+        return False
+    if task in {"", "video_generation", "text_to_video", "t2v"}:
+        return not media
+    if task not in {"image_to_video", "i2v", "video_from_image", "video_edit"}:
+        return False
+
+    image_items = [item for item in list(media or []) if _is_image_media_item(item)]
+    if len(image_items) != 1 or len(list(media or [])) != 1:
+        return False
+    path = _media_path_from_item(image_items[0])
+    return bool(path and not path.lower().startswith("data:") and not path.startswith(("http://", "https://")))
+
+
 def _local_image_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[str, Any]) -> float:
     for raw in (
         os.environ.get("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_TIMEOUT_S"),
@@ -1094,6 +1117,26 @@ def _local_image_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[s
         if timeout > 0:
             return timeout
     return 3600.0
+
+
+def _local_video_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[str, Any]) -> float:
+    for raw in (
+        os.environ.get("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS_TIMEOUT_S"),
+        os.environ.get("ABSTRACTRUNTIME_LOCAL_MEDIA_SUBPROCESS_TIMEOUT_S"),
+        params.get("timeout_s"),
+        params.get("timeout"),
+        llm_kwargs.get("timeout_s"),
+        llm_kwargs.get("timeout"),
+    ):
+        if raw is None:
+            continue
+        try:
+            timeout = float(raw)
+        except Exception:
+            continue
+        if timeout > 0:
+            return timeout
+    return 7200.0
 
 
 def _run_local_image_subprocess(
@@ -1156,6 +1199,128 @@ def _run_local_image_subprocess(
     response = parsed.get("response")
     if not isinstance(response, dict):
         raise RuntimeError("Local image generation subprocess returned an invalid response.")
+    return _decode_subprocess_media_payload(response)
+
+
+def _run_local_video_subprocess(
+    *,
+    provider: str,
+    model: str,
+    llm_kwargs: Dict[str, Any],
+    prompt: str,
+    specs: List[Dict[str, Any]],
+    media: Optional[List[Any]],
+    timeout_s: float,
+    progress_callback: Optional[Any] = None,
+) -> Dict[str, Any]:
+    request = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "llm_kwargs": _jsonable(llm_kwargs or {}),
+        "prompt": str(prompt or ""),
+        "specs": _jsonable(specs),
+        "media": _jsonable(media or []),
+    }
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    def _invoke() -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [sys.executable, "-m", "abstractruntime.integrations.abstractcore.media_subprocess"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+
+    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS_SERIALIZE", default=True):
+        lock = _LOCAL_IMAGE_SUBPROCESS_LOCK
+    else:
+        lock = threading.Lock()
+
+    with lock:
+        proc = _invoke()
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(request, ensure_ascii=False))
+        proc.stdin.close()
+
+        parsed: Optional[Dict[str, Any]] = None
+        output_tail: List[str] = []
+        deadline = time.time() + float(timeout_s)
+        selector = selectors.DefaultSelector()
+        if proc.stdout is not None:
+            selector.register(proc.stdout, selectors.EVENT_READ)
+
+        def _consume_stdout_line(line: str) -> None:
+            nonlocal parsed
+            stripped = str(line).strip()
+            if stripped:
+                output_tail.append(stripped)
+                del output_tail[:-40]
+            try:
+                item = json.loads(stripped)
+            except Exception:
+                return
+            if not isinstance(item, dict):
+                return
+            if item.get("type") == "progress":
+                event = item.get("event")
+                if callable(progress_callback) and isinstance(event, dict):
+                    progress_callback(event)
+                return
+            parsed = item
+
+        try:
+            while True:
+                if time.time() >= deadline and proc.poll() is None:
+                    proc.kill()
+                    raise TimeoutError(f"Local video generation subprocess timed out after {timeout_s:.0f}s.")
+                ready = selector.select(timeout=0.25)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                for key, _mask in ready:
+                    line = key.fileobj.readline()
+                    if not line:
+                        if proc.poll() is not None:
+                            break
+                        continue
+                    _consume_stdout_line(line)
+                if proc.poll() is not None:
+                    break
+            if proc.stdout is not None:
+                try:
+                    remaining = proc.stdout.read()
+                except Exception:
+                    remaining = ""
+                for line in str(remaining or "").splitlines():
+                    _consume_stdout_line(line)
+        finally:
+            try:
+                selector.close()
+            except Exception:
+                pass
+
+        returncode = proc.wait()
+
+    if returncode != 0:
+        detail = ""
+        if parsed and parsed.get("ok") is False:
+            detail = str(parsed.get("error") or "")
+        if not detail:
+            detail = "\n".join(output_tail).strip() or "local video generation failed"
+        raise RuntimeError(
+            f"Local video generation subprocess exited with code {returncode}: {detail[-2000:]}"
+        )
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Local video generation subprocess returned no parseable response.")
+    if parsed.get("ok") is False:
+        raise RuntimeError(str(parsed.get("error") or "local video generation failed"))
+    response = parsed.get("response")
+    if not isinstance(response, dict):
+        raise RuntimeError("Local video generation subprocess returned an invalid response.")
     return _decode_subprocess_media_payload(response)
 
 
@@ -4423,7 +4588,7 @@ class LocalAbstractCoreLLMClient:
                 media_only = bool(specs) and all(
                     isinstance(spec, dict)
                     and (
-                        str(spec.get("modality") or "").strip().lower() in {"image", "voice"}
+                        str(spec.get("modality") or "").strip().lower() in {"image", "video", "voice"}
                         or (
                             str(spec.get("modality") or "").strip().lower() == "text"
                             and str(spec.get("task") or "").strip().lower() == "transcription"
@@ -4441,6 +4606,23 @@ class LocalAbstractCoreLLMClient:
                             prompt=str(prompt or ""),
                             specs=[dict(spec) for spec in specs],
                             timeout_s=_local_image_subprocess_timeout_s(params, getattr(self, "_llm_kwargs", {})),
+                        )
+                        result = _normalize_multimodal_response(
+                            result_obj,
+                            artifact_store=self._artifact_store,
+                            run_id=run_id,
+                            default_tags=default_artifact_tags,
+                        )
+                    elif _is_subprocess_safe_video_specs(specs, media):
+                        result_obj = _run_local_video_subprocess(
+                            provider=self._provider,
+                            model=self._model,
+                            llm_kwargs=getattr(self, "_llm_kwargs", {}),
+                            prompt=str(prompt or ""),
+                            specs=[dict(spec) for spec in specs],
+                            media=media,
+                            timeout_s=_local_video_subprocess_timeout_s(params, getattr(self, "_llm_kwargs", {})),
+                            progress_callback=params.get("on_progress"),
                         )
                         result = _normalize_multimodal_response(
                             result_obj,
@@ -5532,6 +5714,7 @@ class MultiLocalAbstractCoreLLMClient:
         self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
         self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
+        self._override_clients: Dict[Tuple[str, str, str, str], LocalAbstractCoreLLMClient] = {}
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._default_client = self._get_client(self._default_provider, self._default_model)
@@ -5542,13 +5725,22 @@ class MultiLocalAbstractCoreLLMClient:
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._default_provider, self._default_model
 
-    def _create_client(self, provider: str, model: str) -> LocalAbstractCoreLLMClient:
+    def _create_client(
+        self,
+        provider: str,
+        model: str,
+        *,
+        llm_kwargs_override: Optional[Dict[str, Any]] = None,
+    ) -> LocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
+        llm_kwargs = dict(self._llm_kwargs)
+        if llm_kwargs_override:
+            llm_kwargs.update(dict(llm_kwargs_override))
         try:
             return LocalAbstractCoreLLMClient(
                 provider=key[0],
                 model=key[1],
-                llm_kwargs=self._llm_kwargs,
+                llm_kwargs=llm_kwargs,
                 artifact_store=self._artifact_store,
                 bloc_root_dir=self._bloc_root_dir,
                 prompt_cache_export_root_dir=self._prompt_cache_export_root_dir,
@@ -5561,7 +5753,7 @@ class MultiLocalAbstractCoreLLMClient:
                 return LocalAbstractCoreLLMClient(
                     provider=key[0],
                     model=key[1],
-                    llm_kwargs=self._llm_kwargs,
+                    llm_kwargs=llm_kwargs,
                     artifact_store=self._artifact_store,
                     bloc_root_dir=self._bloc_root_dir,
                 )
@@ -5571,12 +5763,28 @@ class MultiLocalAbstractCoreLLMClient:
                 return LocalAbstractCoreLLMClient(
                     provider=key[0],
                     model=key[1],
-                    llm_kwargs=self._llm_kwargs,
+                    llm_kwargs=llm_kwargs,
                     artifact_store=self._artifact_store,
                 )
 
-    def _get_client(self, provider: str, model: str) -> LocalAbstractCoreLLMClient:
+    def _get_client(
+        self,
+        provider: str,
+        model: str,
+        *,
+        llm_kwargs_override: Optional[Dict[str, Any]] = None,
+    ) -> LocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
+        if llm_kwargs_override:
+            base_url = str(llm_kwargs_override.get("base_url") or "").strip()
+            api_key = str(llm_kwargs_override.get("api_key") or "").strip()
+            api_key_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16] if api_key else ""
+            override_key = (key[0], key[1], base_url, api_key_fp)
+            client = self._override_clients.get(override_key)
+            if client is None:
+                client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
+                self._override_clients[override_key] = client
+            return client
         client = self._clients.get(key)
         if client is None:
             client = self._create_client(key[0], key[1])
@@ -5590,7 +5798,12 @@ class MultiLocalAbstractCoreLLMClient:
 
     def list_loaded_clients(self) -> List[Tuple[str, str]]:
         """Return (provider, model) pairs loaded in this process (best-effort)."""
-        return list(self._clients.keys())
+        out = list(self._clients.keys())
+        for provider, model, _base_url, _api_key_fp in self._override_clients.keys():
+            pair = (provider, model)
+            if pair not in out:
+                out.append(pair)
+        return out
 
     def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         _ = kwargs
@@ -5996,7 +6209,15 @@ class MultiLocalAbstractCoreLLMClient:
         )
         model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
 
-        client = self._get_client(provider_str, model_str)
+        llm_kwargs_override: Dict[str, Any] = {}
+        base_url = params.pop("base_url", None)
+        if isinstance(base_url, str) and base_url.strip():
+            llm_kwargs_override["base_url"] = base_url.strip()
+        provider_api_key = _pop_provider_api_key(params)
+        if provider_api_key:
+            llm_kwargs_override["api_key"] = provider_api_key
+
+        client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
         return client.generate(
             prompt=prompt,
             messages=messages,

@@ -391,6 +391,95 @@ def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -
         )
 
 
+def test_local_video_media_only_runs_in_subprocess_and_stores_generated_bytes(monkeypatch, tmp_path) -> None:
+    store = InMemoryArtifactStore()
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-source")
+    calls = []
+    progress_events = []
+
+    class _InProcessVideoLLM:
+        def _run_multimodal_spec(self, **_kwargs):
+            raise AssertionError("video generation must be isolated from the runtime process")
+
+    def fake_subprocess(**kwargs):
+        calls.append(kwargs)
+        callback = kwargs.get("progress_callback")
+        if callable(callback):
+            callback({"phase": "denoise", "step": 1, "total_steps": 2, "frame": 1, "total_frames": 2, "progress": 0.5})
+        return {
+            "outputs": {
+                "video": [
+                    {
+                        "modality": "video",
+                        "task": "image_to_video",
+                        "data": b"mp4-from-subprocess",
+                        "content_type": "video/mp4",
+                        "format": "mp4",
+                        "provider": "mlx-gen",
+                        "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                    }
+                ]
+            },
+            "metadata": {
+                "media_only": True,
+                "subprocess": True,
+                "runtime_provider": "mlx",
+                "runtime_model": "qwen3.5-2b",
+                "execution_mode": "local_video_subprocess",
+            },
+        }
+
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.llm_client._run_local_video_subprocess",
+        fake_subprocess,
+    )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen3.5-2b"
+    client._llm_kwargs = {"enable_tracing": True}
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _InProcessVideoLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out = client.generate(
+        prompt="make it move",
+        media=[{"file_path": str(image_path), "content_type": "image/png", "type": "image"}],
+        params={
+            "output": {
+                "modality": "video",
+                "task": "image_to_video",
+                "provider": "mlx-gen",
+                "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+                "run_id": "run-video",
+                "tags": {"node_id": "n-video"},
+            },
+            "trace_metadata": {"run_id": "run-video", "node_id": "n-video"},
+            "on_progress": progress_events.append,
+        },
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "mlx"
+    assert calls[0]["model"] == "qwen3.5-2b"
+    assert calls[0]["specs"][0]["provider"] == "mlx-gen"
+    assert calls[0]["media"][0]["file_path"] == str(image_path)
+    assert progress_events and progress_events[0]["progress"] == 0.5
+    item = out["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-from-subprocess"
+    assert artifact.metadata.run_id == "run-video"
+    assert artifact.metadata.tags["node_id"] == "n-video"
+    assert artifact.metadata.tags["kind"] == "generated_media"
+    assert out["runtime_provider"] == "mlx"
+    assert out["runtime_model"] == "qwen3.5-2b"
+    assert out["media_provider"] == "mlx-gen"
+    assert out["media_model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+
+
 def test_local_generated_media_requires_artifact_store_before_provider_call() -> None:
     class _UnexpectedLLM:
         def generate(self, **kwargs):

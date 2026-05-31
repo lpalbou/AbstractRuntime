@@ -147,16 +147,109 @@ def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return params safe for persisted runtime observability traces."""
 
     callback_keys = {"on_progress", "progress_callback", "progress_event_callback"}
+    sensitive_fragments = ("api_key", "api-key", "apikey", "authorization", "password", "secret", "token")
     out: Dict[str, Any] = {}
     for key, value in dict(params or {}).items():
         key_s = str(key)
         if key_s in callback_keys or callable(value):
+            continue
+        if any(fragment in key_s.lower() for fragment in sensitive_fragments):
+            out[key_s] = "[redacted]" if value not in (None, "") else value
             continue
         out[key_s] = value
     return out
 
 
 _MISSING = object()
+
+
+def _first_output_provider(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        provider = value.get("provider")
+        if isinstance(provider, str) and provider.strip():
+            return provider.strip()
+        specs = value.get("specs")
+        if isinstance(specs, list):
+            for item in specs:
+                found = _first_output_provider(item)
+                if found:
+                    return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _first_output_provider(item)
+            if found:
+                return found
+    return None
+
+
+def _replace_output_provider(value: Any, *, old_provider: str, new_provider: str) -> Any:
+    old_norm = str(old_provider or "").strip().lower()
+    if not old_norm or not isinstance(new_provider, str) or not new_provider.strip():
+        return value
+    if isinstance(value, dict):
+        out = dict(value)
+        provider = out.get("provider")
+        if isinstance(provider, str) and provider.strip().lower() == old_norm:
+            out["provider"] = new_provider.strip()
+        if isinstance(out.get("specs"), list):
+            out["specs"] = [_replace_output_provider(item, old_provider=old_provider, new_provider=new_provider) for item in out["specs"]]
+        return out
+    if isinstance(value, list):
+        return [_replace_output_provider(item, old_provider=old_provider, new_provider=new_provider) for item in value]
+    return value
+
+
+def _apply_provider_endpoint_profile_resolution(*, llm: AbstractCoreLLMClient, params: Dict[str, Any]) -> None:
+    """Resolve a host-provided virtual provider profile into Core routing params.
+
+    Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM
+    client. Runtime keeps this as a generic optional hook so it does not import
+    Gateway, and only the transient `params` dict receives the raw provider key.
+    """
+
+    resolver = getattr(llm, "resolve_provider_endpoint_profile", None)
+    if not callable(resolver):
+        return
+    provider = params.get("_provider")
+    if not (isinstance(provider, str) and provider.strip()):
+        provider = _first_output_provider(params.get("output"))
+    if not (isinstance(provider, str) and provider.strip()):
+        return
+    try:
+        resolved = resolver(provider.strip())
+    except Exception as exc:
+        raise RuntimeError(f"Failed to resolve provider endpoint profile {provider!r}: {exc}") from exc
+    if not isinstance(resolved, dict):
+        return
+
+    provider_family = str(resolved.get("provider") or resolved.get("provider_family") or "").strip()
+    if not provider_family:
+        raise RuntimeError(f"Provider endpoint profile {provider!r} did not resolve to a provider family.")
+
+    params["_provider"] = provider_family
+    if "output" in params:
+        params["output"] = _replace_output_provider(params.get("output"), old_provider=provider, new_provider=provider_family)
+
+    base_url = resolved.get("base_url")
+    if isinstance(base_url, str) and base_url.strip() and not str(params.get("base_url") or "").strip():
+        params["base_url"] = base_url.strip()
+
+    api_key = resolved.get("api_key")
+    if isinstance(api_key, str) and api_key.strip():
+        existing_key = params.get("provider_api_key") or params.get("api_key")
+        if not (isinstance(existing_key, str) and existing_key.strip()):
+            params["provider_api_key"] = api_key.strip()
+
+    metadata = {
+        "id": str(resolved.get("id") or "").strip(),
+        "virtual_provider": str(resolved.get("virtual_provider") or provider).strip(),
+        "display_name": str(resolved.get("display_name") or "").strip(),
+        "provider_family": provider_family,
+        "scope": str(resolved.get("scope") or "").strip(),
+        "base_url_configured": bool(str(resolved.get("base_url") or "").strip()),
+        "api_key_set": bool(isinstance(api_key, str) and api_key.strip()),
+    }
+    params["_provider_endpoint_profile"] = {k: v for k, v in metadata.items() if v not in ("", None)}
 
 
 def _coerce_media_input(media: Any) -> Any:
@@ -995,6 +1088,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             params["_provider"] = provider.strip()
         if isinstance(model, str) and model.strip():
             params["_model"] = model.strip()
+        _apply_provider_endpoint_profile_resolution(llm=llm, params=params)
 
         default_provider, default_model = _llm_prompt_cache_identity(llm)
         if output_request is not _MISSING and output_request_has_non_text_result(output_request):

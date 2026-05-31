@@ -33,7 +33,7 @@ Scheduler convenience wrapper:
 from abstractruntime import create_scheduled_runtime
 ```
 
-Optional integration (requires `abstractruntime[abstractcore]`):
+AbstractCore integration (included in the base `abstractruntime` install):
 
 ```python
 from abstractruntime.integrations.abstractcore import (
@@ -176,11 +176,11 @@ Implementation: `src/abstractruntime/history_bundle.py`.
 
 This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
 
-## Optional integrations
+## Runtime-owned integrations
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install "abstractruntime[abstractcore]"` (AbstractCore 2.13.30 or newer).
+Requires: `pip install abstractruntime` (AbstractCore 2.13.31 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -206,14 +206,14 @@ Entry points:
 - `params`: provider/model routing, generation controls, prompt-cache keys or `prompt_cache_binding`, structured-output schema options, and tracing metadata
 
 Multimodal support:
-- install `abstractruntime[multimodal]` for common AbstractCore media, vision, voice, audio, and music dependencies
+- common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and generated image/video tasks also report `execution_mode="local_one_shot_subprocess"`
-- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
+- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected local-inference profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection

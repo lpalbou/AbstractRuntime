@@ -28,9 +28,9 @@ Examples 1-5 only require abstractruntime:
 pip install abstractruntime
 ```
 
-Examples 6-7 require additional packages:
+Examples 6-7 use Runtime's base AbstractCore integration:
 ```bash
-pip install "abstractruntime[abstractcore]"
+pip install abstractruntime
 # Example 07 also requires AbstractAgent (separate package/repo).
 # Also requires Ollama running locally with qwen3:4b-instruct-2507-q4_K_M
 ```

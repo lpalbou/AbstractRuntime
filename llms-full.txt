@@ -10,19 +10,19 @@ This file is an **agent-oriented build guide** for the AbstractRuntime *library*
 
 Quick facts:
 - Python: 3.10+ (`pyproject.toml`)
-- Version: 0.4.25
+- Version: 0.4.26
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella; pairs with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Public export surface (source of truth): `src/abstractruntime/__init__.py`
-- Optional AbstractCore baseline: `abstractruntime[abstractcore]` installs `abstractcore>=2.13.30`
-- Multimodal extra: `abstractruntime[multimodal]` installs `abstractcore[remote,vision,voice,audio,music]>=2.13.30`
-- Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned env/config should be translated into explicit Runtime inputs or Runtime-owned env names.
+- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,media,tools,vision,voice,audio,music]>=2.13.31`
+- Install profiles: base `abstractruntime` is remote-light with MCP and multimodal routing; `abstractruntime[apple]` and `abstractruntime[gpu]` add local inferencer stacks.
+- Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned env/config should be translated into explicit Runtime inputs or Runtime-owned env names. Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM client; Runtime treats it as an optional resolver hook, injects transient provider/base URL/key params for the call, and redacts secret-like params from persisted observability.
 
 ```mermaid
 flowchart LR
   Host["Host app / service"] -->|"WorkflowSpec"| RT["AbstractRuntime"]
   RT -->|"checkpoints"| RS["RunStore"]
   RT -->|"append-only"| LS["LedgerStore"]
-  RT -->|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore (optional)"]
+  RT -->|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore"]
 ```
 
 ## What AbstractRuntime is (and is not)
@@ -207,9 +207,10 @@ What you get:
 - generated image, video, voice/audio, and music outputs via AbstractCore's unified `generate(..., output=...)` selector
 - generated binary outputs require a runtime ArtifactStore and are normalized to ArtifactStore refs instead of inline bytes
 - hardened remote provider-key routing: server auth uses `Authorization`, provider overrides use `X-AbstractCore-Provider-API-Key`
-- optional MCP worker entrypoint (`abstractruntime-mcp-worker`)
+- host endpoint-profile resolver hook for virtual provider ids such as Gateway's `endpoint:*`, resolved only into transient call params
+- MCP worker entrypoint (`abstractruntime-mcp-worker`)
 
-Quick start (local mode, requires `pip install "abstractruntime[abstractcore]"`):
+Quick start (local mode, requires `pip install abstractruntime`):
 
 ```python
 from abstractruntime.integrations.abstractcore import create_local_runtime
@@ -221,11 +222,11 @@ Notes:
 - Tool calls and results are durable (ledger + checkpoints). Keep secrets out of tool arguments.
 - Use `ApprovalToolExecutor(delegate=..., policy=ToolApprovalPolicy())` when a local host should auto-run safe tools but pause for user approval before write/command/unknown tools.
 - Remote `params.api_key` and `params.provider_api_key` are compatibility inputs; runtime converts them to `X-AbstractCore-Provider-API-Key` headers for current AbstractCore servers.
-- Gateway/hosts choose Core server URLs, Core server auth headers, provider/model defaults, tool executors, artifact stores, and any Gateway env/config translation before Runtime sees the call.
+- Gateway/hosts choose Core server URLs, Core server auth headers, provider/model defaults, tool executors, artifact stores, endpoint-profile resolvers, and any Gateway env/config translation before Runtime sees the call.
 - Hosts should bind `get_abstractcore_host_facade(rt)` for prompt-cache, durable bloc/KV, and model-residency control operations, and use the Runtime-owned email wrapper layer (`get_abstractcore_host_facade(rt)` or `abstractruntime.integrations.abstractcore.comms_facade`) for host-local email helper operations instead of importing `abstractcore.tools.comms_tools` directly.
 - Hosts should use `abstractruntime.integrations.abstractcore.telegram_facade` for Telegram TDLib bootstrap/global-client/send helpers instead of importing `abstractcore.tools.telegram_tdlib` or `abstractcore.tools.telegram_tools` directly. These wrappers remain host-local and do not proxy through a remote Core server.
 - If an outbound email or Telegram send belongs to a run, hosts should prefer `get_abstractcore_run_facade(rt).send_email(...)` or `send_telegram_message(...)`. Those are durable `TOOL_CALLS` child runs: Runtime records the request and outcome, and replay should reuse the recorded result instead of resending the message. If the child run waits for approval or passthrough host execution, resume it through the same public boundary with `resume_tool_calls(...)`.
-- Use `pip install "abstractruntime[multimodal]"` for common AbstractCore media, vision, voice, audio, and music dependencies.
+- Common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install.
 - Optional comms tools (email/WhatsApp/Telegram) are gated by env vars; see `docs/tools-comms.md` and code `src/abstractruntime/integrations/abstractcore/default_tools.py`.
 - Read-file session attachment registration is bounded by `TOOL_CALLS.payload.max_attachment_bytes`, `run.vars["_runtime"]["max_attachment_bytes"]`, `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`, then the 25 MiB default.
 

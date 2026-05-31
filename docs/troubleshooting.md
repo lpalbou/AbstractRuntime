@@ -13,15 +13,14 @@ Checks:
 
 ```bash
 python -m pip show AbstractRuntime abstractcore
-python -m pip install -U "abstractruntime[abstractcore]"
+python -m pip install -U abstractruntime
 ```
 
 Fix:
-- Install the matching optional extra for the surface you need:
-  - `abstractruntime[abstractcore]` for LLM/tools integration.
-  - `abstractruntime[multimodal]` for common image, voice, audio, and music dependencies.
-  - `abstractruntime[mcp-worker]` for the MCP worker entry point.
-- The current AbstractCore integration expects `abstractcore>=2.13.30`.
+- Install or upgrade the base Runtime package. LLM/tools integration, common
+  remote-light multimodal dependencies, and the MCP worker entry point are part
+  of the base install.
+- The current AbstractCore integration expects `abstractcore>=2.13.31`.
 
 Verify:
 
@@ -127,7 +126,7 @@ Symptom:
 Fix:
 
 ```bash
-python -m pip install -U "abstractruntime[mcp-worker]"
+python -m pip install -U abstractruntime
 abstractruntime-mcp-worker --help
 ```
 

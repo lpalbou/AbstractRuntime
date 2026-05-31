@@ -87,7 +87,7 @@ Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/ab
 
 Yes, when the configured AbstractCore provider/model supports the media. Pass `payload.media` as a path, a media dict, an artifact ref such as `{"$artifact": "..."}`, or a list of those. The runtime keeps the effect payload JSON-safe and materializes artifact refs into temporary provider-ready files for the call.
 
-Install `abstractruntime[multimodal]` for common media/vision/audio/music dependencies.
+Common remote-light media/vision/audio/music dependencies are included in the base `abstractruntime` install. Use `abstractruntime[apple]` or `abstractruntime[gpu]` only when this host should execute local inferencer stacks.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/effect_handlers.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
 ## How do I generate images, video, voice/audio, or music?
@@ -311,7 +311,7 @@ Docs: `workflow-bundles.md`, `architecture.md`. Code: `src/abstractruntime/workf
 
 ## How do I run the MCP worker?
 
-Use the `abstractruntime-mcp-worker` CLI (from the `mcp-worker` extra) and select toolsets explicitly.
+Use the `abstractruntime-mcp-worker` CLI from the base Runtime install and select toolsets explicitly.
 
 Docs: `mcp-worker.md`. Code: `src/abstractruntime/integrations/abstractcore/mcp_worker.py`.
 

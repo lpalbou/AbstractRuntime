@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.26] - 2026-05-31
+
+### Changed
+- Moved AbstractCore remote/tool/media capability integration and the MCP worker dependency set into the base `pip install abstractruntime` profile. Runtime now exposes only the base, `abstractruntime[apple]`, and `abstractruntime[gpu]` user install profiles for functionality vs. local-inferencer selection; the `abstractcore`, `multimodal`, `mcp-worker`, `all-apple`, and `all-gpu` extras are no longer part of the supported install surface.
+- Raised the AbstractCore dependency floor to `abstractcore>=2.13.31` so Runtime installs inherit the latest remote-light media and Wan A14B vision contracts.
+
+### Fixed
+- Local text-to-video and image-to-video media-only calls now run in an isolated subprocess, preserving progress callbacks while preventing native MLX/Metal video failures from killing the Gateway/Runtime parent process.
+
 ## [0.4.25] - 2026-05-29
 
 ### Added
@@ -570,7 +579,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.25...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.26...HEAD
+[0.4.26]: https://github.com/lpalbou/abstractruntime/compare/v0.4.25...v0.4.26
 [0.4.25]: https://github.com/lpalbou/abstractruntime/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...v0.4.24
 [0.4.23]: https://github.com/lpalbou/abstractruntime/compare/v0.4.22...v0.4.23

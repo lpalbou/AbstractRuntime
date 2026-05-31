@@ -1,6 +1,6 @@
 # MCP worker (`abstractruntime-mcp-worker`)
 
-AbstractRuntime ships an optional MCP worker that exposes AbstractCore toolsets over MCP (JSON-RPC) via:
+AbstractRuntime ships an MCP worker that exposes AbstractCore toolsets over MCP (JSON-RPC) via:
 - stdio (default)
 - HTTP (optional)
 
@@ -11,7 +11,7 @@ Entry point:
 ## Install
 
 ```bash
-pip install "abstractruntime[mcp-worker]"
+pip install abstractruntime
 ```
 
 ## Run (stdio)
@@ -51,4 +51,3 @@ abstractruntime-mcp-worker --transport http --toolsets files --http-allow-origin
 ## See also
 
 - `integrations/abstractcore.md` — tool executors and default toolsets
-

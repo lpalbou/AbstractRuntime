@@ -6,19 +6,24 @@ If you only read one doc after `README.md`, read this one.
 
 ## Install
 
-Core runtime:
+Remote-light runtime:
 
 ```bash
 pip install abstractruntime
 ```
 
-Optional (LLM + tools via AbstractCore):
+This installs AbstractCore 2.13.31 or newer with remote provider, media,
+vision, voice, audio, music, tool, and MCP-worker support. The base install is
+remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
+endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
+HuggingFace/Torch, Diffusers, or sentence-transformer embeddings.
+
+Use hardware profiles only when this Runtime host should execute local engines:
 
 ```bash
-pip install "abstractruntime[abstractcore]"
+pip install "abstractruntime[apple]"
+pip install "abstractruntime[gpu]"
 ```
-
-This installs AbstractCore 2.13.30 or newer, which matches the documented server auth, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool behavior, public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery. Use `abstractruntime[multimodal]` when your workflows need common media dependencies and capability plugins (installs `abstractcore[remote,vision,voice,audio,music]>=2.13.30`, including `abstractmusic>=0.1.12`).
 
 ## Mental model (source of truth)
 

@@ -1,7 +1,7 @@
 """Subprocess worker for local AbstractCore media generation.
 
 Native Apple/Metal backends can abort the interpreter on driver-level failures. Running
-local image generation in a worker process keeps the gateway/runtime parent alive and
+local media generation in a worker process keeps the gateway/runtime parent alive and
 turns those failures into ordinary step errors.
 """
 
@@ -127,8 +127,55 @@ def _image_kwargs_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         "response_format",
         "run_id",
         "tags",
+        "prompt",
     }
     return {str(k): v for k, v in spec.items() if str(k) not in ignored and v is not None}
+
+
+def _video_kwargs_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    ignored = {
+        "modality",
+        "task",
+        "format",
+        "content_type",
+        "mime_type",
+        "response_format",
+        "run_id",
+        "tags",
+    }
+    return {str(k): v for k, v in spec.items() if str(k) not in ignored and v is not None}
+
+
+def _media_path_from_item(item: Any) -> str:
+    if isinstance(item, str) and item.strip():
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("file_path", "filePath", "path"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _media_mime_from_item(item: Any) -> str:
+    if isinstance(item, dict):
+        for key in ("content_type", "mime_type", "mimeType", "mime"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    return ""
+
+
+def _is_image_media_item(item: Any) -> bool:
+    mime = _media_mime_from_item(item)
+    if mime.startswith("image/"):
+        return True
+    if isinstance(item, dict):
+        raw_type = item.get("type") or item.get("media_type") or item.get("mediaType")
+        if isinstance(raw_type, str) and raw_type.strip().lower() == "image":
+            return True
+    path = _media_path_from_item(item).lower()
+    return path.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
 
 
 def _run_image_spec(registry: Any, *, prompt: str, spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,6 +187,66 @@ def _run_image_spec(registry: Any, *, prompt: str, spec: Dict[str, Any]) -> Dict
     return {
         "modality": "image",
         "task": "image_generation",
+        "data": data,
+        "artifact_ref": artifact_ref,
+        "content_type": content_type,
+        "format": fmt,
+        "backend_id": getattr(registry.vision, "backend_id", None),
+        "provider": str(spec.get("provider") or getattr(registry.vision, "backend_id", None) or "abstractvision"),
+        "model": str(spec.get("model") or ""),
+        "metadata": metadata,
+    }
+
+
+def _emit_progress_event(event: Any) -> None:
+    print(
+        json.dumps(
+            {
+                "type": "progress",
+                "event": _jsonable(event),
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+
+
+def _run_video_spec(
+    registry: Any,
+    *,
+    prompt: str,
+    spec: Dict[str, Any],
+    media: Any,
+) -> Dict[str, Any]:
+    task = str(spec.get("task") or "").strip().lower()
+    fmt = str(spec.get("format") or "mp4").strip().lower() or "mp4"
+    content_type = str(spec.get("content_type") or spec.get("mime_type") or f"video/{fmt}")
+    kwargs = _video_kwargs_from_spec(spec)
+    extra = kwargs.get("extra")
+    extra_dict = dict(extra) if isinstance(extra, dict) else {}
+    extra_dict["on_progress"] = _emit_progress_event
+    kwargs["extra"] = extra_dict
+
+    if task in {"image_to_video", "i2v", "video_from_image", "video_edit"}:
+        image_items = [item for item in list(media or []) if _is_image_media_item(item)]
+        if len(image_items) != 1:
+            raise ValueError("Local image-to-video subprocess requires exactly one source image file.")
+        image_path = _media_path_from_item(image_items[0])
+        if not image_path:
+            raise ValueError("Local image-to-video subprocess media must include file_path.")
+        kwargs.setdefault("prompt", prompt)
+        raw = registry.vision.i2v(image_path, **kwargs)
+        normalized_task = "image_to_video"
+    elif task in {"", "video_generation", "text_to_video", "t2v"}:
+        raw = registry.vision.t2v(prompt, **kwargs)
+        normalized_task = "text_to_video"
+    else:
+        raise ValueError(f"Unsupported subprocess video task: {task!r}")
+
+    data, artifact_ref, metadata = _bytes_from_raw(raw)
+    return {
+        "modality": "video",
+        "task": normalized_task,
         "data": data,
         "artifact_ref": artifact_ref,
         "content_type": content_type,
@@ -186,6 +293,7 @@ def main() -> int:
         model = str(payload.get("model") or "").strip()
         llm_kwargs = payload.get("llm_kwargs") if isinstance(payload.get("llm_kwargs"), dict) else {}
         specs = payload.get("specs") if isinstance(payload.get("specs"), list) else []
+        media = payload.get("media") if isinstance(payload.get("media"), list) else []
         prompt = str(payload.get("prompt") or "")
         if not specs:
             raise ValueError("Missing output specs for local media subprocess.")
@@ -209,9 +317,14 @@ def main() -> int:
                 raise ValueError("Output spec must be an object.")
             modality = str(spec.get("modality") or "").strip().lower()
             task = str(spec.get("task") or "").strip().lower()
+            if modality == "image" and (not task or task in {"image_generation", "t2i", "text_to_image"}):
+                response.add_output("image", _run_image_spec(registry, prompt=prompt, spec=dict(spec)))
+                continue
+            if modality == "video":
+                response.add_output("video", _run_video_spec(registry, prompt=prompt, spec=dict(spec), media=media))
+                continue
             if modality != "image" or (task and task not in {"image_generation", "t2i", "text_to_image"}):
                 raise ValueError(f"Unsupported subprocess media spec: modality={modality!r} task={task!r}")
-            response.add_output("image", _run_image_spec(registry, prompt=prompt, spec=dict(spec)))
 
         print(json.dumps({"ok": True, "response": _serialize_response(response)}, ensure_ascii=False), flush=True)
         return 0

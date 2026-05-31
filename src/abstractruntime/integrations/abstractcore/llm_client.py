@@ -5780,10 +5780,14 @@ class MultiLocalAbstractCoreLLMClient:
             api_key = str(llm_kwargs_override.get("api_key") or "").strip()
             api_key_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16] if api_key else ""
             override_key = (key[0], key[1], base_url, api_key_fp)
-            client = self._override_clients.get(override_key)
+            override_clients = getattr(self, "_override_clients", None)
+            if override_clients is None:
+                override_clients = {}
+                self._override_clients = override_clients
+            client = override_clients.get(override_key)
             if client is None:
                 client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
-                self._override_clients[override_key] = client
+                override_clients[override_key] = client
             return client
         client = self._clients.get(key)
         if client is None:
@@ -5798,8 +5802,8 @@ class MultiLocalAbstractCoreLLMClient:
 
     def list_loaded_clients(self) -> List[Tuple[str, str]]:
         """Return (provider, model) pairs loaded in this process (best-effort)."""
-        out = list(self._clients.keys())
-        for provider, model, _base_url, _api_key_fp in self._override_clients.keys():
+        out = list(getattr(self, "_clients", {}).keys())
+        for provider, model, _base_url, _api_key_fp in getattr(self, "_override_clients", {}).keys():
             pair = (provider, model)
             if pair not in out:
                 out.append(pair)

@@ -1718,7 +1718,7 @@ Code: <code>src/abstractruntime/core/models.py</code> (<code>RunState</code>) an
 <p>Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <h2 id="can-llm_call-analyze-images-audio-or-files">Can <code>LLM_CALL</code> analyze images, audio, or files?<a class="headerlink" href="#can-llm_call-analyze-images-audio-or-files" title="Permanent link">&para;</a></h2>
 <p>Yes, when the configured AbstractCore provider/model supports the media. Pass <code>payload.media</code> as a path, a media dict, an artifact ref such as <code>{"$artifact": "..."}</code>, or a list of those. The runtime keeps the effect payload JSON-safe and materializes artifact refs into temporary provider-ready files for the call.</p>
-<p>Install <code>abstractruntime[multimodal]</code> for common media/vision/audio/music dependencies.
+<p>Common remote-light media/vision/audio/music dependencies are included in the base <code>abstractruntime</code> install. Use <code>abstractruntime[apple]</code> or <code>abstractruntime[gpu]</code> only when this host should execute local inferencer stacks.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
 <h2 id="how-do-i-generate-images-video-voiceaudio-or-music">How do I generate images, video, voice/audio, or music?<a class="headerlink" href="#how-do-i-generate-images-video-voiceaudio-or-music" title="Permanent link">&para;</a></h2>
 <p>Use <code>LLM_CALL</code> with AbstractCore's <code>output</code> selector:</p>
@@ -1871,7 +1871,7 @@ Safety depends on whether workflow code/spec has changed since the snapshot was 
 <p><code>WorkflowSpec</code> is an in-memory graph of Python callables (not portable). WorkflowBundles (<code>.flow</code>) distribute <strong>VisualFlow JSON</strong> plus a manifest; hosts compile VisualFlow JSON into <code>WorkflowSpec</code> using the VisualFlow compiler.</p>
 <p>Docs: <code>workflow-bundles.md</code>, <code>architecture.md</code>. Code: <code>src/abstractruntime/workflow_bundle/*</code>, <code>src/abstractruntime/visualflow_compiler/*</code>.</p>
 <h2 id="how-do-i-run-the-mcp-worker">How do I run the MCP worker?<a class="headerlink" href="#how-do-i-run-the-mcp-worker" title="Permanent link">&para;</a></h2>
-<p>Use the <code>abstractruntime-mcp-worker</code> CLI (from the <code>mcp-worker</code> extra) and select toolsets explicitly.</p>
+<p>Use the <code>abstractruntime-mcp-worker</code> CLI from the base Runtime install and select toolsets explicitly.</p>
 <p>Docs: <code>mcp-worker.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/mcp_worker.py</code>.</p>
 <h2 id="where-should-i-look-for-runnable-examples">Where should I look for runnable examples?<a class="headerlink" href="#where-should-i-look-for-runnable-examples" title="Permanent link">&para;</a></h2>
 <ul>

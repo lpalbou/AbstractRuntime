@@ -1305,16 +1305,17 @@
 - tool executors: <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>
 - default toolsets (incl. comms gating): <code>src/abstractruntime/integrations/abstractcore/default_tools.py</code></p>
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>This extra installs AbstractCore 2.13.30 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.</p>
-<p>For AbstractCore's multimodal <code>generate(..., output=...)</code> path, use the newer baseline and optional media packages:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[multimodal]&quot;</span>
+<p>The base install includes AbstractCore 2.13.31 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.</p>
+<p>The base install also includes the remote-light media/capability plugins needed
+for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
+image/video/voice/music generation still depends on configured AbstractCore
+capability backends and hardware profiles:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[apple]&quot;</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[gpu]&quot;</span>
 </code></pre></div>
-<p>This installs <code>abstractcore[remote,vision,voice,audio,music]&gt;=2.13.30</code>. Local image/video/voice/music generation still depends on the configured AbstractCore capability backends (for example AbstractVision, AbstractVoice, and AbstractMusic, or OpenAI/OpenAI-compatible remote engines). With <code>abstractmusic&gt;=0.1.12</code>, the base music extra includes the lightweight remote ACE Music backend without local model-runtime extras.</p>
-<p>The MCP worker entrypoint uses the <code>mcp-worker</code> extra:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
-</code></pre></div>
+<p>With <code>abstractmusic&gt;=0.1.12</code>, the base music integration includes the lightweight remote ACE Music backend without local model-runtime extras. The MCP worker entrypoint is included in the base Runtime install.</p>
 <h2 id="execution-modes">Execution modes<a class="headerlink" href="#execution-modes" title="Permanent link">&para;</a></h2>
 <p>The factories implement three execution modes (ADR-0002):
 - <strong>Local</strong>: in-process AbstractCore providers + local tool execution
@@ -1385,7 +1386,7 @@ the current process. Remote model execution is a separate topology exposed throu
 <p>Notes:
 - Remote mode supports per-request dynamic routing by forwarding <code>params.base_url</code> to the AbstractCore server request body (<code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>).
 - Remote mode sends per-request provider key overrides from <code>params.api_key</code> / <code>params.provider_api_key</code> as <code>X-AbstractCore-Provider-API-Key</code> headers. Server/master auth should be supplied separately through the client's configured headers, usually <code>Authorization: Bearer &lt;ABSTRACTCORE_SERVER_API_KEY&gt;</code>.
-- Local mode treats <code>base_url</code> as a provider construction concern; the local client intentionally strips <code>params.base_url</code>.
+- Local mode treats <code>base_url</code> and provider API keys as provider-construction concerns. <code>MultiLocalAbstractCoreLLMClient</code> can construct a per-call client when a host injects <code>params.base_url</code> plus <code>params.api_key</code> or <code>params.provider_api_key</code> (for example from a Gateway provider endpoint profile), then strips those fields before calling the provider.
 - <code>media</code> accepts one item or a list. Durable artifact refs such as <code>{"$artifact": "...", "filename": "speech.wav"}</code> are materialized to temporary files for AbstractCore and never stored as raw bytes in <code>RunState</code>.
 - <code>output</code> may be top-level or inside <code>params</code>; top-level <code>outputs</code> is accepted as a runtime alias for AbstractCore's <code>output</code>.
 - <code>output.tags</code>, when present, are merged into the generated artifact metadata. Runtime metadata such as <code>run_id</code> and <code>tags</code> is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.

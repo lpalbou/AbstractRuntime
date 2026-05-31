@@ -1072,14 +1072,13 @@
   optional dependencies.</p>
 <p>Checks:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>show<span class="w"> </span>AbstractRuntime<span class="w"> </span>abstractcore
-python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>abstractruntime
 </code></pre></div>
 <p>Fix:
-- Install the matching optional extra for the surface you need:
-  - <code>abstractruntime[abstractcore]</code> for LLM/tools integration.
-  - <code>abstractruntime[multimodal]</code> for common image, voice, audio, and music dependencies.
-  - <code>abstractruntime[mcp-worker]</code> for the MCP worker entry point.
-- The current AbstractCore integration expects <code>abstractcore&gt;=2.13.30</code>.</p>
+- Install or upgrade the base Runtime package. LLM/tools integration, common
+  remote-light multimodal dependencies, and the MCP worker entry point are part
+  of the base install.
+- The current AbstractCore integration expects <code>abstractcore&gt;=2.13.31</code>.</p>
 <p>Verify:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])&quot;</span>
 </code></pre></div>
@@ -1151,7 +1150,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <p>Symptom:
 - <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>
 <p>Fix:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>abstractruntime
 abstractruntime-mcp-worker<span class="w"> </span>--help
 </code></pre></div>
 <p>Docs:

@@ -1020,14 +1020,14 @@
 
 
 <h1 id="mcp-worker-abstractruntime-mcp-worker">MCP worker (<code>abstractruntime-mcp-worker</code>)<a class="headerlink" href="#mcp-worker-abstractruntime-mcp-worker" title="Permanent link">&para;</a></h1>
-<p>AbstractRuntime ships an optional MCP worker that exposes AbstractCore toolsets over MCP (JSON-RPC) via:
+<p>AbstractRuntime ships an MCP worker that exposes AbstractCore toolsets over MCP (JSON-RPC) via:
 - stdio (default)
 - HTTP (optional)</p>
 <p>Entry point:
 - CLI script: <code>abstractruntime-mcp-worker</code> (<code>pyproject.toml</code>)
 - implementation: <code>src/abstractruntime/integrations/abstractcore/mcp_worker.py</code></p>
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[mcp-worker]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
 <h2 id="run-stdio">Run (stdio)<a class="headerlink" href="#run-stdio" title="Permanent link">&para;</a></h2>
 <p>Choose toolsets explicitly (comma-separated):</p>

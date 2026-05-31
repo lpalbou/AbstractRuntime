@@ -459,15 +459,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#optional-integrations" class="md-nav__link">
+  <a href="#runtime-owned-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional integrations
+        Runtime-owned integrations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Optional integrations">
+    <nav class="md-nav" aria-label="Runtime-owned integrations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1193,15 +1193,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#optional-integrations" class="md-nav__link">
+  <a href="#runtime-owned-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional integrations
+        Runtime-owned integrations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Optional integrations">
+    <nav class="md-nav" aria-label="Runtime-owned integrations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1294,7 +1294,7 @@
 <p>Scheduler convenience wrapper:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_scheduled_runtime</span>
 </code></pre></div>
-<p>Optional integration (requires <code>abstractruntime[abstractcore]</code>):</p>
+<p>AbstractCore integration (included in the base <code>abstractruntime</code> install):</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ApprovalToolExecutor</span><span class="p">,</span>
     <span class="n">MappingToolExecutor</span><span class="p">,</span>
@@ -1401,9 +1401,9 @@
 <li><code>persist_workflow_snapshot(...)</code></li>
 </ul>
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.</p>
-<h2 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h2>
+<h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install "abstractruntime[abstractcore]"</code> (AbstractCore 2.13.30 or newer).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.13.31 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1425,14 +1425,14 @@
 - <code>output</code>: AbstractCore output selector; top-level <code>outputs</code> is accepted as a runtime alias
 - <code>params</code>: provider/model routing, generation controls, prompt-cache keys or <code>prompt_cache_binding</code>, structured-output schema options, and tracing metadata</p>
 <p>Multimodal support:
-- install <code>abstractruntime[multimodal]</code> for common AbstractCore media, vision, voice, audio, and music dependencies
+- common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
 - media-only normalized results expose <code>runtime_provider</code> / <code>runtime_model</code> separately from <code>media_provider</code> / <code>media_model</code>
 - optional local media residency failures complete with <code>status_hint="warning"</code> and <code>degraded=true</code>; unsupported local media warmup for <code>image_generation</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> reports <code>requires_long_lived_server=true</code>, and generated image/video tasks also report <code>execution_mode="local_one_shot_subprocess"</code>
-- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected Core/capability install profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs</p>
+- Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected local-inference profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs</p>
 <p>Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code> or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default

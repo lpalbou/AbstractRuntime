@@ -1076,7 +1076,7 @@
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tool_executor</span><span class="p">)</span>
 </code></pre></div>
 <p>Notes:
-- Install extras: <code>pip install "abstractruntime[abstractcore]"</code> (or <code>abstractruntime[mcp-worker]</code>).
+- Install Runtime with <code>pip install abstractruntime</code>; AbstractCore tool integration and the MCP worker entry point are part of the base remote-light install.
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (<code>PassthroughToolExecutor</code> in <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>).
 - For local bridge-owned delivery flows, <code>ApprovalToolExecutor</code> can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable <code>TOOL_CALLS</code> path, Runtime also exposes <strong>host wrappers</strong> for operator-owned email and Telegram surfaces:

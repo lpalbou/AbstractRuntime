@@ -1067,13 +1067,18 @@
 <p>This guide gets you from install to a durable <strong>pause → resume</strong> workflow quickly.</p>
 <p>If you only read one doc after <code>README.md</code>, read this one.</p>
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
-<p>Core runtime:</p>
+<p>Remote-light runtime:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>Optional (LLM + tools via AbstractCore):</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[abstractcore]&quot;</span>
+<p>This installs AbstractCore 2.13.31 or newer with remote provider, media,
+vision, voice, audio, music, tool, and MCP-worker support. The base install is
+remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
+endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
+HuggingFace/Torch, Diffusers, or sentence-transformer embeddings.</p>
+<p>Use hardware profiles only when this Runtime host should execute local engines:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[apple]&quot;</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[gpu]&quot;</span>
 </code></pre></div>
-<p>This installs AbstractCore 2.13.30 or newer, which matches the documented server auth, provider-key header routing, generated-media contracts, capability catalog, prompt-cache control plane, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool behavior, public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery. Use <code>abstractruntime[multimodal]</code> when your workflows need common media dependencies and capability plugins (installs <code>abstractcore[remote,vision,voice,audio,music]&gt;=2.13.30</code>, including <code>abstractmusic&gt;=0.1.12</code>).</p>
 <h2 id="mental-model-source-of-truth">Mental model (source of truth)<a class="headerlink" href="#mental-model-source-of-truth" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Workflows are in-memory graphs: <code>WorkflowSpec</code> (<code>src/abstractruntime/core/spec.py</code>)</li>

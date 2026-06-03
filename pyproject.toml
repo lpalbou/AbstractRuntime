@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.26"
+version = "0.4.27"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,7 +44,7 @@ dependencies = [
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing are available without selecting
   # local inference engines.
-  "abstractcore[remote,media,tools,vision,voice,audio,music]>=2.13.31",
+  "abstractcore[remote,media,tools,vision,voice,audio,music]>=2.13.32",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -58,12 +58,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[all-apple]>=2.13.31",
+  "abstractcore[all-apple]>=2.13.32",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[all-gpu]>=2.13.31",
+  "abstractcore[all-gpu]>=2.13.32",
   "setuptools<82.0.0,>=80.10.2",
 ]
 

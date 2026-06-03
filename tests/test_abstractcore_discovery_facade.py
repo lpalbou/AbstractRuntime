@@ -229,6 +229,15 @@ class _RecordingRequestSender:
                     ],
                 }
             )
+        if url == "http://core.test/v1/models?provider=ollama&input_type=image&output_type=text":
+            return _HttpResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": "ollama/llava"},
+                    ],
+                }
+            )
         if url == "http://core.test/v1/models?provider=lmstudio&output_type=embeddings&base_url=http%3A%2F%2Fprovider.test%2Fv1":
             return _HttpResponse(
                 {
@@ -576,10 +585,12 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_provider_models",
-        lambda provider_name, *, base_url=None, provider_api_key=None, timeout_s=None: {
+        lambda provider_name, *, base_url=None, provider_api_key=None, input_type=None, output_type=None, timeout_s=None: {
             "provider": provider_name,
             "models": [base_url or "default"],
             "provider_api_key": provider_api_key,
+            "input_type": input_type,
+            "output_type": output_type,
             "timeout_s": timeout_s,
         },
     )
@@ -676,6 +687,8 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         "provider": "ollama",
         "models": ["http://provider.test/v1"],
         "provider_api_key": "secret",
+        "input_type": None,
+        "output_type": None,
         "timeout_s": None,
     }
     assert client.list_embedding_models(base_url="http://provider.test/v1", api_key="secret", provider="lmstudio") == {
@@ -870,6 +883,36 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
 
 
+def test_local_stt_provider_models_use_provider_scoped_fast_path(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    calls: list[str] = []
+
+    class _FakeVoice:
+        def voice_catalog(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+            _ = args, kwargs
+            calls.append("voice_catalog")
+            raise AssertionError("provider-scoped STT model lookup must not build the full voice catalog")
+
+        def list_stt_models(self, provider: str | None = None) -> List[str]:
+            calls.append(f"list_stt_models:{provider}")
+            return ["large-v3"] if provider == "faster-whisper" else []
+
+    class _FakeRegistry:
+        voice = _FakeVoice()
+
+    monkeypatch.setattr(discovery_queries, "_runtime_capability_registry", lambda **_kwargs: _FakeRegistry())
+
+    payload = discovery_queries.local_list_stt_models(provider="faster-whisper")
+
+    assert calls == ["list_stt_models:faster-whisper"]
+    assert payload["models"] == ["large-v3"]
+    assert payload["stt_models_by_provider"] == {"faster-whisper": ["large-v3"]}
+    assert payload["provider_models"] == [
+        {"id": "faster-whisper/large-v3", "provider": "faster-whisper", "model": "large-v3"}
+    ]
+
+
 def test_local_embedding_provider_catalog_comes_from_core(monkeypatch) -> None:
     from abstractruntime.integrations.abstractcore import discovery_queries
 
@@ -937,6 +980,49 @@ def test_local_cached_vision_models_preserve_helper_error_details(monkeypatch) -
     assert payload["source"] == "abstractvision.local_cache"
 
 
+def test_local_provider_models_forward_capability_filters(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    calls: list[Dict[str, Any]] = []
+
+    def fake_models(provider: str, **kwargs: Any) -> list[str]:
+        calls.append({"provider": provider, **kwargs})
+        return ["vlm-model"]
+
+    monkeypatch.setattr("abstractcore.providers.registry.get_available_models_for_provider", fake_models)
+
+    payload = discovery_queries.local_list_provider_models(
+        "lmstudio",
+        input_type="image",
+        output_type="text",
+    )
+
+    assert payload["models"] == ["vlm-model"]
+    assert calls[0]["provider"] == "lmstudio"
+    assert [item.value for item in calls[0]["input_capabilities"]] == ["image"]
+    assert [item.value for item in calls[0]["output_capabilities"]] == ["text"]
+
+
+def test_local_provider_models_reject_invalid_capability_filters(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    called = False
+
+    def fake_models(provider: str, **kwargs: Any) -> list[str]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("abstractcore.providers.registry.get_available_models_for_provider", fake_models)
+
+    payload = discovery_queries.local_list_provider_models("lmstudio", input_type="unsupported")
+
+    assert payload["available"] is False
+    assert payload["models"] == []
+    assert payload["error"] == "Unsupported input_type filter: unsupported"
+    assert called is False
+
+
 def test_discovery_facade_preserves_model_capability_lookup_failures(monkeypatch) -> None:
     monkeypatch.setattr(
         "abstractcore.architectures.detection.get_model_capabilities",
@@ -978,6 +1064,11 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         "ollama",
         base_url="http://provider.test/v1",
         api_key="secret",
+    )
+    filtered_provider_models = facade.list_provider_models(
+        "ollama",
+        input_type="image",
+        output_type="text",
     )
     embeddings = facade.list_embedding_models(
         provider="lmstudio",
@@ -1023,6 +1114,7 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
     assert provider_models["models"] == ["llama", "qwen"]
     assert provider_models["source"] == "abstractcore.remote"
     assert provider_models["available"] is True
+    assert filtered_provider_models["models"] == ["llava"]
     assert embeddings["provider"] == "lmstudio"
     assert embeddings["models"] == ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]
     assert embeddings["models_by_provider"] == {"lmstudio": ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]}
@@ -1068,6 +1160,12 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
             "method": "GET",
             "url": "http://core.test/v1/models?provider=ollama&base_url=http%3A%2F%2Fprovider.test%2Fv1",
             "headers": {"X-Test": "1", "X-AbstractCore-Provider-API-Key": "secret"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/models?provider=ollama&input_type=image&output_type=text",
+            "headers": {"X-Test": "1"},
             "timeout": 12.0,
         },
         {

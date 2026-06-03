@@ -266,11 +266,13 @@ def _detect_country() -> str:
 
     Order:
     1) Explicit env override: ABSTRACT_COUNTRY / ABSTRACTFRAMEWORK_COUNTRY
-    2) Locale region from `locale.getlocale()` or locale env vars (LANG/LC_ALL/LC_CTYPE)
-    3) Timezone (IANA name) via zone.tab mapping
+    2) Timezone (IANA name) via zone.tab mapping
+    3) Locale region from `locale.getlocale()` or locale env vars (LANG/LC_ALL/LC_CTYPE)
 
     Notes:
     - Avoid parsing encoding-only strings like `UTF-8` as a country (a common locale env pitfall).
+    - Prefer timezone over locale: hosted shells frequently inherit an `en_US` locale even when
+      the runtime is actually operating in another local timezone.
     - If no reliable region is found, return `XX` (unknown).
     """
 
@@ -297,6 +299,12 @@ def _detect_country() -> str:
         if cc is not None:
             return cc
 
+    tz_name = _detect_timezone_name()
+    if tz_name:
+        cc = _country_from_zone_tab(zone_name=tz_name)
+        if cc is not None:
+            return cc
+
     candidates: List[str] = []
     try:
         loc = locale.getlocale()[0]
@@ -315,13 +323,23 @@ def _detect_country() -> str:
         if cc is not None:
             return cc
 
-    tz_name = _detect_timezone_name()
-    if tz_name:
-        cc = _country_from_zone_tab(zone_name=tz_name)
-        if cc is not None:
-            return cc
-
     return "XX"
+
+
+def _normalize_country_code(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    base = raw.split(".", 1)[0].split("@", 1)[0].strip()
+    if len(base) == 2 and base.isalpha():
+        return base.upper()
+    parts = [p.strip() for p in re.split(r"[_-]", base) if p.strip()]
+    for part in parts[1:]:
+        if len(part) == 2 and part.isalpha():
+            return part.upper()
+    return None
 
 
 def _system_context_header() -> str:
@@ -435,6 +453,59 @@ def _detect_runtime_user(trace_metadata: Optional[Dict[str, Any]] = None) -> Opt
     return None
 
 
+def _client_grounding_metadata(trace_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return browser-provided prompt-grounding metadata, if present.
+
+    Browser context is useful for user-facing date/time/location grounding in hosted apps, but it
+    is not trusted for authorization, routing, or policy. Keep it explicitly provenance-labeled.
+    """
+    if not isinstance(trace_metadata, dict):
+        return {}
+    raw = trace_metadata.get("client_context")
+    if not isinstance(raw, dict):
+        return {}
+
+    def _text(key: str, *, max_len: int = 160) -> str:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            return ""
+        return value.strip()[:max_len]
+
+    out: Dict[str, Any] = {"source": "browser_untrusted"}
+    local_datetime = _text("local_datetime", max_len=80)
+    if local_datetime and re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?$", local_datetime):
+        out["local_datetime"] = local_datetime
+    timezone_name = _text("timezone", max_len=120)
+    if timezone_name and re.match(r"^[A-Za-z0-9_+./-]+$", timezone_name):
+        out["timezone"] = timezone_name
+    locale_name = _text("locale", max_len=80)
+    if locale_name and re.match(r"^[A-Za-z0-9_@.+-]+$", locale_name):
+        out["locale"] = locale_name
+    locale_country = _normalize_country_code(_text("locale_country", max_len=8))
+    if locale_country:
+        out["locale_country"] = locale_country
+    country = _country_from_zone_tab(zone_name=timezone_name) if timezone_name else None
+    if country is None:
+        country = _normalize_country_code(_text("country", max_len=8))
+    if country is None and locale_country:
+        country = locale_country
+    if country is None and locale_name:
+        country = _normalize_country_code(locale_name)
+    if country:
+        out["country"] = country
+    offset = raw.get("timezone_offset_minutes")
+    if isinstance(offset, (int, float)) and -14 * 60 <= float(offset) <= 14 * 60:
+        out["timezone_offset_minutes"] = int(offset)
+
+    if "local_datetime" in out:
+        display_dt = str(out["local_datetime"]).replace("T", " ")
+        display_dt = display_dt.replace("Z", "")
+        display_dt = re.split(r"[+-]\d{2}:\d{2}$", display_dt)[0]
+        out["display"] = f"[{display_dt[:19]} {out.get('country') or 'XX'}]"
+
+    return out if len(out) > 1 else {}
+
+
 def _runtime_grounding_metadata(trace_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     now = datetime.now().astimezone()
     country = _detect_country()
@@ -451,6 +522,23 @@ def _runtime_grounding_metadata(trace_metadata: Optional[Dict[str, Any]] = None)
         metadata["timezone"] = timezone_name
     if user:
         metadata["user"] = user
+    client_metadata = _client_grounding_metadata(trace_metadata)
+    if client_metadata:
+        server_context = {
+            key: value
+            for key, value in metadata.items()
+            if key in {"local_datetime", "timezone", "country", "display", "source"}
+        }
+        merged = dict(metadata)
+        for key in ("local_datetime", "timezone", "country", "display", "locale", "timezone_offset_minutes"):
+            value = client_metadata.get(key)
+            if value is not None and str(value).strip():
+                merged[key] = value
+        merged["source"] = "browser_untrusted"
+        merged["server_context"] = server_context
+        if user:
+            merged["user"] = user
+        return merged
     return metadata
 
 
@@ -2332,6 +2420,9 @@ def _normalize_residency_task(task: Any) -> str:
         "t2m": "music_generation",
         "text_to_music": "music_generation",
         "lyrics_to_music": "music_generation",
+        "sound": "text_to_audio",
+        "sfx": "text_to_audio",
+        "sound_generation": "text_to_audio",
         "transcription": "stt",
         "transcriptions": "stt",
         "transcribe": "stt",
@@ -2361,6 +2452,7 @@ _LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = (
     "tts",
     "stt",
     "music_generation",
+    "text_to_audio",
 )
 
 
@@ -2397,7 +2489,7 @@ def _model_residency_unsupported_payload(
         payload["config_hint"] = (
             "Set ABSTRACTCORE_SERVER_BASE_URL to a long-lived AbstractCore server to enable media warmup."
         )
-    elif task_s in {"tts", "stt", "music_generation"}:
+    elif task_s in {"tts", "stt", "music_generation", "text_to_audio"}:
         payload["local_media_residency_backend"] = "none"
         payload["requires_long_lived_core_backend"] = True
         payload["requires_long_lived_server"] = True
@@ -3267,6 +3359,21 @@ def _resolve_media_artifacts(
                 p = content_path_fn(str(aid))
                 if hasattr(p, "exists") and p.exists():
                     file_path = str(p)
+                    guessed_ext = mimetypes.guess_extension(content_type or "") or ""
+                    current_ext = os.path.splitext(file_path)[1].lower()
+                    if (
+                        isinstance(temp_dir, str)
+                        and temp_dir.strip()
+                        and guessed_ext
+                        and current_ext in {"", ".bin"}
+                    ):
+                        typed_path = os.path.join(temp_dir, f"{str(aid).strip()}{guessed_ext}")
+                        try:
+                            with open(file_path, "rb") as src, open(typed_path, "wb") as dst:
+                                dst.write(src.read())
+                            file_path = typed_path
+                        except Exception:
+                            pass
             except Exception:
                 file_path = ""
 
@@ -3308,6 +3415,7 @@ def _resolve_media_artifacts(
                     resolved[key] = raw_role.strip()
             if content_type:
                 resolved["content_type"] = str(content_type)
+                resolved["mime_type"] = str(content_type)
             base_type = str(content_type or "").split(";", 1)[0].strip().lower()
             if base_type.startswith("audio/"):
                 resolved["type"] = "audio"
@@ -3542,7 +3650,7 @@ def _normalize_generated_item(
             content_type = f"image/{str(fmt or 'png').strip().lower() or 'png'}"
         elif modality == "video":
             content_type = f"video/{str(fmt or 'mp4').strip().lower() or 'mp4'}"
-        elif modality in {"voice", "audio", "music"}:
+        elif modality in {"voice", "audio", "music", "sound"}:
             content_type = f"audio/{str(fmt or 'wav').strip().lower() or 'wav'}"
         else:
             content_type = "application/octet-stream"
@@ -3987,6 +4095,90 @@ def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
     }
 
 
+def _attach_provider_endpoint_profile_resolver_to_client(client: Any, resolver: Any) -> None:
+    """Attach a Gateway endpoint-profile resolver to a Runtime/Core client pair."""
+    try:
+        setattr(client, "resolve_provider_endpoint_profile", resolver)
+    except Exception:
+        pass
+    llm = getattr(client, "_llm", None)
+    if llm is not None:
+        try:
+            setattr(llm, "resolve_provider_endpoint_profile", resolver)
+        except Exception:
+            pass
+
+
+def _normalize_core_capability_defaults(value: Any) -> Dict[str, Dict[str, Any]]:
+    """Normalize a Core/Gateway capability-default payload to route-keyed rows."""
+    if not value:
+        return {}
+    rows: Any
+    if isinstance(value, dict) and isinstance(value.get("routes"), list):
+        rows = value.get("routes")
+    elif isinstance(value, dict):
+        rows = []
+        for key, row in value.items():
+            if isinstance(row, dict):
+                item = dict(row)
+                item.setdefault("key", str(key))
+                rows.append(item)
+    else:
+        rows = value
+    if not isinstance(rows, list):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip().lower()
+        if not key and row.get("kind") and row.get("modality"):
+            key = f"{str(row.get('kind')).strip().lower()}.{str(row.get('modality')).strip().lower()}"
+        if "." not in key:
+            continue
+        out[key] = dict(row)
+    return out
+
+
+def _coerce_core_config_file(path: Optional[str | Path]) -> Optional[str]:
+    if path is None:
+        return None
+    try:
+        text = str(Path(path).expanduser())
+    except Exception:
+        text = str(path)
+    text = text.strip()
+    return text or None
+
+
+def _attach_core_execution_context_to_client(
+    client: Any,
+    *,
+    core_config_file: Optional[str] = None,
+    capability_defaults: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
+    """Attach scoped Core execution config to a Runtime/Core client pair.
+
+    Gateway hosts may run many principals in one Python process. This deliberately
+    avoids mutating AbstractCore's process-global config singleton or environment.
+    """
+    targets = [client]
+    llm = getattr(client, "_llm", None)
+    if llm is not None:
+        targets.append(llm)
+    for target in targets:
+        if core_config_file:
+            try:
+                setattr(target, "_abstractcore_config_file", core_config_file)
+            except Exception:
+                pass
+        if capability_defaults is not None:
+            try:
+                setattr(target, "_abstractcore_capability_defaults", dict(capability_defaults))
+            except Exception:
+                pass
+
+
 class LocalAbstractCoreLLMClient:
     """In-process LLM client using AbstractCore's provider stack."""
 
@@ -3999,6 +4191,8 @@ class LocalAbstractCoreLLMClient:
         artifact_store: Optional[Any] = None,
         bloc_root_dir: Optional[str | Path] = None,
         prompt_cache_export_root_dir: Optional[str | Path] = None,
+        core_config_file: Optional[str | Path] = None,
+        capability_defaults: Optional[Any] = None,
     ):
         # In this monorepo layout, `import abstractcore` can resolve to a namespace package
         # (the outer project directory) when running from the repo root. In that case, the
@@ -4018,6 +4212,8 @@ class LocalAbstractCoreLLMClient:
         self._artifact_store = artifact_store
         self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
         self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
+        self._core_config_file = _coerce_core_config_file(core_config_file)
+        self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
         self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
         if self._generate_lock is not None:
             _warn_local_generate_lock_once(provider=self._provider, model=self._model)
@@ -4029,14 +4225,24 @@ class LocalAbstractCoreLLMClient:
             kwargs.setdefault("max_traces", 50)
         self._llm_kwargs = dict(kwargs)
         self._llm = create_llm(provider, model=model, **kwargs)
+        _attach_core_execution_context_to_client(
+            self,
+            core_config_file=self._core_config_file,
+            capability_defaults=self._capability_defaults,
+        )
         self._tool_handler = UniversalToolHandler(model)
         self._prompt_cache_state_lock = threading.Lock()
         self._prompt_cache_state: Dict[str, _PromptCacheSessionState] = {}
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
+        self._provider_endpoint_profile_resolver = None
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._provider, self._model
+
+    def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:
+        self._provider_endpoint_profile_resolver = resolver
+        _attach_provider_endpoint_profile_resolver_to_client(self, resolver)
 
     def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         _ = kwargs
@@ -4521,7 +4727,7 @@ class LocalAbstractCoreLLMClient:
             acore_output_request = _is_abstractcore_output_request(output_request)
             if _output_request_has_generated_media(output_request) and self._artifact_store is None:
                 raise ValueError("Generated media outputs require an ArtifactStore.")
-            skip_turn_grounding = _output_request_has_non_text_result(output_request)
+            skip_turn_grounding = _output_request_has_non_text_result(output_request) or bool(media)
             trace_metadata = params.get("trace_metadata") if isinstance(params.get("trace_metadata"), dict) else {}
             run_id = trace_metadata.get("run_id") if isinstance(trace_metadata, dict) else None
             run_id = str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None
@@ -4835,6 +5041,8 @@ class LocalAbstractCoreLLMClient:
             provider_name,
             base_url=call_kwargs.get("base_url"),
             provider_api_key=provider_api_key,
+            input_type=call_kwargs.get("input_type"),
+            output_type=call_kwargs.get("output_type"),
             timeout_s=call_kwargs.get("timeout_s"),
         )
 
@@ -5706,6 +5914,8 @@ class MultiLocalAbstractCoreLLMClient:
         artifact_store: Optional[Any] = None,
         bloc_root_dir: Optional[str | Path] = None,
         prompt_cache_export_root_dir: Optional[str | Path] = None,
+        core_config_file: Optional[str | Path] = None,
+        capability_defaults: Optional[Any] = None,
     ):
         self._llm_kwargs = dict(llm_kwargs or {})
         self._default_provider = provider.strip().lower()
@@ -5713,10 +5923,13 @@ class MultiLocalAbstractCoreLLMClient:
         self._artifact_store = artifact_store
         self._bloc_root_dir = _coerce_bloc_root_dir(bloc_root_dir)
         self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
+        self._core_config_file = _coerce_core_config_file(core_config_file)
+        self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
         self._override_clients: Dict[Tuple[str, str, str, str], LocalAbstractCoreLLMClient] = {}
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
+        self._provider_endpoint_profile_resolver = None
         self._default_client = self._get_client(self._default_provider, self._default_model)
 
         # Provide a stable underlying LLM for components that need one (e.g. summarizer).
@@ -5736,36 +5949,63 @@ class MultiLocalAbstractCoreLLMClient:
         llm_kwargs = dict(self._llm_kwargs)
         if llm_kwargs_override:
             llm_kwargs.update(dict(llm_kwargs_override))
-        try:
-            return LocalAbstractCoreLLMClient(
-                provider=key[0],
-                model=key[1],
-                llm_kwargs=llm_kwargs,
-                artifact_store=self._artifact_store,
-                bloc_root_dir=self._bloc_root_dir,
-                prompt_cache_export_root_dir=self._prompt_cache_export_root_dir,
-            )
-        except TypeError as exc:
-            message = str(exc)
-            if "prompt_cache_export_root_dir" not in message and "bloc_root_dir" not in message:
-                raise
+        variants: List[Dict[str, Any]] = [
+            {
+                "bloc_root_dir": self._bloc_root_dir,
+                "prompt_cache_export_root_dir": self._prompt_cache_export_root_dir,
+                "core_config_file": self._core_config_file,
+                "capability_defaults": self._capability_defaults,
+            },
+            {
+                "bloc_root_dir": self._bloc_root_dir,
+                "core_config_file": self._core_config_file,
+                "capability_defaults": self._capability_defaults,
+            },
+            {
+                "core_config_file": self._core_config_file,
+                "capability_defaults": self._capability_defaults,
+            },
+            {},
+        ]
+        last_exc: Optional[TypeError] = None
+        client: Optional[LocalAbstractCoreLLMClient] = None
+        for extra_kwargs in variants:
             try:
-                return LocalAbstractCoreLLMClient(
+                client = LocalAbstractCoreLLMClient(
                     provider=key[0],
                     model=key[1],
                     llm_kwargs=llm_kwargs,
                     artifact_store=self._artifact_store,
-                    bloc_root_dir=self._bloc_root_dir,
+                    **extra_kwargs,
                 )
-            except TypeError as fallback_exc:
-                if "bloc_root_dir" not in str(fallback_exc):
+                break
+            except TypeError as exc:
+                last_exc = exc
+                message = str(exc)
+                if not any(
+                    marker in message
+                    for marker in (
+                        "prompt_cache_export_root_dir",
+                        "bloc_root_dir",
+                        "core_config_file",
+                        "capability_defaults",
+                    )
+                ):
                     raise
-                return LocalAbstractCoreLLMClient(
-                    provider=key[0],
-                    model=key[1],
-                    llm_kwargs=llm_kwargs,
-                    artifact_store=self._artifact_store,
-                )
+        if client is None:
+            if last_exc is not None:
+                raise last_exc
+            raise TypeError("Failed to construct LocalAbstractCoreLLMClient")
+        if self._core_config_file or self._capability_defaults:
+            _attach_core_execution_context_to_client(
+                client,
+                core_config_file=self._core_config_file,
+                capability_defaults=self._capability_defaults,
+            )
+        resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
+        if callable(resolver):
+            _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
+        return client
 
     def _get_client(
         self,
@@ -5794,6 +6034,18 @@ class MultiLocalAbstractCoreLLMClient:
             client = self._create_client(key[0], key[1])
             self._clients[key] = client
         return client
+
+    def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:
+        self._provider_endpoint_profile_resolver = resolver
+        _attach_provider_endpoint_profile_resolver_to_client(self, resolver)
+        for client in list(getattr(self, "_clients", {}).values()):
+            _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
+        for client in list(getattr(self, "_override_clients", {}).values()):
+            _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
+        default_client = getattr(self, "_default_client", None)
+        if default_client is not None:
+            _attach_provider_endpoint_profile_resolver_to_client(default_client, resolver)
+        self._llm = getattr(default_client, "_llm", None)
 
     def get_provider_instance(self, *, provider: str, model: str) -> Any:
         """Return the underlying AbstractCore provider instance for (provider, model)."""
@@ -7549,6 +7801,8 @@ class RemoteAbstractCoreLLMClient:
             query={
                 "provider": provider_text,
                 "base_url": call_kwargs.get("base_url"),
+                "input_type": call_kwargs.get("input_type"),
+                "output_type": call_kwargs.get("output_type"),
             },
             provider_api_key=provider_api_key,
             timeout_s=call_kwargs.get("timeout_s"),
@@ -9316,9 +9570,16 @@ class RemoteAbstractCoreLLMClient:
                 "Music output routing uses `provider` as the backend selector; "
                 "`backend` and `music_backend` are not supported."
             )
+        provider_task = str(spec.get("task") or "music_generation").strip().lower().replace("-", "_") or "music_generation"
+        if provider_task in {"music", "song", "t2m", "music_generation"}:
+            provider_task = "text_to_music"
+        elif provider_task in {"sound", "sfx", "sound_generation", "audio_generation"}:
+            provider_task = "text_to_audio"
+        result_task = "sound_generation" if provider_task == "text_to_audio" else "music_generation"
+        result_modality = "sound" if result_task == "sound_generation" else "music"
         body: Dict[str, Any] = {
             "prompt": str(prompt or ""),
-            "task": str(spec.get("task") or "music_generation"),
+            "task": provider_task,
             "format": fmt,
         }
         for key, value in spec.items():
@@ -9351,17 +9612,17 @@ class RemoteAbstractCoreLLMClient:
         media_provider = str(body.get("provider") or "abstractcore-server").strip() or "abstractcore-server"
         run_id, tags = self._trace_run_id_and_tags(
             params,
-            task="music_generation",
-            modality="music",
+            task=result_task,
+            modality=result_modality,
             model=str(body.get("model") or "") or None,
         )
         return _normalize_multimodal_response(
             {
                 "outputs": {
-                    "music": [
+                    result_modality: [
                         {
-                            "modality": "music",
-                            "task": "music_generation",
+                            "modality": result_modality,
+                            "task": result_task,
                             "data": audio_bytes,
                             "content_type": content_type,
                             "format": fmt,
@@ -9587,7 +9848,7 @@ class RemoteAbstractCoreLLMClient:
         acore_output_request = _is_abstractcore_output_request(output_request)
         if _output_request_has_generated_media(output_request) and self._artifact_store is None:
             raise ValueError("Generated media outputs require an ArtifactStore.")
-        skip_turn_grounding = _output_request_has_non_text_result(output_request)
+        skip_turn_grounding = _output_request_has_non_text_result(output_request) or bool(media)
         runtime_grounding = _mark_grounding_prompt_injected(
             _runtime_grounding_metadata(trace_metadata if isinstance(trace_metadata, dict) else None),
             not skip_turn_grounding,

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.27] - 2026-06-03
+
+### Changed
+- Raised the AbstractCore dependency floor to `abstractcore>=2.13.32` so Runtime hosts inherit provider endpoint profiles, route-specific multimodal defaults, and updated audio-understanding model metadata.
+- Updated AbstractCore discovery integration to expose Gateway/Core capability defaults, provider endpoint profiles, and route-specific media catalogs to thin clients.
+
+### Fixed
+- LLM and generated-media execution now resolves Gateway/Core default provider and model selections when VisualFlow nodes leave provider/model on Auto.
+- Media artifact resolution and VisualFlow generated-media calls now preserve uploaded artifacts and progress callbacks across Runtime/AbstractCore boundaries.
+
 ## [0.4.26] - 2026-05-31
 
 ### Changed
@@ -579,7 +589,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.26...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.27...HEAD
+[0.4.27]: https://github.com/lpalbou/abstractruntime/compare/v0.4.26...v0.4.27
 [0.4.26]: https://github.com/lpalbou/abstractruntime/compare/v0.4.25...v0.4.26
 [0.4.25]: https://github.com/lpalbou/abstractruntime/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/lpalbou/abstractruntime/compare/v0.4.23...v0.4.24

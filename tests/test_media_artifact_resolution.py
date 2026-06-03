@@ -27,6 +27,7 @@ def test_resolved_audio_artifact_preserves_content_type_for_transcription(tmp_pa
             "artifact_id": "audio-1",
             "content_type": "audio/wav",
             "file_path": str(content_path),
+            "mime_type": "audio/wav",
             "type": "audio",
         }
     ]

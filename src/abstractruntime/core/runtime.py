@@ -1254,6 +1254,15 @@ class Runtime:
 
         params["on_progress"] = _on_progress
         payload["params"] = params
+        _on_progress(
+            {
+                "status": "running",
+                "stage": "starting",
+                "message": "Starting generation",
+                "progress": 0.0,
+                "percent": 0.0,
+            }
+        )
         return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:

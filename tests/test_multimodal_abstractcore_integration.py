@@ -13,6 +13,7 @@ from abstractruntime.integrations.abstractcore.llm_client import (
     LocalAbstractCoreLLMClient,
     RemoteAbstractCoreLLMClient,
     _normalize_local_response,
+    _resolve_media_artifacts,
     _run_local_image_subprocess,
 )
 from abstractruntime.integrations.abstractcore.output_specs import (
@@ -21,13 +22,37 @@ from abstractruntime.integrations.abstractcore.output_specs import (
     output_request_has_generated_media,
     output_request_has_non_text_result,
 )
-from abstractruntime.storage.artifacts import InMemoryArtifactStore
+from abstractruntime.storage.artifacts import FileArtifactStore, InMemoryArtifactStore
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 
 
 class _NoopTools:
     def execute(self, *, tool_calls):
         return {"mode": "executed", "results": []}
+
+
+def test_resolve_media_artifacts_uses_typed_temp_path_for_blob_store(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "runtime")
+    meta = store.store(
+        b"png-input",
+        content_type="image/png",
+        tags={"filename": "content.png"},
+    )
+    temp_dir = tmp_path / "media"
+    temp_dir.mkdir()
+
+    resolved = _resolve_media_artifacts(
+        [{"$artifact": meta.artifact_id, "filename": "content.png"}],
+        artifact_store=store,
+        temp_dir=str(temp_dir),
+    )
+
+    item = resolved[0]
+    assert item["content_type"] == "image/png"
+    assert item["mime_type"] == "image/png"
+    assert item["type"] == "image"
+    assert item["file_path"].endswith(".png")
+    assert Path(item["file_path"]).read_bytes() == b"png-input"
 
 
 def test_normalize_multimodal_response_stores_generated_bytes_as_artifact() -> None:
@@ -280,7 +305,12 @@ def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> No
     assert "on_progress" not in ((llm_records[0].get("effect") or {}).get("payload") or {}).get("params", {})
     progress_records = [r for r in records if ((r.get("effect") or {}).get("payload") or {}).get("name") == "abstract.progress"]
     assert progress_records
-    progress_payload = ((progress_records[0].get("effect") or {}).get("payload") or {}).get("payload") or {}
+    progress_payload = {}
+    for record in progress_records:
+        candidate = ((record.get("effect") or {}).get("payload") or {}).get("payload") or {}
+        if candidate.get("phase") == "denoise":
+            progress_payload = candidate
+            break
     assert progress_payload["phase"] == "denoise"
     assert progress_payload["step"] == 2
     assert progress_payload["total_steps"] == 4
@@ -1112,7 +1142,7 @@ def test_remote_music_output_uses_music_endpoint_and_stores_artifact() -> None:
     assert sender.calls[0]["json"]["prompt"] == "Warm lo-fi piano with brushed drums."
     assert sender.calls[0]["json"]["provider"] == "acemusic"
     assert sender.calls[0]["json"]["model"] == "ace-step"
-    assert sender.calls[0]["json"]["task"] == "music_generation"
+    assert sender.calls[0]["json"]["task"] == "text_to_music"
     item = out["outputs"]["music"][0]
     artifact = store.load(item["artifact_id"])
     assert artifact is not None

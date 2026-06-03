@@ -671,6 +671,8 @@ def local_list_provider_models(
     *,
     base_url: Optional[str] = None,
     provider_api_key: Optional[str] = None,
+    input_type: Optional[str] = None,
+    output_type: Optional[str] = None,
     timeout_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     provider_text = str(provider_name or "").strip()
@@ -688,6 +690,20 @@ def local_list_provider_models(
         kwargs["api_key"] = provider_api_key.strip()
     if timeout_s is not None:
         kwargs["timeout"] = float(timeout_s)
+    try:
+        input_capabilities = _provider_model_input_capabilities(input_type)
+        output_capabilities = _provider_model_output_capabilities(output_type)
+    except ValueError as exc:
+        return _with_status(
+            {"provider": provider_text, "models": []},
+            source="abstractcore.local",
+            available=False,
+            error=str(exc),
+        )
+    if input_capabilities:
+        kwargs["input_capabilities"] = input_capabilities
+    if output_capabilities:
+        kwargs["output_capabilities"] = output_capabilities
     try:
         from abstractcore.providers.registry import get_available_models_for_provider
 
@@ -707,6 +723,30 @@ def local_list_provider_models(
         available=bool(out),
         error=None,
     )
+
+
+def _provider_model_input_capabilities(value: Optional[str]) -> Optional[list[Any]]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        from abstractcore.providers.model_capabilities import ModelInputCapability
+
+        return [ModelInputCapability(raw)]
+    except Exception as exc:
+        raise ValueError(f"Unsupported input_type filter: {raw}") from exc
+
+
+def _provider_model_output_capabilities(value: Optional[str]) -> Optional[list[Any]]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        from abstractcore.providers.model_capabilities import ModelOutputCapability
+
+        return [ModelOutputCapability(raw)]
+    except Exception as exc:
+        raise ValueError(f"Unsupported output_type filter: {raw}") from exc
 
 
 def local_list_embedding_models(
@@ -1000,13 +1040,44 @@ def local_list_stt_models(
     provider_api_key: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> Dict[str, Any]:
+    provider_s = str(provider or "").strip()
     try:
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
         ).voice
-        catalog = voice.voice_catalog() if hasattr(voice, "voice_catalog") else {}
-        models = voice.list_stt_models()
+        if provider_s and hasattr(voice, "list_stt_models"):
+            try:
+                models = voice.list_stt_models(provider=provider_s)
+            except TypeError:
+                models = voice.list_stt_models()
+            cleaned = _dedupe_strings([str(item) for item in list(models or [])])
+            payload = _with_status(
+                {
+                    "models": cleaned,
+                    "active_model": cleaned[0] if cleaned else None,
+                    "providers": [provider_s],
+                    "available_providers": [provider_s] if cleaned else [],
+                    "active_provider": provider_s if cleaned else None,
+                    "models_by_provider": {provider_s: cleaned} if cleaned else {},
+                    "stt_models_by_provider": {provider_s: cleaned} if cleaned else {},
+                    "provider_models": _provider_models_from_mapping({provider_s: cleaned}) if cleaned else [],
+                    "controls": _voice_catalog_controls(),
+                },
+                source="abstractvoice.local",
+                available=bool(cleaned),
+                error=None,
+            )
+            return _filter_provider_model_catalog_response(
+                payload,
+                provider=provider_s,
+                model_keys=("models_by_provider", "stt_models_by_provider"),
+            )
+        catalog = voice.voice_catalog(provider=provider_s or None) if hasattr(voice, "voice_catalog") else {}
+        try:
+            models = voice.list_stt_models(provider=provider_s or None)
+        except TypeError:
+            models = voice.list_stt_models()
     except Exception as exc:
         return _filter_provider_model_catalog_response(
             _with_status(

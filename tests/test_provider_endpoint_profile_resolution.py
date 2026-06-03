@@ -128,3 +128,93 @@ def test_multilocal_client_uses_endpoint_profile_url_and_key_for_local_provider_
         "llm_kwargs": {"base_url": "https://llm.example.test/v1", "api_key": "secret-key"},
     }
     assert result["metadata"]["params"] == {"temperature": 0.2}
+
+
+def test_multilocal_client_propagates_endpoint_profile_resolver_to_cached_clients(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import llm_client as llm_client_mod
+
+    created: list[Any] = []
+
+    class FakeUnderlyingLLM:
+        pass
+
+    class FakeLocalClient:
+        def __init__(self, *, provider, model, llm_kwargs=None, artifact_store=None, bloc_root_dir=None, prompt_cache_export_root_dir=None):
+            _ = provider, model, llm_kwargs, artifact_store, bloc_root_dir, prompt_cache_export_root_dir
+            self._llm = FakeUnderlyingLLM()
+            created.append(self)
+
+        def generate(self, *, prompt, messages=None, system_prompt=None, tools=None, media=None, params=None):
+            _ = prompt, messages, system_prompt, tools, media, params
+            return {"content": "ok"}
+
+        def get_model_capabilities(self, model_name=None):
+            _ = model_name
+            return {"max_tokens": 8192}
+
+    monkeypatch.setattr(llm_client_mod, "LocalAbstractCoreLLMClient", FakeLocalClient)
+
+    resolver = lambda provider_id: {"provider": "openai-compatible", "id": provider_id}  # noqa: E731
+    client = llm_client_mod.MultiLocalAbstractCoreLLMClient(provider="lmstudio", model="local-model")
+
+    client.set_provider_endpoint_profile_resolver(resolver)
+
+    assert created
+    default_client = created[0]
+    assert getattr(default_client, "resolve_provider_endpoint_profile") is resolver
+    assert getattr(default_client._llm, "resolve_provider_endpoint_profile") is resolver
+
+    routed_client = client._get_client("openai-compatible", "remote-model")
+    assert getattr(routed_client, "resolve_provider_endpoint_profile") is resolver
+    assert getattr(routed_client._llm, "resolve_provider_endpoint_profile") is resolver
+
+
+def test_multilocal_client_attaches_scoped_core_capability_defaults_to_clients(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import llm_client as llm_client_mod
+
+    created: list[Any] = []
+
+    class FakeUnderlyingLLM:
+        pass
+
+    class FakeLocalClient:
+        def __init__(self, *, provider, model, llm_kwargs=None, artifact_store=None):
+            _ = provider, model, llm_kwargs, artifact_store
+            self._llm = FakeUnderlyingLLM()
+            created.append(self)
+
+        def generate(self, *, prompt, messages=None, system_prompt=None, tools=None, media=None, params=None):
+            _ = prompt, messages, system_prompt, tools, media, params
+            return {"content": "ok"}
+
+        def get_model_capabilities(self, model_name=None):
+            _ = model_name
+            return {"max_tokens": 8192}
+
+    monkeypatch.setattr(llm_client_mod, "LocalAbstractCoreLLMClient", FakeLocalClient)
+
+    defaults = {
+        "routes": [
+            {
+                "key": "input.voice",
+                "provider": "faster-whisper",
+                "model": "large-v3",
+                "source": "abstractcore.runtime",
+            }
+        ]
+    }
+    client = llm_client_mod.MultiLocalAbstractCoreLLMClient(
+        provider="lmstudio",
+        model="local-model",
+        core_config_file="/tmp/runtime/config/abstractcore.json",
+        capability_defaults=defaults,
+    )
+
+    default_client = created[0]
+    assert getattr(default_client, "_abstractcore_config_file") == "/tmp/runtime/config/abstractcore.json"
+    assert getattr(default_client._llm, "_abstractcore_config_file") == "/tmp/runtime/config/abstractcore.json"
+    assert getattr(default_client, "_abstractcore_capability_defaults")["input.voice"]["model"] == "large-v3"
+    assert getattr(default_client._llm, "_abstractcore_capability_defaults")["input.voice"]["provider"] == "faster-whisper"
+
+    routed_client = client._get_client("openai-compatible", "remote-model")
+    assert getattr(routed_client._llm, "_abstractcore_capability_defaults")["input.voice"]["model"] == "large-v3"

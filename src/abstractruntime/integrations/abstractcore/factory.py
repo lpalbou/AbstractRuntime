@@ -85,6 +85,8 @@ def create_local_runtime(
     config: Optional[RuntimeConfig] = None,
     artifact_store: Optional[ArtifactStore] = None,
     extra_effect_handlers: Optional[Dict[Any, Any]] = None,
+    core_config_file: Optional[str | Path] = None,
+    capability_defaults: Optional[Any] = None,
 ) -> Runtime:
     """Create a runtime with local LLM execution via AbstractCore.
 
@@ -140,6 +142,8 @@ def create_local_runtime(
         artifact_store=artifact_store,
         bloc_root_dir=bloc_root_dir,
         prompt_cache_export_root_dir=prompt_cache_export_root_dir,
+        core_config_file=core_config_file,
+        capability_defaults=capability_defaults,
     )
     tools = tool_executor or AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     # Orchestrator policy: enforce tool execution timeout at the runtime layer.

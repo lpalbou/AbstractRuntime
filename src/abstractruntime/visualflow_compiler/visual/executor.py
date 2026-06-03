@@ -2495,6 +2495,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     if raw_key in input_data:
                         mem_cfg[raw_key] = input_data.get(raw_key)
 
+            if not provider and not model:
+                pending_auto: Dict[str, Any] = {
+                    "type": "llm_call",
+                    "prompt": prompt,
+                    "system_prompt": system,
+                    "tools": tools,
+                    "params": dict(params),
+                    "include_context": include_context_value,
+                    **mem_cfg,
+                }
+                if output_specified:
+                    pending_auto["output"] = output_request
+                return {
+                    "response": "",
+                    "_pending_effect": pending_auto,
+                }
+
             if not provider or not model:
                 pending_missing: Dict[str, Any] = {
                     "type": "llm_call",
@@ -2508,9 +2525,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 if output_specified:
                     pending_missing["output"] = output_request
                 return {
-                    "response": "[LLM Call: missing provider/model]",
+                    "response": "[LLM Call: incomplete provider/model override]",
                     "_pending_effect": pending_missing,
-                    "error": "Missing provider or model configuration",
+                    "error": "Provider and model must both be set, or both left blank for Gateway/Core defaults",
                 }
 
             response_schema = None

@@ -56,6 +56,55 @@ def test_visualflow_llm_call_uses_prompt_var() -> None:
     assert payload.get("prompt") == "Hello"
 
 
+def test_visualflow_llm_call_blank_provider_model_uses_runtime_default() -> None:
+    from abstractruntime.core.models import RunState, RunStatus
+    from abstractruntime.visualflow_compiler import compile_visualflow
+
+    raw = {
+        "id": "vf",
+        "name": "vf",
+        "entryNode": "start",
+        "nodes": [
+            {
+                "id": "start",
+                "type": "on_flow_start",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "outputs": [
+                        {"id": "exec-out", "label": "", "type": "execution"},
+                        {"id": "prompt", "label": "prompt", "type": "string"},
+                    ]
+                },
+            },
+            {
+                "id": "call",
+                "type": "llm_call",
+                "position": {"x": 0, "y": 0},
+                "data": {"effectConfig": {"provider": "", "model": "", "temperature": 0.0}},
+            },
+        ],
+        "edges": [
+            {"id": "e1", "source": "start", "sourceHandle": "exec-out", "target": "call", "targetHandle": "exec-in"},
+        ],
+    }
+
+    spec = compile_visualflow(raw)
+    run = RunState(run_id="r1", workflow_id=spec.workflow_id, status=RunStatus.RUNNING, current_node="start", vars={})
+    run.vars.update({"prompt": "Hello"})
+
+    plan1 = spec.get_node("start")(run, _ctx())
+    assert plan1.next_node == "call"
+    run.current_node = plan1.next_node
+
+    plan2 = spec.get_node("call")(run, _ctx())
+    assert plan2.effect is not None
+    assert plan2.effect.type.value == "llm_call"
+    payload = dict(plan2.effect.payload or {})
+    assert payload.get("prompt") == "Hello"
+    assert "provider" not in payload
+    assert "model" not in payload
+
+
 def test_visualflow_llm_call_does_not_use_request_var() -> None:
     from abstractruntime.core.models import RunState, RunStatus
     from abstractruntime.visualflow_compiler import compile_visualflow

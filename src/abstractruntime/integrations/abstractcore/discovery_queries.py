@@ -673,6 +673,7 @@ def local_list_provider_models(
     provider_api_key: Optional[str] = None,
     input_type: Optional[str] = None,
     output_type: Optional[str] = None,
+    capability_route: Optional[Any] = None,
     timeout_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     provider_text = str(provider_name or "").strip()
@@ -693,6 +694,7 @@ def local_list_provider_models(
     try:
         input_capabilities = _provider_model_input_capabilities(input_type)
         output_capabilities = _provider_model_output_capabilities(output_type)
+        capability_routes = _provider_model_capability_routes(capability_route)
     except ValueError as exc:
         return _with_status(
             {"provider": provider_text, "models": []},
@@ -704,6 +706,8 @@ def local_list_provider_models(
         kwargs["input_capabilities"] = input_capabilities
     if output_capabilities:
         kwargs["output_capabilities"] = output_capabilities
+    if capability_routes:
+        kwargs["capability_routes"] = capability_routes
     try:
         from abstractcore.providers.registry import get_available_models_for_provider
 
@@ -747,6 +751,20 @@ def _provider_model_output_capabilities(value: Optional[str]) -> Optional[list[A
         return [ModelOutputCapability(raw)]
     except Exception as exc:
         raise ValueError(f"Unsupported output_type filter: {raw}") from exc
+
+
+def _provider_model_capability_routes(value: Optional[Any]) -> Optional[list[str]]:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        from abstractcore.providers.model_capabilities import normalize_capability_route_filter
+
+        routes = normalize_capability_route_filter(value)
+        return routes or None
+    except Exception as exc:
+        raise ValueError(f"Unsupported capability_route filter: {value}") from exc
 
 
 def local_list_embedding_models(

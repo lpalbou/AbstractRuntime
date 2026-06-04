@@ -764,6 +764,7 @@ def create_llm_call_handler(
     model: Optional[str] = None,
     temperature: float = 0.7,
     seed: int = -1,
+    thinking: Any = None,
 ) -> Callable:
     """Create a node handler that makes an LLM call.
 
@@ -776,6 +777,7 @@ def create_llm_call_handler(
         model: Model name to use
         temperature: Temperature parameter
         seed: Seed parameter (-1 means random/unset)
+        thinking: Optional reasoning/thinking control for supported models
 
     Returns:
         A node handler that produces LLM_CALL effect
@@ -823,6 +825,10 @@ def create_llm_call_handler(
             seed_i = -1
         if seed_i >= 0:
             effect.payload["params"]["seed"] = seed_i
+        if isinstance(thinking, bool):
+            effect.payload["params"]["thinking"] = thinking
+        elif isinstance(thinking, str) and thinking.strip():
+            effect.payload["params"]["thinking"] = thinking.strip()
 
         return StepPlan(
             node_id=node_id,

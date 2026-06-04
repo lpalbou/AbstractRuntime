@@ -238,6 +238,15 @@ class _RecordingRequestSender:
                     ],
                 }
             )
+        if url == "http://core.test/v1/models?provider=ollama&capability_route=input.image%2Coutput.text":
+            return _HttpResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": "ollama/llava-route"},
+                    ],
+                }
+            )
         if url == "http://core.test/v1/models?provider=lmstudio&output_type=embeddings&base_url=http%3A%2F%2Fprovider.test%2Fv1":
             return _HttpResponse(
                 {
@@ -585,12 +594,13 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_provider_models",
-        lambda provider_name, *, base_url=None, provider_api_key=None, input_type=None, output_type=None, timeout_s=None: {
+        lambda provider_name, *, base_url=None, provider_api_key=None, input_type=None, output_type=None, capability_route=None, timeout_s=None: {
             "provider": provider_name,
             "models": [base_url or "default"],
             "provider_api_key": provider_api_key,
             "input_type": input_type,
             "output_type": output_type,
+            "capability_route": capability_route,
             "timeout_s": timeout_s,
         },
     )
@@ -689,6 +699,7 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         "provider_api_key": "secret",
         "input_type": None,
         "output_type": None,
+        "capability_route": None,
         "timeout_s": None,
     }
     assert client.list_embedding_models(base_url="http://provider.test/v1", api_key="secret", provider="lmstudio") == {
@@ -995,12 +1006,14 @@ def test_local_provider_models_forward_capability_filters(monkeypatch) -> None:
         "lmstudio",
         input_type="image",
         output_type="text",
+        capability_route=["input.image", "output.text"],
     )
 
     assert payload["models"] == ["vlm-model"]
     assert calls[0]["provider"] == "lmstudio"
     assert [item.value for item in calls[0]["input_capabilities"]] == ["image"]
     assert [item.value for item in calls[0]["output_capabilities"]] == ["text"]
+    assert calls[0]["capability_routes"] == ["input.image", "output.text"]
 
 
 def test_local_provider_models_reject_invalid_capability_filters(monkeypatch) -> None:
@@ -1020,6 +1033,13 @@ def test_local_provider_models_reject_invalid_capability_filters(monkeypatch) ->
     assert payload["available"] is False
     assert payload["models"] == []
     assert payload["error"] == "Unsupported input_type filter: unsupported"
+    assert called is False
+
+    payload = discovery_queries.local_list_provider_models("lmstudio", capability_route="unsupported")
+
+    assert payload["available"] is False
+    assert payload["models"] == []
+    assert payload["error"] == "Unsupported capability_route filter: unsupported"
     assert called is False
 
 
@@ -1070,6 +1090,10 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         input_type="image",
         output_type="text",
     )
+    route_filtered_provider_models = facade.list_provider_models(
+        "ollama",
+        capability_route=["input.image", "output.text"],
+    )
     embeddings = facade.list_embedding_models(
         provider="lmstudio",
         base_url="http://provider.test/v1",
@@ -1115,6 +1139,7 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
     assert provider_models["source"] == "abstractcore.remote"
     assert provider_models["available"] is True
     assert filtered_provider_models["models"] == ["llava"]
+    assert route_filtered_provider_models["models"] == ["llava-route"]
     assert embeddings["provider"] == "lmstudio"
     assert embeddings["models"] == ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]
     assert embeddings["models_by_provider"] == {"lmstudio": ["bge-small-en-v1.5", "text-embedding-nomic-embed-text-v1.5"]}
@@ -1165,6 +1190,12 @@ def test_remote_discovery_methods_proxy_core_catalogs_and_normalize_shapes(monke
         {
             "method": "GET",
             "url": "http://core.test/v1/models?provider=ollama&input_type=image&output_type=text",
+            "headers": {"X-Test": "1"},
+            "timeout": 12.0,
+        },
+        {
+            "method": "GET",
+            "url": "http://core.test/v1/models?provider=ollama&capability_route=input.image%2Coutput.text",
             "headers": {"X-Test": "1"},
             "timeout": 12.0,
         },

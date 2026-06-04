@@ -2159,6 +2159,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         model_default = config.get("model", "")
         temperature = config.get("temperature", 0.7)
         seed_default = config.get("seed", -1)
+        thinking_default = config.get("thinking")
         tools_default_raw = config.get("tools")
         include_context_cfg = config.get("include_context")
         if include_context_cfg is None:
@@ -2312,6 +2313,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             return schema
 
+        def _normalize_thinking(raw: Any) -> Any:
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                clean = raw.strip()
+                return clean or None
+            return None
+
         def handler(input_data):
             if isinstance(input_data, dict):
                 raw_prompt = input_data.get("prompt")
@@ -2413,9 +2422,16 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             except Exception:
                 seed_value = -1
 
+            thinking_raw: Any = thinking_default
+            if isinstance(input_data, dict) and "thinking" in input_data:
+                thinking_raw = input_data.get("thinking")
+            thinking_value = _normalize_thinking(thinking_raw)
+
             params: Dict[str, Any] = {"temperature": float(temperature_value)}
             if seed_value >= 0:
                 params["seed"] = seed_value
+            if thinking_value is not None:
+                params["thinking"] = thinking_value
             if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
                 params["max_output_tokens"] = int(max_output_tokens_value)
             if isinstance(input_data, dict) and "prompt_cache_binding" in input_data:
@@ -2763,6 +2779,17 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     out.append(x.strip())
             return out
 
+        def _route_filter_from(raw: Any) -> Any:
+            if raw is None:
+                return None
+            if isinstance(raw, str):
+                clean = raw.strip()
+                return clean or None
+            if isinstance(raw, (list, tuple, set)):
+                out = [str(x).strip() for x in raw if str(x).strip()]
+                return out or None
+            return None
+
         def handler(input_data: Any):
             provider = None
             if isinstance(input_data, dict) and isinstance(input_data.get("provider"), str):
@@ -2782,6 +2809,19 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 allowed_models = _as_str_list(cfg.get("allowedModels")) or _as_str_list(cfg.get("allowed_models"))
             allow = {m for m in allowed_models if m}
 
+            capability_routes = None
+            if isinstance(input_data, dict):
+                capability_routes = _route_filter_from(input_data.get("capability_route"))
+                if capability_routes is None:
+                    capability_routes = _route_filter_from(input_data.get("capability_routes"))
+            if capability_routes is None:
+                capability_routes = (
+                    _route_filter_from(cfg.get("capabilityRoute"))
+                    or _route_filter_from(cfg.get("capability_route"))
+                    or _route_filter_from(cfg.get("capabilityRoutes"))
+                    or _route_filter_from(cfg.get("capability_routes"))
+                )
+
             try:
                 from abstractcore.providers.registry import get_available_models_for_provider
             except Exception:
@@ -2793,6 +2833,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 models = []
             if not isinstance(models, list):
                 models = []
+
+            if capability_routes:
+                try:
+                    from abstractcore.providers.model_capabilities import filter_models_by_capabilities
+
+                    models = filter_models_by_capabilities(models, capability_routes=capability_routes)
+                except Exception as e:
+                    return {"provider": provider, "models": [], "error": f"Invalid capability_route filter: {e}"}
 
             out: list[str] = []
             for m in models:

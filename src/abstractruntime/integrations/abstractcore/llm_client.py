@@ -5043,6 +5043,7 @@ class LocalAbstractCoreLLMClient:
             provider_api_key=provider_api_key,
             input_type=call_kwargs.get("input_type"),
             output_type=call_kwargs.get("output_type"),
+            capability_route=call_kwargs.get("capability_route", call_kwargs.get("capability_routes")),
             timeout_s=call_kwargs.get("timeout_s"),
         )
 
@@ -7795,6 +7796,11 @@ class RemoteAbstractCoreLLMClient:
             return self._discovery_error_payload(source="abstractcore.remote", error="provider_name is required")
         call_kwargs = dict(kwargs)
         provider_api_key = _pop_provider_api_key(call_kwargs)
+        capability_route = call_kwargs.get("capability_route", call_kwargs.get("capability_routes"))
+        if isinstance(capability_route, set):
+            capability_route = ",".join(str(item).strip() for item in sorted(capability_route, key=str) if str(item).strip())
+        elif isinstance(capability_route, (list, tuple)):
+            capability_route = ",".join(str(item).strip() for item in capability_route if str(item).strip())
         payload = self._discovery_get(
             "/models",
             source="abstractcore.remote",
@@ -7803,6 +7809,7 @@ class RemoteAbstractCoreLLMClient:
                 "base_url": call_kwargs.get("base_url"),
                 "input_type": call_kwargs.get("input_type"),
                 "output_type": call_kwargs.get("output_type"),
+                "capability_route": capability_route,
             },
             provider_api_key=provider_api_key,
             timeout_s=call_kwargs.get("timeout_s"),

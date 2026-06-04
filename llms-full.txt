@@ -200,7 +200,7 @@ What you get:
 - effect handlers for `LLM_CALL`, `TOOL_CALLS`, and `MODEL_RESIDENCY`
 - three execution modes (ADR-0002): local / remote / hybrid
 - tool execution modes: executed (trusted local), approval-gated local execution, or passthrough (external worker boundary)
-- public Runtime discovery, host-control, and durable run facades for AbstractCore-backed hosts
+- public Runtime discovery, host-control, and durable run facades for AbstractCore-backed hosts, including `list_provider_models(..., capability_route=...)`
 - prompt-cache control methods and durable bloc/KV helpers on local/multi-local/remote LLM clients
 - cached-session/prompt-cache routing through stable runtime keys; provider cache objects stay inside AbstractCore clients
 - media input analysis and transcription via `LLM_CALL.media`
@@ -385,6 +385,7 @@ Durability and distribution:
 - `docs/snapshots.md`: snapshot/bookmark model
 - `docs/workflow-bundles.md`: `.flow` bundle format, VisualFlow distribution, and concrete multi-entry fan-in metadata
 - VisualFlow media nodes (`generate_image`, `edit_image`/`image_to_image`, `generate_video`/`text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`) compile to `LLM_CALL` with an `output` selector, while `listen_voice` compiles to `WAIT_EVENT` (persist the authoring node type; no client-side lowering required).
+- VisualFlow LLM Call and Agent nodes preserve Core generation controls such as `thinking` in LLM params/runtime vars. Provider Models nodes can filter discovered provider models with Core `capability_route` keys such as `output.text` or `input.image,output.text`.
 - VisualFlow multi-entry fan-in is lowered into internal `join_exec` and `path_mux` nodes when authoring JSON uses `entryRoutes` and `inputRouteOverrides`.
 
 ## VisualFlow multi-entry fan-in (LLM authoring note)

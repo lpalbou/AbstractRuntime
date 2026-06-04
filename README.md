@@ -111,6 +111,10 @@ Drivers + distribution:
 - scheduler: `create_scheduled_runtime()` (`src/abstractruntime/scheduler/*`)
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
 - VisualFlow multi-entry execution lowering for fan-in routes and per-entry input overrides (`docs/workflow-bundles.md`)
+- VisualFlow LLM Call and Agent nodes propagate Core generation params such as
+  `thinking` through Runtime effects. Provider Models nodes can apply Core
+  `capability_route` filters so run-time model discovery matches Gateway/Flow
+  authoring.
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Runtime-owned integrations:

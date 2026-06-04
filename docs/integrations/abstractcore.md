@@ -661,6 +661,19 @@ Behavior by execution mode:
   `/v1/vision/*` on the configured AbstractCore server. Per-request provider key overrides supplied as `api_key` /
   `provider_api_key` become `X-AbstractCore-Provider-API-Key` headers.
 
+`list_provider_models(provider, ...)` accepts the legacy `input_type` and
+`output_type` filters plus Core's precise `capability_route` filter. Local mode
+normalizes route filters before calling AbstractCore's provider registry; remote
+mode forwards them to `/v1/models?capability_route=...`:
+
+```python
+models = facade.list_provider_models(
+    "lmstudio",
+    capability_route=["input.image", "output.text"],
+)
+embeddings = facade.list_provider_models("lmstudio", capability_route="embedding.text")
+```
+
 Contract notes:
 
 - This surface is query-oriented. It does not create durable Runtime history on its own.

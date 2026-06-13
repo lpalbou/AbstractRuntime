@@ -568,7 +568,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
     def _create_list_folder_files_handler(_data: Dict[str, Any]):
         from abstractcore.tools.abstractignore import AbstractIgnore
-        from abstractcore.utils.file_filters import file_matches_filters, guess_file_family
+        from abstractruntime.utils.file_filters import file_matches_filters, guess_file_family
         from pathlib import Path
         import os
 
@@ -754,7 +754,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         import base64
 
         def handler(input_data: Any) -> Dict[str, Any]:
-            from abstractcore.utils.file_filters import guess_file_family
+            from abstractruntime.utils.file_filters import guess_file_family
 
             payload = input_data if isinstance(input_data, dict) else {}
             store = _artifact_store_from_payload(payload)

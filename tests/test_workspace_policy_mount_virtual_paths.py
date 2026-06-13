@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from abstractcore.utils.workspace_paths import build_workspace_mounts
+from abstractruntime.utils.workspace_paths import build_workspace_mounts
 
 
 def test_workspace_or_allowed_resolves_mount_prefixed_relative_paths(tmp_path: Path) -> None:

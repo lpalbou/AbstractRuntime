@@ -23,7 +23,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from abstractcore.utils.workspace_paths import (
+from abstractruntime.utils.workspace_paths import (
     WorkspacePathError,
     WorkspacePathResolution,
     build_workspace_mounts,

@@ -6723,27 +6723,25 @@ class MultiLocalAbstractCoreLLMClient:
         llm_kwargs = dict(self._llm_kwargs)
         if llm_kwargs_override:
             llm_kwargs.update(dict(llm_kwargs_override))
-        variants: List[Dict[str, Any]] = [
-            {
+        extra_kwargs: Dict[str, Any] = {
+            name: value
+            for name, value in {
                 "bloc_root_dir": self._bloc_root_dir,
                 "prompt_cache_export_root_dir": self._prompt_cache_export_root_dir,
                 "core_config_file": self._core_config_file,
                 "capability_defaults": self._capability_defaults,
-            },
-            {
-                "bloc_root_dir": self._bloc_root_dir,
-                "core_config_file": self._core_config_file,
-                "capability_defaults": self._capability_defaults,
-            },
-            {
-                "core_config_file": self._core_config_file,
-                "capability_defaults": self._capability_defaults,
-            },
-            {},
-        ]
+            }.items()
+            if value is not None
+        }
+        optional_names = tuple(extra_kwargs.keys())
         last_exc: Optional[TypeError] = None
         client: Optional[LocalAbstractCoreLLMClient] = None
-        for extra_kwargs in variants:
+        tried_variants: set[Tuple[str, ...]] = set()
+        while True:
+            variant_key = tuple(sorted(extra_kwargs.keys()))
+            if variant_key in tried_variants:
+                break
+            tried_variants.add(variant_key)
             try:
                 client = LocalAbstractCoreLLMClient(
                     provider=key[0],
@@ -6756,16 +6754,10 @@ class MultiLocalAbstractCoreLLMClient:
             except TypeError as exc:
                 last_exc = exc
                 message = str(exc)
-                if not any(
-                    marker in message
-                    for marker in (
-                        "prompt_cache_export_root_dir",
-                        "bloc_root_dir",
-                        "core_config_file",
-                        "capability_defaults",
-                    )
-                ):
+                unsupported_name = next((name for name in optional_names if name in message), None)
+                if unsupported_name is None or unsupported_name not in extra_kwargs:
                     raise
+                extra_kwargs = {name: value for name, value in extra_kwargs.items() if name != unsupported_name}
         if client is None:
             if last_exc is not None:
                 raise last_exc

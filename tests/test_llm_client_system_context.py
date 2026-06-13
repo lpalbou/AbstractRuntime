@@ -54,16 +54,24 @@ def test_local_llm_client_surfaces_runtime_metadata_to_user_turn(monkeypatch) ->
     assert client._llm.calls, "expected a provider call"
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     runtime_meta = _runtime_metadata_from_text(prompt_sent)
-    assert runtime_meta["country"] == "FR"
+    # Prompt envelope is temporal-only by default: locale-correlated fields
+    # (country/timezone/user) bias the model's reply language and live in
+    # result metadata instead.
     assert "local_datetime" in runtime_meta
+    assert "country" not in runtime_meta
+    assert "user" not in runtime_meta
     assert prompt_sent.rstrip().endswith("hello")
     assert isinstance(result.get("metadata"), dict)
     assert result["metadata"]["runtime_grounding"]["country"] == "FR"
     assert result["metadata"]["runtime_grounding"]["prompt_injected"] is True
     payload = result["metadata"]["_provider_request"]["payload"]
-    assert payload["messages"][0]["role"] == "user"
-    request_meta = _runtime_metadata_from_text(str(payload["messages"][0]["content"] or ""))
-    assert request_meta["country"] == "FR"
+    # The envelope injection now also appends the grounding contract as a system
+    # message, so the user turn is the first non-system message.
+    user_msgs = [m for m in payload["messages"] if m.get("role") == "user"]
+    assert user_msgs
+    request_meta = _runtime_metadata_from_text(str(user_msgs[0]["content"] or ""))
+    assert "local_datetime" in request_meta
+    assert "country" not in request_meta
 
 
 def test_local_llm_client_uses_browser_context_for_prompt_grounding(monkeypatch) -> None:
@@ -111,12 +119,17 @@ def test_local_llm_client_uses_browser_context_for_prompt_grounding(monkeypatch)
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     runtime_meta = _runtime_metadata_from_text(prompt_sent)
     assert runtime_meta["local_datetime"] == "2026-06-01T11:22:33-04:00"
-    assert runtime_meta["timezone"] == "America/New_York"
-    assert runtime_meta["country"] == "US"
-    assert runtime_meta["user"] == "alice"
+    # Locale-correlated fields stay out of the prompt envelope by default;
+    # they remain available to hosts via result metadata below.
+    assert "timezone" not in runtime_meta
+    assert "country" not in runtime_meta
+    assert "user" not in runtime_meta
     assert isinstance(result.get("metadata"), dict)
     grounding = result["metadata"]["runtime_grounding"]
     assert grounding["source"] == "browser_untrusted"
+    assert grounding["timezone"] == "America/New_York"
+    assert grounding["country"] == "US"
+    assert grounding["user"] == "alice"
     assert grounding["server_context"]["country"] == "FR"
     assert grounding["server_context"]["source"] == "abstractruntime"
 
@@ -145,7 +158,7 @@ def test_browser_timezone_wins_over_locale_country_for_grounding(monkeypatch) ->
     client._llm = _DummyLLM()
     client._tool_handler = UniversalToolHandler(client._model)
 
-    client.generate(
+    result = client.generate(
         prompt="where am I grounded?",
         params={
             "trace_metadata": {
@@ -161,8 +174,14 @@ def test_browser_timezone_wins_over_locale_country_for_grounding(monkeypatch) ->
 
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     runtime_meta = _runtime_metadata_from_text(prompt_sent)
-    assert runtime_meta["timezone"] == "Europe/Paris"
-    assert runtime_meta["country"] == "FR"
+    assert runtime_meta["local_datetime"] == "2026-06-01T23:07:00+02:00"
+    assert "timezone" not in runtime_meta
+    assert "country" not in runtime_meta
+    # Timezone still wins over the inherited locale region for the
+    # metadata-level country resolution.
+    grounding = result["metadata"]["runtime_grounding"]
+    assert grounding["timezone"] == "Europe/Paris"
+    assert grounding["country"] == "FR"
 
 
 def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch) -> None:
@@ -194,10 +213,10 @@ def test_local_llm_client_strips_legacy_grounding_from_system_prompt(monkeypatch
 
     sys = str(client._llm.calls[0].get("system_prompt") or "")
     assert not sys.startswith("Grounding:")
-    assert sys.strip() == "Base system prompt."
+    assert sys.startswith("Base system prompt.")
     prompt_sent = str(client._llm.calls[0].get("prompt") or "")
     runtime_meta = _runtime_metadata_from_text(prompt_sent)
-    assert runtime_meta["country"] == "FR"
+    assert "local_datetime" in runtime_meta
 
 
 def test_local_llm_client_drops_recent_tool_activity_system_messages(monkeypatch) -> None:
@@ -265,9 +284,11 @@ def test_remote_llm_client_surfaces_runtime_metadata_to_user_turn(monkeypatch) -
     client.generate(prompt="hello", params={"max_tokens": 5})
 
     body = sender.calls[0]["json"]
-    assert body["messages"][0]["role"] == "user"
-    runtime_meta = _runtime_metadata_from_text(str(body["messages"][0]["content"] or ""))
-    assert runtime_meta["country"] == "FR"
+    user_msgs = [m for m in body["messages"] if m.get("role") == "user"]
+    assert user_msgs
+    runtime_meta = _runtime_metadata_from_text(str(user_msgs[0]["content"] or ""))
+    assert "local_datetime" in runtime_meta
+    assert "country" not in runtime_meta
 
 
 def test_runtime_metadata_envelope_is_per_call() -> None:
@@ -358,6 +379,177 @@ def test_runtime_metadata_echo_is_sanitized_from_response_text() -> None:
 
     assert result["content"] == "hello"
     assert result["text"]["content"] == "hello"
+
+
+def _dummy_local_client():
+    from abstractcore.core.types import GenerateResponse
+    from abstractcore.tools.handler import UniversalToolHandler
+
+    class _DummyLLM:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def get_capabilities(self) -> list[str]:
+            return []
+
+        def generate(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return GenerateResponse(content="ok", finish_reason="stop", gen_time=1.0)
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "dummy"
+    client._model = "openai/gpt-oss-20b"
+    client._artifact_store = None
+    client._llm = _DummyLLM()
+    client._tool_handler = UniversalToolHandler(client._model)
+    return client
+
+
+def test_prompt_envelope_is_temporal_only_by_default(monkeypatch) -> None:
+    """Locale-correlated fields flip the model's reply language (verified
+    against a live 397B model: 3/3 French answers to an all-English prompt with
+    country FR in the envelope, 0/3 without). The prompt envelope therefore
+    carries only the local date/time by default."""
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.delenv("ABSTRACTRUNTIME_GROUNDING_PROMPT_FIELDS", raising=False)
+    grounding = {
+        "local_datetime": "2026-06-10T15:29:16+02:00",
+        "timezone": "Europe/Paris",
+        "country": "FR",
+        "user": "albou",
+        "display": "[2026-06-10 15:29:16 FR]",
+    }
+
+    envelope = llm_client._runtime_grounding_prompt_envelope(grounding)
+    payload = _runtime_metadata_from_text(envelope)
+
+    assert payload == {
+        "local_datetime": "2026-06-10T15:29:16+02:00",
+        "display": "[2026-06-10 15:29:16]",
+    }
+
+
+def test_prompt_envelope_fields_env_opt_in(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACTRUNTIME_GROUNDING_PROMPT_FIELDS", "local_datetime,timezone,country,user,display")
+    grounding = {
+        "local_datetime": "2026-06-10T15:29:16+02:00",
+        "timezone": "Europe/Paris",
+        "country": "FR",
+        "user": "albou",
+        "display": "[2026-06-10 15:29:16 FR]",
+    }
+
+    envelope = llm_client._runtime_grounding_prompt_envelope(grounding)
+    payload = _runtime_metadata_from_text(envelope)
+
+    assert payload["country"] == "FR"
+    assert payload["timezone"] == "Europe/Paris"
+    assert payload["user"] == "albou"
+    assert payload["display"] == "[2026-06-10 15:29:16 FR]"
+
+
+def test_prompt_envelope_env_opt_in_ignores_unknown_fields(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACTRUNTIME_GROUNDING_PROMPT_FIELDS", "bogus, , nope")
+
+    assert llm_client._prompt_grounding_fields() == ("local_datetime", "display")
+
+
+def test_grounding_contract_appended_to_system_prompt_when_envelope_injected(monkeypatch) -> None:
+    """The injector owns the contract: when <runtime_metadata> is prepended to the
+    user turn, the system prompt must explain it is machine context, not a
+    language preference. Otherwise models infer the reply language from
+    country/timezone (observed: English request answered in French on FR hosts)."""
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
+    client = _dummy_local_client()
+
+    client.generate(prompt="hello", system_prompt="Base system prompt.")
+
+    sys = str(client._llm.calls[0].get("system_prompt") or "")
+    assert sys.startswith("Base system prompt.")
+    assert llm_client._RUNTIME_GROUNDING_CONTRACT in sys
+    assert "not a language or locale preference" in sys
+
+
+def test_grounding_contract_is_not_duplicated(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
+    client = _dummy_local_client()
+
+    sys_in = f"Base system prompt.\n\n{llm_client._RUNTIME_GROUNDING_CONTRACT}"
+    client.generate(prompt="hello", system_prompt=sys_in)
+
+    sys = str(client._llm.calls[0].get("system_prompt") or "")
+    assert sys.count(llm_client._RUNTIME_GROUNDING_CONTRACT) == 1
+
+
+def test_grounding_contract_without_base_system_prompt(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
+    client = _dummy_local_client()
+
+    client.generate(prompt="hello")
+
+    sys = str(client._llm.calls[0].get("system_prompt") or "")
+    assert sys == llm_client._RUNTIME_GROUNDING_CONTRACT
+
+
+def test_media_turns_do_not_append_grounding_contract(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
+    client = _dummy_local_client()
+
+    client.generate(
+        prompt="describe this picture",
+        system_prompt="Base system prompt.",
+        media=[{"content": b"png", "content_type": "image/png", "type": "image"}],
+    )
+
+    sys = str(client._llm.calls[0].get("system_prompt") or "")
+    assert llm_client._RUNTIME_GROUNDING_CONTRACT not in sys
+
+
+def test_remote_llm_client_appends_grounding_contract(monkeypatch) -> None:
+    import abstractruntime.integrations.abstractcore.llm_client as llm_client
+
+    monkeypatch.setenv("ABSTRACT_COUNTRY", "FR")
+
+    class StubSender:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, *, headers, json, timeout):
+            self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return {
+                "model": json["model"],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+        headers={"X-Test": "1"},
+    )
+
+    client.generate(prompt="hello", system_prompt="Base system prompt.", params={"max_tokens": 5})
+
+    body = sender.calls[0]["json"]
+    messages = body["messages"]
+    sys_msgs = [m for m in messages if m.get("role") == "system"]
+    assert sys_msgs, f"expected a system message in {messages}"
+    assert llm_client._RUNTIME_GROUNDING_CONTRACT in str(sys_msgs[0].get("content") or "")
 
 
 def test_country_detection_ignores_encoding_only_locale_values(monkeypatch) -> None:

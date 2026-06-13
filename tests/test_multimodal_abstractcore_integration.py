@@ -12,6 +12,7 @@ from abstractruntime.integrations.abstractcore.llm_client import (
     HttpBinaryResponse,
     LocalAbstractCoreLLMClient,
     RemoteAbstractCoreLLMClient,
+    _is_subprocess_safe_image_specs,
     _normalize_local_response,
     _resolve_media_artifacts,
     _run_local_image_subprocess,
@@ -244,7 +245,19 @@ def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> No
             seen["params"] = params
             callback = kwargs.get("on_progress") or params.get("on_progress")
             assert callable(callback)
-            callback({"phase": "denoise", "step": 2, "total_steps": 4, "progress": 0.5})
+
+            class _Event:
+                phase = "denoise"
+                frame = 3
+                total_frames = 5
+                step = 2
+                total_steps = 4
+                progress = 0.5
+                step_progress = 0.5
+                frame_progress = 0.6
+                task = "text_to_video"
+
+            callback(_Event())
             return MultimodalGenerateResponse(
                 outputs={
                     "video": [
@@ -264,6 +277,7 @@ def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> No
     client._model = "gpt-4o-mini"
     client._artifact_store = store
     client._generate_lock = None
+    client._capability_defaults = {}
     client._llm = _ProgressLLM()
     client._maybe_prepare_prompt_cache = lambda **_kwargs: None
 
@@ -305,6 +319,11 @@ def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> No
     assert "on_progress" not in ((llm_records[0].get("effect") or {}).get("payload") or {}).get("params", {})
     progress_records = [r for r in records if ((r.get("effect") or {}).get("payload") or {}).get("name") == "abstract.progress"]
     assert progress_records
+    payloads = [
+        ((record.get("effect") or {}).get("payload") or {}).get("payload") or {}
+        for record in progress_records
+    ]
+    assert not any(payload.get("progress_mode") == "unreported" or payload.get("reported") is False for payload in payloads)
     progress_payload = {}
     for record in progress_records:
         candidate = ((record.get("effect") or {}).get("payload") or {}).get("payload") or {}
@@ -315,6 +334,11 @@ def test_runtime_injects_generated_media_progress_callback_into_llm_call() -> No
     assert progress_payload["step"] == 2
     assert progress_payload["total_steps"] == 4
     assert progress_payload["progress"] == 0.5
+    assert progress_payload["step_progress"] == 0.5
+    assert progress_payload["frame"] == 3
+    assert progress_payload["total_frames"] == 5
+    assert progress_payload["frame_progress"] == 0.6
+    assert progress_payload["task"] == "text_to_video"
     item = (state.vars["result"]["outputs"]["video"])[0]
     assert store.load(item["artifact_id"]) is not None
 
@@ -400,15 +424,50 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
 
 
 def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -> None:
-    class _AbortResult:
-        returncode = 134
-        stdout = ""
-        stderr = "failed assertion `A command encoder is already encoding to this command buffer'"
+    from abstractruntime.integrations.abstractcore import llm_client
 
-    def fake_run(*_args, **_kwargs):
-        return _AbortResult()
+    class _FakeStdin:
+        def write(self, _value):
+            return None
 
-    monkeypatch.setattr("abstractruntime.integrations.abstractcore.llm_client.subprocess.run", fake_run)
+        def close(self):
+            return None
+
+    class _FakeStdout:
+        def has_line(self) -> bool:
+            return False
+
+        def readline(self) -> str:
+            return ""
+
+        def read(self) -> str:
+            return "failed assertion `A command encoder is already encoding to this command buffer'"
+
+    class _FakeProc:
+        stdin = _FakeStdin()
+        stdout = _FakeStdout()
+
+        def poll(self):
+            return 134
+
+        def wait(self):
+            return 134
+
+        def kill(self):
+            return None
+
+    class _FakeSelector:
+        def register(self, fileobj, _event):
+            self.fileobj = fileobj
+
+        def select(self, timeout=0):
+            return []
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(llm_client.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
+    monkeypatch.setattr(llm_client.selectors, "DefaultSelector", _FakeSelector)
 
     with pytest.raises(RuntimeError, match="Local image generation subprocess exited with code 134"):
         _run_local_image_subprocess(
@@ -417,8 +476,155 @@ def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -
             llm_kwargs={},
             prompt="A red mug.",
             specs=[{"modality": "image", "task": "image_generation"}],
-            timeout_s=30,
         )
+
+
+def test_local_image_subprocess_streams_progress_events(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import llm_client
+
+    final_payload = {
+        "ok": True,
+        "response": {
+            "outputs": {
+                "image": [
+                    {
+                        "modality": "image",
+                        "task": "image_generation",
+                        "data_b64": base64.b64encode(b"png-output").decode("ascii"),
+                        "content_type": "image/png",
+                        "format": "png",
+                    }
+                ]
+            }
+        },
+    }
+    lines = [
+        json.dumps({"type": "progress", "event": {"phase": "denoise", "step": 2, "total_steps": 4, "progress": 0.5}}) + "\n",
+        json.dumps(final_payload) + "\n",
+    ]
+
+    class _FakeStdin:
+        def write(self, _value):
+            return None
+
+        def close(self):
+            return None
+
+    class _FakeStdout:
+        def __init__(self):
+            self.lines = list(lines)
+
+        def has_line(self) -> bool:
+            return bool(self.lines)
+
+        def readline(self) -> str:
+            return self.lines.pop(0) if self.lines else ""
+
+        def read(self) -> str:
+            return ""
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = _FakeStdin()
+            self.stdout = _FakeStdout()
+
+        def poll(self):
+            return None if self.stdout.has_line() else 0
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            return None
+
+    class _SelectorKey:
+        def __init__(self, fileobj):
+            self.fileobj = fileobj
+
+    class _FakeSelector:
+        def register(self, fileobj, _event):
+            self.fileobj = fileobj
+
+        def select(self, timeout=0):
+            if self.fileobj.has_line():
+                return [(_SelectorKey(self.fileobj), None)]
+            return []
+
+        def close(self):
+            return None
+
+    events = []
+    monkeypatch.setattr(llm_client.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
+    monkeypatch.setattr(llm_client.selectors, "DefaultSelector", _FakeSelector)
+
+    out = _run_local_image_subprocess(
+        provider="mlx",
+        model="qwen3.5-2b",
+        llm_kwargs={},
+        prompt="A red mug.",
+        specs=[{"modality": "image", "task": "image_generation"}],
+        progress_callback=events.append,
+    )
+
+    assert events == [{"phase": "denoise", "step": 2, "total_steps": 4, "progress": 0.5}]
+    assert out["outputs"]["image"][0]["data"] == b"png-output"
+
+
+def test_local_inprocess_media_spec_receives_progress_callback() -> None:
+    from abstractcore.core.multimodal_generation import GeneratedItem
+
+    store = InMemoryArtifactStore()
+    specs_seen = []
+    progress_events = []
+
+    class _InProcessImageLLM:
+        def _run_multimodal_spec(self, *, result, spec, prompt, media, artifact_store):
+            del prompt, media, artifact_store
+            specs_seen.append(spec)
+            callback = spec.get("extra", {}).get("on_progress")
+            if callable(callback):
+                callback({"phase": "denoise", "step": 1, "total_steps": 2, "progress": 0.5})
+            result.outputs.setdefault("image", []).append(
+                GeneratedItem(
+                    modality="image",
+                    task="image_edit",
+                    data=b"png-edited",
+                    content_type="image/png",
+                    format="png",
+                    provider="mlx-gen",
+                    model="AbstractFramework/qwen-image-edit-2511-4bit",
+                )
+            )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen3.5-2b"
+    client._llm_kwargs = {}
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _InProcessImageLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out = client.generate(
+        prompt="Change the color.",
+        media=[{"type": "image", "content": b"png-source", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_edit",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-edit-2511-4bit",
+            },
+            "on_progress": progress_events.append,
+        },
+    )
+
+    assert callable(specs_seen[0]["extra"]["on_progress"])
+    assert progress_events == [{"phase": "denoise", "step": 1, "total_steps": 2, "progress": 0.5}]
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edited"
 
 
 def test_local_video_media_only_runs_in_subprocess_and_stores_generated_bytes(monkeypatch, tmp_path) -> None:
@@ -494,6 +700,7 @@ def test_local_video_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
     assert calls
     assert calls[0]["provider"] == "mlx"
     assert calls[0]["model"] == "qwen3.5-2b"
+    assert "timeout_s" not in calls[0]
     assert calls[0]["specs"][0]["provider"] == "mlx-gen"
     assert calls[0]["media"][0]["file_path"] == str(image_path)
     assert progress_events and progress_events[0]["progress"] == 0.5
@@ -719,6 +926,193 @@ class _RemoteImageSender:
         return {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-edited").decode("ascii")}]}
 
 
+def _assert_generated_media_calls_have_no_timeout(sender) -> None:
+    assert sender.calls
+    assert all(call.get("timeout") is None for call in sender.calls)
+
+
+class _RemoteImageGenerationJobSender(_RemoteImageSender):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return {
+                "id": "job-image",
+                "state": "running",
+                "progress": {
+                    "phase": "denoise",
+                    "step": 1,
+                    "total_steps": 2,
+                    "progress": 0.5,
+                    "last_event": {"task": "image_generation", "step_progress": 0.5},
+                },
+            }
+        return {
+            "id": "job-image",
+            "state": "succeeded",
+            "progress": {
+                "phase": "done",
+                "step": 2,
+                "total_steps": 2,
+                "progress": 1.0,
+                "last_event": {"task": "image_generation", "step_progress": 1.0},
+            },
+            "result": {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-image-job").decode("ascii")}]},
+        }
+
+    def post(self, url, *, headers, json, timeout):
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json, "timeout": timeout})
+        if url.endswith("/v1/vision/jobs/images/generations"):
+            return {"job_id": "job-image"}
+        return super().post(url, headers=headers, json=json, timeout=timeout)
+
+
+def test_runtime_records_remote_image_generation_progress_from_core_job() -> None:
+    store = InMemoryArtifactStore()
+    ledger = InMemoryLedgerStore()
+    sender = _RemoteImageGenerationJobSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=ledger,
+        effect_handlers=build_effect_handlers(llm=client, artifact_store=store),
+        artifact_store=store,
+    )
+
+    def start(run, ctx):
+        del run, ctx
+        return StepPlan(
+            node_id="image",
+            effect=Effect(
+                type=EffectType.LLM_CALL,
+                payload={
+                    "prompt": "A red cube.",
+                    "params": {
+                        "output": {
+                            "modality": "image",
+                            "provider": "mlx-gen",
+                            "model": "AbstractFramework/flux.2-klein-4b-4bit",
+                            "format": "png",
+                            "steps": 2,
+                        },
+                        "poll_interval_s": 0.05,
+                    },
+                },
+                result_key="result",
+            ),
+            next_node="done",
+        )
+
+    def done(run, ctx):
+        del ctx
+        return StepPlan(node_id="done", complete_output={"result": run.vars.get("result")})
+
+    workflow = WorkflowSpec(workflow_id="remote_image_progress", entry_node="image", nodes={"image": start, "done": done})
+    run_id = runtime.start(workflow=workflow, vars={})
+    state = runtime.tick(workflow=workflow, run_id=run_id)
+
+    assert state.status.value == "completed"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/images/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    records = ledger.list(run_id)
+    progress_records = [
+        r
+        for r in records
+        if ((r.get("effect") or {}).get("payload") or {}).get("name") == "abstract.progress"
+    ]
+    assert progress_records
+    payloads = [((r.get("effect") or {}).get("payload") or {}).get("payload") or {} for r in progress_records]
+    assert any(p.get("last_event", {}).get("task") == "image_generation" for p in payloads)
+    assert any(p.get("progress") == 1.0 for p in payloads)
+    item = state.vars["result"]["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-image-job"
+
+
+def test_remote_vision_job_poll_has_no_total_timeout(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import llm_client
+
+    sender = _RemoteVideoJobSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        timeout_s=0.01,
+    )
+    ticks = iter([100.0, 200.0, 300.0])
+    monkeypatch.setattr(llm_client.time, "time", lambda: next(ticks, 300.0))
+    monkeypatch.setattr(llm_client.time, "sleep", lambda _seconds: None)
+
+    out = client._poll_remote_vision_job(
+        job_id="job-video",
+        headers={},
+        params={"poll_interval_s": 0.01},
+    )
+
+    assert out["data"][0]["b64_json"] == base64.b64encode(b"mp4-job").decode("ascii")
+    assert sender.poll_count == 2
+    _assert_generated_media_calls_have_no_timeout(sender)
+
+
+class _RemoteImageEditJobSender(_RemoteImageSender):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return {
+                "id": "job-edit",
+                "state": "running",
+                "progress": {
+                    "phase": "denoise",
+                    "step": 1,
+                    "total_steps": 2,
+                    "progress": 0.5,
+                    "last_event": {"task": "image_edit", "step_progress": 0.5},
+                },
+            }
+        return {
+            "id": "job-edit",
+            "state": "succeeded",
+            "progress": {
+                "phase": "done",
+                "step": 2,
+                "total_steps": 2,
+                "progress": 1.0,
+                "last_event": {"task": "image_edit", "step_progress": 1.0},
+            },
+            "result": {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-edit-job").decode("ascii")}]},
+        }
+
+    def post_multipart(self, url, *, headers, data, files, timeout):
+        self.calls.append(
+            {
+                "method": "MULTIPART",
+                "url": url,
+                "headers": headers,
+                "data": dict(data),
+                "files": {name: (value[0], value[1], value[2]) for name, value in files.items()},
+                "timeout": timeout,
+            }
+        )
+        if url.endswith("/v1/vision/jobs/images/edits"):
+            return {"job_id": "job-edit"}
+        return super().post_multipart(url, headers=headers, data=data, files=files, timeout=timeout)
+
+
 class _RemoteVideoJobSender(_RemoteImageSender):
     def __init__(self) -> None:
         super().__init__()
@@ -747,6 +1141,152 @@ class _RemoteVideoJobSender(_RemoteImageSender):
         return super().post(url, headers=headers, json=json, timeout=timeout)
 
 
+class _RemoteImageToVideoJobSender(_RemoteImageSender):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return {
+                "id": "job-i2v",
+                "state": "running",
+                "progress": {
+                    "phase": "denoise",
+                    "frame": 20,
+                    "total_frames": 81,
+                    "step": 5,
+                    "total_steps": 20,
+                    "progress": 0.25,
+                    "step_progress": 0.25,
+                    "frame_progress": 20 / 81,
+                    "last_event": {
+                        "task": "image_to_video",
+                        "step": 5,
+                        "total_steps": 20,
+                        "step_progress": 0.25,
+                        "frame": 20,
+                        "total_frames": 81,
+                        "frame_progress": 20 / 81,
+                    },
+                },
+            }
+        return {
+            "id": "job-i2v",
+            "state": "succeeded",
+            "progress": {
+                "phase": "done",
+                "step": 20,
+                "total_steps": 20,
+                "progress": 1.0,
+                "step_progress": 1.0,
+                "last_event": {"task": "image_to_video", "step_progress": 1.0},
+            },
+            "result": {"created": 1, "data": [{"b64_json": base64.b64encode(b"mp4-i2v-job").decode("ascii")}]},
+        }
+
+    def post_multipart(self, url, *, headers, data, files, timeout):
+        self.calls.append(
+            {
+                "method": "MULTIPART",
+                "url": url,
+                "headers": headers,
+                "data": dict(data),
+                "files": {name: (value[0], value[1], value[2]) for name, value in files.items()},
+                "timeout": timeout,
+            }
+        )
+        if url.endswith("/v1/vision/jobs/videos/edits"):
+            return {"job_id": "job-i2v"}
+        return super().post_multipart(url, headers=headers, data=data, files=files, timeout=timeout)
+
+
+class _RemoteImageUpscaleJobSender(_RemoteImageSender):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append({"method": "GET", "url": url, "headers": headers, "timeout": timeout})
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return {
+                "id": "job-upscale",
+                "state": "running",
+                "progress": {
+                    "phase": "denoise",
+                    "step": 1,
+                    "total_steps": 2,
+                    "progress": 0.5,
+                    "last_event": {"task": "image_upscale", "step_progress": 0.5},
+                },
+            }
+        if self.poll_count == 2:
+            return {
+                "id": "job-upscale",
+                "state": "running",
+                "progress": {
+                    "phase": "complete",
+                    "step": 2,
+                    "total_steps": 2,
+                    "progress": 1.0,
+                    "last_event": {"task": "image_upscale", "step_progress": 1.0},
+                },
+            }
+        return {
+            "id": "job-upscale",
+            "state": "succeeded",
+            "progress": {
+                "phase": "done",
+                "step": 2,
+                "total_steps": 2,
+                "progress": 1.0,
+                "last_event": {"task": "image_upscale", "step_progress": 1.0},
+            },
+            "result": {"created": 1, "data": [{"b64_json": base64.b64encode(b"png-upscale-job").decode("ascii")}]},
+        }
+
+    def post_multipart(self, url, *, headers, data, files, timeout):
+        self.calls.append(
+            {
+                "method": "MULTIPART",
+                "url": url,
+                "headers": headers,
+                "data": dict(data),
+                "files": {name: (value[0], value[1], value[2]) for name, value in files.items()},
+                "timeout": timeout,
+            }
+        )
+        if url.endswith("/v1/vision/jobs/images/upscale"):
+            return {"job_id": "job-upscale"}
+        return super().post_multipart(url, headers=headers, data=data, files=files, timeout=timeout)
+
+
+def test_local_image_subprocess_safety_accepts_edit_and_upscale_file_media(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png-source")
+    mask = tmp_path / "mask.png"
+    mask.write_bytes(b"png-mask")
+
+    assert _is_subprocess_safe_image_specs(
+        [{"modality": "image", "task": "image_edit"}],
+        [
+            {"file_path": str(source), "type": "image", "role": "source"},
+            {"file_path": str(mask), "type": "image", "role": "mask"},
+        ],
+    ) is True
+    assert _is_subprocess_safe_image_specs(
+        [{"modality": "image", "task": "image_upscale"}],
+        [{"file_path": str(source), "type": "image", "role": "source"}],
+    ) is True
+    assert _is_subprocess_safe_image_specs(
+        [{"modality": "image", "task": "image_edit"}],
+        [{"file_path": "https://example.com/source.png", "type": "image", "role": "source"}],
+    ) is False
+
+
 def test_remote_image_output_uses_abstractcore_server_endpoint_and_stores_artifact() -> None:
     store = InMemoryArtifactStore()
     sender = _RemoteImageSender()
@@ -766,6 +1306,7 @@ def test_remote_image_output_uses_abstractcore_server_endpoint_and_stores_artifa
     )
 
     assert sender.calls[0]["url"] == "http://core.test/v1/images/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
     assert sender.calls[0]["json"]["model"] == "openai-compatible/gpt-image-1"
     item = out["outputs"]["image"][0]
     artifact = store.load(item["artifact_id"])
@@ -813,9 +1354,89 @@ def test_remote_image_output_preserves_mflux_provider_and_model_separately() -> 
     )
 
     assert sender.calls[0]["url"] == "http://core.test/v1/images/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
     assert sender.calls[0]["json"]["provider"] == "mflux"
     assert sender.calls[0]["json"]["model"] == "AbstractFramework/flux.2-klein-4b-4bit"
     assert not str(sender.calls[0]["json"]["model"]).startswith("diffusers/")
+
+
+def test_remote_image_output_forwards_batch_seeds_and_lora_adapters() -> None:
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    client.generate(
+        prompt="A castle at dawn.",
+        params={
+            "output": {
+                "modality": "image",
+                "task": "text_to_image",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-2512-8bit",
+                "format": "png",
+                "count": 2,
+                "seeds": [101, 202],
+                "lora_adapters": [
+                    {"id": "cinematic-lighting", "scale": 0.75},
+                    {"id": "ink-outline", "scale": 0.4},
+                ],
+            }
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["url"] == "http://core.test/v1/images/generations"
+    assert call["json"]["n"] == 2
+    assert call["json"]["seeds"] == [101, 202]
+    assert call["json"]["lora_adapters"] == [
+        {"id": "cinematic-lighting", "scale": 0.75},
+        {"id": "ink-outline", "scale": 0.4},
+    ]
+
+
+def test_remote_image_output_with_progress_uses_core_job_endpoint() -> None:
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageGenerationJobSender()
+    events = []
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="A red cube.",
+        params={
+            "output": {
+                "modality": "image",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/flux.2-klein-4b-4bit",
+                "format": "png",
+                "steps": 2,
+            },
+            "on_progress": events.append,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-img-job", "node_id": "n-img-job"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "POST"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/images/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    assert sender.calls[0]["json"]["provider"] == "mlx-gen"
+    assert sender.calls[1]["method"] == "GET"
+    assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-image?consume=true"
+    assert events[0]["last_event"]["task"] == "image_generation"
+    assert events[-1]["progress"] == 1.0
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-image-job"
 
 
 def test_remote_image_output_rejects_input_media_instead_of_ignoring_it(tmp_path: Path) -> None:
@@ -891,6 +1512,92 @@ def test_remote_image_edit_uses_abstractcore_images_edits_endpoint_and_stores_ar
     assert artifact.metadata.tags["node_id"] == "n-edit"
 
 
+def test_remote_image_edit_forwards_batch_seeds_and_lora_adapters(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    client.generate(
+        prompt="Convert to watercolor.",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_edit",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-edit-2511-8bit",
+                "count": 3,
+                "seeds": [1, 2, 3],
+                "lora_adapters": [
+                    {"id": "watercolor", "scale": 0.8},
+                    {"id": "paper-grain", "scale": 0.35},
+                ],
+            }
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["url"] == "http://core.test/mlx-gen/v1/images/edits"
+    assert call["data"]["n"] == "3"
+    assert call["data"]["seeds"] == "1,2,3"
+    assert json.loads(call["data"]["lora_adapters_json"]) == [
+        {"id": "watercolor", "scale": 0.8},
+        {"id": "paper-grain", "scale": 0.35},
+    ]
+
+
+def test_remote_image_edit_with_progress_uses_core_job_endpoint(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageEditJobSender()
+    events = []
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="Make the jacket red.",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_edit",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-edit-2511-4bit",
+                "format": "png",
+                "steps": 2,
+            },
+            "on_progress": events.append,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-edit-job", "node_id": "n-edit-job"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "MULTIPART"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/images/edits"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    assert sender.calls[0]["data"]["provider"] == "mlx-gen"
+    assert sender.calls[0]["data"]["model"] == "AbstractFramework/qwen-image-edit-2511-4bit"
+    assert sender.calls[1]["method"] == "GET"
+    assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-edit?consume=true"
+    assert events[0]["last_event"]["task"] == "image_edit"
+    assert events[-1]["progress"] == 1.0
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edit-job"
+
+
 def test_remote_video_output_uses_abstractcore_server_endpoint_and_stores_artifact() -> None:
     store = InMemoryArtifactStore()
     sender = _RemoteImageSender()
@@ -920,6 +1627,7 @@ def test_remote_video_output_uses_abstractcore_server_endpoint_and_stores_artifa
 
     assert sender.calls[0]["method"] == "POST"
     assert sender.calls[0]["url"] == "http://core.test/v1/videos/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
     assert sender.calls[0]["json"]["provider"] == "mlx-gen"
     assert sender.calls[0]["json"]["model"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     assert sender.calls[0]["json"]["num_frames"] == 41
@@ -961,6 +1669,7 @@ def test_remote_video_output_with_progress_uses_core_job_endpoint() -> None:
 
     assert sender.calls[0]["method"] == "POST"
     assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/videos/generations"
+    _assert_generated_media_calls_have_no_timeout(sender)
     assert sender.calls[1]["method"] == "GET"
     assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-video?consume=true"
     assert events[0]["phase"] == "denoise"
@@ -969,6 +1678,45 @@ def test_remote_video_output_with_progress_uses_core_job_endpoint() -> None:
     artifact = store.load(item["artifact_id"])
     assert artifact is not None
     assert artifact.content == b"mp4-job"
+
+
+def test_remote_video_output_forwards_batch_flow_shift_seeds_and_lora_adapters() -> None:
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    client.generate(
+        prompt="A drone shot over a frozen lake.",
+        params={
+            "output": {
+                "modality": "video",
+                "task": "text_to_video",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+                "count": 2,
+                "seeds": [77, 88],
+                "flow_shift": 3.0,
+                "lora_adapters": [
+                    {"id": "documentary-motion", "scale": 0.6},
+                    {"id": "cool-grade", "scale": 0.25},
+                ],
+            }
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["url"] == "http://core.test/v1/videos/generations"
+    assert call["json"]["n"] == 2
+    assert call["json"]["seeds"] == [77, 88]
+    assert call["json"]["flow_shift"] == 3.0
+    assert call["json"]["lora_adapters"] == [
+        {"id": "documentary-motion", "scale": 0.6},
+        {"id": "cool-grade", "scale": 0.25},
+    ]
 
 
 def test_remote_image_to_video_uses_abstractcore_videos_edits_endpoint_and_stores_artifact(tmp_path: Path) -> None:
@@ -1015,6 +1763,244 @@ def test_remote_image_to_video_uses_abstractcore_videos_edits_endpoint_and_store
     assert artifact.metadata.content_type == "video/mp4"
     assert artifact.metadata.run_id == "run-i2v"
     assert artifact.metadata.tags["node_id"] == "n-i2v"
+
+
+def test_remote_image_to_video_with_progress_uses_core_job_endpoint_and_step_progress(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageToVideoJobSender()
+    events = []
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="Add a slow camera orbit.",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "video",
+                "task": "image_to_video",
+                "provider": "mlx-gen",
+                "model": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+                "format": "mp4",
+                "num_frames": 81,
+                "steps": 20,
+            },
+            "on_progress": events.append,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-i2v-job", "node_id": "n-i2v-job"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "MULTIPART"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/videos/edits"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    assert sender.calls[1]["method"] == "GET"
+    assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-i2v?consume=true"
+    assert events[0]["phase"] == "denoise"
+    assert events[0]["step"] == 5
+    assert events[0]["total_steps"] == 20
+    assert events[0]["step_progress"] == 0.25
+    assert events[0]["frame"] == 20
+    assert events[0]["total_frames"] == 81
+    assert events[0]["frame_progress"] == 20 / 81
+    assert events[0]["last_event"]["task"] == "image_to_video"
+    assert events[-1]["progress"] == 1.0
+    item = out["outputs"]["video"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"mp4-i2v-job"
+
+
+def test_remote_image_to_video_forwards_batch_flow_shift_seeds_and_lora_adapters(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    client.generate(
+        prompt="Orbit around the ship.",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "video",
+                "task": "image_to_video",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
+                "count": 2,
+                "seeds": [301, 302],
+                "flow_shift": 5.0,
+                "lora_adapters": [
+                    {"id": "cinematic-camera", "scale": 0.7},
+                    {"id": "contrast-pop", "scale": 0.3},
+                ],
+            }
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["url"] == "http://core.test/mlx-gen/v1/videos/edits"
+    assert call["data"]["n"] == "2"
+    assert call["data"]["seeds"] == "301,302"
+    assert call["data"]["flow_shift"] == 5.0
+    assert json.loads(call["data"]["lora_adapters_json"]) == [
+        {"id": "cinematic-camera", "scale": 0.7},
+        {"id": "contrast-pop", "scale": 0.3},
+    ]
+
+
+def test_remote_image_upscale_uses_abstractcore_images_upscale_endpoint_and_stores_artifact(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_upscale",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/seedvr2-3b-8bit",
+                "format": "png",
+                "scale": "2x",
+                "resolution": 2048,
+                "softness": 0.25,
+                "seed": 2405,
+                "quantize": 8,
+                "vae_tiling": True,
+                "extra": {"tile_overlap": 32},
+            },
+            "trace_metadata": {"run_id": "run-upscale", "node_id": "n-upscale"},
+        },
+    )
+
+    call = sender.calls[0]
+    assert call["method"] == "MULTIPART"
+    assert call["url"] == "http://core.test/mlx-gen/v1/images/upscale"
+    assert call["data"]["model"] == "AbstractFramework/seedvr2-3b-8bit"
+    assert call["data"]["response_format"] == "b64_json"
+    assert call["data"]["scale"] == "2x"
+    assert call["data"]["resolution"] == 2048
+    assert call["data"]["softness"] == 0.25
+    assert call["data"]["seed"] == 2405
+    assert call["data"]["quantize"] == 8
+    assert call["data"]["vae_tiling"] is True
+    assert json.loads(call["data"]["extra_json"]) == {"tile_overlap": 32}
+    assert call["files"]["image"][1] == b"png-input"
+    item = out["outputs"]["image"][0]
+    assert item["task"] == "image_upscale"
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edited"
+    assert artifact.metadata.content_type == "image/png"
+    assert artifact.metadata.run_id == "run-upscale"
+    assert artifact.metadata.tags["node_id"] == "n-upscale"
+
+
+def test_remote_image_upscale_with_progress_uses_core_job_endpoint(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageUpscaleJobSender()
+    events = []
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_upscale",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/seedvr2-3b-8bit",
+                "scale": "2x",
+            },
+            "on_progress": events.append,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-upscale-job", "node_id": "n-upscale-job"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "MULTIPART"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/images/upscale"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    assert sender.calls[0]["data"]["provider"] == "mlx-gen"
+    assert sender.calls[1]["method"] == "GET"
+    assert sender.calls[1]["url"] == "http://core.test/v1/vision/jobs/job-upscale?consume=true"
+    assert events[0]["last_event"]["task"] == "image_upscale"
+    finalizing = [event for event in events if event.get("progress_mode") == "finalizing"]
+    assert finalizing
+    assert finalizing[0]["phase"] == "finalizing"
+    assert finalizing[0]["progress"] < 1.0
+    assert finalizing[0]["job_state"] == "running"
+    assert events[-1]["progress"] == 1.0
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-upscale-job"
+
+
+def test_remote_image_upscale_without_route_delegates_default_to_core_job(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"png-input")
+    store = InMemoryArtifactStore()
+    sender = _RemoteImageUpscaleJobSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+
+    out = client.generate(
+        prompt="",
+        media=[{"file_path": str(image_path), "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_upscale",
+                "scale": "2x",
+            },
+            "on_progress": lambda _event: None,
+            "poll_interval_s": 0.05,
+            "trace_metadata": {"run_id": "run-upscale-default", "node_id": "n-upscale-default"},
+        },
+    )
+
+    assert sender.calls[0]["method"] == "MULTIPART"
+    assert sender.calls[0]["url"] == "http://core.test/v1/vision/jobs/images/upscale"
+    _assert_generated_media_calls_have_no_timeout(sender)
+    assert "provider" not in sender.calls[0]["data"]
+    assert "model" not in sender.calls[0]["data"]
+    item = out["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-upscale-job"
 
 
 def test_remote_generated_media_requires_artifact_store_before_provider_call() -> None:

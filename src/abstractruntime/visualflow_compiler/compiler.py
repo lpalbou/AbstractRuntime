@@ -175,6 +175,8 @@ def _create_effect_node_handler(
         "generate_image",
         "edit_image",
         "image_to_image",
+        "upscale_image",
+        "image_upscale",
         "generate_video",
         "text_to_video",
         "image_to_video",
@@ -2138,6 +2140,7 @@ def _create_visual_agent_effect_handler(
 
             flow._node_outputs[node_id] = {
                 "response": response_text,
+                "data": data,
                 "success": True,
                 "meta": meta,
                 "scratchpad": scratchpad_out,
@@ -2153,6 +2156,7 @@ def _create_visual_agent_effect_handler(
                 node_id=node_id,
                 complete_output={
                     "response": response_text,
+                    "data": data,
                     "success": True,
                     "meta": meta,
                     "scratchpad": scratchpad_out,
@@ -2167,6 +2171,7 @@ def _create_visual_agent_effect_handler(
                 node_id=node_id,
                 complete_output={
                     "response": str(last.get("response") or ""),
+                    "data": last.get("data"),
                     "success": bool(last.get("success")) if "success" in last else True,
                     "meta": last.get("meta") if isinstance(last.get("meta"), dict) else {},
                     "scratchpad": last.get("scratchpad"),
@@ -2219,6 +2224,35 @@ def _create_visual_function_handler(
             input_data = run.vars.get(input_key)
         else:
             input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
+
+        visual_node_type = getattr(func, "_visual_node_type", None)
+        if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf"} and isinstance(run.vars, dict):
+            ambient: Dict[str, Any] = {}
+            for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+                if key in run.vars:
+                    ambient[key] = run.vars.get(key)
+            if ambient:
+                if isinstance(input_data, dict):
+                    merged_input = dict(input_data)
+                else:
+                    merged_input = {"input": input_data}
+                for key, value in ambient.items():
+                    merged_input.setdefault(key, value)
+                input_data = merged_input
+        if visual_node_type in {"read_artifact", "import_workspace_file", "export_artifact", "list_folder_files"}:
+            if isinstance(input_data, dict):
+                merged_input = dict(input_data)
+            else:
+                merged_input = {"input": input_data}
+            for key in ("_runtime_artifact_store", "_runtime_run_store", "_runtime_run_id", "_runtime_session_id"):
+                value = getattr(run, key, None)
+                if value is not None:
+                    merged_input.setdefault(key, value)
+            if isinstance(run.vars, dict):
+                for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+                    if key in run.vars:
+                        merged_input.setdefault(key, run.vars.get(key))
+            input_data = merged_input
 
         # Execute function (which is the data-aware wrapped handler)
         try:
@@ -2613,6 +2647,8 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     content = raw.get("content")
                     response_text = str(content) if content is not None else ""
                 current["response"] = response_text
+                if isinstance(data, (dict, list)):
+                    current["data"] = data
                 # Convenience pin: expose tool_calls directly, instead of forcing consumers
                 # to drill into `result.tool_calls` via a Break Object node.
                 current["tool_calls"] = tool_calls
@@ -2681,6 +2717,8 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             "generate_image",
             "edit_image",
             "image_to_image",
+            "upscale_image",
+            "image_upscale",
             "generate_video",
             "text_to_video",
             "image_to_video",
@@ -2688,7 +2726,7 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             "generate_music",
         }:
             if isinstance(raw, dict):
-                if effect_type in {"generate_image", "edit_image", "image_to_image"}:
+                if effect_type in {"generate_image", "edit_image", "image_to_image", "upscale_image", "image_upscale"}:
                     modality = "image"
                     primary_artifact_key = "image_artifact"
                 elif effect_type in {"generate_video", "text_to_video", "image_to_video"}:
@@ -2919,15 +2957,17 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             scratchpad_out["tool_calls"] = tc
             scratchpad_out["tool_results"] = tr
 
+            structured_data = raw if bucket_output_mode == "structured" and isinstance(raw, dict) else None
+
             # Best-effort response string:
             # - prefer preserved unstructured answer (before structured-output post-pass)
             # - fall back to common keys inside the raw result
             response = ""
-            if bucket_output_mode == "structured" and isinstance(raw, dict):
+            if structured_data is not None:
                 try:
                     import json as _json
 
-                    response = _json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                    response = _json.dumps(structured_data, ensure_ascii=False, separators=(",", ":"))
                 except Exception:
                     response = ""
             if not response:
@@ -3073,6 +3113,8 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 meta["output_mode"] = bucket_output_mode
 
             current["response"] = response
+            if structured_data is not None:
+                current["data"] = structured_data
             current["success"] = bool(success) if success is not None else True
             current["meta"] = meta
             current["scratchpad"] = scratchpad_out

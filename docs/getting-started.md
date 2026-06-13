@@ -12,8 +12,8 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.13.31 or newer with remote provider, media,
-vision, voice, audio, music, tool, and MCP-worker support. The base install is
+This installs AbstractCore 2.13.37 or newer with remote provider, vision,
+voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
 HuggingFace/Torch, Diffusers, or sentence-transformer embeddings.

@@ -23,23 +23,23 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from abstractcore.utils.workspace_paths import (
+    WorkspacePathError,
+    WorkspacePathResolution,
+    build_workspace_mounts,
+    is_under_path,
+    resolve_no_strict,
+    resolve_workspace_path as resolve_canonical_workspace_path,
+)
+
 WorkspaceAccessMode = str  # "workspace_only" | "all_except_ignored" | "workspace_or_allowed"
 
 _VALID_ACCESS_MODES: set[str] = {"workspace_only", "all_except_ignored", "workspace_or_allowed"}
-_MOUNT_NAME_RE: set[str] = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
-
-
-def _resolve_no_strict(path: Path) -> Path:
-    """Resolve without requiring the path to exist (best-effort across py versions)."""
-    try:
-        return path.resolve(strict=False)
-    except TypeError:  # pragma: no cover (older python)
-        return path.resolve()
 
 
 def _find_repo_root_from_here(*, start: Path, max_hops: int = 10) -> Optional[Path]:
     """Best-effort monorepo root detection for local/dev runs."""
-    cur = _resolve_no_strict(start)
+    cur = resolve_no_strict(start)
     for _ in range(max_hops):
         docs = cur / "docs" / "KnowledgeBase.md"
         if docs.exists():
@@ -64,14 +64,14 @@ def resolve_workspace_base_dir() -> Path:
     """
     env = os.getenv("ABSTRACT_WORKSPACE_BASE_DIR") or os.getenv("ABSTRACTFLOW_WORKSPACE_BASE_DIR")
     if isinstance(env, str) and env.strip():
-        return _resolve_no_strict(Path(env.strip()).expanduser())
+        return resolve_no_strict(Path(env.strip()).expanduser())
 
     here_dir = Path(__file__).resolve().parent
     guessed = _find_repo_root_from_here(start=here_dir)
     if guessed is not None:
         return guessed
 
-    return _resolve_no_strict(Path.cwd())
+    return resolve_no_strict(Path.cwd())
 
 
 def _normalize_access_mode(raw: Any) -> WorkspaceAccessMode:
@@ -150,7 +150,7 @@ def _resolve_ignored_paths(*, root: Path, ignored: Iterable[str]) -> Tuple[Path,
         p = Path(s).expanduser()
         if not p.is_absolute():
             p = root / p
-        out.append(_resolve_no_strict(p))
+        out.append(resolve_no_strict(p))
     # Stable ordering for deterministic error messages/tests.
     return tuple(dict.fromkeys(out))
 
@@ -164,60 +164,17 @@ def _resolve_allowed_paths(*, root: Path, allowed: Iterable[str]) -> Tuple[Path,
         p = Path(s).expanduser()
         if not p.is_absolute():
             p = root / p
-        out.append(_resolve_no_strict(p))
+        out.append(resolve_no_strict(p))
     return tuple(dict.fromkeys(out))
 
 
 def _is_under(child: Path, parent: Path) -> bool:
-    try:
-        _resolve_no_strict(child).relative_to(_resolve_no_strict(parent))
-        return True
-    except Exception:
-        return False
-
-
-def _slug_mount_name(name: str) -> str:
-    """Return a stable mount name (<= 32 chars, lower-case, [a-z0-9_-])."""
-    s = str(name or "").strip().lower()
-    if not s:
-        return "mount"
-    out: list[str] = []
-    for ch in s:
-        if ch in _MOUNT_NAME_RE:
-            out.append(ch)
-        else:
-            out.append("-")
-    slug = "".join(out).strip("-")
-    if not slug:
-        return "mount"
-    return slug[:32]
+    return is_under_path(child, parent)
 
 
 def _mounts_from_allowed_paths(*, allowed_dirs: Iterable[Path], used_names: set[str]) -> Dict[str, Path]:
     """Build a deterministic {mount_name -> root} map for allowed roots outside workspace_root."""
-    import hashlib
-
-    out: Dict[str, Path] = {}
-    for p in allowed_dirs:
-        try:
-            resolved = p.resolve()
-        except Exception:
-            resolved = p
-        base = _slug_mount_name(resolved.name)
-        name = base
-        if name in used_names:
-            digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
-            trim = max(1, 32 - (1 + len(digest)))
-            name = f"{base[:trim]}_{digest}"
-        i = 2
-        while name in used_names:
-            suffix = f"_{i}"
-            trim = max(1, 32 - len(suffix))
-            name = f"{base[:trim]}{suffix}"
-            i += 1
-        used_names.add(name)
-        out[name] = resolved
-    return out
+    return build_workspace_mounts(allowed_dirs=allowed_dirs, used_names=used_names)
 
 
 def _resolve_virtual_mount_relative_path(*, scope: "WorkspaceScope", raw: str) -> tuple[Path, str]:
@@ -232,43 +189,29 @@ def _resolve_virtual_mount_relative_path(*, scope: "WorkspaceScope", raw: str) -
     Returns:
       (root_used, rel_part) where rel_part is a relative path to join under root_used.
     """
-    text = str(raw or "").strip().replace("\\", "/")
-    if text.startswith("@"):
-        text = text[1:].lstrip()
-    while text.startswith("./"):
-        text = text[2:]
-
-    parts = [seg for seg in text.split("/") if seg not in ("", ".")]
-    if len(parts) < 2:
-        return (scope.root, text)
-
-    first = parts[0]
-
-    # Mounts: allow a "mount/..." prefix for allowed roots outside workspace_root.
+    mounts: Dict[str, Path] = {}
     if scope.access_mode == "workspace_or_allowed" and scope.allowed_paths:
         used: set[str] = set()
         allowed_outside = [p for p in scope.allowed_paths if isinstance(p, Path) and not _is_under(p, scope.root)]
         mounts = _mounts_from_allowed_paths(allowed_dirs=allowed_outside, used_names=used)
-        if first in mounts:
-            root = mounts[first]
-            rel = "/".join(parts[1:])
-            return (root, rel)
-
-    # Convenience: if the path redundantly begins with the workspace directory name, strip it
-    # when it does not exist as a real child directory (common with "repo-name/..." patterns).
     try:
-        if first == scope.root.name and not (scope.root / first).exists():
-            rel = "/".join(parts[1:])
-            return (scope.root, rel)
-    except Exception:
-        pass
-
-    return (scope.root, text)
+        resolved = resolve_canonical_workspace_path(
+            base=scope.root,
+            mounts=mounts,
+            raw_path=raw,
+            workspace_root_name=scope.root.name,
+        )
+    except WorkspacePathError as exc:
+        if exc.kind == "path_escape":
+            raise ValueError(f"Path escapes workspace_root: '{raw}'") from exc
+        raise ValueError(str(exc)) from exc
+    rel_part = resolved.resolved_path.relative_to(resolved.root_path).as_posix()
+    return (resolved.root_path, rel_part)
 
 
 def _ensure_allowed(*, path: Path, scope: "WorkspaceScope") -> None:
     for blocked in scope.ignored_paths:
-        if _is_under(path, blocked) or _resolve_no_strict(path) == _resolve_no_strict(blocked):
+        if _is_under(path, blocked) or resolve_no_strict(path) == resolve_no_strict(blocked):
             raise ValueError(f"Path is blocked by workspace_ignored_paths: '{path}'")
 
 
@@ -277,7 +220,7 @@ def _resolve_under_root_strict(*, root: Path, user_path: str) -> Path:
     p = Path(str(user_path or "").strip()).expanduser()
     if p.is_absolute():
         raise ValueError("Internal error: strict under-root resolver received absolute path")
-    resolved = _resolve_no_strict(root / p)
+    resolved = resolve_no_strict(root / p)
     if not _is_under(resolved, root):
         raise ValueError(f"Path escapes workspace_root: '{user_path}'")
     return resolved
@@ -295,7 +238,7 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
 
     p = Path(raw).expanduser()
     if p.is_absolute():
-        resolved = _resolve_no_strict(p)
+        resolved = resolve_no_strict(p)
         if scope.access_mode == "workspace_only":
             if not _is_under(resolved, scope.root):
                 raise ValueError(f"Path escapes workspace_root: '{user_path}'")
@@ -310,6 +253,59 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
     root_used, rel_part = _resolve_virtual_mount_relative_path(scope=scope, raw=raw)
     resolved = _resolve_under_root_strict(root=root_used, user_path=rel_part)
     _ensure_allowed(path=resolved, scope=scope)
+    return resolved
+
+
+def resolve_user_workspace_path(*, scope: "WorkspaceScope", user_path: str) -> WorkspacePathResolution:
+    """Resolve a user path and return its canonical workspace-path representation."""
+    raw = str(user_path or "").strip()
+    if not raw:
+        raise ValueError("Empty path")
+
+    if raw.startswith("@"):
+        raw = raw[1:].lstrip()
+
+    mounts: Dict[str, Path] = {}
+    if scope.allowed_paths:
+        used: set[str] = set()
+        allowed_outside = [p for p in scope.allowed_paths if isinstance(p, Path) and not _is_under(p, scope.root)]
+        mounts = _mounts_from_allowed_paths(allowed_dirs=allowed_outside, used_names=used)
+
+    if scope.access_mode == "all_except_ignored":
+        try:
+            resolved = resolve_canonical_workspace_path(
+                base=scope.root,
+                mounts=mounts,
+                raw_path=raw,
+                workspace_root_name=scope.root.name,
+            )
+        except WorkspacePathError as exc:
+            if exc.kind == "path_escape":
+                raise ValueError(f"Path escapes workspace_root: '{user_path}'") from exc
+            if exc.kind != "outside_workspace_roots":
+                raise ValueError(str(exc)) from exc
+            resolved_path = resolve_user_path(scope=scope, user_path=raw)
+            return WorkspacePathResolution(
+                resolved_path=resolved_path,
+                virtual_path=str(resolved_path),
+                mount_name=None,
+                root_path=resolved_path.parent,
+            )
+        _ensure_allowed(path=resolved.resolved_path, scope=scope)
+        return resolved
+
+    try:
+        resolved = resolve_canonical_workspace_path(
+            base=scope.root,
+            mounts=mounts,
+            raw_path=raw,
+            workspace_root_name=scope.root.name,
+        )
+    except WorkspacePathError as exc:
+        if exc.kind == "path_escape":
+            raise ValueError(f"Path escapes workspace_root: '{user_path}'") from exc
+        raise ValueError(str(exc)) from exc
+    _ensure_allowed(path=resolved.resolved_path, scope=scope)
     return resolved
 
 
@@ -353,7 +349,7 @@ class WorkspaceScope:
         root = Path(raw.strip()).expanduser()
         if not root.is_absolute():
             root = base / root
-        root = _resolve_no_strict(root)
+        root = resolve_no_strict(root)
         if root.exists() and not root.is_dir():
             raise ValueError(f"workspace_root must be a directory (got file): {raw}")
         root.mkdir(parents=True, exist_ok=True)
@@ -468,7 +464,7 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
     def _rewrite_path_field(field: str, *, default_to_root: bool = False) -> None:
         raw = out.get(field)
         if (raw is None or (isinstance(raw, str) and not raw.strip())) and default_to_root:
-            out[field] = str(_resolve_no_strict(root))
+            out[field] = str(resolve_no_strict(root))
             return
         if raw is None:
             return
@@ -558,4 +554,5 @@ __all__ = [
     "rewrite_tool_arguments",
     "resolve_workspace_base_dir",
     "resolve_user_path",
+    "resolve_user_workspace_path",
 ]

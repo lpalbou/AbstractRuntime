@@ -37,6 +37,7 @@ class _RecordingDiscoveryClient:
             "list_music_providers": {"providers": ["acemusic"], "provider_details": [{"provider": "acemusic"}]},
             "list_music_models": {"providers": ["acemusic"], "models": [{"provider": "acemusic", "id": "ace-step"}]},
             "list_vision_provider_models": {"providers": ["mflux"], "models": []},
+            "list_vision_adapters": {"adapters": [{"id": "wan-style", "provider": "mlx-gen"}], "count": 1},
             "list_cached_vision_models": {"models": [{"id": "flux-dev", "provider": "mflux"}]},
         }
 
@@ -203,6 +204,27 @@ class _RecordingDiscoveryClient:
             **kwargs,
         )
 
+    def list_vision_adapters(
+        self,
+        *,
+        model: str | None = None,
+        task: str | None = None,
+        base_url: str | None = None,
+        provider_api_key: str | None = None,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._record(
+            "list_vision_adapters",
+            None,
+            model=model,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
 
 class _LegacyDiscoveryClient(_RecordingDiscoveryClient):
     lookup_model_capabilities = None  # type: ignore[assignment]
@@ -347,6 +369,20 @@ class _RecordingRequestSender:
                     ]
                 }
             )
+        if url == "http://core.test/v1/vision/adapters?model=AbstractFramework%2Fwan2.2-ti2v-5b-diffusers-8bit&task=text_to_video&provider=mlx-gen&base_url=http%3A%2F%2Fprovider.test%2Fv1":
+            return _HttpResponse(
+                {
+                    "adapters": [
+                        {
+                            "id": "wan-style-pack",
+                            "provider": "mlx-gen",
+                            "compatible_models": ["AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit"],
+                            "compatible_tasks": ["text_to_video", "image_to_video"],
+                        }
+                    ],
+                    "count": 1,
+                }
+            )
         raise AssertionError(f"Unexpected GET url: {url}")
 
     def post(self, url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: float) -> _HttpResponse:
@@ -471,6 +507,13 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
         provider="acemusic",
     )
     vision = facade.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
+    adapters = facade.list_vision_adapters(
+        model="AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+        task="text_to_video",
+        base_url="http://provider.test/v1",
+        provider_api_key="secret",
+        provider="mlx-gen",
+    )
     cached = facade.list_cached_vision_models(task="text_to_image", provider="mflux")
 
     assert providers == {"items": [{"name": "mlx"}]}
@@ -483,6 +526,7 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
     assert music_providers == {"providers": ["acemusic"], "provider_details": [{"provider": "acemusic"}]}
     assert music_models == {"providers": ["acemusic"], "models": [{"provider": "acemusic", "id": "ace-step"}]}
     assert vision == {"providers": ["mflux"], "models": []}
+    assert adapters == {"adapters": [{"id": "wan-style", "provider": "mlx-gen"}], "count": 1}
     assert cached == {"models": [{"id": "flux-dev", "provider": "mflux"}]}
 
     assert client.calls == [
@@ -556,6 +600,17 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
                 "provider_api_key": None,
                 "provider": "mflux",
                 "providers_only": True,
+            },
+        ),
+        (
+            "list_vision_adapters",
+            None,
+            {
+                "model": "AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+                "task": "text_to_video",
+                "base_url": "http://provider.test/v1",
+                "provider_api_key": "secret",
+                "provider": "mlx-gen",
             },
         ),
         (
@@ -675,6 +730,18 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.discovery_queries.local_list_vision_adapters",
+        lambda *, model=None, task=None, base_url=None, provider_api_key=None, provider=None: {
+            "model": model,
+            "task": task,
+            "provider": provider,
+            "base_url": base_url,
+            "provider_api_key": provider_api_key,
+            "adapters": [{"id": "wan-style-pack", "provider": provider or "mlx-gen"}],
+            "count": 1,
+        },
+    )
+    monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_cached_vision_models",
         lambda *, task=None, provider=None: {"task": task, "provider": provider},
     )
@@ -756,6 +823,21 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
         "base_url": None,
         "provider_api_key": None,
     }
+    assert client.list_vision_adapters(
+        model="AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+        task="text_to_video",
+        base_url="http://provider.test/v1",
+        api_key="secret",
+        provider="mlx-gen",
+    ) == {
+        "model": "AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+        "task": "text_to_video",
+        "provider": "mlx-gen",
+        "base_url": "http://provider.test/v1",
+        "provider_api_key": "secret",
+        "adapters": [{"id": "wan-style-pack", "provider": "mlx-gen"}],
+        "count": 1,
+    }
     assert client.list_cached_vision_models(task="text_to_image", provider="mflux") == {
         "task": "text_to_image",
         "provider": "mflux",
@@ -798,6 +880,23 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
         def list_provider_models(self, *, task: str | None = None) -> List[Dict[str, Any]]:
             _ = task
             return [{"provider": "mflux", "model": "flux-dev"}]
+
+        def list_provider_adapters(
+            self,
+            *,
+            model: str | None = None,
+            task: str | None = None,
+            provider: str | None = None,
+        ) -> List[Dict[str, Any]]:
+            _ = provider
+            return [
+                {
+                    "id": "wan-style-pack",
+                    "provider": "mlx-gen",
+                    "compatible_models": [model or "AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit"],
+                    "compatible_tasks": [task or "text_to_video"],
+                }
+            ]
 
     class _FakeMusic:
         backend_id = "music-backend"
@@ -869,6 +968,11 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     music_providers = client.list_music_providers(task="text_to_music")
     music_models = client.list_music_models(task="text_to_music", provider="acemusic")
     vision = client.list_vision_provider_models(task="text_to_image", provider="mflux", providers_only=True)
+    adapters = client.list_vision_adapters(
+        model="AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+        task="text_to_video",
+        provider="mlx-gen",
+    )
     cached = client.list_cached_vision_models(task="text_to_image", provider="mflux")
     embeddings = client.list_embedding_models(provider="huggingface")
 
@@ -891,6 +995,9 @@ def test_local_discovery_methods_shape_snapshot_responses(monkeypatch) -> None:
     assert music_models["models_by_provider"] == {"acemusic": ["ace-step", "ace-pro"]}
     assert vision["providers"] == ["mflux"]
     assert vision["models"] == []
+    assert adapters["count"] == 1
+    assert adapters["adapters"][0]["id"] == "wan-style-pack"
+    assert adapters["adapters"][0]["compatible_tasks"] == ["text_to_video"]
     assert cached["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
 
 
@@ -970,6 +1077,42 @@ def test_local_cached_vision_models_do_not_import_core_server_helper(monkeypatch
     assert payload["available"] is True
     assert payload["source"] == "abstractvision.local_cache"
     assert payload["models"] == [{"id": "flux-dev", "provider": "mflux", "tasks": ["text_to_image"]}]
+
+
+def test_local_vision_provider_models_accept_image_upscale_task_from_cache(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    class _StubVision:
+        backend_id = "mlx-gen"
+
+        def available_providers(self, task=None):
+            return {"providers": [], "available_providers": []}
+
+        def list_provider_models(self, task=None):
+            return []
+
+    class _StubRegistry:
+        vision = _StubVision()
+
+    monkeypatch.setattr(discovery_queries, "_runtime_capability_registry", lambda **_kwargs: _StubRegistry())
+    monkeypatch.setattr(
+        "abstractcore.capabilities.vision_catalog.get_local_vision_cache_catalog",
+        lambda: {
+            "models": [
+                {
+                    "id": "AbstractFramework/seedvr2-3b-8bit",
+                    "provider": "mlx-gen",
+                    "tasks": ["image_upscale"],
+                }
+            ]
+        },
+    )
+
+    payload = discovery_queries.local_list_vision_provider_models(task="image_upscale", provider="mlx-gen")
+
+    assert payload["task"] == "image_upscale"
+    assert payload["models_by_provider"] == {"mlx-gen": ["AbstractFramework/seedvr2-3b-8bit"]}
+    assert payload["error"] is None
 
 
 def test_local_cached_vision_models_preserve_helper_error_details(monkeypatch) -> None:

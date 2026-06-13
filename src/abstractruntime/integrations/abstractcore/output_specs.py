@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-_MIN_ABSTRACTCORE_VERSION = (2, 13, 29)
-_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.29"
+_MIN_ABSTRACTCORE_VERSION = (2, 13, 37)
+_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.37"
 
 
 def _version_tuple(value: str) -> tuple[int, int, int]:

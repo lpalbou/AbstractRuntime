@@ -874,6 +874,8 @@ def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> No
     assert local_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.capability_plugin"
     assert local_caps["tasks"]["image_to_image"]["supported"] is True
     assert local_caps["tasks"]["image_to_image"]["shares_backend_cache_with"] == "image_generation"
+    assert local_caps["tasks"]["image_upscale"]["supported"] is True
+    assert local_caps["tasks"]["image_upscale"]["shares_backend_cache_with"] == "image_generation"
     assert local_caps["tasks"]["video_generation"]["supported"] is True
     assert local_caps["tasks"]["text_to_video"]["supported"] is True
     assert local_caps["tasks"]["image_to_video"]["supported"] is True
@@ -886,6 +888,7 @@ def test_model_residency_capabilities_describe_core_backed_truth_by_task() -> No
     assert remote_caps["tasks"]["image_generation"]["truth_source"] == "abstractcore.server./acore/models"
     assert remote_caps["tasks"]["image_to_image"]["truth_source"] == "abstractcore.server./acore/models"
     assert remote_caps["tasks"]["image_to_image"]["supported"] is True
+    assert remote_caps["tasks"]["image_upscale"]["supported"] is True
     assert remote_caps["tasks"]["video_generation"]["truth_source"] == "abstractcore.server./acore/models"
     assert remote_caps["tasks"]["text_to_video"]["supported"] is True
     assert remote_caps["tasks"]["image_to_video"]["supported"] is True

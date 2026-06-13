@@ -143,17 +143,37 @@ def _jsonable(value: Any) -> Any:
         return str(value)
 
 
+def _is_sensitive_observability_key(key: str) -> bool:
+    key_l = str(key or "").lower()
+    if not key_l:
+        return False
+    if any(fragment in key_l for fragment in ("api_key", "api-key", "apikey", "authorization", "password", "secret")):
+        return True
+    parts = [p for p in re.split(r"[^a-z0-9]+", key_l) if p]
+    if "token" not in parts:
+        return False
+    return any(part in parts for part in ("access", "auth", "bearer", "bot", "csrf", "id", "refresh", "session")) or key_l in {
+        "token",
+        "auth_token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "bearer_token",
+        "csrf_token",
+        "session_token",
+    }
+
+
 def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return params safe for persisted runtime observability traces."""
 
     callback_keys = {"on_progress", "progress_callback", "progress_event_callback"}
-    sensitive_fragments = ("api_key", "api-key", "apikey", "authorization", "password", "secret", "token")
     out: Dict[str, Any] = {}
     for key, value in dict(params or {}).items():
         key_s = str(key)
         if key_s in callback_keys or callable(value):
             continue
-        if any(fragment in key_s.lower() for fragment in sensitive_fragments):
+        if _is_sensitive_observability_key(key_s):
             out[key_s] = "[redacted]" if value not in (None, "") else value
             continue
         out[key_s] = value
@@ -490,7 +510,7 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
     effect payloads (we persist the schema, not the Python class).
     """
     try:
-        from pydantic import BaseModel, create_model
+        from pydantic import BaseModel, Field, create_model
     except Exception as e:  # pragma: no cover
         raise RuntimeError(f"Pydantic is required for structured outputs: {e}")
 
@@ -574,10 +594,22 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
                     f"Invalid property name '{prop_name}'. Use identifier-style names (letters, digits, underscore)."
                 )
             t = _python_type(prop_schema, nested_name=f"{name}_{prop_name}")
+            description = None
+            default_value = None
+            has_default = False
+            if isinstance(prop_schema, dict):
+                raw_description = prop_schema.get("description")
+                if isinstance(raw_description, str) and raw_description.strip():
+                    description = raw_description.strip()
+                if "default" in prop_schema:
+                    default_value = prop_schema.get("default")
+                    has_default = True
+
             if prop_name in required:
-                fields[prop_name] = (t, ...)
+                fields[prop_name] = (t, Field(..., description=description))
             else:
-                fields[prop_name] = (Optional[t], None)
+                field_default = default_value if has_default else None
+                fields[prop_name] = (Optional[t], Field(field_default, description=description))
 
         return create_model(name, **fields)  # type: ignore[call-arg]
 
@@ -878,6 +910,8 @@ def _resolve_llm_call_media(
                 raw_role = item.get(key)
                 if isinstance(raw_role, str) and raw_role.strip():
                     resolved[key] = raw_role.strip()
+        if filename:
+            resolved["filename"] = filename
         if content_type:
             resolved["content_type"] = content_type
             base_type = content_type.split(";", 1)[0].strip().lower()

@@ -26,8 +26,10 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `faq.md` — common questions (recommended)
 - `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
 - `manual_testing.md` — manual smoke tests and how to run the test suite
+- `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
+- `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and PDF document nodes (`read_pdf` / `write_pdf`)
 
 ## Features (reference)
 

@@ -117,10 +117,16 @@ These APIs are exported at the package root (see `src/abstractruntime/__init__.p
 ## Artifacts (store by reference)
 
 Implementation: `src/abstractruntime/storage/artifacts.py`.
+Deep dive: `artifacts.md`.
 
 Key types:
 - `ArtifactStore` (interface), `InMemoryArtifactStore`, `FileArtifactStore`
 - helpers: `artifact_ref(...)`, `resolve_artifact(...)`, `is_artifact_ref(...)`
+
+The store keeps payload bytes out of run state and persists structured metadata:
+- `ArtifactDescriptor` is the Runtime-owned descriptor used by Gateway and Observer. It separates `semantic_kind` such as `voice`, `music`, `sound`, or `image` from `render_kind` such as `audio`, `markdown`, `html`, or `json`, and can carry workflow/node/turn links, media facts, generation/provenance data, source refs, security, and action links.
+- `ArtifactAccessStats` records explicit metadata/content/preview/download/export actions when HTTP or UI layers call `record_access(...)`. Plain `load(...)` and `get_metadata(...)` remain side-effect free.
+- `search(...)`, `count(...)`, `facet_counts(...)`, and `stats(...)` provide metadata queries for host control planes. `FileArtifactStore` serves these from a repairable SQLite catalog when possible, including exact `total`, `total_bytes`, and requested facet counts without forcing Gateway/Observer to load every matching artifact.
 
 Artifacts are used by:
 - offloading wrappers (`src/abstractruntime/storage/offloading.py`)
@@ -156,9 +162,23 @@ VisualFlow compiler helpers are available from `abstractruntime.visualflow_compi
 - `visual_to_flow(...)` lowers VisualFlow into the internal Flow IR.
 - `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
 
-VisualFlow authoring note (media nodes):
-- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
+VisualFlow authoring note (media and document nodes):
+- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
 - Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
+- Runtime also recognizes file/document nodes. `read_file` and `write_file`
+  handle UTF-8 text/JSON workspace paths. In Gateway-hosted runs, those paths
+  follow the shared canonical contract: `rel/path` for the main workspace root
+  and `mount_alias/rel/path` for approved mounts. `read_pdf` extracts text and
+  metadata from PDF paths with `pypdf`; `write_pdf` renders text or
+  Markdown-style content to real PDF bytes with `reportlab`; `list_folder_files`
+  enumerates workspace-scoped folders with family/extension filters;
+  `import_workspace_file` snapshots a workspace file into a durable artifact;
+  `read_artifact` projects saved file content back out as text/JSON/bounded
+  binary metadata; and `export_artifact` writes a durable artifact back to a
+  workspace path. PDF bytes are written to the workspace path and only
+  JSON-safe metadata/path values are stored in run state. In local Runtime-only
+  runs with no workspace scope, relative file-node paths still fall back to the
+  process working directory.
 
 Public bundle APIs are exported from `src/abstractruntime/workflow_bundle/__init__.py` and re-exported in `src/abstractruntime/__init__.py`:
 - open: `open_workflow_bundle(...)`
@@ -180,7 +200,7 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.13.31 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.13.37 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -193,11 +213,14 @@ Entry points:
 - public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
-- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`)
+- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
 - host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `get_model_residency_capabilities`, `list_model_residency`, `load_model_residency`, `unload_model_residency`)
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
 - host-facade email helpers delegate to Runtime's host-local comms facade/export layer (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
-- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- task-specific image/video helpers preserve batch and adapter controls such as
+  `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
+  subprocess isolation stays within the same public contract.
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
 - `prompt`, `messages`, `system_prompt`, and convenience `text`
@@ -208,11 +231,11 @@ Entry points:
 Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
-- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and generated image/video tasks also report `execution_mode="local_one_shot_subprocess"`
+- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and generated image/video tasks also report `execution_mode="local_one_shot_subprocess"`
 - Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected local-inference profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:

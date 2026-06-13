@@ -65,6 +65,10 @@ def test_run_facade_generate_image_creates_durable_child_run_with_truthful_media
                         "format": "png",
                         "provider": "mflux",
                         "model": "flux-dev",
+                        "metadata": {
+                            "token": "secret-token",
+                            "nested": {"access_token": "secret-access", "safe": "kept"},
+                        },
                     }
                 ]
             },
@@ -128,6 +132,27 @@ def test_run_facade_generate_image_creates_durable_child_run_with_truthful_media
     artifact = store.load(item["artifact_id"])
     assert artifact is not None
     assert artifact.content == b"png-child"
+    descriptor = artifact.metadata.descriptor
+    assert descriptor.semantic_kind == "image"
+    assert descriptor.render_kind == "image"
+    assert descriptor.modality == "image"
+    assert descriptor.task == "image_generation"
+    assert descriptor.classification_source == "producer"
+    assert descriptor.session_id == "sess-media"
+    assert descriptor.workflow_id == "wf_abstractcore_run_facade_image_generation"
+    assert descriptor.producer["provider"] == "mflux"
+    assert descriptor.producer["model"] == "flux-dev"
+    assert descriptor.producer["runtime_provider"] == "mlx"
+    assert descriptor.generation["prompt"] == "A red mug."
+    assert descriptor.generation["requested_format"] == "png"
+    assert descriptor.provenance["run_id"] == child.run_id
+    assert descriptor.security["redaction"] == "bounded_secret_key_redaction_v1"
+    assert descriptor.security["sensitivity"] == "user_content"
+    assert artifact.metadata.metadata["schema"] == "abstractruntime.generated_media_metadata.v1"
+    assert artifact.metadata.metadata["security"]["recorded_user_content_fields"] == ["prompt"]
+    assert artifact.metadata.metadata["capability_metadata"]["token"] == "[redacted]"
+    assert artifact.metadata.metadata["capability_metadata"]["nested"]["access_token"] == "[redacted]"
+    assert artifact.metadata.metadata["capability_metadata"]["nested"]["safe"] == "kept"
 
     ledger = runtime.get_ledger(child.run_id)
     effect_types = [
@@ -202,6 +227,89 @@ def test_run_facade_edit_image_creates_durable_child_run_with_media() -> None:
     assert artifact is not None
     assert artifact.content == b"png-edited"
     assert artifact.metadata.run_id == child.run_id
+    descriptor = artifact.metadata.descriptor
+    assert descriptor.semantic_kind == "image"
+    assert descriptor.task == "image_edit"
+    assert descriptor.generation["prompt"] == "Make the jacket red."
+    assert descriptor.source_refs
+    source_ref = descriptor.source_refs[0]
+    assert source_ref["kind"] == "artifact"
+    assert source_ref["artifact_id"] == source.artifact_id
+    assert source_ref["content_type"] == "image/png"
+    assert source_ref["modality"] == "image"
+    assert source_ref["filename"] == "source.png"
+
+
+def test_run_facade_upscale_image_creates_durable_child_run_with_media() -> None:
+    store = InMemoryArtifactStore()
+    source = store.store(b"png-source", content_type="image/png", tags={"filename": "source.png"})
+    seen: Dict[str, Any] = {}
+
+    class _ImageUpscaleProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                outputs={
+                    "image": [
+                        GeneratedItem(
+                            modality="image",
+                            task="image_upscale",
+                            data=b"png-upscaled",
+                            content_type="image/png",
+                            format="png",
+                            provider="mlx-gen",
+                            model="AbstractFramework/seedvr2-3b-8bit",
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _ImageUpscaleProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-upscale")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.upscale_image(
+        parent_run_id,
+        media={"$artifact": source.artifact_id, "filename": "source.png"},
+        output={
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/seedvr2-3b-8bit",
+            "format": "png",
+            "scale": "2x",
+            "softness": 0.25,
+            "quantize": 8,
+        },
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert seen["output"]["task"] == "image_upscale"
+    assert seen["output"]["scale"] == "2x"
+    assert seen["output"]["softness"] == 0.25
+    assert seen["output"]["quantize"] == 8
+    assert seen["media"][0]["artifact_id"] == source.artifact_id
+    item = child.output["result"]["outputs"]["image"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-upscaled"
+    assert artifact.metadata.run_id == child.run_id
+    assert artifact.metadata.descriptor.task == "image_upscale"
 
 
 def test_run_facade_generate_video_creates_durable_child_run_with_progress() -> None:
@@ -379,6 +487,80 @@ def test_run_facade_transcribe_audio_inherits_runtime_media_defaults() -> None:
     assert seen["media"][0]["artifact_id"] == meta.artifact_id
 
 
+def test_run_facade_generate_voice_creates_durable_child_run_with_artifact_descriptor() -> None:
+    store = InMemoryArtifactStore()
+    seen: Dict[str, Any] = {}
+
+    class _VoiceProvider:
+        def generate(self, **kwargs):
+            from abstractcore.core.multimodal_generation import GeneratedItem, MultimodalGenerateResponse
+
+            seen.update(kwargs)
+            return MultimodalGenerateResponse(
+                outputs={
+                    "voice": [
+                        GeneratedItem(
+                            modality="voice",
+                            task="tts",
+                            data=b"wav-voice",
+                            content_type="audio/wav",
+                            format="wav",
+                            provider="abstractvoice",
+                            model="tts-test",
+                            metadata={"voice_id": "narrator", "language": "en", "cloned_voice": False},
+                        )
+                    ]
+                }
+            )
+
+    llm = object.__new__(LocalAbstractCoreLLMClient)
+    llm._provider = "mlx"
+    llm._model = "qwen-chat"
+    llm._artifact_store = store
+    llm._generate_lock = None
+    llm._llm = _VoiceProvider()
+    llm._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=llm, tools=_NoopTools(), artifact_store=store),
+    )
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-voice")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    child = facade.generate_voice(
+        parent_run_id,
+        text="Read this clearly.",
+        output={"provider": "abstractvoice", "model": "tts-test", "format": "wav", "voice": "narrator", "language": "en"},
+    )
+
+    assert child.status == RunStatus.COMPLETED
+    assert seen["prompt"] == "Read this clearly."
+    assert seen["output"]["modality"] == "voice"
+    assert seen["output"]["task"] == "tts"
+    item = child.output["result"]["outputs"]["voice"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"wav-voice"
+    descriptor = artifact.metadata.descriptor
+    assert descriptor.semantic_kind == "voice"
+    assert descriptor.render_kind == "audio"
+    assert descriptor.modality == "voice"
+    assert descriptor.task == "tts"
+    assert descriptor.generation["text"] == "Read this clearly."
+    assert descriptor.generation["params"]["voice"] == "narrator"
+    assert descriptor.generation["params"]["language"] == "en"
+    assert descriptor.producer["provider"] == "abstractvoice"
+    assert descriptor.producer["model"] == "tts-test"
+    assert descriptor.security["recorded_user_content_fields"] == ["text"]
+    assert artifact.metadata.metadata["capability_metadata"]["voice_id"] == "narrator"
+    assert artifact.metadata.metadata["capability_metadata"]["cloned_voice"] is False
+
+
 def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backed_output() -> None:
     store = InMemoryArtifactStore()
     seen: Dict[str, Any] = {}
@@ -452,6 +634,23 @@ def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backe
     assert artifact.content == b"wav-child"
     assert artifact.metadata.run_id == child.run_id
     assert artifact.metadata.tags["kind"] == "generated_media"
+    descriptor = artifact.metadata.descriptor
+    assert descriptor.semantic_kind == "music"
+    assert descriptor.render_kind == "audio"
+    assert descriptor.modality == "music"
+    assert descriptor.task == "music_generation"
+    assert descriptor.classification_source == "producer"
+    assert descriptor.session_id == "sess-music"
+    assert descriptor.workflow_id == "wf_abstractcore_run_facade_music_generation"
+    assert descriptor.producer["provider"] == "acemusic"
+    assert descriptor.producer["model"] == "ace-step"
+    assert descriptor.producer["runtime_provider"] == "mlx"
+    assert descriptor.generation["prompt"] == "Warm lo-fi piano with brushed drums."
+    assert descriptor.generation["requested_format"] == "wav"
+    assert descriptor.provenance["run_id"] == child.run_id
+    assert descriptor.security["recorded_user_content_fields"] == ["prompt"]
+    assert artifact.metadata.metadata["schema"] == "abstractruntime.generated_media_metadata.v1"
+    assert artifact.metadata.metadata["generation"]["prompt"] == "Warm lo-fi piano with brushed drums."
 
 
 def test_run_facade_generate_music_rejects_legacy_backend_fields() -> None:

@@ -196,15 +196,30 @@ def _progress_event_payload(
                 "stage",
                 "status",
                 "message",
+                "progress_mode",
+                "progress_source",
+                "reported",
+                "terminal",
+                "job_state",
                 "current",
                 "total",
                 "step",
                 "total_steps",
+                "step_progress",
                 "frame",
                 "total_frames",
+                "frame_progress",
                 "progress",
                 "percent",
                 "eta_s",
+                "eta_seconds",
+                "remaining_s",
+                "remaining_seconds",
+                "elapsed_s",
+                "elapsed_seconds",
+                "task",
+                "timestep",
+                "raw",
             ):
                 try:
                     value = getattr(event, name)
@@ -251,6 +266,8 @@ def _output_request_accepts_progress_callback(output: Any) -> bool:
         "image_generation",
         "image_edit",
         "image_to_image",
+        "image_upscale",
+        "upscale_image",
         "text_to_image",
         "text_to_video",
         "image_to_video",
@@ -1254,15 +1271,6 @@ class Runtime:
 
         params["on_progress"] = _on_progress
         payload["params"] = params
-        _on_progress(
-            {
-                "status": "running",
-                "stage": "starting",
-                "message": "Starting generation",
-                "progress": 0.0,
-                "percent": 0.0,
-            }
-        )
         return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
@@ -1309,6 +1317,13 @@ class Runtime:
                 return controlled
 
             handler = workflow.get_node(run.current_node)
+            try:
+                setattr(run, "_runtime_artifact_store", self._artifact_store)
+                setattr(run, "_runtime_run_store", self._run_store)
+                setattr(run, "_runtime_run_id", run.run_id)
+                setattr(run, "_runtime_session_id", run.session_id)
+            except Exception:
+                pass
             plan = handler(run, self._ctx)
 
             # Completion

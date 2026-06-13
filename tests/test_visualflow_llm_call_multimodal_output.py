@@ -146,6 +146,67 @@ def test_visualflow_llm_call_media_result_sync_exposes_generated_output_fields()
     assert out["meta"]["trace"] == {"trace_id": "tr-mm"}
 
 
+def test_visualflow_llm_call_structured_result_sync_exposes_data_pin() -> None:
+    from abstractruntime.core.models import RunState
+    from abstractruntime.visualflow_compiler.compiler import _sync_effect_results_to_node_outputs
+    from abstractruntime.visualflow_compiler.visual.executor import visual_to_flow
+    from abstractruntime.visualflow_compiler.visual.models import load_visualflow_json
+
+    vf = load_visualflow_json(
+        {
+            "id": "vf-llm-structured-sync",
+            "name": "vf-llm-structured-sync",
+            "entryNode": "call",
+            "nodes": [
+                {
+                    "id": "call",
+                    "type": "llm_call",
+                    "data": {
+                        "nodeType": "llm_call",
+                        "pinDefaults": {
+                            "resp_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "choice": {"type": "string", "enum": ["summarize", "classify"]},
+                                    "confidence": {"type": "number"},
+                                },
+                                "required": ["choice"],
+                            }
+                        },
+                        "outputs": [
+                            {"id": "exec-out", "label": "", "type": "execution"},
+                            {"id": "response", "label": "response", "type": "string"},
+                            {"id": "data", "label": "data", "type": "object"},
+                            {"id": "meta", "label": "meta", "type": "object"},
+                        ],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+    )
+    flow = visual_to_flow(vf)
+    run = RunState.new(workflow_id=flow.flow_id, entry_node="call")
+    structured_data = {"choice": "summarize", "confidence": 0.95}
+    run.vars["_temp"] = {
+        "effects": {
+            "call": {
+                "content": "ignored because data is authoritative",
+                "data": structured_data,
+                "metadata": {"trace_id": "tr-structured"},
+            }
+        }
+    }
+
+    _sync_effect_results_to_node_outputs(run, flow)
+
+    out = flow._node_outputs["call"]  # type: ignore[attr-defined]
+    assert out["response"] == '{"choice":"summarize","confidence":0.95}'
+    assert out["data"] == structured_data
+    assert out["meta"]["output_mode"] == "structured"
+    assert out["meta"]["trace"] == {"trace_id": "tr-structured"}
+
+
 def test_visualflow_generate_music_result_sync_exposes_music_artifact_aliases() -> None:
     from abstractruntime.core.models import RunState
     from abstractruntime.visualflow_compiler.compiler import _sync_effect_results_to_node_outputs

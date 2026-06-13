@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.31 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.
+The base install includes AbstractCore 2.13.37 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, and vision adapter discovery plus batch/LoRA media controls.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -257,11 +257,11 @@ For local one-shot subprocess image generation, runtime metadata also records `e
 
 Long-running generated media may expose provider progress callbacks. Runtime injects a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
-Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` return:
+Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` return:
 
 - `code="model_residency_unsupported"`
 - `requires_long_lived_server=true`
@@ -705,6 +705,11 @@ providers = facade.list_providers(include_models=False)
 voices = facade.get_voice_catalog(provider="openai", providers_only=True)
 music = facade.list_music_providers(task="text_to_music")
 vision = facade.list_vision_provider_models(task="text_to_image", providers_only=True)
+upscalers = facade.list_vision_provider_models(task="image_upscale")
+adapters = facade.list_vision_adapters(
+    task="text_to_video",
+    model="AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
+)
 ```
 
 ## Durable run-scoped media and comms execution
@@ -720,6 +725,7 @@ Public durable entry points:
 - `resume_tool_calls(...)`
 - `generate_image(...)`
 - `edit_image(...)`
+- `upscale_image(...)`
 - `generate_video(...)`
 - `image_to_video(...)`
 - `generate_voice(...)`
@@ -744,12 +750,39 @@ facade = get_abstractcore_run_facade(rt)
 child = facade.generate_image(
     "existing-parent-run-id",
     prompt="A red mug on a white table.",
-    output={"provider": "mlx-gen", "model": "AbstractFramework/flux.2-klein-4b-4bit", "format": "png"},
+    output={
+        "provider": "mlx-gen",
+        "model": "AbstractFramework/qwen-image-2512-8bit",
+        "format": "png",
+        "count": 2,
+        "seeds": [101, 102],
+        "lora_adapters": [
+            {"id": "pixel-art", "scale": 0.7},
+            {"id": "cool-grade", "scale": 0.2},
+        ],
+    },
 )
 
 assert child.status.value == "completed"
 result = child.output["result"]
 print(child.run_id, result["media_model"], result["outputs"]["image"][0]["artifact_id"])
+```
+
+Image upscaling uses the same durable child-run boundary and Core-owned `image_upscale` selector:
+
+```python
+child = facade.upscale_image(
+    "existing-parent-run-id",
+    media={"$artifact": "source-image-artifact-id", "type": "image"},
+    output={
+        "provider": "mlx-gen",
+        "format": "png",
+        "scale": 2,
+        "resolution": 1024,
+    },
+)
+
+print(child.run_id, child.output["result"]["outputs"]["image"][0]["artifact_id"])
 ```
 
 For video, use the same child-run boundary:
@@ -760,9 +793,13 @@ child = facade.generate_video(
     prompt="Glowing data streams converge into a geometric logo.",
     output={
         "provider": "mlx-gen",
-        "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        "model": "AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
         "format": "mp4",
         "num_frames": 41,
+        "count": 2,
+        "seeds": [401, 402],
+        "flow_shift": 3.0,
+        "lora_adapters": [{"id": "documentary-motion", "scale": 0.6}],
     },
 )
 

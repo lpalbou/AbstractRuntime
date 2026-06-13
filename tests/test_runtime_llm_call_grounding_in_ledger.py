@@ -70,7 +70,9 @@ def test_llm_call_grounding_is_visible_in_ledger_without_affecting_idempotency_k
     payload = (first.get("effect") or {}).get("payload") or {}
     prompt_sent = str(payload.get("prompt") or "")
     assert prompt_sent.startswith("<runtime_metadata>")
-    assert '"display":"[2000-01-01 00:00:00 FR]"' in prompt_sent
-    assert '"country":"FR"' in prompt_sent
+    # Prompt envelope is temporal-only by default: the country code is kept in
+    # result metadata but stays out of the prompt (it biases reply language).
+    assert '"display":"[2000-01-01 00:00:00]"' in prompt_sent
+    assert '"country"' not in prompt_sent
     assert prompt_sent.endswith("</runtime_metadata>\nhello")
     assert re.match(r"^<runtime_metadata>.*</runtime_metadata>\nhello$", prompt_sent)

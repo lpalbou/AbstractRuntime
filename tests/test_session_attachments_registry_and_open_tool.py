@@ -233,21 +233,17 @@ def test_open_attachment_binary_returns_media_ref() -> None:
 
 @pytest.mark.basic
 def test_open_attachment_pdf_extracts_text_when_media_stack_available() -> None:
-    pytest.importorskip("pymupdf")
-    pytest.importorskip("pymupdf4llm")
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
     pytest.importorskip("abstractcore.media.auto_handler")
 
-    import pymupdf as fitz  # type: ignore[import-not-found]
+    from abstractruntime.documents import render_pdf_bytes
 
     store = InMemoryArtifactStore()
     sid = "s1"
     rid = session_memory_owner_run_id(sid)
 
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Hello PDF")
-    content = doc.tobytes()
-    doc.close()
+    content, _metadata = render_pdf_bytes("# Attachment PDF\n\nHello PDF", title="Attachment PDF")
 
     sha = hashlib.sha256(content).hexdigest()
     meta = store.store(

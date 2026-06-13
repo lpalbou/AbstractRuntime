@@ -218,7 +218,7 @@ the recorded result rather than resending the external message.
 
 ## Should a host execute image / TTS / music / STT directly for an existing run?
 
-No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `edit_image(...)`, `generate_voice(...)`, `generate_music(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.
+No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `edit_image(...)`, `upscale_image(...)`, `generate_voice(...)`, `generate_music(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.
 
 That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/run_facade.py`.

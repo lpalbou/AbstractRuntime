@@ -384,6 +384,30 @@ class AbstractCoreRunFacade:
             child_vars=child_vars,
         )
 
+    def upscale_image(
+        self,
+        run_id: str,
+        *,
+        media: Any,
+        output: Optional[Dict[str, Any]] = None,
+        prompt: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ) -> RunState:
+        """Create a durable child run for image upscaling."""
+
+        spec = {"modality": "image", "task": "image_upscale"}
+        if isinstance(output, dict):
+            spec.update(copy.deepcopy(output))
+        return self.execute_llm_call(
+            run_id,
+            prompt=prompt,
+            media=media,
+            output=spec,
+            params=params,
+            child_vars=child_vars,
+        )
+
     def generate_video(
         self,
         run_id: str,

@@ -56,6 +56,8 @@ from .storage.snapshots import Snapshot, SnapshotStore, InMemorySnapshotStore, J
 from .storage.offloading import OffloadingLedgerStore, OffloadingRunStore, offload_large_values
 from .storage.artifacts import (
     Artifact,
+    ArtifactAccessStats,
+    ArtifactDescriptor,
     ArtifactMetadata,
     ArtifactStore,
     InMemoryArtifactStore,
@@ -151,6 +153,8 @@ __all__ = [
     "JsonSnapshotStore",
     # Artifacts
     "Artifact",
+    "ArtifactAccessStats",
+    "ArtifactDescriptor",
     "ArtifactMetadata",
     "ArtifactStore",
     "InMemoryArtifactStore",

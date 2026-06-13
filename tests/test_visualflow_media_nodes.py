@@ -71,6 +71,29 @@ def test_generate_image_node_compiles_to_llm_call_output_selector() -> None:
     assert output["guidance_scale"] == 6.5
 
 
+def test_generate_image_node_compiles_batch_seed_and_lora_fields() -> None:
+    plan = _plan_for_node(
+        "generate_image",
+        {
+            "prompt": "a horse",
+            "count": 2,
+            "seeds": [11, 22],
+            "lora_adapters": [
+                {"id": "cinematic-lighting", "scale": 0.7},
+                {"id": "ink-outline", "scale": 0.35},
+            ],
+        },
+    )
+
+    output = dict((plan.effect.payload or {}).get("output") or {})
+    assert output["count"] == 2
+    assert output["seeds"] == [11, 22]
+    assert output["lora_adapters"] == [
+        {"id": "cinematic-lighting", "scale": 0.7},
+        {"id": "ink-outline", "scale": 0.35},
+    ]
+
+
 def test_generate_image_legacy_provider_model_are_not_media_fallbacks() -> None:
     plan = _plan_for_node(
         "generate_image",
@@ -157,6 +180,28 @@ def test_image_to_image_alias_compiles_to_image_edit_selector() -> None:
     assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
 
 
+def test_edit_image_node_compiles_batch_seed_and_lora_fields() -> None:
+    plan = _plan_for_node(
+        "edit_image",
+        {
+            "prompt": "Add clouds.",
+            "source_image": "img-1",
+            "count": 3,
+            "seeds": [31, 32, 33],
+            "lora_adapters": '[{"id":"watercolor","scale":0.8},{"id":"paper-grain","scale":0.25}]',
+        },
+    )
+
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert output["count"] == 3
+    assert output["seeds"] == [31, 32, 33]
+    assert output["lora_adapters"] == [
+        {"id": "watercolor", "scale": 0.8},
+        {"id": "paper-grain", "scale": 0.25},
+    ]
+
+
 def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
     plan = _plan_for_node(
         "generate_video",
@@ -172,6 +217,7 @@ def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
             "steps": 50,
             "seed": 4321,
             "guidance_scale": 5.0,
+            "guidance_2": 3.0,
         },
     )
 
@@ -194,6 +240,66 @@ def test_generate_video_node_compiles_to_llm_call_video_selector() -> None:
     assert output["steps"] == 50
     assert output["seed"] == 4321
     assert output["guidance_scale"] == 5.0
+    assert output["guidance_2"] == 3.0
+
+
+def test_generate_video_node_compiles_batch_flow_shift_seed_and_lora_fields() -> None:
+    plan = _plan_for_node(
+        "generate_video",
+        {
+            "prompt": "A logo reveal.",
+            "count": 2,
+            "seeds": [101, 202],
+            "flow_shift": 3.0,
+            "loraAdapters": [
+                {"id": "documentary-motion", "scale": 0.6},
+                {"id": "cool-grade", "scale": 0.25},
+            ],
+        },
+    )
+
+    output = dict((plan.effect.payload or {}).get("output") or {})
+    assert output["count"] == 2
+    assert output["seeds"] == [101, 202]
+    assert output["flow_shift"] == 3.0
+    assert output["lora_adapters"] == [
+        {"id": "documentary-motion", "scale": 0.6},
+        {"id": "cool-grade", "scale": 0.25},
+    ]
+
+
+def test_upscale_image_node_compiles_to_llm_call_image_upscale_selector() -> None:
+    plan = _plan_for_node(
+        "upscale_image",
+        {
+            "image_artifact": "img-1",
+            "image_provider": "mlx-gen",
+            "image_model": "AbstractFramework/seedvr2-3b-8bit",
+            "format": "png",
+            "resolution": "2x",
+            "softness": 0.25,
+            "seed": 2405,
+            "quantize": 8,
+            "vae_tiling": True,
+        },
+    )
+
+    assert plan.effect is not None
+    assert plan.effect.type == EffectType.LLM_CALL
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    media = list(payload.get("media") or [])
+    assert output["modality"] == "image"
+    assert output["task"] == "image_upscale"
+    assert output["provider"] == "mlx-gen"
+    assert output["model"] == "AbstractFramework/seedvr2-3b-8bit"
+    assert "scale" not in output
+    assert output["resolution"] == "2x"
+    assert output["softness"] == 0.25
+    assert output["seed"] == 2405
+    assert output["quantize"] == 8
+    assert output["vae_tiling"] is True
+    assert media == [{"type": "image", "role": "source", "$artifact": "img-1"}]
 
 
 def test_image_to_video_node_compiles_to_llm_call_video_selector() -> None:
@@ -221,6 +327,27 @@ def test_image_to_video_node_compiles_to_llm_call_video_selector() -> None:
     assert output["seed"] == 4321
     assert output["guidance_scale"] == 5.0
     assert payload["media"] == [{"type": "image", "role": "source", "$artifact": "img-1"}]
+
+
+def test_image_to_video_node_compiles_batch_flow_shift_seed_and_lora_fields() -> None:
+    plan = _plan_for_node(
+        "image_to_video",
+        {
+            "prompt": "Orbit around the subject.",
+            "source_image": "img-1",
+            "count": 2,
+            "seeds": [301, 302],
+            "flowShift": 5.0,
+            "lora_adapters": [{"id": "cinematic-camera", "scale": 0.7}],
+        },
+    )
+
+    payload = dict(plan.effect.payload or {})
+    output = dict(payload.get("output") or {})
+    assert output["count"] == 2
+    assert output["seeds"] == [301, 302]
+    assert output["flow_shift"] == 5.0
+    assert output["lora_adapters"] == [{"id": "cinematic-camera", "scale": 0.7}]
 
 
 def test_generate_voice_node_compiles_to_llm_call_tts_selector() -> None:

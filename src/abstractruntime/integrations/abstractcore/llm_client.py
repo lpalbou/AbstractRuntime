@@ -54,6 +54,210 @@ _LOCAL_GENERATE_LOCKS_WARNED_LOCK = threading.Lock()
 _LOCAL_IMAGE_SUBPROCESS_LOCK = threading.Lock()
 
 
+def _configured_capability_default_row(row: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return None
+    if row.get("source") == "not_configured":
+        return None
+    if not (row.get("provider") or row.get("model") or row.get("base_url") or row.get("options")):
+        return None
+    return dict(row)
+
+
+def _output_default_route_keys(spec: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    modality = str(spec.get("modality") or "").strip().lower()
+    task = str(spec.get("task") or "").strip().lower().replace("-", "_")
+    if modality == "image":
+        if task in {"image_edit", "image_to_image", "i2i", "edit_image"}:
+            return "output.image.image_to_image", "output.image"
+        if task in {"image_upscale", "image_upscaling", "upscale", "upscale_image"}:
+            return "output.image.image_upscale", "output.image"
+        if task in {"", "image_generation", "text_to_image", "t2i"}:
+            return "output.image.text_to_image", "output.image"
+    if modality == "video":
+        if task in {"image_to_video", "i2v", "video_from_image", "video_edit"}:
+            return "output.video.image_to_video", "output.video"
+        if task in {"", "video_generation", "text_to_video", "t2v"}:
+            return "output.video.text_to_video", "output.video"
+    return None, None
+
+
+def _with_capability_default_route(
+    spec: Dict[str, Any],
+    capability_defaults: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, Any]:
+    routed = dict(spec)
+    if (
+        not isinstance(capability_defaults, dict)
+        or str(routed.get("provider") or "").strip()
+        or str(routed.get("model") or "").strip()
+        or str(routed.get("base_url") or "").strip()
+    ):
+        return routed
+    primary_key, fallback_key = _output_default_route_keys(routed)
+    if not primary_key:
+        return routed
+    route = _configured_capability_default_row(capability_defaults.get(primary_key))
+    if route is None and fallback_key:
+        route = _configured_capability_default_row(capability_defaults.get(fallback_key))
+    if route is None:
+        return routed
+    for key in ("provider", "model", "base_url"):
+        value = route.get(key)
+        if isinstance(value, str) and value.strip():
+            routed[key] = value.strip()
+    options = route.get("options")
+    if isinstance(options, dict):
+        for key, value in options.items():
+            if isinstance(key, str) and key.strip() and key not in routed and value is not None:
+                routed[key.strip()] = value
+    return routed
+
+
+def _with_output_progress_callback(spec: Dict[str, Any], progress_callback: Optional[Any]) -> Dict[str, Any]:
+    if not callable(progress_callback):
+        return dict(spec)
+    routed = dict(spec)
+    extra = routed.get("extra")
+    extra_dict = dict(extra) if isinstance(extra, dict) else {}
+    extra_dict["on_progress"] = progress_callback
+    routed["extra"] = extra_dict
+    return routed
+
+
+def _progress_number(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value)
+        except Exception:
+            return None
+    return None
+
+
+def _progress_looks_complete(progress: Dict[str, Any]) -> bool:
+    direct = _progress_number(progress.get("progress"))
+    if direct is None:
+        direct = _progress_number(progress.get("percent"))
+        if direct is not None and direct > 1:
+            direct = direct / 100.0
+    if direct is not None and direct >= 1.0:
+        return True
+    for current_key, total_key in (("step", "total_steps"), ("frame", "total_frames"), ("current", "total")):
+        current = _progress_number(progress.get(current_key))
+        total = _progress_number(progress.get(total_key))
+        if current is not None and total is not None and total > 0 and current >= total:
+            return True
+    return False
+
+
+def _progress_is_reported(progress: Dict[str, Any]) -> bool:
+    mode = str(progress.get("progress_mode") or "").strip().lower()
+    if progress.get("reported") is False:
+        return False
+    if mode == "unreported":
+        return False
+    return True
+
+
+def _spec_generation_count(spec: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(spec, dict):
+        return None
+    raw = spec.get("count", spec.get("n"))
+    if raw is None:
+        seeds = _spec_generation_seeds(spec)
+        return len(seeds) if seeds else None
+    try:
+        count = int(raw)
+    except Exception as exc:
+        raise ValueError("Vision output count must be an integer >= 1.") from exc
+    if count < 1:
+        raise ValueError("Vision output count must be >= 1.")
+    return count
+
+
+def _spec_generation_seeds(spec: Dict[str, Any]) -> Optional[List[int]]:
+    if not isinstance(spec, dict):
+        return None
+    raw = spec.get("seeds")
+    if raw is None:
+        return None
+    if isinstance(raw, (str, bytes, bytearray)) or not isinstance(raw, list):
+        raise ValueError("Vision output seeds must be a list of integers.")
+    seeds: List[int] = []
+    for value in raw:
+        try:
+            seeds.append(int(value))
+        except Exception as exc:
+            raise ValueError("Vision output seeds must be integers.") from exc
+    if not seeds:
+        raise ValueError("Vision output seeds cannot be empty.")
+    return seeds
+
+
+def _spec_lora_adapters(spec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    raw = spec.get("lora_adapters")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("Vision output lora_adapters must be a list of adapter objects.")
+    adapters: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"Vision output lora_adapters[{index}] must be an object.")
+        adapters.append({str(key): value for key, value in item.items() if value is not None})
+    return adapters
+
+
+def _register_subprocess_stream(selector: Any, fileobj: Any, label: str) -> None:
+    try:
+        selector.register(fileobj, selectors.EVENT_READ, data=label)
+    except TypeError:
+        selector.register(fileobj, selectors.EVENT_READ)
+
+
+def _subprocess_stream_label(key: Any, *, stdout: Any, stderr: Any) -> str:
+    label = getattr(key, "data", None)
+    if isinstance(label, str) and label:
+        return label
+    fileobj = getattr(key, "fileobj", None)
+    if fileobj is stderr:
+        return "stderr"
+    if fileobj is stdout:
+        return "stdout"
+    return "stdout"
+
+
+def _progress_for_remote_job_state(progress: Dict[str, Any], *, job_id: str, state: str) -> Dict[str, Any]:
+    payload = dict(progress)
+    payload.setdefault("job_id", job_id)
+    payload["job_state"] = state
+    terminal = state in {"succeeded", "failed"}
+    if terminal:
+        payload["terminal"] = True
+        payload["progress_mode"] = "terminal"
+        payload.setdefault("progress_source", "core")
+        payload.setdefault("status", state)
+        payload.setdefault("phase", state)
+        if state == "succeeded":
+            payload["progress"] = 1.0
+        return payload
+    payload.setdefault("terminal", False)
+    if _progress_looks_complete(payload):
+        raw_progress = payload.get("progress")
+        if raw_progress is not None:
+            payload.setdefault("raw_progress", raw_progress)
+        payload["progress"] = min(float(_progress_number(payload.get("progress")) or 1.0), 0.999)
+        payload["phase"] = "finalizing"
+        payload["status"] = "running"
+        payload["message"] = "Finalizing output"
+        payload["progress_mode"] = "finalizing"
+        payload.setdefault("progress_source", "runtime")
+        payload["terminal"] = False
+    return payload
+
+
 @dataclass
 class _PromptCacheSessionState:
     system_module_hash: str
@@ -542,12 +746,73 @@ def _runtime_grounding_metadata(trace_metadata: Optional[Dict[str, Any]] = None)
     return metadata
 
 
+# Contract line appended to the system prompt whenever a <runtime_metadata>
+# envelope is injected into the user turn. Without it, models read the raw
+# machine context as user-authored tokens and can infer a reply language or
+# locale from it, even when the user's request is written in another language.
+# The contract is stable text (no per-turn entropy) so prompt/KV caching is
+# unaffected.
+_RUNTIME_GROUNDING_CONTRACT = (
+    "RUNTIME GROUNDING: the latest user message may begin with a machine-generated "
+    "<runtime_metadata>{...}</runtime_metadata> envelope carrying the current local "
+    "date/time (and optionally timezone, country, or OS user) for grounding. It is not "
+    "written by the user and it is not a language or locale preference. Always respond "
+    "in the language of the user's request itself unless the user explicitly asks "
+    "otherwise."
+)
+
+# Fields surfaced to the model inside the per-turn prompt envelope. The default
+# is strictly temporal: A/B tests against a live 397B model (2026-06-10) showed
+# that locale-correlated fields (country "FR", timezone "Europe/Paris", a
+# French-looking OS user) flip replies into the host country's language for
+# borderline requests, in 3/3 samples, even when the user prompt is entirely
+# English, carries explicit language rules, and the system prompt explains the
+# envelope. With the temporal-only envelope the same payload answered in the
+# request language. Full grounding (timezone/country/user) remains available in
+# result metadata (`runtime_grounding`) for hosts, and operators can opt fields
+# back into the prompt via ABSTRACTRUNTIME_GROUNDING_PROMPT_FIELDS.
+_DEFAULT_PROMPT_GROUNDING_FIELDS: tuple[str, ...] = ("local_datetime", "display")
+_ALLOWED_PROMPT_GROUNDING_FIELDS = {"local_datetime", "timezone", "country", "user", "display"}
+_DISPLAY_COUNTRY_SUFFIX_RE = re.compile(r"\s+[A-Z]{2}\]$")
+
+
+def _prompt_grounding_fields() -> tuple[str, ...]:
+    raw = os.getenv("ABSTRACTRUNTIME_GROUNDING_PROMPT_FIELDS")
+    if raw is None or not raw.strip():
+        return _DEFAULT_PROMPT_GROUNDING_FIELDS
+    fields = tuple(field.strip() for field in raw.split(",") if field.strip())
+    filtered = tuple(field for field in fields if field in _ALLOWED_PROMPT_GROUNDING_FIELDS)
+    return filtered or _DEFAULT_PROMPT_GROUNDING_FIELDS
+
+
+def _append_runtime_grounding_contract(system_prompt: Optional[str], *, injected: bool) -> Optional[str]:
+    """Append the grounding contract to the system prompt when the envelope is injected.
+
+    Idempotent: never duplicates the contract (e.g. composed prompts or replayed
+    system text that already carries it).
+    """
+    if not injected:
+        return system_prompt
+    base = system_prompt if isinstance(system_prompt, str) else ""
+    if _RUNTIME_GROUNDING_CONTRACT in base:
+        return system_prompt
+    if not base.strip():
+        return _RUNTIME_GROUNDING_CONTRACT
+    return f"{base.rstrip()}\n\n{_RUNTIME_GROUNDING_CONTRACT}"
+
+
 def _runtime_grounding_prompt_envelope(grounding: Dict[str, Any]) -> str:
+    fields = _prompt_grounding_fields()
     prompt_payload: Dict[str, Any] = {}
-    for key in ("local_datetime", "timezone", "country", "user", "display"):
+    for key in fields:
         value = grounding.get(key)
         if value is not None and str(value).strip():
             prompt_payload[key] = value
+    # The display string embeds the ISO country code ("[... FR]"); strip it
+    # when country is not an opted-in prompt field so ambient locale does not
+    # leak into the model's language choice through the back door.
+    if "display" in prompt_payload and "country" not in fields:
+        prompt_payload["display"] = _DISPLAY_COUNTRY_SUFFIX_RE.sub("]", str(prompt_payload["display"]))
     return "<runtime_metadata>" + json.dumps(
         prompt_payload,
         ensure_ascii=False,
@@ -1148,12 +1413,9 @@ def _decode_subprocess_media_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional[List[Any]]) -> bool:
     if not _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS", default=True):
         return False
-    if media:
-        # Image edits can carry artifact-backed files and masks. Keep those in-process until
-        # the subprocess transport has an explicit media-file contract.
-        return False
     if not specs:
         return False
+    normalized_media = list(media or [])
     for spec in specs:
         if not isinstance(spec, dict):
             return False
@@ -1161,7 +1423,44 @@ def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional
         task = str(spec.get("task") or "").strip().lower()
         if modality != "image":
             return False
-        if task and task not in {"image_generation", "t2i", "text_to_image"}:
+        if task in {"", "image_generation", "t2i", "text_to_image"}:
+            if normalized_media:
+                return False
+            continue
+        if task in {"image_edit", "image_to_image", "i2i", "edit_image"}:
+            image_items = [item for item in normalized_media if _is_image_media_item(item)]
+            if not image_items:
+                return False
+            source_items = [
+                item
+                for item in image_items
+                if str(item.get("role") or item.get("purpose") or "").strip().lower() == "source"
+            ]
+            mask_items = [
+                item
+                for item in image_items
+                if str(item.get("role") or item.get("purpose") or "").strip().lower() == "mask"
+            ]
+            source_item = source_items[0] if source_items else image_items[0]
+            source_path = _media_path_from_item(source_item)
+            if not source_path or source_path.lower().startswith("data:") or source_path.startswith(("http://", "https://")):
+                return False
+            if len(mask_items) > 1:
+                return False
+            if mask_items:
+                mask_path = _media_path_from_item(mask_items[0])
+                if not mask_path or mask_path.lower().startswith("data:") or mask_path.startswith(("http://", "https://")):
+                    return False
+            continue
+        if task in {"image_upscale", "image_upscaling", "upscale", "upscale_image"}:
+            image_items = [item for item in normalized_media if _is_image_media_item(item)]
+            if len(image_items) != 1:
+                return False
+            path = _media_path_from_item(image_items[0])
+            if not path or path.lower().startswith("data:") or path.startswith(("http://", "https://")):
+                return False
+            continue
+        if task:
             return False
     return True
 
@@ -1188,45 +1487,6 @@ def _is_subprocess_safe_video_specs(specs: List[Dict[str, Any]], media: Optional
     return bool(path and not path.lower().startswith("data:") and not path.startswith(("http://", "https://")))
 
 
-def _local_image_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[str, Any]) -> float:
-    for raw in (
-        os.environ.get("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_TIMEOUT_S"),
-        params.get("timeout_s"),
-        params.get("timeout"),
-        llm_kwargs.get("timeout_s"),
-        llm_kwargs.get("timeout"),
-    ):
-        if raw is None:
-            continue
-        try:
-            timeout = float(raw)
-        except Exception:
-            continue
-        if timeout > 0:
-            return timeout
-    return 3600.0
-
-
-def _local_video_subprocess_timeout_s(params: Dict[str, Any], llm_kwargs: Dict[str, Any]) -> float:
-    for raw in (
-        os.environ.get("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS_TIMEOUT_S"),
-        os.environ.get("ABSTRACTRUNTIME_LOCAL_MEDIA_SUBPROCESS_TIMEOUT_S"),
-        params.get("timeout_s"),
-        params.get("timeout"),
-        llm_kwargs.get("timeout_s"),
-        llm_kwargs.get("timeout"),
-    ):
-        if raw is None:
-            continue
-        try:
-            timeout = float(raw)
-        except Exception:
-            continue
-        if timeout > 0:
-            return timeout
-    return 7200.0
-
-
 def _run_local_image_subprocess(
     *,
     provider: str,
@@ -1234,71 +1494,6 @@ def _run_local_image_subprocess(
     llm_kwargs: Dict[str, Any],
     prompt: str,
     specs: List[Dict[str, Any]],
-    timeout_s: float,
-) -> Dict[str, Any]:
-    request = {
-        "provider": str(provider or ""),
-        "model": str(model or ""),
-        "llm_kwargs": _jsonable(llm_kwargs or {}),
-        "prompt": str(prompt or ""),
-        "specs": _jsonable(specs),
-    }
-    env = dict(os.environ)
-    env.setdefault("PYTHONUNBUFFERED", "1")
-
-    def _invoke() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, "-m", "abstractruntime.integrations.abstractcore.media_subprocess"],
-            input=json.dumps(request, ensure_ascii=False),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-            check=False,
-        )
-
-    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_SERIALIZE", default=True):
-        with _LOCAL_IMAGE_SUBPROCESS_LOCK:
-            proc = _invoke()
-    else:
-        proc = _invoke()
-
-    parsed: Optional[Dict[str, Any]] = None
-    try:
-        parsed = _loads_last_json_line(proc.stdout)
-    except Exception:
-        parsed = None
-
-    if proc.returncode != 0:
-        stderr = str(proc.stderr or "").strip()
-        stdout = str(proc.stdout or "").strip()
-        if parsed and parsed.get("ok") is False:
-            detail = str(parsed.get("error") or "local image generation failed")
-        else:
-            detail = stderr or stdout or "local image generation failed"
-        raise RuntimeError(
-            f"Local image generation subprocess exited with code {proc.returncode}: {detail[-2000:]}"
-        )
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Local image generation subprocess returned no parseable response.")
-    if parsed.get("ok") is False:
-        raise RuntimeError(str(parsed.get("error") or "local image generation failed"))
-    response = parsed.get("response")
-    if not isinstance(response, dict):
-        raise RuntimeError("Local image generation subprocess returned an invalid response.")
-    return _decode_subprocess_media_payload(response)
-
-
-def _run_local_video_subprocess(
-    *,
-    provider: str,
-    model: str,
-    llm_kwargs: Dict[str, Any],
-    prompt: str,
-    specs: List[Dict[str, Any]],
-    media: Optional[List[Any]],
-    timeout_s: float,
     progress_callback: Optional[Any] = None,
 ) -> Dict[str, Any]:
     request = {
@@ -1307,7 +1502,6 @@ def _run_local_video_subprocess(
         "llm_kwargs": _jsonable(llm_kwargs or {}),
         "prompt": str(prompt or ""),
         "specs": _jsonable(specs),
-        "media": _jsonable(media or []),
     }
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -1317,12 +1511,12 @@ def _run_local_video_subprocess(
             [sys.executable, "-m", "abstractruntime.integrations.abstractcore.media_subprocess"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             env=env,
         )
 
-    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS_SERIALIZE", default=True):
+    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_SERIALIZE", default=True):
         lock = _LOCAL_IMAGE_SUBPROCESS_LOCK
     else:
         lock = threading.Lock()
@@ -1335,10 +1529,12 @@ def _run_local_video_subprocess(
 
         parsed: Optional[Dict[str, Any]] = None
         output_tail: List[str] = []
-        deadline = time.time() + float(timeout_s)
         selector = selectors.DefaultSelector()
         if proc.stdout is not None:
-            selector.register(proc.stdout, selectors.EVENT_READ)
+            _register_subprocess_stream(selector, proc.stdout, "stdout")
+        proc_stderr = getattr(proc, "stderr", None)
+        if proc_stderr is not None:
+            _register_subprocess_stream(selector, proc_stderr, "stderr")
 
         def _consume_stdout_line(line: str) -> None:
             nonlocal parsed
@@ -1359,11 +1555,14 @@ def _run_local_video_subprocess(
                 return
             parsed = item
 
+        def _consume_diagnostic_line(line: str) -> None:
+            stripped = str(line).strip()
+            if stripped:
+                output_tail.append(stripped)
+                del output_tail[:-40]
+
         try:
             while True:
-                if time.time() >= deadline and proc.poll() is None:
-                    proc.kill()
-                    raise TimeoutError(f"Local video generation subprocess timed out after {timeout_s:.0f}s.")
                 ready = selector.select(timeout=0.25)
                 if not ready:
                     if proc.poll() is not None:
@@ -1375,7 +1574,10 @@ def _run_local_video_subprocess(
                         if proc.poll() is not None:
                             break
                         continue
-                    _consume_stdout_line(line)
+                    if _subprocess_stream_label(key, stdout=proc.stdout, stderr=proc_stderr) == "stdout":
+                        _consume_stdout_line(line)
+                    else:
+                        _consume_diagnostic_line(line)
                 if proc.poll() is not None:
                     break
             if proc.stdout is not None:
@@ -1385,6 +1587,148 @@ def _run_local_video_subprocess(
                     remaining = ""
                 for line in str(remaining or "").splitlines():
                     _consume_stdout_line(line)
+            if proc_stderr is not None:
+                try:
+                    remaining_err = proc_stderr.read()
+                except Exception:
+                    remaining_err = ""
+                for line in str(remaining_err or "").splitlines():
+                    _consume_diagnostic_line(line)
+        finally:
+            try:
+                selector.close()
+            except Exception:
+                pass
+
+        returncode = proc.wait()
+
+    if returncode != 0:
+        if parsed and parsed.get("ok") is False:
+            detail = str(parsed.get("error") or "")
+        else:
+            detail = "\n".join(output_tail).strip() or "local image generation failed"
+        raise RuntimeError(
+            f"Local image generation subprocess exited with code {returncode}: {detail[-2000:]}"
+        )
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Local image generation subprocess returned no parseable response.")
+    if parsed.get("ok") is False:
+        raise RuntimeError(str(parsed.get("error") or "local image generation failed"))
+    response = parsed.get("response")
+    if not isinstance(response, dict):
+        raise RuntimeError("Local image generation subprocess returned an invalid response.")
+    return _decode_subprocess_media_payload(response)
+
+
+def _run_local_video_subprocess(
+    *,
+    provider: str,
+    model: str,
+    llm_kwargs: Dict[str, Any],
+    prompt: str,
+    specs: List[Dict[str, Any]],
+    media: Optional[List[Any]],
+    progress_callback: Optional[Any] = None,
+) -> Dict[str, Any]:
+    request = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "llm_kwargs": _jsonable(llm_kwargs or {}),
+        "prompt": str(prompt or ""),
+        "specs": _jsonable(specs),
+        "media": _jsonable(media or []),
+    }
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    def _invoke() -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [sys.executable, "-m", "abstractruntime.integrations.abstractcore.media_subprocess"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_VIDEO_SUBPROCESS_SERIALIZE", default=True):
+        lock = _LOCAL_IMAGE_SUBPROCESS_LOCK
+    else:
+        lock = threading.Lock()
+
+    with lock:
+        proc = _invoke()
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(request, ensure_ascii=False))
+        proc.stdin.close()
+
+        parsed: Optional[Dict[str, Any]] = None
+        output_tail: List[str] = []
+        selector = selectors.DefaultSelector()
+        if proc.stdout is not None:
+            _register_subprocess_stream(selector, proc.stdout, "stdout")
+        proc_stderr = getattr(proc, "stderr", None)
+        if proc_stderr is not None:
+            _register_subprocess_stream(selector, proc_stderr, "stderr")
+
+        def _consume_stdout_line(line: str) -> None:
+            nonlocal parsed
+            stripped = str(line).strip()
+            if stripped:
+                output_tail.append(stripped)
+                del output_tail[:-40]
+            try:
+                item = json.loads(stripped)
+            except Exception:
+                return
+            if not isinstance(item, dict):
+                return
+            if item.get("type") == "progress":
+                event = item.get("event")
+                if callable(progress_callback) and isinstance(event, dict):
+                    progress_callback(event)
+                return
+            parsed = item
+
+        def _consume_diagnostic_line(line: str) -> None:
+            stripped = str(line).strip()
+            if stripped:
+                output_tail.append(stripped)
+                del output_tail[:-40]
+
+        try:
+            while True:
+                ready = selector.select(timeout=0.25)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                for key, _mask in ready:
+                    line = key.fileobj.readline()
+                    if not line:
+                        if proc.poll() is not None:
+                            break
+                        continue
+                    if _subprocess_stream_label(key, stdout=proc.stdout, stderr=proc_stderr) == "stdout":
+                        _consume_stdout_line(line)
+                    else:
+                        _consume_diagnostic_line(line)
+                if proc.poll() is not None:
+                    break
+            if proc.stdout is not None:
+                try:
+                    remaining = proc.stdout.read()
+                except Exception:
+                    remaining = ""
+                for line in str(remaining or "").splitlines():
+                    _consume_stdout_line(line)
+            if proc_stderr is not None:
+                try:
+                    remaining_err = proc_stderr.read()
+                except Exception:
+                    remaining_err = ""
+                for line in str(remaining_err or "").splitlines():
+                    _consume_diagnostic_line(line)
         finally:
             try:
                 selector.close()
@@ -2402,6 +2746,11 @@ def _normalize_residency_task(task: Any) -> str:
         "image_to_image": "image_to_image",
         "image_edit": "image_to_image",
         "edit_image": "image_to_image",
+        "upscale": "image_upscale",
+        "upscaler": "image_upscale",
+        "image_upscale": "image_upscale",
+        "image_upscaling": "image_upscale",
+        "upscale_image": "image_upscale",
         "video": "video_generation",
         "videos": "video_generation",
         "video_generation": "video_generation",
@@ -2446,6 +2795,7 @@ def _residency_task_filter(task: Any) -> Optional[str]:
 _LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = (
     "image_generation",
     "image_to_image",
+    "image_upscale",
     "video_generation",
     "text_to_video",
     "image_to_video",
@@ -2481,7 +2831,7 @@ def _model_residency_unsupported_payload(
         "diagnostics": {"source": "abstractruntime"},
         "affected_models": [],
     }
-    if task_s in {"image_generation", "image_to_image", "video_generation", "text_to_video", "image_to_video"}:
+    if task_s in {"image_generation", "image_to_image", "image_upscale", "video_generation", "text_to_video", "image_to_video"}:
         payload["execution_mode"] = "local_one_shot_subprocess"
         payload["local_media_residency_backend"] = "none"
         payload["requires_long_lived_core_backend"] = True
@@ -2545,6 +2895,16 @@ def _local_model_residency_capabilities(*, mode: str, source: str, text_loads_ot
         ),
         "image_to_image": _model_residency_capability_task(
             task="image_to_image",
+            supported=True,
+            truth_source="abstractcore.capability_plugin",
+            extra={
+                "local_media_residency_backend": "capability_plugin",
+                "requires_installed_capability_plugin": True,
+                "shares_backend_cache_with": "image_generation",
+            },
+        ),
+        "image_upscale": _model_residency_capability_task(
+            task="image_upscale",
             supported=True,
             truth_source="abstractcore.capability_plugin",
             extra={
@@ -3413,6 +3773,8 @@ def _resolve_media_artifacts(
                 raw_role = item.get(key)
                 if isinstance(raw_role, str) and raw_role.strip():
                     resolved[key] = raw_role.strip()
+            if filename:
+                resolved["filename"] = str(filename)
             if content_type:
                 resolved["content_type"] = str(content_type)
                 resolved["mime_type"] = str(content_type)
@@ -3551,6 +3913,342 @@ def _string_tags(tags: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
+def _artifact_render_kind(content_type: str) -> str:
+    ct = str(content_type or "").strip().lower()
+    if ct.startswith("image/"):
+        return "image"
+    if ct.startswith("audio/"):
+        return "audio"
+    if ct.startswith("video/"):
+        return "video"
+    if ct in {
+        "application/javascript",
+        "application/x-javascript",
+        "application/typescript",
+        "application/x-python-code",
+        "application/x-sh",
+        "application/x-shellscript",
+        "text/javascript",
+        "text/jsx",
+        "text/typescript",
+        "text/tsx",
+        "text/x-python",
+        "text/x-shellscript",
+        "text/x-script.python",
+        "text/x-go",
+        "text/x-rust",
+        "text/x-java-source",
+        "text/x-c",
+        "text/x-c++",
+        "text/x-csharp",
+        "text/x-php",
+        "text/x-ruby",
+    }:
+        return "code"
+    if ct in {"application/json"} or ct.endswith("+json"):
+        return "json"
+    if ct in {"text/markdown", "text/x-markdown"}:
+        return "markdown"
+    if "html" in ct:
+        return "html"
+    if ct.startswith("text/"):
+        return "text"
+    if "pdf" in ct or "document" in ct or "officedocument" in ct:
+        return "document"
+    return "binary"
+
+
+def _generated_semantic_kind(*, modality: str, task: str, content_type: str) -> str:
+    modality0 = str(modality or "").strip().lower()
+    task0 = str(task or "").strip().lower()
+    if modality0 in {"voice", "music", "sound", "image", "video", "code"}:
+        return modality0
+    if task0 in {"code", "coding", "code_generation", "script", "program"}:
+        return "code"
+    if task0 in {"tts", "speech", "speech_generation"}:
+        return "voice"
+    if task0 in {"music", "music_generation", "text_to_music", "lyrics_to_music"}:
+        return "music"
+    if task0 in {"sound", "sound_generation", "text_to_audio", "audio_generation"}:
+        return "sound"
+    if task0 in {"stt", "transcription", "speech_to_text"}:
+        return "transcript"
+    render = _artifact_render_kind(content_type)
+    return render if render != "binary" else (modality0 or "artifact")
+
+
+def _safe_artifact_value(value: Any, *, depth: int = 0) -> Any:
+    """Return bounded, JSON-safe artifact metadata with obvious secret fields redacted."""
+
+    if depth > 6:
+        return "#TRUNCATION: metadata depth limit"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        return {"bytes": len(value), "redacted": True}
+    if isinstance(value, str):
+        if len(value) > 12000:
+            return value[:12000] + "#TRUNCATION"
+        return value
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        out = [_safe_artifact_value(v, depth=depth + 1) for v in items[:120]]
+        if len(items) > 120:
+            out.append({"truncated_items": len(items) - 120})
+        return out
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for key, raw in list(value.items())[:160]:
+            key_s = str(key)
+            key_l = key_s.lower()
+            if key_l in {
+                "access_token",
+                "api_token",
+                "auth_token",
+                "bearer_token",
+                "bot_token",
+                "client_secret",
+                "csrf_token",
+                "id_token",
+                "password",
+                "refresh_token",
+                "secret",
+                "session_token",
+                "token",
+            } or any(fragment in key_l for fragment in ("api_key", "api-key", "apikey", "authorization", "private_key")):
+                out[key_s] = "[redacted]" if raw not in (None, "") else raw
+                continue
+            token_parts = [p for p in re.split(r"[^a-z0-9]+", key_l) if p]
+            if "password" in token_parts or "secret" in token_parts or "token" in token_parts:
+                out[key_s] = "[redacted]" if raw not in (None, "") else raw
+                continue
+            if key_l in {"data", "b64_json", "image", "video", "audio", "content"} and isinstance(raw, str) and len(raw) > 2048:
+                out[key_s] = {"chars": len(raw), "redacted": True}
+                continue
+            if callable(raw):
+                continue
+            out[key_s] = _safe_artifact_value(raw, depth=depth + 1)
+        if len(value) > 160:
+            out["truncated_keys"] = len(value) - 160
+        return out
+    return _jsonable(value)
+
+
+def _generated_artifact_context(*, prompt: str, media: Optional[List[Any]], output_request: Any) -> Dict[str, Any]:
+    specs: List[Dict[str, Any]] = []
+    if _is_abstractcore_output_request(output_request):
+        try:
+            specs = [dict(s) for s in _normalize_output_specs_for_runtime(output_request) if isinstance(s, dict)]
+        except Exception:
+            specs = []
+    elif isinstance(output_request, dict):
+        specs = [dict(output_request)]
+
+    source_refs: List[Dict[str, Any]] = []
+    for item in list(media or []):
+        if not isinstance(item, dict):
+            continue
+        artifact_id = _artifact_id_from_media_item(item)
+        if not artifact_id:
+            continue
+        ref: Dict[str, Any] = {"kind": "artifact", "artifact_id": artifact_id}
+        for src_key, out_key in (
+            ("run_id", "run_id"),
+            ("content_type", "content_type"),
+            ("mime_type", "content_type"),
+            ("type", "modality"),
+            ("role", "role"),
+            ("purpose", "role"),
+            ("filename", "filename"),
+        ):
+            raw = item.get(src_key)
+            if raw is not None and str(raw).strip() and out_key not in ref:
+                ref[out_key] = str(raw).strip()
+        source_refs.append(ref)
+
+    return {"prompt": str(prompt or ""), "specs": specs, "source_refs": source_refs}
+
+
+def _matching_output_spec(context: Optional[Dict[str, Any]], *, modality: str, task: str) -> Dict[str, Any]:
+    specs = context.get("specs") if isinstance(context, dict) else None
+    if not isinstance(specs, list):
+        return {}
+    modality0 = str(modality or "").strip().lower()
+    task0 = str(task or "").strip().lower()
+    fallback: Dict[str, Any] = {}
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        spec_modality = str(spec.get("modality") or "").strip().lower()
+        spec_task = str(spec.get("task") or "").strip().lower()
+        if spec_modality == modality0 and (not task0 or spec_task == task0):
+            return dict(spec)
+        if spec_modality == modality0 and not fallback:
+            fallback = dict(spec)
+    return fallback
+
+
+def _generation_params_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    excluded = {
+        "artifact_id",
+        "data",
+        "input",
+        "media",
+        "modality",
+        "model",
+        "output",
+        "prompt",
+        "provider",
+        "run_id",
+        "tags",
+        "task",
+        "text",
+        "type",
+    }
+    out: Dict[str, Any] = {}
+    for key, value in dict(spec or {}).items():
+        key_s = str(key)
+        if key_s in excluded or callable(value):
+            continue
+        if value is None:
+            continue
+        out[key_s] = _safe_artifact_value(value)
+    return out
+
+
+def _generated_artifact_descriptor_and_metadata(
+    *,
+    item: Any,
+    content_type: str,
+    tags: Dict[str, str],
+    generation_context: Optional[Dict[str, Any]],
+    item_index: int,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    modality = str(_field(item, "modality", "") or "").strip().lower()
+    task = str(_field(item, "task", "") or "").strip().lower()
+    spec = _matching_output_spec(generation_context, modality=modality, task=task)
+    semantic_kind = _generated_semantic_kind(modality=modality, task=task, content_type=content_type)
+    render_kind = _artifact_render_kind(content_type)
+
+    prompt = str((generation_context or {}).get("prompt") or "").strip()
+    provider = (
+        str(_field(item, "provider", "") or "").strip()
+        or str(spec.get("provider") or "").strip()
+        or str(tags.get("provider") or "").strip()
+    )
+    model = (
+        str(_field(item, "model", "") or "").strip()
+        or str(spec.get("model") or "").strip()
+        or str(tags.get("model") or "").strip()
+    )
+    backend = str(_field(item, "backend_id", "") or spec.get("backend_id") or spec.get("backend") or "").strip()
+
+    producer: Dict[str, Any] = {
+        "package": "abstractruntime.integrations.abstractcore",
+        "capability_route": task or modality or "generated_media",
+    }
+    if provider:
+        producer["provider"] = provider
+    if model:
+        producer["model"] = model
+    if backend:
+        producer["backend"] = backend
+    runtime_provider = str(tags.get("provider") or "").strip()
+    runtime_model = str(tags.get("model") or "").strip()
+    if runtime_provider and runtime_provider != provider:
+        producer["runtime_provider"] = runtime_provider
+    if runtime_model and runtime_model != model:
+        producer["runtime_model"] = runtime_model
+
+    generation: Dict[str, Any] = {"output_index": int(item_index)}
+    if prompt:
+        prompt_value = _safe_artifact_value(prompt)
+        if task in {"tts", "speech", "speech_generation"} or modality == "voice":
+            generation["text"] = prompt_value
+        else:
+            generation["prompt"] = prompt_value
+    fmt = str(_field(item, "format", "") or spec.get("format") or spec.get("output_format") or "").strip()
+    if fmt:
+        generation["requested_format"] = fmt
+    negative_prompt = spec.get("negative_prompt")
+    if negative_prompt is not None and str(negative_prompt).strip():
+        generation["negative_prompt"] = _safe_artifact_value(negative_prompt)
+    params = _generation_params_from_spec(spec)
+    if params:
+        generation["params"] = params
+
+    source_refs = list((generation_context or {}).get("source_refs") or [])
+    provenance: Dict[str, Any] = {"source": tags.get("source") or "llm_call"}
+    if tags.get("run_id"):
+        provenance["run_id"] = tags["run_id"]
+    if tags.get("request_id"):
+        provenance["request_id"] = tags["request_id"]
+    security: Dict[str, Any] = {"redaction": "bounded_secret_key_redaction_v1"}
+    user_content_fields = [key for key in ("prompt", "text", "negative_prompt") if generation.get(key)]
+    if user_content_fields:
+        security.update(
+            {
+                "sensitivity": "user_content",
+                "recorded_user_content_fields": user_content_fields,
+                "prompt_storage": "descriptor_generation_bounded",
+            }
+        )
+    descriptor: Dict[str, Any] = {
+        "semantic_kind": semantic_kind,
+        "render_kind": render_kind,
+        "modality": modality or semantic_kind,
+        "task": task,
+        "classification_source": "producer",
+        "session_id": tags.get("session_id") or None,
+        "workflow_id": tags.get("workflow_id") or tags.get("workflow") or None,
+        "node_id": tags.get("node_id") or tags.get("node") or None,
+        "step_id": tags.get("step_id") or None,
+        "effect_id": tags.get("effect_id") or tags.get("effect_idempotency_key") or None,
+        "turn_id": tags.get("turn_id") or tags.get("turn") or None,
+        "ledger_cursor": tags.get("ledger_cursor") or tags.get("step_cursor") or None,
+        "parent_run_id": tags.get("parent_run_id") or None,
+        "actor_id": tags.get("actor_id") or None,
+        "producer": producer,
+        "provenance": provenance,
+        "generation": generation,
+        "source_refs": source_refs,
+        "security": security,
+    }
+
+    item_metadata = _field(item, "metadata", {}) or {}
+    metadata = {
+        "schema": "abstractruntime.generated_media_metadata.v1",
+        "producer": producer,
+        "generation": generation,
+        "source_refs": source_refs,
+        "security": security,
+        "capability_metadata": _safe_artifact_value(item_metadata),
+    }
+    return descriptor, metadata
+
+
+def _update_generated_artifact_metadata(
+    *,
+    artifact_store: Optional[Any],
+    artifact_ref: Dict[str, Any],
+    tags: Dict[str, str],
+    metadata: Dict[str, Any],
+    descriptor: Dict[str, Any],
+) -> None:
+    if artifact_store is None:
+        return
+    artifact_id = str(artifact_ref.get("artifact_id") or artifact_ref.get("$artifact") or "").strip()
+    if not artifact_id:
+        return
+    update = getattr(artifact_store, "update_metadata", None)
+    if not callable(update):
+        return
+    try:
+        update(artifact_id, tags=tags, metadata=metadata, descriptor=descriptor)
+    except Exception:
+        return
+
+
 def _store_generated_bytes(
     data: bytes,
     *,
@@ -3558,6 +4256,8 @@ def _store_generated_bytes(
     run_id: Optional[str],
     content_type: str,
     tags: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    descriptor: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     if artifact_store is None:
         return None
@@ -3580,6 +4280,8 @@ def _store_generated_bytes(
         content_type=str(content_type or "application/octet-stream"),
         run_id=str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None,
         tags=string_tags,
+        metadata=metadata,
+        descriptor=descriptor,
         artifact_id=artifact_id,
     )
     artifact_id = getattr(meta, "artifact_id", None)
@@ -3639,6 +4341,8 @@ def _normalize_generated_item(
     artifact_store: Optional[Any],
     run_id: Optional[str],
     default_tags: Optional[Dict[str, Any]],
+    generation_context: Optional[Dict[str, Any]] = None,
+    item_index: int = 0,
     fallback_modality: Optional[str] = None,
 ) -> Dict[str, Any]:
     modality = str(_field(item, "modality", fallback_modality or "") or fallback_modality or "").strip().lower()
@@ -3667,8 +4371,21 @@ def _normalize_generated_item(
         size_bytes=data_len,
     )
 
+    tags = _string_tags(default_tags)
+    tags.update({"kind": "generated_media"})
+    if modality:
+        tags["modality"] = modality
+    if task:
+        tags["task"] = task
+    descriptor, artifact_metadata = _generated_artifact_descriptor_and_metadata(
+        item=item,
+        content_type=content_type,
+        tags=tags,
+        generation_context=generation_context,
+        item_index=item_index,
+    )
+
     if artifact_ref is None and isinstance(data, (bytes, bytearray)):
-        tags = _string_tags(default_tags)
         tags.update({"kind": "generated_media"})
         if modality:
             tags["modality"] = modality
@@ -3680,8 +4397,18 @@ def _normalize_generated_item(
             run_id=run_id,
             content_type=content_type,
             tags=tags,
+            metadata=artifact_metadata,
+            descriptor=descriptor,
         )
         artifact_ref = stored_ref
+    elif artifact_ref is not None:
+        _update_generated_artifact_metadata(
+            artifact_store=artifact_store,
+            artifact_ref=artifact_ref,
+            tags=tags,
+            metadata=artifact_metadata,
+            descriptor=descriptor,
+        )
 
     out: Dict[str, Any] = {
         "modality": modality,
@@ -3731,6 +4458,7 @@ def _normalize_multimodal_response(
     artifact_store: Optional[Any] = None,
     run_id: Optional[str] = None,
     default_tags: Optional[Dict[str, Any]] = None,
+    generation_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     text_resp = _field(resp, "text", None)
     text = _normalize_local_response(text_resp) if text_resp is not None else None
@@ -3747,9 +4475,11 @@ def _normalize_multimodal_response(
                     artifact_store=artifact_store,
                     run_id=run_id,
                     default_tags=default_tags,
+                    generation_context=generation_context,
+                    item_index=idx,
                     fallback_modality=str(modality),
                 )
-                for item in items
+                for idx, item in enumerate(items)
             ]
             if normalized_items:
                 outputs[str(modality)] = normalized_items
@@ -3840,6 +4570,7 @@ def _normalize_local_response(
     artifact_store: Optional[Any] = None,
     run_id: Optional[str] = None,
     default_tags: Optional[Dict[str, Any]] = None,
+    generation_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Normalize an AbstractCore local `generate()` result into JSON."""
 
@@ -3888,6 +4619,7 @@ def _normalize_local_response(
             artifact_store=artifact_store,
             run_id=run_id,
             default_tags=default_tags,
+            generation_context=generation_context,
         )
 
     # Dict-like already
@@ -4745,6 +5477,7 @@ class LocalAbstractCoreLLMClient:
                     "actor_id",
                     "session_id",
                     "parent_run_id",
+                    "request_id",
                 ):
                     raw = trace_metadata.get(key)
                     if raw is not None and str(raw).strip():
@@ -4770,6 +5503,15 @@ class LocalAbstractCoreLLMClient:
                 system_prompt=system_prompt,
                 messages=messages,
             )
+            system_prompt = _append_runtime_grounding_contract(
+                system_prompt,
+                injected=not skip_turn_grounding,
+            )
+            generation_context = _generated_artifact_context(
+                prompt=str(prompt or ""),
+                media=media,
+                output_request=output_request,
+            )
 
             stream_raw = params.pop("stream", None)
             if stream_raw is None:
@@ -4790,7 +5532,11 @@ class LocalAbstractCoreLLMClient:
                 params["output"] = _strip_runtime_output_metadata_for_core(params.get("output"))
 
             if acore_output_request and not tools:
-                specs = _normalize_output_specs_for_runtime(output_request)
+                capability_defaults = getattr(self, "_capability_defaults", {})
+                specs = [
+                    _with_capability_default_route(spec, capability_defaults)
+                    for spec in _normalize_output_specs_for_runtime(output_request)
+                ]
                 media_only = bool(specs) and all(
                     isinstance(spec, dict)
                     and (
@@ -4811,13 +5557,14 @@ class LocalAbstractCoreLLMClient:
                             llm_kwargs=getattr(self, "_llm_kwargs", {}),
                             prompt=str(prompt or ""),
                             specs=[dict(spec) for spec in specs],
-                            timeout_s=_local_image_subprocess_timeout_s(params, getattr(self, "_llm_kwargs", {})),
+                            progress_callback=params.get("on_progress"),
                         )
                         result = _normalize_multimodal_response(
                             result_obj,
                             artifact_store=self._artifact_store,
                             run_id=run_id,
                             default_tags=default_artifact_tags,
+                            generation_context=generation_context,
                         )
                     elif _is_subprocess_safe_video_specs(specs, media):
                         result_obj = _run_local_video_subprocess(
@@ -4827,7 +5574,6 @@ class LocalAbstractCoreLLMClient:
                             prompt=str(prompt or ""),
                             specs=[dict(spec) for spec in specs],
                             media=media,
-                            timeout_s=_local_video_subprocess_timeout_s(params, getattr(self, "_llm_kwargs", {})),
                             progress_callback=params.get("on_progress"),
                         )
                         result = _normalize_multimodal_response(
@@ -4835,10 +5581,12 @@ class LocalAbstractCoreLLMClient:
                             artifact_store=self._artifact_store,
                             run_id=run_id,
                             default_tags=default_artifact_tags,
+                            generation_context=generation_context,
                         )
                     else:
                         from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
 
+                        progress_callback = params.get("on_progress")
                         result_obj = MultimodalGenerateResponse(
                             metadata={
                                 "media_only": True,
@@ -4849,7 +5597,7 @@ class LocalAbstractCoreLLMClient:
                         for spec in specs:
                             run_spec(
                                 result=result_obj,
-                                spec=dict(spec),
+                                spec=_with_output_progress_callback(dict(spec), progress_callback),
                                 prompt=str(prompt or ""),
                                 media=media,
                                 artifact_store=self._artifact_store,
@@ -4859,6 +5607,7 @@ class LocalAbstractCoreLLMClient:
                             artifact_store=self._artifact_store,
                             run_id=run_id,
                             default_tags=default_artifact_tags,
+                            generation_context=generation_context,
                         )
                     _sanitize_runtime_grounding_echoes(result)
                     _attach_runtime_grounding(result, runtime_grounding)
@@ -4891,6 +5640,7 @@ class LocalAbstractCoreLLMClient:
                         artifact_store=self._artifact_store if acore_output_request else None,
                         run_id=run_id,
                         default_tags=default_artifact_tags,
+                        generation_context=generation_context,
                     )
                 _sanitize_runtime_grounding_echoes(result)
                 _attach_runtime_grounding(result, runtime_grounding)
@@ -4922,6 +5672,7 @@ class LocalAbstractCoreLLMClient:
                             artifact_store=self._artifact_store if acore_output_request else None,
                             run_id=run_id,
                             default_tags=default_artifact_tags,
+                            generation_context=generation_context,
                         )
                     _sanitize_runtime_grounding_echoes(result)
                     _attach_runtime_grounding(result, runtime_grounding)
@@ -5184,6 +5935,28 @@ class LocalAbstractCoreLLMClient:
             provider_api_key=provider_api_key,
             provider=provider,
             providers_only=providers_only,
+        )
+
+    def list_vision_adapters(
+        self,
+        *,
+        model: Optional[str] = None,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_vision_adapters
+
+        return local_list_vision_adapters(
+            model=model,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
         )
 
     def list_cached_vision_models(
@@ -6647,6 +7420,25 @@ class MultiLocalAbstractCoreLLMClient:
             **kwargs,
         )
 
+    def list_vision_adapters(
+        self,
+        *,
+        model: Optional[str] = None,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._default_client.list_vision_adapters(
+            model=model,
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
     def get_prompt_cache_capabilities(
         self,
         *,
@@ -7595,6 +8387,12 @@ class RemoteAbstractCoreLLMClient:
                 truth_source="abstractcore.server./acore/models",
                 extra={"shares_backend_cache_with": "image_generation"},
             ),
+            "image_upscale": _model_residency_capability_task(
+                task="image_upscale",
+                supported=True,
+                truth_source="abstractcore.server./acore/models",
+                extra={"shares_backend_cache_with": "image_generation"},
+            ),
             "text_to_video": _model_residency_capability_task(
                 task="text_to_video",
                 supported=True,
@@ -8222,6 +9020,46 @@ class RemoteAbstractCoreLLMClient:
             ]
         payload["models"] = models
         payload["available"] = bool(models)
+        return payload
+
+    def list_vision_adapters(
+        self,
+        *,
+        model: Optional[str] = None,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        payload = self._discovery_get(
+            "/vision/adapters",
+            source="abstractcore.remote",
+            query={
+                "model": model,
+                "task": task,
+                "base_url": base_url,
+                "provider": provider,
+            },
+            provider_api_key=provider_api_key,
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
+        adapters = [dict(item) for item in list(payload.get("adapters") or []) if isinstance(item, dict)]
+        provider_value = str(provider or "").strip().lower()
+        if provider_value:
+            adapters = [
+                item
+                for item in adapters
+                if str(item.get("provider") or item.get("raw", {}).get("provider") or "").strip().lower() == provider_value
+            ]
+        payload["model"] = str(model or "").strip() or None
+        payload["task"] = str(task or "").strip() or None
+        payload["provider"] = str(provider or "").strip() or None
+        payload["adapters"] = adapters
+        payload["count"] = len(adapters)
+        payload["available"] = bool(adapters)
         return payload
 
     def _prompt_cache_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -8947,6 +9785,7 @@ class RemoteAbstractCoreLLMClient:
                 "actor_id",
                 "session_id",
                 "parent_run_id",
+                "request_id",
             ):
                 raw = trace_metadata.get(key)
                 if raw is not None and str(raw).strip():
@@ -8996,12 +9835,13 @@ class RemoteAbstractCoreLLMClient:
         headers: Dict[str, str],
         data: Dict[str, Any],
         files: Dict[str, tuple[str, bytes, str]],
+        timeout: Optional[float] = None,
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         sender = self._sender
         post_multipart = getattr(sender, "post_multipart", None)
         if not callable(post_multipart):
             raise ValueError("Remote multipart media output requires a request sender with post_multipart().")
-        raw = post_multipart(url, headers=headers, data=data, files=files, timeout=self._timeout_s)
+        raw = post_multipart(url, headers=headers, data=data, files=files, timeout=timeout)
         return _unwrap_http_response(raw)
 
     def _remote_image_generation(
@@ -9046,6 +9886,7 @@ class RemoteAbstractCoreLLMClient:
             "seed",
             "steps",
             "guidance_scale",
+            "guidance_2",
             "quality",
             "style",
             "user",
@@ -9057,6 +9898,15 @@ class RemoteAbstractCoreLLMClient:
         ):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
+        count = _spec_generation_count(spec)
+        if count is not None:
+            body["n"] = count
+        seeds = _spec_generation_seeds(spec)
+        if seeds is not None:
+            body["seeds"] = list(seeds)
+        lora_adapters = _spec_lora_adapters(spec)
+        if lora_adapters:
+            body["lora_adapters"] = lora_adapters
         endpoint_model_lower = endpoint_model.lower()
         official_openai_gpt_image = (
             endpoint_model_lower.startswith("openai-compatible/gpt-image")
@@ -9078,6 +9928,7 @@ class RemoteAbstractCoreLLMClient:
                 "seed",
                 "steps",
                 "guidance_scale",
+                "guidance_2",
                 "negative_prompt",
             ):
                 body.pop(local_only_key, None)
@@ -9085,9 +9936,19 @@ class RemoteAbstractCoreLLMClient:
         if isinstance(base_url, str) and base_url.strip():
             body["base_url"] = base_url.strip()
 
-        url = _join_core_v1_url(self._server_base_url, "/images/generations")
-        raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
-        resp, _resp_headers = _unwrap_http_response(raw)
+        progress_callback = params.get("on_progress")
+        if callable(progress_callback):
+            url = _join_core_v1_url(self._server_base_url, "/vision/jobs/images/generations")
+            raw = self._sender.post(url, headers=headers, json=body, timeout=None)
+            start_resp, _resp_headers = _unwrap_http_response(raw)
+            job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
+            if not job_id:
+                raise ValueError("Remote image generation job did not return job_id.")
+            resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
+        else:
+            url = _join_core_v1_url(self._server_base_url, "/images/generations")
+            raw = self._sender.post(url, headers=headers, json=body, timeout=None)
+            resp, _resp_headers = _unwrap_http_response(raw)
 
         data_items = resp.get("data") if isinstance(resp, dict) else None
         if not isinstance(data_items, list) or not data_items:
@@ -9128,6 +9989,7 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=prompt, media=None, output_request=spec),
         )
 
     def _remote_image_edit(
@@ -9178,9 +10040,15 @@ class RemoteAbstractCoreLLMClient:
             data["model"] = endpoint_model
         if endpoint_provider:
             data["provider"] = endpoint_provider
-        for key in ("size", "negative_prompt", "seed", "steps", "guidance_scale"):
+        count = _spec_generation_count(spec)
+        seeds = _spec_generation_seeds(spec)
+        for key in ("size", "negative_prompt", "seed", "steps", "guidance_scale", "guidance_2"):
             if key in spec and spec.get(key) is not None:
                 data[key] = spec.get(key)
+        if count is not None:
+            data["n"] = str(count)
+        if seeds is not None:
+            data["seeds"] = ",".join(str(seed) for seed in seeds)
         extra = dict(spec.get("extra")) if isinstance(spec.get("extra"), dict) else {}
         for key in (
             "quality",
@@ -9193,6 +10061,9 @@ class RemoteAbstractCoreLLMClient:
         ):
             if key in spec and spec.get(key) is not None:
                 extra.setdefault(key, spec.get(key))
+        lora_adapters = _spec_lora_adapters(spec)
+        if lora_adapters:
+            data["lora_adapters_json"] = json.dumps(lora_adapters, ensure_ascii=False, separators=(",", ":"))
         if extra:
             data["extra_json"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
         base_url = params.get("base_url")
@@ -9203,12 +10074,21 @@ class RemoteAbstractCoreLLMClient:
         if mask_item is not None:
             files["mask"] = _file_tuple("mask", mask_item)
 
-        if endpoint_provider:
+        progress_callback = params.get("on_progress")
+        if callable(progress_callback):
+            url = _join_core_v1_url(self._server_base_url, "/vision/jobs/images/edits")
+            start_resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files, timeout=None)
+            job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
+            if not job_id:
+                raise ValueError("Remote image edit job did not return job_id.")
+            resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
+        elif endpoint_provider:
             data.pop("provider", None)
             url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/images/edits")
+            resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files, timeout=None)
         else:
             url = _join_core_v1_url(self._server_base_url, "/images/edits")
-        resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files)
+            resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files, timeout=None)
 
         data_items = resp.get("data") if isinstance(resp, dict) else None
         if not isinstance(data_items, list) or not data_items:
@@ -9249,6 +10129,119 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=prompt, media=media, output_request=spec),
+        )
+
+    def _remote_image_upscale(
+        self,
+        *,
+        spec: Dict[str, Any],
+        media: Optional[List[Any]],
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        image_item: Any = None
+        for item in list(media or []):
+            if _is_image_media_item(item):
+                if image_item is not None:
+                    raise ValueError("Remote image upscale requires exactly one source image media item.")
+                image_item = item
+        if image_item is None:
+            raise ValueError("Remote image upscale requires exactly one source image media item.")
+
+        path = _media_path_from_item(image_item)
+        if not path:
+            raise ValueError("Remote image upscale media must resolve to a local file path.")
+        if path.lower().startswith("data:") or path.startswith(("http://", "https://")):
+            raise ValueError("Remote image upscale media must be a local file path or artifact-backed file.")
+        filename = os.path.basename(path) or "image.bin"
+        mime = _media_mime_from_item(image_item) or _mime_type_for_path(path)
+        with open(path, "rb") as f:
+            file_bytes = f.read()
+
+        endpoint_model = str(spec.get("model") or "").strip()
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        data: Dict[str, Any] = {"response_format": "b64_json"}
+        if endpoint_model:
+            data["model"] = endpoint_model
+        if endpoint_provider:
+            data["provider"] = endpoint_provider
+        for key in (
+            "scale",
+            "resolution",
+            "softness",
+            "seed",
+            "quantize",
+            "vae_tiling",
+            "output_format",
+            "format",
+        ):
+            if key in spec and spec.get(key) is not None:
+                data[key] = spec.get(key)
+        extra = dict(spec.get("extra")) if isinstance(spec.get("extra"), dict) else {}
+        if extra:
+            data["extra_json"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            data["base_url"] = base_url.strip()
+
+        files = {"image": (filename, file_bytes, mime)}
+        progress_callback = params.get("on_progress")
+        if callable(progress_callback):
+            url = _join_core_v1_url(self._server_base_url, "/vision/jobs/images/upscale")
+            start_resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files, timeout=None)
+            job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
+            if not job_id:
+                raise ValueError("Remote image upscale job did not return job_id.")
+            resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
+        else:
+            if endpoint_provider:
+                data.pop("provider", None)
+                url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/images/upscale")
+            else:
+                url = _join_core_v1_url(self._server_base_url, "/images/upscale")
+            resp, _resp_headers = self._post_multipart_files(url, headers=headers, data=data, files=files, timeout=None)
+
+        data_items = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data_items, list) or not data_items:
+            raise ValueError("Remote image upscale returned no data items.")
+
+        fmt = str(spec.get("format") or spec.get("output_format") or "png").strip().lower() or "png"
+        content_type = f"image/{fmt}"
+        outputs: List[Dict[str, Any]] = []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            raw_b64 = item.get("b64_json") or item.get("image") or item.get("data")
+            if not isinstance(raw_b64, str) or not raw_b64.strip():
+                continue
+            image_bytes = base64.b64decode("".join(raw_b64.strip().split()), validate=True)
+            outputs.append(
+                {
+                    "modality": "image",
+                    "task": "image_upscale",
+                    "data": image_bytes,
+                    "content_type": content_type,
+                    "format": fmt,
+                    "provider": endpoint_provider or "abstractcore-server",
+                    "model": str(data.get("model") or "") or None,
+                    "metadata": {"_provider_request": {"url": url, "payload": data}},
+                }
+            )
+        if not outputs:
+            raise ValueError("Remote image upscale response did not contain b64_json data.")
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="image_upscale",
+            modality="image",
+            model=str(data.get("model") or "") or None,
+        )
+        return _normalize_multimodal_response(
+            {"outputs": {"image": outputs}, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
+            artifact_store=self._artifact_store,
+            run_id=run_id,
+            default_tags=tags,
+            generation_context=_generated_artifact_context(prompt="", media=media, output_request=spec),
         )
 
     def _remote_video_generation(
@@ -9266,9 +10259,18 @@ class RemoteAbstractCoreLLMClient:
             body["provider"] = endpoint_provider
         if endpoint_model:
             body["model"] = endpoint_model
-        for key in ("n", "width", "height", "fps", "seed", "steps", "guidance_scale", "negative_prompt", "extra"):
+        for key in ("n", "width", "height", "fps", "seed", "steps", "guidance_scale", "guidance_2", "flow_shift", "negative_prompt", "extra"):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
+        count = _spec_generation_count(spec)
+        if count is not None:
+            body["n"] = count
+        seeds = _spec_generation_seeds(spec)
+        if seeds is not None:
+            body["seeds"] = list(seeds)
+        lora_adapters = _spec_lora_adapters(spec)
+        if lora_adapters:
+            body["lora_adapters"] = lora_adapters
         num_frames = spec.get("num_frames")
         if num_frames is None:
             num_frames = spec.get("frames")
@@ -9281,7 +10283,7 @@ class RemoteAbstractCoreLLMClient:
         progress_callback = params.get("on_progress")
         if callable(progress_callback):
             url = _join_core_v1_url(self._server_base_url, "/vision/jobs/videos/generations")
-            raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+            raw = self._sender.post(url, headers=headers, json=body, timeout=None)
             start_resp, _resp_headers = _unwrap_http_response(raw)
             job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
             if not job_id:
@@ -9289,7 +10291,7 @@ class RemoteAbstractCoreLLMClient:
             resp = self._poll_remote_vision_job(job_id=job_id, headers=headers, params=params)
         else:
             url = _join_core_v1_url(self._server_base_url, "/videos/generations")
-            raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+            raw = self._sender.post(url, headers=headers, json=body, timeout=None)
             resp, _resp_headers = _unwrap_http_response(raw)
 
         data_items = resp.get("data") if isinstance(resp, dict) else None
@@ -9331,6 +10333,7 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=prompt, media=None, output_request=spec),
         )
 
     def _poll_remote_vision_job(
@@ -9349,26 +10352,25 @@ class RemoteAbstractCoreLLMClient:
         except Exception:
             interval = 1.0
         interval = max(0.05, min(interval, 10.0))
-        deadline = time.time() + max(1.0, float(self._timeout_s or 1.0))
         last_progress_key = ""
         while True:
             url = f"{_join_core_v1_url(self._server_base_url, f'/vision/jobs/{quote(job_id)}')}?consume=true"
-            raw = self._sender.get(url, headers=headers, timeout=self._timeout_s)
+            raw = self._sender.get(url, headers=headers, timeout=None)
             job, _resp_headers = _unwrap_http_response(raw)
             if not isinstance(job, dict):
                 raise ValueError("Remote vision job poll returned a non-object response.")
+            state = str(job.get("state") or "").strip().lower()
             progress = job.get("progress")
             if callable(callback) and isinstance(progress, dict):
-                progress_payload = dict(progress)
-                progress_payload.setdefault("job_id", job_id)
-                try:
-                    progress_key = json.dumps(progress_payload, sort_keys=True, default=str)
-                except Exception:
-                    progress_key = str(progress_payload)
-                if progress_key != last_progress_key:
-                    callback(progress_payload)
-                    last_progress_key = progress_key
-            state = str(job.get("state") or "").strip().lower()
+                progress_payload = _progress_for_remote_job_state(progress, job_id=job_id, state=state)
+                if _progress_is_reported(progress_payload) or state in {"succeeded", "failed"}:
+                    try:
+                        progress_key = json.dumps(progress_payload, sort_keys=True, default=str)
+                    except Exception:
+                        progress_key = str(progress_payload)
+                    if progress_key != last_progress_key:
+                        callback(progress_payload)
+                        last_progress_key = progress_key
             if state == "succeeded":
                 result = job.get("result")
                 if not isinstance(result, dict):
@@ -9376,8 +10378,6 @@ class RemoteAbstractCoreLLMClient:
                 return result
             if state == "failed":
                 raise ValueError(str(job.get("error") or "Remote vision job failed."))
-            if time.time() >= deadline:
-                raise TimeoutError(f"Timed out waiting for remote vision job {job_id}.")
             time.sleep(interval)
 
     def _remote_image_to_video(
@@ -9415,15 +10415,24 @@ class RemoteAbstractCoreLLMClient:
             data["model"] = endpoint_model
         if endpoint_provider:
             data["provider"] = endpoint_provider
-        for key in ("width", "height", "fps", "seed", "steps", "guidance_scale", "negative_prompt"):
+        count = _spec_generation_count(spec)
+        seeds = _spec_generation_seeds(spec)
+        for key in ("width", "height", "fps", "seed", "steps", "guidance_scale", "guidance_2", "flow_shift", "negative_prompt"):
             if key in spec and spec.get(key) is not None:
                 data[key] = spec.get(key)
+        if count is not None:
+            data["n"] = str(count)
+        if seeds is not None:
+            data["seeds"] = ",".join(str(seed) for seed in seeds)
         num_frames = spec.get("num_frames")
         if num_frames is None:
             num_frames = spec.get("frames")
         if num_frames is not None:
             data["num_frames"] = num_frames
         extra = dict(spec.get("extra")) if isinstance(spec.get("extra"), dict) else {}
+        lora_adapters = _spec_lora_adapters(spec)
+        if lora_adapters:
+            data["lora_adapters_json"] = json.dumps(lora_adapters, ensure_ascii=False, separators=(",", ":"))
         if extra:
             data["extra_json"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
         base_url = params.get("base_url")
@@ -9438,6 +10447,7 @@ class RemoteAbstractCoreLLMClient:
                 headers=headers,
                 data=data,
                 files={"image": (filename, file_bytes, mime)},
+                timeout=None,
             )
             job_id = str(start_resp.get("job_id") or "").strip() if isinstance(start_resp, dict) else ""
             if not job_id:
@@ -9454,6 +10464,7 @@ class RemoteAbstractCoreLLMClient:
                 headers=headers,
                 data=data,
                 files={"image": (filename, file_bytes, mime)},
+                timeout=None,
             )
 
         data_items = resp.get("data") if isinstance(resp, dict) else None
@@ -9495,6 +10506,7 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=prompt, media=media, output_request=spec),
         )
 
     def _remote_tts(
@@ -9560,6 +10572,7 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=text, media=None, output_request=spec),
         )
 
     def _remote_music(
@@ -9644,6 +10657,7 @@ class RemoteAbstractCoreLLMClient:
             artifact_store=self._artifact_store,
             run_id=run_id,
             default_tags=tags,
+            generation_context=_generated_artifact_context(prompt=prompt, media=None, output_request=spec),
         )
 
     def _remote_transcription(
@@ -9726,11 +10740,14 @@ class RemoteAbstractCoreLLMClient:
 
         if modality == "image":
             image_edit_tasks = {"image_edit", "image_to_image", "i2i", "edit_image"}
+            image_upscale_tasks = {"image_upscale", "image_upscaling", "upscale", "upscale_image"}
             image_generation_tasks = {"", "image_generation", "t2i", "text_to_image"}
             if task in image_edit_tasks:
                 if not text:
                     raise ValueError("Remote image edit requires prompt or text.")
                 return self._remote_image_edit(spec=spec, prompt=text, media=media, headers=headers, params=params)
+            if task in image_upscale_tasks:
+                return self._remote_image_upscale(spec=spec, media=media, headers=headers, params=params)
             if task not in image_generation_tasks:
                 raise ValueError(f"Unsupported remote image task: {task!r}")
             if media:
@@ -9869,6 +10886,10 @@ class RemoteAbstractCoreLLMClient:
         system_prompt, messages = _coalesce_leading_system_messages(
             system_prompt=system_prompt,
             messages=messages,
+        )
+        system_prompt = _append_runtime_grounding_contract(
+            system_prompt,
+            injected=not skip_turn_grounding,
         )
 
         if isinstance(trace_metadata, dict) and trace_metadata:

@@ -87,3 +87,73 @@ def test_visual_agent_unstructured_result_is_minimal_and_messages_live_in_scratc
     assert [m.get("role") for m in messages] == ["user", "assistant"]
     assert messages[0].get("content") == "Do the thing."
     assert messages[1].get("content") == "Done."
+
+
+def test_visual_agent_structured_result_sync_exposes_data_pin():
+    from abstractruntime.core.models import RunState
+    from abstractruntime.visualflow_compiler.compiler import _sync_effect_results_to_node_outputs
+    from abstractruntime.visualflow_compiler.visual.executor import visual_to_flow
+    from abstractruntime.visualflow_compiler.visual.models import load_visualflow_json
+
+    vf = load_visualflow_json(
+        {
+            "id": "vf-agent-structured-sync",
+            "name": "vf-agent-structured-sync",
+            "entryNode": "node-agent",
+            "nodes": [
+                {
+                    "id": "node-agent",
+                    "type": "agent",
+                    "data": {
+                        "nodeType": "agent",
+                        "pinDefaults": {
+                            "resp_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "choice": {"type": "string", "enum": ["summarize", "classify"]},
+                                    "confidence": {"type": "number"},
+                                },
+                                "required": ["choice"],
+                            }
+                        },
+                        "outputs": [
+                            {"id": "exec-out", "label": "", "type": "execution"},
+                            {"id": "response", "label": "response", "type": "string"},
+                            {"id": "data", "label": "data", "type": "object"},
+                            {"id": "meta", "label": "meta", "type": "object"},
+                            {"id": "scratchpad", "label": "scratchpad", "type": "object"},
+                        ],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+    )
+    flow = visual_to_flow(vf)
+    run = RunState.new(workflow_id=flow.flow_id, entry_node="node-agent")
+    structured_data = {"choice": "summarize", "confidence": 0.95}
+    run.vars["_temp"] = {
+        "effects": {"node-agent": structured_data},
+        "agent": {
+            "node-agent": {
+                "output_mode": "structured",
+                "answer": "The user asked for a summary.",
+                "provider": "lmstudio",
+                "model": "qwen/qwen3.6-35b-a3b",
+                "scratchpad": {
+                    "node_id": "node-agent",
+                    "steps": [],
+                    "messages": [{"role": "assistant", "content": "The user asked for a summary."}],
+                },
+            }
+        },
+    }
+
+    _sync_effect_results_to_node_outputs(run, flow)
+
+    out = flow._node_outputs["node-agent"]  # type: ignore[attr-defined]
+    assert out["response"] == '{"choice":"summarize","confidence":0.95}'
+    assert out["data"] == structured_data
+    assert out["meta"]["output_mode"] == "structured"
+    assert out["meta"]["provider"] == "lmstudio"
+    assert out["meta"]["model"] == "qwen/qwen3.6-35b-a3b"

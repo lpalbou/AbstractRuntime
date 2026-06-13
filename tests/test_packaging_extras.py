@@ -50,13 +50,18 @@ def test_runtime_base_is_remote_light_with_multimodal_and_mcp_support() -> None:
     assert "abstractcore = [" not in text
     assert "multimodal = [" not in text
     assert "mcp-worker = [" not in text
-    assert '"abstractcore[remote,media,tools,vision,voice,audio,music]>=2.13.31"' in text
+    assert '"abstractcore[remote,tools,vision,voice,audio,music]>=2.13.37"' in text
     assert '"openai<2.0.0,>=1.109.1"' in text
     assert '"httpx<1.0.0,>=0.28.1"' in text
     assert '"anyio<5.0.0,>=4.12.1"' in text
     assert '"Pillow<13.0.0,>=10.0.0"' in text
+    assert '"pypdf<7.0.0,>=6.0.0"' in text
+    assert '"reportlab<5.0.0,>=4.0.0"' in text
     assert '"unstructured[docx,odt,pptx,rtf,xlsx]<0.19.0,>=0.18.32"' in text
     assert '"python-pptx<2.0.0,>=1.0.2"' in text
+    assert "pymupdf" not in text.lower()
+    assert "pymupdf4llm" not in text
+    assert "pymupdf-layout" not in text
     assert '"torch' not in text
     assert '"sentence-transformers' not in text
     assert '"vllm' not in text
@@ -80,7 +85,17 @@ def test_runtime_exposes_only_apple_and_gpu_user_install_profiles() -> None:
     apple_block = _extract_optional_dependency_block(text, key="apple")
     gpu_block = _extract_optional_dependency_block(text, key="gpu")
 
-    assert '"abstractcore[all-apple]>=2.13.31"' in apple_block
-    assert '"abstractcore[all-gpu]>=2.13.31"' in gpu_block
+    assert '"abstractcore[all-apple]>=2.13.37"' in apple_block
+    assert '"abstractcore[all-gpu]>=2.13.37"' in gpu_block
     assert '"setuptools<82.0.0,>=80.10.2"' in apple_block
     assert '"setuptools<82.0.0,>=80.10.2"' in gpu_block
+    assert "pymupdf" not in apple_block.lower()
+    assert "pymupdf" not in gpu_block.lower()
+
+    core_pyproject = pyproject.resolve().parents[1] / "abstractcore" / "pyproject.toml"
+    if core_pyproject.exists():
+        core_text = core_pyproject.read_text(encoding="utf-8")
+        for core_profile in ("all-apple", "all-gpu"):
+            core_block = _extract_optional_dependency_block(core_text, key=core_profile)
+            assert '"pypdf>=6.0.0,<7.0.0"' in core_block
+            assert "pymupdf" not in core_block.lower()

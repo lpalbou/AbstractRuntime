@@ -128,6 +128,9 @@ def _image_kwargs_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         "run_id",
         "tags",
         "prompt",
+        "count",
+        "n",
+        "seeds",
     }
     return {str(k): v for k, v in spec.items() if str(k) not in ignored and v is not None}
 
@@ -142,8 +145,37 @@ def _video_kwargs_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         "response_format",
         "run_id",
         "tags",
+        "count",
+        "n",
+        "seeds",
     }
     return {str(k): v for k, v in spec.items() if str(k) not in ignored and v is not None}
+
+
+def _spec_generation_count_seeds(spec: Dict[str, Any]) -> tuple[int, list[int] | None]:
+    raw_seeds = spec.get("seeds")
+    default_count = len(raw_seeds) if isinstance(raw_seeds, list) and raw_seeds else 1
+    raw_count = spec.get("count", spec.get("n", default_count))
+    try:
+        count = int(raw_count) if raw_count is not None else 1
+    except Exception as exc:
+        raise ValueError("Output count must be an integer >= 1.") from exc
+    if count < 1:
+        raise ValueError("Output count must be >= 1.")
+
+    if raw_seeds is None:
+        return count, None
+    if isinstance(raw_seeds, (str, bytes, bytearray)) or not isinstance(raw_seeds, list):
+        raise ValueError("Output seeds must be a list of integers.")
+    seeds: list[int] = []
+    for value in raw_seeds:
+        try:
+            seeds.append(int(value))
+        except Exception as exc:
+            raise ValueError("Output seeds must be integers.") from exc
+    if not seeds:
+        raise ValueError("Output seeds cannot be empty.")
+    return count, seeds
 
 
 def _media_path_from_item(item: Any) -> str:
@@ -178,24 +210,119 @@ def _is_image_media_item(item: Any) -> bool:
     return path.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
 
 
-def _run_image_spec(registry: Any, *, prompt: str, spec: Dict[str, Any]) -> Dict[str, Any]:
-    fmt = str(spec.get("format") or "png")
-    content_type = str(spec.get("content_type") or spec.get("mime_type") or f"image/{fmt}")
-    kwargs = _image_kwargs_from_spec(spec)
-    raw = registry.vision.t2i(prompt, **kwargs)
+def _media_image_source_and_mask(media: Any, *, task: str) -> tuple[str, str | None]:
+    image_items = [item for item in list(media or []) if _is_image_media_item(item)]
+    if not image_items:
+        raise ValueError(f"Local {task} subprocess requires a source image file.")
+    source_item = next(
+        (
+            item
+            for item in image_items
+            if str(item.get("role") or item.get("purpose") or "").strip().lower() == "source"
+        ),
+        image_items[0],
+    )
+    source_path = _media_path_from_item(source_item)
+    if not source_path:
+        raise ValueError(f"Local {task} subprocess media must include file_path for the source image.")
+    mask_item = next(
+        (
+            item
+            for item in image_items
+            if str(item.get("role") or item.get("purpose") or "").strip().lower() == "mask"
+        ),
+        None,
+    )
+    mask_path = _media_path_from_item(mask_item) if mask_item is not None else ""
+    if mask_item is not None and not mask_path:
+        raise ValueError(f"Local {task} subprocess media must include file_path for the mask image.")
+    return source_path, (mask_path or None)
+
+
+def _generated_item_from_raw(
+    raw: Any,
+    *,
+    modality: str,
+    task: str,
+    fmt: str,
+    content_type: str,
+    provider: str,
+    model: str,
+    backend_id: Any,
+) -> Dict[str, Any]:
     data, artifact_ref, metadata = _bytes_from_raw(raw)
     return {
-        "modality": "image",
-        "task": "image_generation",
+        "modality": modality,
+        "task": task,
         "data": data,
         "artifact_ref": artifact_ref,
         "content_type": content_type,
         "format": fmt,
-        "backend_id": getattr(registry.vision, "backend_id", None),
-        "provider": str(spec.get("provider") or getattr(registry.vision, "backend_id", None) or "abstractvision"),
-        "model": str(spec.get("model") or ""),
+        "backend_id": backend_id,
+        "provider": provider,
+        "model": model,
         "metadata": metadata,
     }
+
+
+def _run_image_spec(registry: Any, *, prompt: str, spec: Dict[str, Any], media: Any) -> list[Dict[str, Any]]:
+    fmt = str(spec.get("format") or "png")
+    content_type = str(spec.get("content_type") or spec.get("mime_type") or f"image/{fmt}")
+    kwargs = _image_kwargs_from_spec(spec)
+    extra = kwargs.get("extra")
+    extra_dict = dict(extra) if isinstance(extra, dict) else {}
+    extra_dict["on_progress"] = _emit_progress_event
+    kwargs["extra"] = extra_dict
+    count, seeds = _spec_generation_count_seeds(spec)
+    task = str(spec.get("task") or "").strip().lower()
+    provider = str(spec.get("provider") or getattr(registry.vision, "backend_id", None) or "abstractvision")
+    model = str(spec.get("model") or "")
+    backend_id = getattr(registry.vision, "backend_id", None)
+    outputs: list[Any]
+
+    if task in {"", "image_generation", "t2i", "text_to_image"}:
+        if count > 1 or seeds is not None:
+            outputs = list(registry.vision.t2i_batch(prompt, count=count, seeds=seeds, **kwargs) or [])
+        else:
+            outputs = [registry.vision.t2i(prompt, **kwargs)]
+        normalized_task = "image_generation"
+    elif task in {"image_edit", "image_to_image", "i2i", "edit_image"}:
+        source_path, mask_path = _media_image_source_and_mask(media, task="image edit")
+        if count > 1 or seeds is not None:
+            outputs = list(
+                registry.vision.i2i_batch(
+                    prompt,
+                    source_path,
+                    mask=mask_path,
+                    count=count,
+                    seeds=seeds,
+                    **kwargs,
+                )
+                or []
+            )
+        else:
+            outputs = [registry.vision.i2i(prompt, source_path, mask=mask_path, **kwargs)]
+        normalized_task = "image_edit"
+    elif task in {"image_upscale", "image_upscaling", "upscale", "upscale_image"}:
+        source_path, _mask_path = _media_image_source_and_mask(media, task="image upscale")
+        outputs = [registry.vision.upscale_image(source_path, **kwargs)]
+        normalized_task = "image_upscale"
+    else:
+        raise ValueError(f"Unsupported subprocess image task: {task!r}")
+
+    return [
+        _generated_item_from_raw(
+            raw,
+            modality="image",
+            task=normalized_task,
+            fmt=fmt,
+            content_type=content_type,
+            provider=provider,
+            model=model,
+            backend_id=backend_id,
+        )
+        for raw in outputs
+    ]
 
 
 def _emit_progress_event(event: Any) -> None:
@@ -226,6 +353,10 @@ def _run_video_spec(
     extra_dict = dict(extra) if isinstance(extra, dict) else {}
     extra_dict["on_progress"] = _emit_progress_event
     kwargs["extra"] = extra_dict
+    count, seeds = _spec_generation_count_seeds(spec)
+    provider = str(spec.get("provider") or getattr(registry.vision, "backend_id", None) or "abstractvision")
+    model = str(spec.get("model") or "")
+    backend_id = getattr(registry.vision, "backend_id", None)
 
     if task in {"image_to_video", "i2v", "video_from_image", "video_edit"}:
         image_items = [item for item in list(media or []) if _is_image_media_item(item)]
@@ -235,26 +366,36 @@ def _run_video_spec(
         if not image_path:
             raise ValueError("Local image-to-video subprocess media must include file_path.")
         kwargs.setdefault("prompt", prompt)
-        raw = registry.vision.i2v(image_path, **kwargs)
+        if count > 1 or seeds is not None:
+            raw_items = list(registry.vision.i2v_batch(image_path, prompt=prompt, count=count, seeds=seeds, **kwargs) or [])
+        else:
+            raw_items = [registry.vision.i2v(image_path, **kwargs)]
         normalized_task = "image_to_video"
     elif task in {"", "video_generation", "text_to_video", "t2v"}:
-        raw = registry.vision.t2v(prompt, **kwargs)
+        if count > 1 or seeds is not None:
+            raw_items = list(registry.vision.t2v_batch(prompt, count=count, seeds=seeds, **kwargs) or [])
+        else:
+            raw_items = [registry.vision.t2v(prompt, **kwargs)]
         normalized_task = "text_to_video"
     else:
         raise ValueError(f"Unsupported subprocess video task: {task!r}")
 
-    data, artifact_ref, metadata = _bytes_from_raw(raw)
     return {
         "modality": "video",
         "task": normalized_task,
-        "data": data,
-        "artifact_ref": artifact_ref,
-        "content_type": content_type,
-        "format": fmt,
-        "backend_id": getattr(registry.vision, "backend_id", None),
-        "provider": str(spec.get("provider") or getattr(registry.vision, "backend_id", None) or "abstractvision"),
-        "model": str(spec.get("model") or ""),
-        "metadata": metadata,
+        "outputs": [
+            _generated_item_from_raw(
+                raw,
+                modality="video",
+                task=normalized_task,
+                fmt=fmt,
+                content_type=content_type,
+                provider=provider,
+                model=model,
+                backend_id=backend_id,
+            )
+            for raw in raw_items
+        ],
     }
 
 
@@ -318,13 +459,15 @@ def main() -> int:
             modality = str(spec.get("modality") or "").strip().lower()
             task = str(spec.get("task") or "").strip().lower()
             if modality == "image" and (not task or task in {"image_generation", "t2i", "text_to_image"}):
-                response.add_output("image", _run_image_spec(registry, prompt=prompt, spec=dict(spec)))
+                for item in _run_image_spec(registry, prompt=prompt, spec=dict(spec), media=media):
+                    response.add_output("image", item)
                 continue
             if modality == "video":
-                response.add_output("video", _run_video_spec(registry, prompt=prompt, spec=dict(spec), media=media))
+                video_result = _run_video_spec(registry, prompt=prompt, spec=dict(spec), media=media)
+                for item in list(video_result.get("outputs") or []):
+                    response.add_output("video", item)
                 continue
-            if modality != "image" or (task and task not in {"image_generation", "t2i", "text_to_image"}):
-                raise ValueError(f"Unsupported subprocess media spec: modality={modality!r} task={task!r}")
+            raise ValueError(f"Unsupported subprocess media spec: modality={modality!r} task={task!r}")
 
         print(json.dumps({"ok": True, "response": _serialize_response(response)}, ensure_ascii=False), flush=True)
         return 0

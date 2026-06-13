@@ -232,6 +232,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "generate_image",
         "edit_image",
         "image_to_image",
+        "upscale_image",
+        "image_upscale",
         "generate_video",
         "text_to_video",
         "image_to_video",
@@ -325,9 +327,97 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     def _decode_separator(value: str) -> str:
         return value.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
 
+    def _resolve_user_file_path(payload: Dict[str, Any], file_path: str, *, operation: str):
+        from pathlib import Path
+
+        try:
+            from abstractruntime.integrations.abstractcore.workspace_scoped_tools import (
+                WorkspaceScope,
+                resolve_user_path,
+                resolve_user_workspace_path,
+            )
+
+            scope = WorkspaceScope.from_input_data(payload)
+            if scope is not None:
+                resolved = resolve_user_workspace_path(scope=scope, user_path=file_path)
+                return resolved.resolved_path, resolved.virtual_path
+        except Exception as e:
+            raise ValueError(f"{operation} path rejected by workspace policy: {e}") from e
+
+        path = Path(file_path).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path, str(path)
+
+    def _artifact_id_from_value(value: Any) -> str:
+        if isinstance(value, dict):
+            raw = value.get("$artifact") or value.get("artifact_id")
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return ""
+
+    def _artifact_store_from_payload(payload: Dict[str, Any]) -> Any:
+        store = payload.get("_runtime_artifact_store")
+        return store if store is not None else None
+
+    def _runtime_artifact_ref(meta: Any) -> Dict[str, Any]:
+        tags = dict(getattr(meta, "tags", None) or {})
+        ref: Dict[str, Any] = {
+            "$artifact": str(getattr(meta, "artifact_id", "") or ""),
+            "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
+            "run_id": str(getattr(meta, "run_id", "") or "") or None,
+            "content_type": str(getattr(meta, "content_type", "") or "") or None,
+            "modality": str(tags.get("modality") or "") or None,
+        }
+        filename = str(tags.get("filename") or "").strip()
+        if filename:
+            ref["filename"] = filename
+        source_path = str(tags.get("path") or tags.get("source_path") or "").strip()
+        if source_path:
+            ref["source_path"] = source_path
+        size_bytes = getattr(meta, "size_bytes", None)
+        if size_bytes is not None:
+            try:
+                ref["size_bytes"] = int(size_bytes)
+            except Exception:
+                pass
+        return {k: v for k, v in ref.items() if v is not None}
+
+    def _workspace_child_virtual_path(base_virtual_path: str, child_rel: str) -> str:
+        base0 = str(base_virtual_path or "").strip().strip("/")
+        rel0 = str(child_rel or "").strip().strip("/")
+        if not base0:
+            return rel0
+        if not rel0:
+            return base0
+        return f"{base0}/{rel0}"
+
+    def _parse_extensions(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            items = value
+        elif isinstance(value, tuple):
+            items = list(value)
+        else:
+            items = str(value).replace("\n", ",").split(",")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            text = str(item or "").strip().lower()
+            if not text:
+                continue
+            if text.startswith("."):
+                text = text[1:]
+            if text and text not in seen:
+                out.append(text)
+                seen.add(text)
+        return out
+
     def _create_read_file_handler(_data: Dict[str, Any]):
         import json
-        from pathlib import Path
 
         def handler(input_data: Any) -> Dict[str, Any]:
             payload = input_data if isinstance(input_data, dict) else {}
@@ -336,9 +426,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("read_file requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path = Path(file_path).expanduser()
-            if not path.is_absolute():
-                path = Path.cwd() / path
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_file")
 
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
@@ -358,23 +446,22 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             if lower_name.endswith(".json"):
                 try:
-                    return {"content": json.loads(text)}
+                    return {"content": json.loads(text), "file_path": virtual_path}
                 except Exception as e:
                     raise ValueError(f"Invalid JSON in '{file_path}': {e}") from e
 
             if looks_like_json:
                 try:
-                    return {"content": json.loads(text)}
+                    return {"content": json.loads(text), "file_path": virtual_path}
                 except Exception:
                     pass
 
-            return {"content": text}
+            return {"content": text, "file_path": virtual_path}
 
         return handler
 
     def _create_write_file_handler(_data: Dict[str, Any]):
         import json
-        from pathlib import Path
 
         def handler(input_data: Any) -> Dict[str, Any]:
             payload = input_data if isinstance(input_data, dict) else {}
@@ -383,9 +470,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("write_file requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path = Path(file_path).expanduser()
-            if not path.is_absolute():
-                path = Path.cwd() / path
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_file")
 
             raw_content = payload.get("content")
 
@@ -411,7 +496,348 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
 
-            return {"bytes": len(text.encode("utf-8")), "file_path": str(path)}
+            return {"bytes": len(text.encode("utf-8")), "file_path": virtual_path}
+
+        return handler
+
+    def _create_read_pdf_handler(_data: Dict[str, Any]):
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_path = payload.get("file_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("read_pdf requires a non-empty 'file_path' input.")
+
+            file_path = raw_path.strip()
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_pdf")
+
+            if not path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            if not path.is_file():
+                raise ValueError(f"Not a file: {file_path}")
+            if path.suffix.lower() != ".pdf":
+                raise ValueError("read_pdf requires a .pdf file path.")
+
+            from abstractruntime.documents import extract_pdf_text
+
+            result = extract_pdf_text(
+                path,
+                page_start=payload.get("page_start"),
+                page_end=payload.get("page_end"),
+                max_chars=payload.get("max_chars"),
+            )
+            return {
+                "content": result.content,
+                "pages": result.pages,
+                "processed_pages": result.processed_pages,
+                "metadata": result.metadata,
+                "warnings": result.warnings,
+                "truncated": result.truncated,
+                "content_type": "application/pdf",
+                "file_path": virtual_path,
+            }
+
+        return handler
+
+    def _create_write_pdf_handler(_data: Dict[str, Any]):
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_path = payload.get("file_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("write_pdf requires a non-empty 'file_path' input.")
+
+            file_path = raw_path.strip()
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_pdf")
+            if path.suffix.lower() != ".pdf":
+                raise ValueError("write_pdf requires a .pdf file path.")
+
+            from abstractruntime.documents import render_pdf_bytes
+
+            title = payload.get("title")
+            pdf_title = title.strip() if isinstance(title, str) and title.strip() else None
+            pdf_bytes, metadata = render_pdf_bytes(payload.get("content"), title=pdf_title)
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(pdf_bytes)
+
+            return {
+                **metadata,
+                "file_path": virtual_path,
+            }
+
+        return handler
+
+    def _create_list_folder_files_handler(_data: Dict[str, Any]):
+        from abstractcore.tools.abstractignore import AbstractIgnore
+        from abstractcore.utils.file_filters import file_matches_filters, guess_file_family
+        from pathlib import Path
+        import os
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_path = payload.get("folder_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("list_folder_files requires a non-empty 'folder_path' input.")
+
+            folder_path = raw_path.strip()
+            folder, virtual_folder = _resolve_user_file_path(payload, folder_path, operation="list_folder_files")
+            if not folder.exists():
+                raise FileNotFoundError(f"Folder not found: {folder_path}")
+            if not folder.is_dir():
+                raise ValueError(f"Not a folder: {folder_path}")
+
+            recursive = bool(payload.get("recursive", False))
+            include_directories = bool(payload.get("include_directories", False))
+            family = str(payload.get("family") or "any").strip().lower() or "any"
+            extensions = _parse_extensions(payload.get("extensions"))
+            limit_raw = payload.get("limit", 500)
+            try:
+                limit = max(1, min(int(limit_raw), 5000))
+            except Exception:
+                limit = 500
+            max_depth_raw = payload.get("max_depth", 0)
+            try:
+                max_depth = max(0, int(max_depth_raw))
+            except Exception:
+                max_depth = 0
+
+            ignore = AbstractIgnore.for_path(folder)
+            files: list[str] = []
+            entries: list[Dict[str, Any]] = []
+            truncated = False
+
+            for dirpath, dirnames, filenames in os.walk(folder):
+                current = Path(dirpath)
+                rel_dir = current.relative_to(folder).as_posix() if current != folder else ""
+                depth = 0 if not rel_dir else len([part for part in rel_dir.split("/") if part])
+
+                kept_dirs: list[str] = []
+                for dirname in dirnames:
+                    candidate = current / dirname
+                    if ignore is not None and ignore.is_ignored(candidate, is_dir=True):
+                        continue
+                    if max_depth > 0 and depth + 1 > max_depth:
+                        continue
+                    kept_dirs.append(dirname)
+                    if include_directories:
+                        rel_child = candidate.relative_to(folder).as_posix()
+                        entries.append(
+                            {
+                                "path": _workspace_child_virtual_path(virtual_folder, rel_child),
+                                "name": candidate.name,
+                                "kind": "folder",
+                                "family": "folder",
+                            }
+                        )
+                        if len(entries) >= limit:
+                            truncated = True
+                            break
+                dirnames[:] = kept_dirs if recursive else []
+                if truncated:
+                    break
+
+                for filename in filenames:
+                    candidate = current / filename
+                    if ignore is not None and ignore.is_ignored(candidate, is_dir=False):
+                        continue
+                    if not file_matches_filters(candidate, family=family, extensions=extensions):
+                        continue
+                    rel_child = candidate.relative_to(folder).as_posix()
+                    virtual_child = _workspace_child_virtual_path(virtual_folder, rel_child)
+                    files.append(virtual_child)
+                    entry: Dict[str, Any] = {
+                        "path": virtual_child,
+                        "name": candidate.name,
+                        "kind": "file",
+                        "family": guess_file_family(candidate),
+                    }
+                    try:
+                        entry["size_bytes"] = int(candidate.stat().st_size)
+                    except Exception:
+                        pass
+                    entries.append(entry)
+                    if len(entries) >= limit:
+                        truncated = True
+                        break
+                if truncated or not recursive:
+                    break
+
+            return {
+                "files": files,
+                "entries": entries,
+                "count": len(files),
+                "truncated": truncated,
+                "folder_path": virtual_folder,
+            }
+
+        return handler
+
+    def _create_import_workspace_file_handler(_data: Dict[str, Any]):
+        import hashlib
+        import mimetypes
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            store = _artifact_store_from_payload(payload)
+            if store is None:
+                raise ValueError("import_workspace_file requires a runtime artifact store.")
+            raw_path = payload.get("file_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("import_workspace_file requires a non-empty 'file_path' input.")
+            path, virtual_path = _resolve_user_file_path(payload, raw_path.strip(), operation="import_workspace_file")
+            if not path.exists():
+                raise FileNotFoundError(f"File not found: {raw_path}")
+            if not path.is_file():
+                raise ValueError(f"Not a file: {raw_path}")
+            content = path.read_bytes()
+            filename = path.name
+            content_type = str(payload.get("content_type") or "").strip().lower()
+            if not content_type:
+                guessed, _enc = mimetypes.guess_type(filename)
+                content_type = str(guessed or "application/octet-stream")
+            session_id = str(payload.get("_runtime_session_id") or "").strip()
+            run_id = str(payload.get("_runtime_run_id") or "").strip() or None
+            tags: Dict[str, str] = {
+                "kind": "run_input",
+                "target": "server",
+                "source": "workspace",
+                "path": virtual_path,
+                "filename": filename,
+                "modality": str(payload.get("modality") or ""),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            if session_id:
+                tags["session_id"] = session_id
+            meta = store.store(bytes(content), content_type=content_type, run_id=run_id, tags=tags)
+            ref = _runtime_artifact_ref(meta)
+            return {
+                "artifact": ref,
+                "artifact_ref": ref,
+                "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
+                "content_type": str(getattr(meta, "content_type", "") or "") or content_type,
+                "size_bytes": int(getattr(meta, "size_bytes", 0) or 0),
+                "source_path": virtual_path,
+            }
+
+        return handler
+
+    def _create_export_artifact_handler(_data: Dict[str, Any]):
+        import hashlib
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            store = _artifact_store_from_payload(payload)
+            if store is None:
+                raise ValueError("export_artifact requires a runtime artifact store.")
+            artifact_id = _artifact_id_from_value(payload.get("artifact"))
+            if not artifact_id:
+                raise ValueError("export_artifact requires an artifact input.")
+            destination = payload.get("file_path")
+            if not isinstance(destination, str) or not destination.strip():
+                raise ValueError("export_artifact requires a non-empty 'file_path' input.")
+            artifact = store.load(artifact_id)
+            if artifact is None:
+                raise FileNotFoundError(f"Artifact not found: {artifact_id}")
+            path, virtual_path = _resolve_user_file_path(payload, destination.strip(), operation="export_artifact")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(bytes(artifact.content or b""))
+            return {
+                "artifact_id": artifact_id,
+                "file_path": virtual_path,
+                "bytes": len(artifact.content or b""),
+                "sha256": hashlib.sha256(bytes(artifact.content or b"")).hexdigest(),
+                "content_type": str(getattr(artifact.metadata, "content_type", "") or ""),
+            }
+
+        return handler
+
+    def _create_read_artifact_handler(_data: Dict[str, Any]):
+        import base64
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            from abstractcore.utils.file_filters import guess_file_family
+
+            payload = input_data if isinstance(input_data, dict) else {}
+            store = _artifact_store_from_payload(payload)
+            if store is None:
+                raise ValueError("read_artifact requires a runtime artifact store.")
+            artifact_id = _artifact_id_from_value(payload.get("artifact"))
+            if not artifact_id:
+                raise ValueError("read_artifact requires an artifact input.")
+            artifact = store.load(artifact_id)
+            if artifact is None:
+                raise FileNotFoundError(f"Artifact not found: {artifact_id}")
+
+            meta = artifact.metadata
+            tags = dict(getattr(meta, "tags", None) or {})
+            filename = str(tags.get("filename") or "").strip()
+            source_path = str(tags.get("path") or tags.get("source_path") or "").strip()
+            content_type = str(getattr(meta, "content_type", "") or "").strip().lower()
+            content_family = guess_file_family(filename or source_path or artifact_id)
+            warnings: list[str] = []
+            truncated = False
+            text_value = ""
+            json_value: Any = None
+            base64_value = ""
+            content_value: Any = None
+            is_binary = False
+            raw = bytes(artifact.content or b"")
+
+            max_text_bytes = 262144
+            max_binary_bytes = 131072
+            if content_type == "application/json" or content_family == "json":
+                try:
+                    text_candidate = raw.decode("utf-8")
+                    json_value = json.loads(text_candidate)
+                    text_value = text_candidate
+                    content_value = json_value
+                except Exception as exc:
+                    warnings.append(f"JSON projection failed: {exc}")
+            if content_value is None and (content_type.startswith("text/") or content_family in {"text", "code"}):
+                try:
+                    text_value = raw.decode("utf-8")
+                    content_value = text_value
+                except Exception as exc:
+                    warnings.append(f"UTF-8 text projection failed: {exc}")
+                    is_binary = True
+            if content_value is None and not is_binary:
+                try:
+                    text_value = raw.decode("utf-8")
+                    if len(raw) <= max_text_bytes:
+                        content_value = text_value
+                    else:
+                        content_value = text_value[:max_text_bytes]
+                        truncated = True
+                        warnings.append("#TRUNCATION: text projection truncated to 262144 bytes.")
+                except Exception:
+                    is_binary = True
+            if is_binary or content_value is None:
+                is_binary = True
+                if len(raw) > max_binary_bytes:
+                    base64_value = base64.b64encode(raw[:max_binary_bytes]).decode("ascii")
+                    truncated = True
+                    warnings.append("#TRUNCATION: binary projection truncated to 131072 bytes before base64 encoding.")
+                else:
+                    base64_value = base64.b64encode(raw).decode("ascii")
+                content_value = {"encoding": "base64", "data": base64_value}
+
+            ref = _runtime_artifact_ref(meta)
+            return {
+                "artifact": ref,
+                "artifact_ref": ref,
+                "artifact_id": artifact_id,
+                "content_type": content_type or "application/octet-stream",
+                "content_family": content_family,
+                "size_bytes": int(getattr(meta, "size_bytes", len(raw)) or len(raw)),
+                "filename": filename,
+                "source_path": source_path,
+                "content": content_value,
+                "text": text_value,
+                "json": json_value,
+                "binary_base64": base64_value,
+                "is_binary": is_binary,
+                "warnings": warnings,
+                "truncated": truncated,
+            }
 
         return handler
 
@@ -1411,6 +1837,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_generate_image_handler(data, effect_config)
         if effect_type in {"edit_image", "image_to_image"}:
             return _create_edit_image_handler(data, effect_config)
+        if effect_type in {"upscale_image", "image_upscale"}:
+            return _create_upscale_image_handler(data, effect_config)
         if effect_type in {"generate_video", "text_to_video"}:
             return _create_generate_video_handler(data, effect_config)
         if effect_type == "image_to_video":
@@ -1591,6 +2019,31 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         except Exception:
             return None
 
+    def _coerce_upscale_resolution(value: Any) -> Optional[Any]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            lowered = text.lower()
+            if lowered.endswith("x"):
+                try:
+                    scale = float(lowered[:-1])
+                except Exception:
+                    return None
+                return text if scale > 0 else None
+            try:
+                parsed = int(float(text))
+            except Exception:
+                return None
+            return parsed if parsed > 0 else None
+        try:
+            parsed = int(float(value))
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+
     def _coerce_float(value: Any) -> Optional[float]:
         if value is None or isinstance(value, bool):
             return None
@@ -1612,6 +2065,56 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if isinstance(config, dict) and key in config and config.get(key) not in (None, ""):
                 return config.get(key)
         return default
+
+    def _normalize_generation_count(value: Any) -> Optional[int]:
+        count = _coerce_int(value)
+        if count is None or count < 1:
+            return None
+        return count
+
+    def _normalize_seed_list(value: Any) -> Optional[list[int]]:
+        if value is None:
+            return None
+        parsed = value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = [part.strip() for part in text.split(",")]
+        if not isinstance(parsed, list):
+            return None
+        seeds: list[int] = []
+        for item in parsed:
+            seed = _coerce_int(item)
+            if seed is None:
+                return None
+            seeds.append(seed)
+        return seeds or None
+
+    def _normalize_lora_adapters(value: Any) -> Optional[list[Dict[str, Any]]]:
+        if value is None:
+            return None
+        parsed = value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return None
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if not isinstance(parsed, list):
+            return None
+        adapters: list[Dict[str, Any]] = []
+        for item in parsed:
+            if isinstance(item, dict) and item:
+                adapters.append(dict(item))
+        return adapters or None
 
     def _image_media_item(value: Any, *, role: str) -> Any:
         if isinstance(value, dict):
@@ -1649,6 +2152,20 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
             if guidance is not None:
                 output_spec["guidance_scale"] = guidance
+            guidance_2 = _coerce_float(_input_or_config(payload, config, "guidance_2", "guidance2", "guidanceTwo"))
+            if guidance_2 is not None:
+                output_spec["guidance_2"] = guidance_2
+            count = _normalize_generation_count(_input_or_config(payload, config, "count", "n"))
+            if count is not None:
+                output_spec["count"] = count
+            seeds = _normalize_seed_list(_input_or_config(payload, config, "seeds"))
+            if seeds is not None:
+                output_spec["seeds"] = seeds
+            lora_adapters = _normalize_lora_adapters(
+                _input_or_config(payload, config, "lora_adapters", "loraAdapters")
+            )
+            if lora_adapters is not None:
+                output_spec["lora_adapters"] = lora_adapters
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:
                 output_spec["extra"] = dict(extra)
@@ -1691,9 +2208,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
             if guidance is not None:
                 output_spec["guidance_scale"] = guidance
+            guidance_2 = _coerce_float(_input_or_config(payload, config, "guidance_2", "guidance2", "guidanceTwo"))
+            if guidance_2 is not None:
+                output_spec["guidance_2"] = guidance_2
             strength = _coerce_float(_input_or_config(payload, config, "strength"))
             if strength is not None:
                 output_spec["strength"] = strength
+            count = _normalize_generation_count(_input_or_config(payload, config, "count", "n"))
+            if count is not None:
+                output_spec["count"] = count
+            seeds = _normalize_seed_list(_input_or_config(payload, config, "seeds"))
+            if seeds is not None:
+                output_spec["seeds"] = seeds
+            lora_adapters = _normalize_lora_adapters(
+                _input_or_config(payload, config, "lora_adapters", "loraAdapters")
+            )
+            if lora_adapters is not None:
+                output_spec["lora_adapters"] = lora_adapters
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:
                 output_spec["extra"] = dict(extra)
@@ -1744,6 +2275,72 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _create_upscale_image_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            fmt = str(_input_or_config(payload, config, "format", "response_format", default="png") or "png").strip().lower() or "png"
+            output_spec: Dict[str, Any] = {"modality": "image", "task": "image_upscale", "format": fmt}
+            for key in ("scale", "output_format"):
+                value = _input_or_config(payload, config, key)
+                if isinstance(value, str) and value.strip():
+                    output_spec[key] = value.strip()
+            resolution = _coerce_upscale_resolution(_input_or_config(payload, config, "resolution"))
+            if resolution is not None:
+                output_spec["resolution"] = resolution
+            for key in ("seed", "quantize"):
+                value = _coerce_int(_input_or_config(payload, config, key))
+                if value is not None:
+                    output_spec[key] = value
+            softness = _coerce_float(_input_or_config(payload, config, "softness"))
+            if softness is not None:
+                output_spec["softness"] = softness
+            if "vae_tiling" in payload or "vaeTiling" in payload or (isinstance(config, dict) and ("vae_tiling" in config or "vaeTiling" in config)):
+                output_spec["vae_tiling"] = _coerce_bool(_input_or_config(payload, config, "vae_tiling", "vaeTiling"))
+            extra = _input_or_config(payload, config, "extra")
+            if isinstance(extra, dict) and extra:
+                output_spec["extra"] = dict(extra)
+            image_provider = _nonempty_str(
+                _input_or_config(payload, config, "image_provider", "imageProvider", "provider_image")
+            )
+            image_model = _nonempty_str(
+                _input_or_config(payload, config, "image_model", "imageModel", "model_image")
+            )
+            if image_provider:
+                output_spec["provider"] = image_provider
+            if image_model:
+                output_spec["model"] = image_model
+
+            source_ref = _input_or_config(
+                payload,
+                config,
+                "image_artifact",
+                "source_image",
+                "sourceImage",
+                "input_image",
+                "inputImage",
+                "image",
+                "artifact",
+                "file_path",
+                "filePath",
+                "source",
+            )
+            media = []
+            source_item = _image_media_item(source_ref, role="source")
+            if source_item:
+                media.append(source_item)
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": str(_input_or_config(payload, config, "prompt", default="") or ""),
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "media": media,
+                "output": output_spec,
+            }
+            return {"image_artifact": None, "artifact_ref": None, "artifact_id": "", "success": None, "_pending_effect": pending}
+
+        return handler
+
     def _create_generate_video_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data: Any):
             payload = _dict_input(input_data)
@@ -1764,6 +2361,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
             if guidance is not None:
                 output_spec["guidance_scale"] = guidance
+            guidance_2 = _coerce_float(_input_or_config(payload, config, "guidance_2", "guidance2", "guidanceTwo"))
+            if guidance_2 is not None:
+                output_spec["guidance_2"] = guidance_2
+            count = _normalize_generation_count(_input_or_config(payload, config, "count", "n"))
+            if count is not None:
+                output_spec["count"] = count
+            seeds = _normalize_seed_list(_input_or_config(payload, config, "seeds"))
+            if seeds is not None:
+                output_spec["seeds"] = seeds
+            flow_shift = _coerce_float(_input_or_config(payload, config, "flow_shift", "flowShift"))
+            if flow_shift is not None:
+                output_spec["flow_shift"] = flow_shift
+            lora_adapters = _normalize_lora_adapters(
+                _input_or_config(payload, config, "lora_adapters", "loraAdapters")
+            )
+            if lora_adapters is not None:
+                output_spec["lora_adapters"] = lora_adapters
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:
                 output_spec["extra"] = dict(extra)
@@ -1807,6 +2421,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             guidance = _coerce_float(_input_or_config(payload, config, "guidance_scale", "guidanceScale"))
             if guidance is not None:
                 output_spec["guidance_scale"] = guidance
+            guidance_2 = _coerce_float(_input_or_config(payload, config, "guidance_2", "guidance2", "guidanceTwo"))
+            if guidance_2 is not None:
+                output_spec["guidance_2"] = guidance_2
+            count = _normalize_generation_count(_input_or_config(payload, config, "count", "n"))
+            if count is not None:
+                output_spec["count"] = count
+            seeds = _normalize_seed_list(_input_or_config(payload, config, "seeds"))
+            if seeds is not None:
+                output_spec["seeds"] = seeds
+            flow_shift = _coerce_float(_input_or_config(payload, config, "flow_shift", "flowShift"))
+            if flow_shift is not None:
+                output_spec["flow_shift"] = flow_shift
+            lora_adapters = _normalize_lora_adapters(
+                _input_or_config(payload, config, "lora_adapters", "loraAdapters")
+            )
+            if lora_adapters is not None:
+                output_spec["lora_adapters"] = lora_adapters
             extra = _input_or_config(payload, config, "extra")
             if isinstance(extra, dict) and extra:
                 output_spec["extra"] = dict(extra)
@@ -2141,7 +2772,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
     def _create_answer_user_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data):
-            message = input_data.get("message", "") if isinstance(input_data, dict) else str(input_data or "")
+            raw_message = input_data.get("message", "") if isinstance(input_data, dict) else input_data
+            message = "" if raw_message is None else str(raw_message)
             raw_level = input_data.get("level") if isinstance(input_data, dict) else None
             level = str(raw_level).strip().lower() if isinstance(raw_level, str) else ""
             if level == "warn":
@@ -2511,6 +3143,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     if raw_key in input_data:
                         mem_cfg[raw_key] = input_data.get(raw_key)
 
+            response_schema = None
+            if isinstance(input_data, dict) and ("resp_schema" in input_data or "response_schema" in input_data):
+                response_schema = _normalize_response_schema(
+                    input_data.get("resp_schema")
+                    if "resp_schema" in input_data
+                    else input_data.get("response_schema")
+                )
+
+            def _attach_response_schema(pending_effect: Dict[str, Any]) -> None:
+                if not isinstance(response_schema, dict) or not response_schema:
+                    return
+                pending_effect["response_schema"] = response_schema
+                # Name is optional; AbstractRuntime will fall back to a safe default.
+                pending_effect["response_schema_name"] = "LLM_StructuredOutput"
+                if structured_output_fallback_default:
+                    pending_effect["structured_output_fallback"] = True
+
             if not provider and not model:
                 pending_auto: Dict[str, Any] = {
                     "type": "llm_call",
@@ -2523,6 +3172,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 }
                 if output_specified:
                     pending_auto["output"] = output_request
+                _attach_response_schema(pending_auto)
                 return {
                     "response": "",
                     "_pending_effect": pending_auto,
@@ -2540,19 +3190,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 }
                 if output_specified:
                     pending_missing["output"] = output_request
+                _attach_response_schema(pending_missing)
                 return {
                     "response": "[LLM Call: incomplete provider/model override]",
                     "_pending_effect": pending_missing,
                     "error": "Provider and model must both be set, or both left blank for Gateway/Core defaults",
                 }
-
-            response_schema = None
-            if isinstance(input_data, dict) and ("resp_schema" in input_data or "response_schema" in input_data):
-                response_schema = _normalize_response_schema(
-                    input_data.get("resp_schema")
-                    if "resp_schema" in input_data
-                    else input_data.get("response_schema")
-                )
 
             pending: Dict[str, Any] = {
                 "type": "llm_call",
@@ -2569,12 +3212,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 pending["output"] = output_request
             if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
                 pending["max_input_tokens"] = int(max_input_tokens_value)
-            if isinstance(response_schema, dict) and response_schema:
-                pending["response_schema"] = response_schema
-                # Name is optional; AbstractRuntime will fall back to a safe default.
-                pending["response_schema_name"] = "LLM_StructuredOutput"
-                if structured_output_fallback_default:
-                    pending["structured_output_fallback"] = True
+            _attach_response_schema(pending)
 
             # Optional explicit context pin: if provided, context.messages overrides inherited run context messages.
             context_msgs: list[Dict[str, Any]] = []
@@ -3249,6 +3887,24 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if type_str == "write_file":
             return _create_write_file_handler(data)
 
+        if type_str == "read_pdf":
+            return _create_read_pdf_handler(data)
+
+        if type_str == "write_pdf":
+            return _create_write_pdf_handler(data)
+
+        if type_str == "list_folder_files":
+            return _create_list_folder_files_handler(data)
+
+        if type_str == "import_workspace_file":
+            return _create_import_workspace_file_handler(data)
+
+        if type_str == "export_artifact":
+            return _create_export_artifact_handler(data)
+
+        if type_str == "read_artifact":
+            return _create_read_artifact_handler(data)
+
         # Sequence / Parallel are scheduler nodes compiled specially by `compile_flow`.
         # Their runtime semantics are handled in `abstractflow.adapters.control_adapter`.
         if type_str in ("sequence", "parallel"):
@@ -3655,4 +4311,5 @@ def _create_data_aware_handler(
         setattr(wrapped_handler, "_last_node_output", node_output)
         return result
 
+    setattr(wrapped_handler, "_visual_node_type", node_type)
     return wrapped_handler

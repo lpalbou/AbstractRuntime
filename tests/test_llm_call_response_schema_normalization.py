@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional
 
+import pytest
+
 from abstractruntime import Effect, EffectType, RunState
 from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
 
@@ -140,6 +142,32 @@ def test_llm_call_response_schema_string_json_is_parsed() -> None:
     assert _model_field_names(response_model) == {"answer"}
 
 
+def test_llm_call_response_schema_required_default_stays_required() -> None:
+    llm = _CaptureLLM()
+    handler = make_llm_call_handler(llm=llm)
+
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {"answer": {"type": "string", "default": "fallback"}},
+        "required": ["answer"],
+    }
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", vars={})
+    effect = Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi", "response_schema": schema})
+
+    outcome = handler(run, effect, None)
+    assert outcome.status == "completed"
+
+    assert isinstance(llm.kwargs, dict)
+    response_model = llm.kwargs.get("params", {}).get("response_model")
+    assert response_model is not None
+    fields = getattr(response_model, "model_fields", None)
+    if isinstance(fields, dict) and hasattr(fields["answer"], "is_required"):
+        assert fields["answer"].is_required()
+    with pytest.raises(Exception):
+        response_model()
+
+
 def test_llm_call_response_schema_non_object_schema_still_errors() -> None:
     llm = _CaptureLLM()
     handler = make_llm_call_handler(llm=llm)
@@ -151,4 +179,3 @@ def test_llm_call_response_schema_non_object_schema_still_errors() -> None:
     assert outcome.status == "failed"
     assert isinstance(outcome.error, str)
     assert "response_schema must be a JSON schema object" in outcome.error
-

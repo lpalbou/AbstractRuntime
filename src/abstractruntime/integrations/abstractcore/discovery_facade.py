@@ -10,6 +10,7 @@ Scope:
 - audio/voice/TTS/STT catalogs
 - music provider/model catalogs
 - vision provider catalogs
+- vision adapter catalogs
 - cached vision model snapshots
 
 Non-goals:
@@ -33,6 +34,7 @@ _DISCOVERY_METHODS = (
     "list_music_providers",
     "list_music_models",
     "list_vision_provider_models",
+    "list_vision_adapters",
     "list_cached_vision_models",
 )
 
@@ -140,6 +142,18 @@ class AbstractCoreDiscoveryClient(Protocol):
     def list_cached_vision_models(
         self,
         *,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def list_vision_adapters(
+        self,
+        *,
+        model: Optional[str] = None,
         task: Optional[str] = None,
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
@@ -357,6 +371,25 @@ class AbstractCoreDiscoveryFacade:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._client.list_cached_vision_models(
+            task=task,
+            base_url=base_url,
+            provider_api_key=provider_api_key,
+            provider=provider,
+            **kwargs,
+        )
+
+    def list_vision_adapters(
+        self,
+        *,
+        model: Optional[str] = None,
+        task: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._client.list_vision_adapters(
+            model=model,
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,

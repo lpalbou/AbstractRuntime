@@ -14,14 +14,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .core.models import RunState
-from .storage.artifacts import ArtifactStore
+from .storage.artifacts import ArtifactMetadata, ArtifactStore
 from .storage.offloading import DEFAULT_MAX_INLINE_BYTES, offload_large_values
 
 RUN_HISTORY_BUNDLE_VERSION_V1 = 1
+RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT = 500
+
+_RUNTIME_METADATA_ENVELOPE_RE = re.compile(
+    r"^\s*<runtime_metadata>\s*(.*?)\s*</runtime_metadata>\s*",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _utc_now_iso() -> str:
@@ -48,9 +55,28 @@ def _sha256_hex(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _extract_user_prompt_from_input(raw: Any) -> str:
+def _split_runtime_metadata_envelope(text: Any) -> Tuple[str, Optional[Dict[str, Any]]]:
+    if not isinstance(text, str):
+        return ("", None)
+    raw = text.strip()
+    if not raw:
+        return ("", None)
+    match = _RUNTIME_METADATA_ENVELOPE_RE.match(raw)
+    if not match:
+        return (raw, None)
+    metadata: Optional[Dict[str, Any]] = None
+    try:
+        parsed = json.loads(match.group(1).strip())
+        if isinstance(parsed, dict):
+            metadata = dict(parsed)
+    except Exception:
+        metadata = None
+    return (raw[match.end() :].strip(), metadata)
+
+
+def _extract_user_prompt_from_input(raw: Any) -> Tuple[str, Optional[Dict[str, Any]]]:
     if not isinstance(raw, dict):
-        return ""
+        return ("", None)
     input_data = raw.get("input_data") if isinstance(raw.get("input_data"), dict) else raw
 
     candidates = [
@@ -64,11 +90,13 @@ def _extract_user_prompt_from_input(raw: Any) -> str:
 
     for c in candidates:
         if isinstance(c, str) and c.strip():
-            return c.strip()
+            return _split_runtime_metadata_envelope(c)
 
     msgs = ctx.get("messages") if isinstance(ctx, dict) else None
     if isinstance(msgs, list):
-        for m in msgs:
+        # `context.messages` is a conversation history. The replay prompt for a
+        # root run is the latest user turn, not the first user turn in the session.
+        for m in reversed(msgs):
             if not isinstance(m, dict):
                 continue
             role = str(m.get("role") or "").strip()
@@ -76,8 +104,17 @@ def _extract_user_prompt_from_input(raw: Any) -> str:
                 continue
             content = m.get("content")
             if isinstance(content, str) and content.strip():
-                return content.strip()
-    return ""
+                prompt, runtime_metadata = _split_runtime_metadata_envelope(content)
+                msg_meta = m.get("runtime_metadata") if isinstance(m.get("runtime_metadata"), dict) else None
+                if msg_meta is None:
+                    meta0 = m.get("metadata") if isinstance(m.get("metadata"), dict) else None
+                    msg_meta = meta0.get("runtime_metadata") if isinstance(meta0, dict) and isinstance(meta0.get("runtime_metadata"), dict) else None
+                if isinstance(msg_meta, dict):
+                    merged = dict(runtime_metadata or {})
+                    merged.update({str(k): v for k, v in msg_meta.items() if v is not None and str(v).strip()})
+                    runtime_metadata = merged or None
+                return (prompt, runtime_metadata)
+    return ("", None)
 
 
 def _extract_context_attachments_from_input(raw: Any) -> List[Dict[str, Any]]:
@@ -394,12 +431,110 @@ def _list_descendant_run_ids(*, run_store: Any, root_run_id: str, limit: int = 5
     return out
 
 
+def _replay_safe(value: Any, *, depth: int = 0) -> Any:
+    """Return a bounded JSON-safe value for replay metadata.
+
+    Artifact descriptors are already redacted by Runtime, but replay bundles should stay
+    compact because they are fetched with ledgers and session context.
+    """
+
+    if depth > 5:
+        return "#TRUNCATION: replay metadata depth limit"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:2000] + "#TRUNCATION" if len(value) > 2000 else value
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        out = [_replay_safe(item, depth=depth + 1) for item in items[:40]]
+        if len(items) > 40:
+            out.append({"truncated_items": len(items) - 40})
+        return out
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for key, raw in list(value.items())[:80]:
+            if key is None:
+                continue
+            out[str(key)] = _replay_safe(raw, depth=depth + 1)
+        if len(value) > 80:
+            out["truncated_keys"] = len(value) - 80
+        return out
+    return str(value)
+
+
+def _artifact_replay_summary(meta: ArtifactMetadata) -> Dict[str, Any]:
+    descriptor = meta.descriptor.to_dict() if getattr(meta, "descriptor", None) is not None else {}
+    access = meta.access.to_dict() if getattr(meta, "access", None) is not None else {}
+    return {
+        "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
+        "blob_id": getattr(meta, "blob_id", None),
+        "run_id": getattr(meta, "run_id", None),
+        "content_type": str(getattr(meta, "content_type", "") or ""),
+        "size_bytes": int(getattr(meta, "size_bytes", 0) or 0),
+        "created_at": getattr(meta, "created_at", None),
+        "tags": _replay_safe(getattr(meta, "tags", None) or {}),
+        "descriptor": _replay_safe(descriptor),
+        "metadata": _replay_safe(getattr(meta, "metadata", None) or {}),
+        "access": _replay_safe(access),
+    }
+
+
+def _list_replay_artifacts_for_run(
+    *,
+    artifact_store: Optional[ArtifactStore],
+    run_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    if artifact_store is None:
+        return []
+    rid = str(run_id or "").strip()
+    if not rid:
+        return []
+    try:
+        metas = artifact_store.list_by_run(rid)
+    except Exception:
+        metas = []
+    if not isinstance(metas, list):
+        return []
+    metas0 = [m for m in metas if isinstance(m, ArtifactMetadata)]
+    metas0.sort(key=lambda m: (str(m.created_at or ""), str(m.artifact_id or "")))
+    max_items = max(0, int(limit or 0))
+    if max_items > 0:
+        metas0 = metas0[:max_items]
+    return [_artifact_replay_summary(m) for m in metas0]
+
+
+def _list_replay_artifacts_for_runs(
+    *,
+    artifact_store: Optional[ArtifactStore],
+    run_ids: Iterable[str],
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    if artifact_store is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    max_items = max(0, int(limit or 0))
+    for rid in run_ids:
+        for item in _list_replay_artifacts_for_run(artifact_store=artifact_store, run_id=rid, limit=max_items or RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT):
+            aid = str(item.get("artifact_id") or "").strip()
+            if not aid or aid in seen:
+                continue
+            seen.add(aid)
+            out.append(item)
+            if max_items > 0 and len(out) >= max_items:
+                return out
+    return out
+
+
 def _best_effort_session_turns(
     *,
     run_store: Any,
     ledger_store: Any,
+    artifact_store: Optional[ArtifactStore],
     session_id: str,
     limit: int,
+    until_ms: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Best-effort session turn list (root runs only).
 
@@ -466,21 +601,62 @@ def _best_effort_session_turns(
     if not sid:
         return []
     list_runs = getattr(run_store, "list_runs", None)
-    if not callable(list_runs):
-        return []
-
-    # RunStore has no session_id index today; we scan a bounded window and filter.
-    try:
-        candidates = list_runs(limit=max(1000, int(limit) * 5))
-    except Exception:
-        candidates = []
 
     roots: List[RunState] = []
-    for r in candidates or []:
+
+    # Prefer the lightweight run index when available. It is the only current path
+    # that can query by session without scanning unrelated runs.
+    list_run_index = getattr(run_store, "list_run_index", None)
+    if callable(list_run_index):
+        try:
+            rows = list_run_index(session_id=sid, root_only=True, limit=max(1000, int(limit) * 5))
+        except Exception:
+            rows = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            rid0 = str(row.get("run_id") or "").strip()
+            if not rid0:
+                continue
+            try:
+                loaded = run_store.load(rid0)
+            except Exception:
+                loaded = None
+            if loaded is None:
+                continue
+            roots.append(loaded)
+
+    if not roots and callable(list_runs):
+        # Compatibility fallback for older stores.
+        try:
+            candidates = list_runs(limit=max(1000, int(limit) * 5))
+        except Exception:
+            candidates = []
+
+        for r in candidates or []:
+            try:
+                rid = str(getattr(r, "run_id", "") or "").strip()
+                if not rid:
+                    continue
+                if str(getattr(r, "session_id", "") or "").strip() != sid:
+                    continue
+                if str(getattr(r, "parent_run_id", "") or "").strip():
+                    continue
+                roots.append(r)
+            except Exception:
+                continue
+
+    if not roots:
+        return []
+
+    roots0: List[RunState] = []
+    seen_roots: set[str] = set()
+    for r in roots:
         try:
             rid = str(getattr(r, "run_id", "") or "").strip()
-            if not rid:
+            if not rid or rid in seen_roots:
                 continue
+            seen_roots.add(rid)
             if str(getattr(r, "session_id", "") or "").strip() != sid:
                 continue
             if str(getattr(r, "parent_run_id", "") or "").strip():
@@ -490,9 +666,10 @@ def _best_effort_session_turns(
             kind = _classify_turn(workflow_id=wid, vars_obj=vars_obj)
             if kind == "internal":
                 continue
-            roots.append(r)
+            roots0.append(r)
         except Exception:
             continue
+    roots = roots0
 
     # Prefer chat-like turns when present (avoid scheduled wrapper runs polluting chat replay).
     if roots:
@@ -505,14 +682,21 @@ def _best_effort_session_turns(
         if chat_roots:
             roots = chat_roots
 
+    if until_ms is not None:
+        bounded_roots: List[RunState] = []
+        for r in roots:
+            created_ms = _parse_iso_ms(getattr(r, "created_at", None))
+            if created_ms is None:
+                created_ms = _parse_iso_ms(getattr(r, "updated_at", None))
+            if created_ms is None or created_ms <= until_ms:
+                bounded_roots.append(r)
+        roots = bounded_roots
+
     def _ts_key(r: Any) -> float:
         for k in ("created_at", "updated_at"):
-            try:
-                v = getattr(r, k, None)
-                if isinstance(v, str) and v.strip():
-                    return float(datetime.fromisoformat(v).timestamp())
-            except Exception:
-                continue
+            ms = _parse_iso_ms(getattr(r, k, None))
+            if ms is not None:
+                return float(ms)
         return 0.0
 
     roots.sort(key=_ts_key)
@@ -542,7 +726,7 @@ def _best_effort_session_turns(
         input_data = dict(vars_obj) if isinstance(vars_obj, dict) else {}
         wid = str(getattr(r, "workflow_id", "") or "").strip()
         kind = _classify_turn(workflow_id=wid, vars_obj=vars_obj)
-        prompt = _extract_user_prompt_from_input(input_data)
+        prompt, prompt_metadata = _extract_user_prompt_from_input(input_data)
         attachments = _extract_context_attachments_from_input(input_data)
         status = getattr(getattr(r, "status", None), "value", None) or str(getattr(r, "status", "") or "")
         created_at = str(getattr(r, "created_at", "") or "").strip() or None
@@ -567,7 +751,14 @@ def _best_effort_session_turns(
                 all_records.extend(_ledger_for(rid2))
             stats = _extract_repl_stats_from_ledger(all_records)
         except Exception:
+            run_ids = [rid]
             stats = None
+
+        artifacts = _list_replay_artifacts_for_runs(
+            artifact_store=artifact_store,
+            run_ids=run_ids,
+            limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
+        )
 
         out.append(
             {
@@ -578,10 +769,12 @@ def _best_effort_session_turns(
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "prompt": prompt or None,
+                "prompt_metadata": prompt_metadata,
                 "attachments": attachments,
                 "answer": answer or None,
                 "answer_meta": answer_meta,
                 "stats": stats,
+                "artifacts": artifacts,
             }
         )
     return out
@@ -707,6 +900,7 @@ def export_run_history_bundle(
             "cursor_start": int(cursor_start),
             "cursor_end": int(cursor_start + len(window) - 1) if window else int(cursor_start - 1),
             "items": items_with_cursor,
+            "artifacts": _list_replay_artifacts_for_run(artifact_store=artifact_store, run_id=rid2, limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT),
         }
         _append_timeline_items(run_id2=rid2, items_with_cursor=items_with_cursor)
 
@@ -715,13 +909,18 @@ def export_run_history_bundle(
     if include_session:
         sid = str(getattr(run, "session_id", "") or "").strip()
         if sid:
+            session_until_ms = _parse_iso_ms(getattr(run, "created_at", None))
+            if session_until_ms is None:
+                session_until_ms = _parse_iso_ms(getattr(run, "updated_at", None))
             session_section = {
                 "session_id": sid,
                 "turns": _best_effort_session_turns(
                     run_store=run_store,
                     ledger_store=ledger_store,
+                    artifact_store=artifact_store,
                     session_id=sid,
                     limit=max(1, int(session_turn_limit) if int(session_turn_limit) > 0 else 200),
+                    until_ms=session_until_ms,
                 ),
             }
 

@@ -282,6 +282,13 @@ def string_length(inputs: Dict[str, Any]) -> int:
     return len(str(inputs.get("text", "")))
 
 
+def string_is_empty(inputs: Dict[str, Any]) -> bool:
+    """Return True if `text` is exactly empty."""
+    text_raw = inputs.get("text")
+    text = "" if text_raw is None else str(text_raw)
+    return text == ""
+
+
 def string_contains(inputs: Dict[str, Any]) -> bool:
     """Return True if `text` contains `pattern` (substring match)."""
     pattern_raw = inputs.get("pattern")
@@ -524,6 +531,66 @@ def data_make_object(inputs: Dict[str, Any]) -> Dict[str, Any]:
             continue
         out[k] = v
     return out
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _add_json_schema_fields(base: Any, additions: Any) -> Dict[str, Any]:
+    base_root = _json_object(base)
+    additions_root = _json_object(additions)
+    if not base_root:
+        return additions_root
+    if not additions_root:
+        return base_root
+
+    base_props = _json_object(base_root.get("properties"))
+    additions_props = _json_object(additions_root.get("properties"))
+    properties = dict(base_props)
+    added_names: set[str] = set()
+    for name, spec in additions_props.items():
+        if not isinstance(name, str) or not name or name in properties:
+            continue
+        properties[name] = spec
+        added_names.add(name)
+
+    required: list[str] = []
+    seen_required: set[str] = set()
+    for item in base_root.get("required") or []:
+        if not isinstance(item, str) or not item.strip() or item in seen_required:
+            continue
+        seen_required.add(item)
+        required.append(item)
+    for item in additions_root.get("required") or []:
+        if not isinstance(item, str) or not item.strip() or item in seen_required or item not in added_names:
+            continue
+        seen_required.add(item)
+        required.append(item)
+
+    merged = dict(base_root)
+    merged["type"] = base_root.get("type") or additions_root.get("type") or "object"
+    merged["properties"] = properties
+    for defs_key in ("$defs", "definitions"):
+        base_defs = _json_object(base_root.get(defs_key))
+        additions_defs = _json_object(additions_root.get(defs_key))
+        if not additions_defs:
+            continue
+        next_defs = dict(base_defs)
+        for name, spec in additions_defs.items():
+            if name not in next_defs:
+                next_defs[name] = spec
+        merged[defs_key] = next_defs
+    if required:
+        merged["required"] = required
+    else:
+        merged.pop("required", None)
+    return merged
+
+
+def data_edit_json_schema(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Add authored fields to a JSON Schema object without modifying existing fields."""
+    return {"schema": _add_json_schema_fields(inputs.get("schema"), inputs.get("_literalValue"))}
 
 
 def data_make_context(inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -1375,6 +1442,7 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "trim": string_trim,
     "substring": string_substring,
     "length": string_length,
+    "is_empty_string": string_is_empty,
     "contains": string_contains,
     "replace": string_replace,
     # Control
@@ -1388,6 +1456,7 @@ BUILTIN_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "set": data_set,
     "merge": data_merge,
     "make_object": data_make_object,
+    "edit_json_schema": data_edit_json_schema,
     "make_context": data_make_context,
     "add_message": data_add_message,
     "make_meta": data_make_meta,

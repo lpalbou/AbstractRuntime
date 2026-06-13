@@ -9,13 +9,17 @@ Tests cover:
 """
 
 import json
+import io
 import tempfile
+import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from abstractruntime import (
     Artifact,
+    ArtifactDescriptor,
     ArtifactMetadata,
     ArtifactStore,
     InMemoryArtifactStore,
@@ -35,6 +39,17 @@ from abstractruntime import (
     InMemoryLedgerStore,
     create_scheduled_runtime,
 )
+
+
+def _wav_bytes(*, seconds: float = 0.25, sample_rate: int = 8000, channels: int = 1) -> bytes:
+    frames = int(seconds * sample_rate)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\0\0" * frames * channels)
+    return buf.getvalue()
 
 
 # -----------------------------------------------------------------------------
@@ -156,6 +171,19 @@ class TestInMemoryArtifactStore:
         loaded = store.get_metadata(metadata.artifact_id)
         assert loaded.tags["source"] == "llm"
         assert loaded.tags["model"] == "gpt-4"
+
+    def test_code_artifact_descriptor_from_mime_and_tags(self):
+        """Code artifacts are classified separately from generic text."""
+        store = InMemoryArtifactStore()
+
+        metadata = store.store(
+            b"print('hello')\n",
+            content_type="text/x-python",
+            tags={"kind": "source_code"},
+        )
+
+        assert metadata.descriptor.render_kind == "code"
+        assert metadata.descriptor.semantic_kind == "code"
 
 
 # -----------------------------------------------------------------------------
@@ -667,6 +695,203 @@ class TestArtifactSearch:
             meta = store.store(b"x", run_id="run-1", content_type="text/plain", tags={"k": "v"})
             res = store.search(run_id="run-1", tags={"k": "v"})
             assert [m.artifact_id for m in res] == [meta.artifact_id]
+
+
+class TestArtifactDescriptorAndCatalog:
+    """Tests for ArtifactDescriptorV1-compatible metadata and catalog behavior."""
+
+    def test_store_descriptor_metadata_and_access_in_memory(self):
+        store = InMemoryArtifactStore()
+
+        meta = store.store(
+            b"voice",
+            content_type="audio/wav",
+            run_id="run-1",
+            tags={"session_id": "s1", "workflow_id": "wf", "node_id": "node-1"},
+            metadata={"provider": "p", "model": "m"},
+            descriptor={
+                "semantic_kind": "voice",
+                "render_kind": "audio",
+                "generation": {"input_text": "hello"},
+            },
+        )
+
+        assert meta.descriptor.schema_version == 1
+        assert meta.descriptor.semantic_kind == "voice"
+        assert meta.descriptor.render_kind == "audio"
+        assert meta.descriptor.session_id == "s1"
+        assert meta.metadata == {"provider": "p", "model": "m"}
+
+        updated = store.record_access(
+            meta.artifact_id,
+            action="preview",
+            actor_id="actor",
+            session_id="s1",
+            run_id="run-1",
+            at="2026-06-06T00:00:00+00:00",
+        )
+        assert updated is not None
+        assert updated.access.access_count == 1
+        assert updated.access.preview_count == 1
+        assert updated.access.last_action == "preview"
+        assert updated.access.last_actor_id == "actor"
+        stats = store.stats(facets=["semantic_kind"], run_id="run-1")
+        assert stats["total"] == 1
+        assert stats["total_bytes"] == len(b"voice")
+        assert stats["facets"]["semantic_kind"] == {"voice": 1}
+
+    def test_runtime_tags_project_to_descriptor_for_voice_and_music(self):
+        store = InMemoryArtifactStore()
+
+        voice = store.store(b"v", content_type="audio/wav", tags={"modality": "voice", "task": "tts"})
+        music = store.store(b"m", content_type="audio/wav", tags={"modality": "music", "task": "music_generation"})
+
+        assert voice.descriptor.render_kind == "audio"
+        assert voice.descriptor.semantic_kind == "voice"
+        assert voice.descriptor.classification_source == "runtime_tags"
+        assert music.descriptor.render_kind == "audio"
+        assert music.descriptor.semantic_kind == "music"
+
+    def test_file_store_persists_descriptor_access_and_catalog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            meta = store.store(
+                _wav_bytes(seconds=0.5, sample_rate=8000),
+                content_type="audio/wav",
+                run_id="run-music",
+                tags={
+                    "session_id": "s-music",
+                    "workflow_id": "wf_music",
+                    "node_id": "call",
+                    "modality": "music",
+                    "task": "music_generation",
+                },
+                metadata={"provider": "abstractmusic", "model": "acestep"},
+            )
+            store.record_access(meta.artifact_id, action="download", session_id="s-music")
+
+            restarted = FileArtifactStore(tmpdir)
+            loaded = restarted.get_metadata(meta.artifact_id)
+
+            assert loaded is not None
+            assert loaded.descriptor.semantic_kind == "music"
+            assert loaded.descriptor.render_kind == "audio"
+            assert loaded.descriptor.session_id == "s-music"
+            assert loaded.descriptor.workflow_id == "wf_music"
+            assert loaded.descriptor.media["duration_s"] == pytest.approx(0.5)
+            assert loaded.descriptor.media["sample_rate"] == 8000
+            assert loaded.access.access_count == 1
+            assert loaded.access.download_count == 1
+            assert loaded.metadata["provider"] == "abstractmusic"
+
+            by_kind = restarted.search(semantic_kind="music", session_id="s-music", limit=0)
+            assert [m.artifact_id for m in by_kind] == [meta.artifact_id]
+            assert restarted.count(semantic_kind="music") == 1
+            assert restarted.facet_counts("semantic_kind") == {"music": 1}
+            stats = restarted.stats(facets=["semantic_kind", "render_kind"], semantic_kind="music", session_id="s-music")
+            assert stats["total"] == 1
+            assert stats["total_bytes"] == meta.size_bytes
+            assert stats["facets"]["semantic_kind"] == {"music": 1}
+            assert stats["facets"]["render_kind"] == {"audio": 1}
+            assert stats["source"] == "artifact_catalog"
+
+    def test_update_metadata_reindexes_file_catalog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            meta = store.store(b"x", content_type="text/plain", tags={"session_id": "s1"})
+
+            updated = store.update_metadata(
+                meta.artifact_id,
+                descriptor=ArtifactDescriptor(
+                    semantic_kind="evidence",
+                    render_kind="text",
+                    workflow_id="wf",
+                    node_id="n1",
+                ),
+                metadata={"source_url": "https://example.test"},
+            )
+
+            assert updated is not None
+            assert updated.descriptor.semantic_kind == "evidence"
+            assert store.search(semantic_kind="evidence")[0].artifact_id == meta.artifact_id
+            assert store.search(workflow_id="wf")[0].artifact_id == meta.artifact_id
+            assert store.get_metadata(meta.artifact_id).metadata["source_url"] == "https://example.test"
+
+    def test_descriptor_update_preserves_existing_media_facts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            meta = store.store(
+                _wav_bytes(seconds=0.25, sample_rate=8000),
+                content_type="audio/wav",
+                tags={"modality": "music", "task": "music_generation"},
+            )
+
+            updated = store.update_metadata(
+                meta.artifact_id,
+                descriptor={"workflow_id": "wf-music", "node_id": "call"},
+            )
+
+            assert updated is not None
+            assert updated.descriptor.workflow_id == "wf-music"
+            assert updated.descriptor.media["duration_s"] == pytest.approx(0.25)
+            restarted = FileArtifactStore(tmpdir)
+            reloaded = restarted.get_metadata(meta.artifact_id)
+            assert reloaded is not None
+            assert reloaded.descriptor.media["sample_rate"] == 8000
+            assert restarted.search(workflow_id="wf-music")[0].artifact_id == meta.artifact_id
+
+    def test_file_store_access_updates_are_thread_locked(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = FileArtifactStore(tmpdir)
+            meta = store.store(b"x", content_type="text/plain", run_id="run-1")
+
+            def touch(i: int) -> None:
+                updated = store.record_access(
+                    meta.artifact_id,
+                    action="preview",
+                    actor_id=f"actor-{i}",
+                    run_id="run-1",
+                )
+                assert updated is not None
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(touch, range(20)))
+
+            loaded = store.get_metadata(meta.artifact_id)
+            assert loaded is not None
+            assert loaded.access.access_count == 20
+            assert loaded.access.preview_count == 20
+            assert store.count(run_id="run-1") == 1
+
+    def test_legacy_metadata_file_projects_descriptor_on_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            refs = base / "artifacts" / "refs"
+            blobs = base / "artifacts" / "blobs"
+            refs.mkdir(parents=True)
+            blobs.mkdir(parents=True)
+            content = b"legacy"
+            blob_id = "abc123"
+            (blobs / f"{blob_id}.bin").write_bytes(content)
+            legacy = {
+                "artifact_id": "legacy1",
+                "blob_id": blob_id,
+                "content_type": "audio/wav",
+                "size_bytes": len(content),
+                "created_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "run-legacy",
+                "tags": {"modality": "voice", "task": "tts", "session_id": "s-legacy"},
+            }
+            (refs / "legacy1.meta").write_text(json.dumps(legacy), encoding="utf-8")
+
+            store = FileArtifactStore(tmpdir)
+            meta = store.get_metadata("legacy1")
+
+            assert meta is not None
+            assert meta.descriptor.semantic_kind == "voice"
+            assert meta.descriptor.render_kind == "audio"
+            assert meta.descriptor.session_id == "s-legacy"
+            assert store.search(semantic_kind="voice")[0].artifact_id == "legacy1"
 
 
 class TestArtifactDeleteByRun:

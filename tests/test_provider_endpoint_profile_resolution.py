@@ -57,7 +57,7 @@ def test_llm_call_resolves_gateway_endpoint_profile_and_redacts_key_from_observa
             "prompt": "hello",
             "provider": "endpoint:office-vllm",
             "model": "qwen/qwen3",
-            "params": {"temperature": 0.2},
+            "params": {"temperature": 0.2, "max_output_tokens": 2048, "max_input_tokens": 8192},
         },
         result_key="llm",
     )
@@ -88,6 +88,8 @@ def test_llm_call_resolves_gateway_endpoint_profile_and_redacts_key_from_observa
     assert isinstance(runtime_obs, dict)
     observed_params = runtime_obs["llm_generate_kwargs"]["params"]
     assert observed_params["provider_api_key"] == "[redacted]"
+    assert observed_params["max_output_tokens"] == 2048
+    assert observed_params["max_input_tokens"] == 8192
     assert "secret-key" not in str(runtime_obs)
 
 
@@ -218,3 +220,64 @@ def test_multilocal_client_attaches_scoped_core_capability_defaults_to_clients(m
 
     routed_client = client._get_client("openai-compatible", "remote-model")
     assert getattr(routed_client._llm, "_abstractcore_capability_defaults")["input.voice"]["model"] == "large-v3"
+
+
+def test_runtime_applies_task_specific_media_capability_defaults() -> None:
+    from abstractruntime.integrations.abstractcore import llm_client as llm_client_mod
+
+    defaults = {
+        "output.image.text_to_image": {
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/z-image-turbo-8bit",
+        },
+        "output.image.image_to_image": {
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/qwen-image-edit-2511-4bit",
+        },
+        "output.image.image_upscale": {
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/seedvr2-3b-8bit",
+            "options": {"resolution": "2x", "softness": 0.25},
+        },
+        "output.video.text_to_video": {
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
+        },
+        "output.video.image_to_video": {
+            "provider": "mlx-gen",
+            "model": "AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
+        },
+    }
+    normalized = llm_client_mod._normalize_core_capability_defaults(defaults)
+
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "image", "task": "image_generation"},
+        normalized,
+    )["model"] == "AbstractFramework/z-image-turbo-8bit"
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "image", "task": "image_edit"},
+        normalized,
+    )["model"] == "AbstractFramework/qwen-image-edit-2511-4bit"
+    upscale = llm_client_mod._with_capability_default_route(
+        {"modality": "image", "task": "image_upscale"},
+        normalized,
+    )
+    assert upscale["model"] == "AbstractFramework/seedvr2-3b-8bit"
+    assert upscale["resolution"] == "2x"
+    assert upscale["softness"] == 0.25
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "video", "task": "text_to_video"},
+        normalized,
+    )["model"] == "AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit"
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "video", "task": "image_to_video"},
+        normalized,
+    )["model"] == "AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit"
+
+    explicit = llm_client_mod._with_capability_default_route(
+        {"modality": "image", "task": "image_upscale", "provider": "custom", "model": "explicit"},
+        normalized,
+    )
+    assert explicit["provider"] == "custom"
+    assert explicit["model"] == "explicit"
+    assert "resolution" not in explicit

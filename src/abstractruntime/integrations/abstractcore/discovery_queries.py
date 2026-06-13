@@ -14,7 +14,10 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-_VISION_TASKS = {"text_to_image", "image_to_image", "text_to_video", "image_to_video"}
+_VISION_TASKS = {"text_to_image", "image_to_image", "image_upscale", "text_to_video", "image_to_video"}
+_VISION_TASKS_MESSAGE = "task must be one of: text_to_image, image_to_image, image_upscale, text_to_video, image_to_video"
+_VISION_ADAPTER_TASKS = {"text_to_image", "image_to_image", "text_to_video", "image_to_video"}
+_VISION_ADAPTER_TASKS_MESSAGE = "task must be one of: text_to_image, image_to_image, text_to_video, image_to_video"
 
 
 def _embedding_provider_details(provider: Optional[str] = None) -> list[Dict[str, Any]]:
@@ -1273,7 +1276,7 @@ def local_list_vision_provider_models(
                 },
                 source="abstractvision.local",
                 available=False,
-                error="task must be one of: text_to_image, image_to_image, text_to_video, image_to_video",
+                error=_VISION_TASKS_MESSAGE,
             ),
             provider=provider,
             providers_only=providers_only,
@@ -1343,7 +1346,7 @@ def local_list_cached_vision_models(
             {"models": [], "task": task_value},
             source="abstractvision.local_cache",
             available=False,
-            error="task must be one of: text_to_image, image_to_image, text_to_video, image_to_video",
+            error=_VISION_TASKS_MESSAGE,
         )
     try:
         from abstractcore.capabilities.vision_catalog import get_local_vision_cache_catalog
@@ -1384,6 +1387,77 @@ def local_list_cached_vision_models(
     )
 
 
+def local_list_vision_adapters(
+    *,
+    model: Optional[str] = None,
+    task: Optional[str] = None,
+    base_url: Optional[str] = None,
+    provider_api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Dict[str, Any]:
+    task_value = str(task or "").strip() or None
+    if task_value and task_value not in _VISION_ADAPTER_TASKS:
+        return _with_status(
+            {
+                "model": str(model or "").strip() or None,
+                "task": task_value,
+                "provider": str(provider or "").strip() or None,
+                "adapters": [],
+                "count": 0,
+            },
+            source="abstractvision.local",
+            available=False,
+            error=_VISION_ADAPTER_TASKS_MESSAGE,
+        )
+
+    provider_value = str(provider or "").strip() or None
+    model_value = str(model or "").strip() or None
+    adapters: list[Dict[str, Any]] = []
+    backend_id: Optional[str] = None
+    catalog_error: Optional[str] = None
+    try:
+        vision = _runtime_capability_registry(
+            vision_base_url=base_url,
+            vision_api_key=provider_api_key,
+        ).vision
+        backend_id = getattr(vision, "backend_id", None)
+        raw = list(
+            vision.list_provider_adapters(
+                model=model_value,
+                task=task_value,
+                provider=provider_value,
+            )
+            or []
+        )
+        for item in raw:
+            if isinstance(item, dict):
+                adapters.append(dict(item))
+    except Exception as exc:
+        catalog_error = str(exc)
+
+    if provider_value:
+        provider_lc = provider_value.lower()
+        adapters = [
+            item
+            for item in adapters
+            if str(item.get("provider") or item.get("raw", {}).get("provider") or "").strip().lower() == provider_lc
+        ]
+
+    return _with_status(
+        {
+            "backend_id": backend_id,
+            "model": model_value,
+            "task": task_value,
+            "provider": provider_value,
+            "adapters": adapters,
+            "count": len(adapters),
+        },
+        source="abstractvision.local",
+        available=bool(adapters),
+        error=catalog_error,
+    )
+
+
 __all__ = [
     "local_get_model_capabilities",
     "local_list_embedding_models",
@@ -1395,5 +1469,6 @@ __all__ = [
     "local_list_provider_models",
     "local_list_stt_models",
     "local_list_tts_models",
+    "local_list_vision_adapters",
     "local_list_vision_provider_models",
 ]

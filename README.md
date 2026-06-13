@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.26 • **Python:** 3.10+
+**Version:** 0.4.28 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -32,12 +32,17 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.31 or newer with remote provider,
-tool, media, vision, voice, audio, and music integration, plus the
+The base install includes AbstractCore 2.13.37 or newer with remote provider,
+tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
 profile or another package-specific local extra.
+
+VisualFlow PDF document nodes use permissive dependencies in Runtime's base
+install: `Read PDF` extracts text and metadata with `pypdf`, and `Write PDF`
+renders text or Markdown-style report content to real PDF bytes with
+`reportlab`.
 
 Native Python hardware profiles add local inferencer stacks:
 
@@ -115,6 +120,13 @@ Drivers + distribution:
   `thinking` through Runtime effects. Provider Models nodes can apply Core
   `capability_route` filters so run-time model discovery matches Gateway/Flow
   authoring.
+- VisualFlow image/video nodes and Runtime media helpers preserve task-specific
+  Core media controls, including `count`/`n`, `seeds`, ordered
+  `lora_adapters`, and video `flow_shift`, while keeping provider/model/task
+  truth in AbstractCore and AbstractVision.
+- VisualFlow structured LLM/Agent results preserve `response` as text and expose
+  the schema-conformant object on `data`, so Break Object and Switch can consume
+  fields without reparsing the response string.
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Runtime-owned integrations:

@@ -3,6 +3,17 @@ from __future__ import annotations
 from abstractruntime.visualflow_compiler.visual.builtins import get_builtin_handler
 
 
+def test_string_is_empty_builtin() -> None:
+    is_empty = get_builtin_handler("is_empty_string")
+    assert is_empty is not None
+
+    assert is_empty({"text": ""}) is True
+    assert is_empty({}) is True
+    assert is_empty({"text": None}) is True
+    assert is_empty({"text": " "}) is False
+    assert is_empty({"text": "hello"}) is False
+
+
 def test_string_contains_builtin() -> None:
     contains = get_builtin_handler("contains")
     assert contains is not None
@@ -30,4 +41,3 @@ def test_string_replace_builtin_modes() -> None:
 
     # Numeric best-effort support: replace first N occurrences.
     assert replace({"text": "a-b-c-d", "pattern": "-", "replacement": "_", "mode": "2"}) == "a_b_c-d"
-

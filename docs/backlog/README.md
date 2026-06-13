@@ -14,7 +14,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 - Planned: 5
 - Proposed: 3
-- Completed: 30
+- Completed: 33
 - Deprecated: 13
 - Recurrent: 0
 
@@ -70,6 +70,9 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0037 | `completed/0037_visualflow_generate_music_node_compiler_parity.md` |
 | 0039 | `completed/0039_runtime_music_structure_prompt_bool_contract.md` |
 | 0040 | `completed/0040_task_agnostic_local_residency_listing.md` |
+| 0041 | `completed/0041_runtime_hardware_extras_avoid_nonpermissive_document_stacks.md` |
+| 0042 | `completed/0042_core_vision_upscale_and_parameter_surface.md` |
+| 0043 | `completed/0043_runtime_vision_adapter_and_batch_surface.md` |
 
 ## Planned
 

@@ -1,7 +1,7 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-05-23
-> Version: 0.4.24
+> Updated: 2026-06-13
+> Version: 0.4.28
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -38,7 +38,7 @@ The boundary is intentionally narrow:
 - Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches.
 - Hosts should use Runtime-owned AbstractCore facades for discovery snapshots, prompt-cache/model-residency control operations, and durable run-scoped media/comms child runs instead of reaching through private runtime attachments or importing Core internals directly.
 - Local execution can use richer AbstractCore capability plugins. Remote and hybrid execution map the common media cases to AbstractCore Server endpoints and OpenAI-compatible content arrays, while hybrid keeps tool execution local.
-- Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool/media capability integration, and the MCP worker entry point, but not backend extras such as LanceDB or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add `abstractruntime[apple]` or `abstractruntime[gpu]`.
+- Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool capability integration, Runtime-owned permissive PDF read/write support, and the MCP worker entry point, but not backend extras such as LanceDB, Core media document stacks, or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add `abstractruntime[apple]` or `abstractruntime[gpu]`.
 - Remote and hybrid clients use explicit Core server URLs and auth headers supplied by the host. Runtime does not read Gateway auth environment variables for provider/model/auth decisions or treat Gateway bearer tokens as Core server/provider credentials.
 
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
@@ -213,6 +213,10 @@ The scheduler is an in-process driver loop that resumes due waits and can delive
 AbstractRuntime includes a compiler and a portable bundle format:
 - VisualFlow compiler: `src/abstractruntime/visualflow_compiler/*` (VisualFlow JSON -> `WorkflowSpec`)
 - Multi-entry VisualFlow authoring routes are lowered into internal `join_exec` and `path_mux` nodes when a target has multiple incoming `exec-in` edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See `workflow-bundles.md` for the concrete metadata shape.
+- VisualFlow document nodes include `read_pdf` and `write_pdf`. They use
+  workspace-scoped paths, keep PDF bytes out of checkpoints, and store only
+  JSON-safe extracted text, metadata, hashes, content types, and file paths in
+  node outputs.
 - WorkflowBundles (`.flow`): `src/abstractruntime/workflow_bundle/*` (manifest + flows + assets)
   - pack/unpack helpers: `pack_workflow_bundle(...)`, `open_workflow_bundle(...)`
 

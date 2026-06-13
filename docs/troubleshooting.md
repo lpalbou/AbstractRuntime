@@ -20,7 +20,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.13.31`.
+- The current AbstractCore integration expects `abstractcore>=2.13.37`.
 
 Verify:
 
@@ -83,7 +83,7 @@ Docs:
 ## Local media residency returns `model_residency_unsupported`
 
 Symptom:
-- A local `MODEL_RESIDENCY` load for `image_generation`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, or `music_generation` returns `ok=false` with
+- A local `MODEL_RESIDENCY` load for `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, or `music_generation` returns `ok=false` with
   `code="model_residency_unsupported"`.
 
 Meaning:

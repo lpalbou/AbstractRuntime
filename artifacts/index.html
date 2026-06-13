@@ -10,13 +10,9 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/troubleshooting/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/artifacts/">
       
       
-        <link rel="prev" href="../integrations/abstractcore/">
-      
-      
-        <link rel="next" href="../tools-comms/">
       
       
         
@@ -27,7 +23,7 @@
     
     
       
-        <title>Troubleshooting - AbstractRuntime</title>
+        <title>Runtime artifacts - AbstractRuntime</title>
       
     
     
@@ -68,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#troubleshooting" class="md-skip">
+        <a href="#runtime-artifacts" class="md-skip">
           Skip to content
         </a>
       
@@ -104,7 +100,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Troubleshooting
+              Runtime artifacts
             
           </span>
         </div>
@@ -356,37 +352,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -402,103 +371,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#importing-abstractruntimeintegrationsabstractcore-fails" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Importing abstractruntime.integrations.abstractcore fails
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#a-run-is-waiting-and-does-not-continue" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A run is waiting and does not continue
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#generated-media-is-missing-or-too-large-for-run-state" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Generated media is missing or too large for run state
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#remote-media-calls-use-the-wrong-model-or-fail-with-input-media-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Remote media calls use the wrong model or fail with input-media errors
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#local-media-residency-returns-model_residency_unsupported" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Local media residency returns model_residency_unsupported
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prompt-cache-behavior-is-not-reused-for-generated-media" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prompt-cache behavior is not reused for generated media
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MCP worker command is not found
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -967,10 +839,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#importing-abstractruntimeintegrationsabstractcore-fails" class="md-nav__link">
+  <a href="#file-like-vocabulary-boundary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Importing abstractruntime.integrations.abstractcore fails
+        File-like vocabulary boundary
       
     </span>
   </a>
@@ -978,10 +850,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#a-run-is-waiting-and-does-not-continue" class="md-nav__link">
+  <a href="#artifact-identity" class="md-nav__link">
     <span class="md-ellipsis">
       
-        A run is waiting and does not continue
+        Artifact identity
       
     </span>
   </a>
@@ -989,10 +861,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#generated-media-is-missing-or-too-large-for-run-state" class="md-nav__link">
+  <a href="#stored-metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Generated media is missing or too large for run state
+        Stored metadata
       
     </span>
   </a>
@@ -1000,10 +872,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#remote-media-calls-use-the-wrong-model-or-fail-with-input-media-errors" class="md-nav__link">
+  <a href="#generated-media-provenance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Remote media calls use the wrong model or fail with input-media errors
+        Generated media provenance
       
     </span>
   </a>
@@ -1011,10 +883,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#local-media-residency-returns-model_residency_unsupported" class="md-nav__link">
+  <a href="#catalog-and-search" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Local media residency returns model_residency_unsupported
+        Catalog and search
       
     </span>
   </a>
@@ -1022,10 +894,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prompt-cache-behavior-is-not-reused-for-generated-media" class="md-nav__link">
+  <a href="#gateway-and-observer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prompt-cache behavior is not reused for generated media
+        Gateway and Observer
       
     </span>
   </a>
@@ -1033,10 +905,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
+  <a href="#retrieval-boundaries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MCP worker command is not found
+        Retrieval boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
       
     </span>
   </a>
@@ -1063,98 +946,131 @@
   
 
 
-<h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
-<p>This page is for symptom-oriented fixes. For concepts and limits, see <code>faq.md</code>; for setup and examples, see
-<code>getting-started.md</code>.</p>
-<h2 id="importing-abstractruntimeintegrationsabstractcore-fails">Importing <code>abstractruntime.integrations.abstractcore</code> fails<a class="headerlink" href="#importing-abstractruntimeintegrationsabstractcore-fails" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- Importing the AbstractCore integration raises an <code>ImportError</code> about the required AbstractCore version or missing
-  optional dependencies.</p>
-<p>Checks:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>show<span class="w"> </span>AbstractRuntime<span class="w"> </span>abstractcore
-python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>abstractruntime
+<h1 id="runtime-artifacts">Runtime artifacts<a class="headerlink" href="#runtime-artifacts" title="Permanent link">&para;</a></h1>
+<p>AbstractRuntime stores large payloads as artifacts so run state, ledger records,
+and workflow outputs remain JSON-safe. Artifacts are the durable record for
+files, generated media, tool evidence, exported history bundles, and other
+payloads that should be referenced by id rather than embedded inline.</p>
+<p>The implementation lives in <code>src/abstractruntime/storage/artifacts.py</code>.</p>
+<h2 id="file-like-vocabulary-boundary">File-like vocabulary boundary<a class="headerlink" href="#file-like-vocabulary-boundary" title="Permanent link">&para;</a></h2>
+<p>Runtime artifacts are not the same thing as live filesystem paths:</p>
+<ul>
+<li><code>Artifact</code>: a Runtime-owned durable payload safe to persist, search, reuse,
+  and pass between runs by reference.</li>
+<li><code>Workspace File</code> / <code>Workspace Folder</code>: a server-side path capability under
+  Gateway/runtime workspace policy. These are path values, not durable payloads.</li>
+<li><code>Local File</code> / <code>Local Folder</code>: a client-side intake source. In hosted/browser
+  mode they should be uploaded and normalized into artifacts before durable
+  execution.</li>
+</ul>
+<p>Gateway/Flow product copy may say <code>Server File</code> / <code>Server Folder</code> when users
+choose an origin, but Runtime stays anchored on artifact refs versus
+workspace-scoped paths.</p>
+<h2 id="artifact-identity">Artifact identity<a class="headerlink" href="#artifact-identity" title="Permanent link">&para;</a></h2>
+<p>An artifact has a stable <code>artifact_id</code>, a <code>blob_id</code> for content deduplication
+when the backend supports it, and a <code>run_id</code> scope. JSON state and Gateway APIs
+pass artifacts with refs such as:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;$artifact&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a7050ebc5c8330...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;artifact_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a7050ebc5c8330...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9e19bd6a-ba07-4c2e-86c6-94ec7ca0a373&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;audio/wav&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;size_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5293012</span>
+<span class="p">}</span>
 </code></pre></div>
-<p>Fix:
-- Install or upgrade the base Runtime package. LLM/tools integration, common
-  remote-light multimodal dependencies, and the MCP worker entry point are part
-  of the base install.
-- The current AbstractCore integration expects <code>abstractcore&gt;=2.13.37</code>.</p>
-<p>Verify:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])&quot;</span>
-</code></pre></div>
-<h2 id="a-run-is-waiting-and-does-not-continue">A run is waiting and does not continue<a class="headerlink" href="#a-run-is-waiting-and-does-not-continue" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- <code>Runtime.tick(...)</code> returns <code>status=waiting</code>, and the run stays paused.</p>
-<p>Likely causes:
-- The run is waiting for <code>ASK_USER</code>, <code>WAIT_EVENT</code>, passthrough tools, or tool approval.
-- <code>WAIT_UNTIL</code> needs a driver loop, or a host must call <code>tick(...)</code> again after the due time.</p>
-<p>Fix:
-- For user/event/tool waits, resume with the exact <code>wait_key</code> from <code>state.waiting.wait_key</code>.
-- For time-based waits, use <code>create_scheduled_runtime()</code> or another host driver that periodically ticks due runs.</p>
-<p>Verify:</p>
-<div class="highlight"><pre><span></span><code><span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">run_id</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">wait_key</span> <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span> <span class="k">else</span> <span class="kc">None</span><span class="p">)</span>
-</code></pre></div>
-<h2 id="generated-media-is-missing-or-too-large-for-run-state">Generated media is missing or too large for run state<a class="headerlink" href="#generated-media-is-missing-or-too-large-for-run-state" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- Image, voice, music, or transcription outputs fail, or binary content is not present in <code>RunState.vars</code>.</p>
-<p>Likely causes:
-- Generated binary outputs require a runtime <code>ArtifactStore</code>.
-- Runtime stores generated bytes by artifact reference instead of embedding raw bytes in checkpoints or ledger records.</p>
-<p>Fix:
-- Construct the runtime with an artifact store such as <code>InMemoryArtifactStore</code> or <code>FileArtifactStore</code>.
-- Read <code>artifact_id</code> / <code>artifact_ref</code> from the durable result and load the artifact from the configured store.</p>
-<p>Docs:
-- <code>api.md#artifacts-store-by-reference</code>
-- <code>integrations/abstractcore.md#multimodal-generation</code></p>
-<h2 id="remote-media-calls-use-the-wrong-model-or-fail-with-input-media-errors">Remote media calls use the wrong model or fail with input-media errors<a class="headerlink" href="#remote-media-calls-use-the-wrong-model-or-fail-with-input-media-errors" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- Remote image/TTS/STT calls do not use the expected media model.
-- Remote image generation fails when media is supplied.
-- Remote transcription rejects media that is not a local file or artifact-backed temporary file.</p>
-<p>Fix:
-- Put endpoint-specific routing in the <code>output</code> selector, not in the chat model unless you intend to route chat.
-- Use <code>output.task="image_edit"</code> for image edits with one source image and optional mask.
-- Use exactly one audio media item for remote STT, and make sure it resolves to a local path or artifact-backed file.</p>
-<p>Docs:
-- <code>integrations/abstractcore.md#multimodal-generation</code></p>
-<h2 id="local-media-residency-returns-model_residency_unsupported">Local media residency returns <code>model_residency_unsupported</code><a class="headerlink" href="#local-media-residency-returns-model_residency_unsupported" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- A local <code>MODEL_RESIDENCY</code> load for <code>image_generation</code>, <code>image_upscale</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, or <code>music_generation</code> returns <code>ok=false</code> with
-  <code>code="model_residency_unsupported"</code>.</p>
-<p>Meaning:
-- Runtime is reporting that the current local execution topology cannot truthfully keep that media backend resident for
-  later reuse.</p>
-<p>Fix:
-- Use a configured long-lived AbstractCore server for media residency, then let Runtime relay <code>/acore/models/*</code>.
-- Keep local media warmup optional (<code>required=false</code>) if it is only an optimization.
-- Do not infer loaded state from model defaults, catalogs, downloaded weights, or provider names.</p>
-<p>Docs:
-- <code>integrations/abstractcore.md#prompt-cache-control-plane-and-durable-blocs</code>
-- <code>faq.md#why-can-local-media-residency-return-okfalse-without-failing-the-run</code></p>
-<h2 id="prompt-cache-behavior-is-not-reused-for-generated-media">Prompt-cache behavior is not reused for generated media<a class="headerlink" href="#prompt-cache-behavior-is-not-reused-for-generated-media" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- A workflow-level prompt-cache flag creates session cache keys for text/chat calls, but not for image, voice, music, or
-  transcription output selectors.</p>
-<p>Meaning:
-- Runtime only auto-derives session prompt-cache keys for text/chat calls. Non-text output selectors may still carry an
-  explicit <code>prompt_cache_binding</code>, but Runtime does not invent one.</p>
-<p>Fix:
-- Use <code>params.prompt_cache_binding</code> for durable exact text/chat prefix reuse.
-- Treat generated media calls as separate capability executions unless the selected AbstractCore backend documents a
-  task-specific cache contract.</p>
-<p>Docs:
-- <code>integrations/abstractcore.md#prompt-cache-control-plane-and-durable-blocs</code>
-- <code>faq.md#where-should-cached-session-or-prompt-cache-state-live</code></p>
-<h2 id="mcp-worker-command-is-not-found">MCP worker command is not found<a class="headerlink" href="#mcp-worker-command-is-not-found" title="Permanent link">&para;</a></h2>
-<p>Symptom:
-- <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>
-<p>Fix:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>abstractruntime
-abstractruntime-mcp-worker<span class="w"> </span>--help
-</code></pre></div>
-<p>Docs:
-- <code>mcp-worker.md</code></p>
+<p>The ref is a pointer, not authorization. Hosts such as AbstractGateway are
+responsible for deciding which principal may list or read an artifact.</p>
+<h2 id="stored-metadata">Stored metadata<a class="headerlink" href="#stored-metadata" title="Permanent link">&para;</a></h2>
+<p>Runtime stores two metadata layers:</p>
+<ul>
+<li><code>tags</code>: string fields for compatibility and simple lookups.</li>
+<li><code>metadata</code>: structured JSON for producer-specific details.</li>
+<li><code>descriptor</code>: a Runtime-owned <code>ArtifactDescriptor</code> that normalizes the fields
+  Gateway and Observer should use.</li>
+</ul>
+<p>The descriptor separates display format from semantic meaning:</p>
+<ul>
+<li><code>render_kind</code>: how the artifact should be rendered, such as <code>image</code>, <code>audio</code>,
+  <code>video</code>, <code>markdown</code>, <code>html</code>, <code>json</code>, <code>text</code>, or <code>document</code>.</li>
+<li><code>semantic_kind</code>: what the artifact represents, such as <code>voice</code>, <code>music</code>,
+  <code>sound</code>, <code>transcript</code>, <code>evidence</code>, <code>workflow_snapshot</code>, or <code>image</code>.</li>
+<li><code>classification_source</code>: whether the classification came from the producer,
+  runtime tags, MIME inference, or legacy fallback.</li>
+</ul>
+<p>The descriptor can also carry <code>session_id</code>, <code>workflow_id</code>, <code>node_id</code>, <code>turn_id</code>,
+<code>ledger_cursor</code>, <code>producer</code>, <code>generation</code>, <code>media</code>, <code>source_refs</code>, <code>links</code>,
+<code>security</code>, and action metadata. Producer metadata may be sparse; consumers
+should show missing fields as unavailable rather than guessing.</p>
+<h2 id="generated-media-provenance">Generated media provenance<a class="headerlink" href="#generated-media-provenance" title="Permanent link">&para;</a></h2>
+<p>When generated media is produced through the Runtime AbstractCore integration
+with output selectors, Runtime stores descriptor and metadata alongside the
+bytes. Current generated outputs include image, video, voice/TTS, music, sound
+or audio outputs, and transcription-style text outputs where the host route
+stores a transcript artifact.</p>
+<p>Generated-media descriptors record available producer facts:</p>
+<ul>
+<li>package/capability route, provider, model, backend, and runtime provider/model
+  when they differ;</li>
+<li>prompt or TTS text, requested format, output index, negative prompt, and
+  redacted generation parameters;</li>
+<li>source artifact refs for edit, image-to-video, cloned/reference voice, or
+  other source-media flows when provided;</li>
+<li>measured media facts such as duration, sample rate, dimensions, channels, or
+  frame counts when the store can inspect the bytes.</li>
+</ul>
+<p>Runtime redacts obvious secret fields and bounds large metadata values. It does
+not store raw provider requests as indexed descriptor fields.</p>
+<p>Gateway or package producers that store artifacts outside the main Runtime
+generated-media path should use <code>build_artifact_descriptor_payload(...)</code> from
+<code>abstractruntime.storage.artifacts</code>. That helper applies the Runtime descriptor
+schema, bounded secret-key redaction, and prompt/text sensitivity labels without
+making Gateway invent a parallel descriptor contract.</p>
+<h2 id="catalog-and-search">Catalog and search<a class="headerlink" href="#catalog-and-search" title="Permanent link">&para;</a></h2>
+<p><code>InMemoryArtifactStore</code> and <code>FileArtifactStore</code> support:</p>
+<ul>
+<li><code>store(...)</code>, <code>load(...)</code>, and <code>get_metadata(...)</code>;</li>
+<li><code>update_metadata(...)</code> for descriptor or structured metadata enrichment;</li>
+<li><code>search(...)</code> for bounded pages;</li>
+<li><code>count(...)</code>, <code>facet_counts(...)</code>, and <code>stats(...)</code> for exact totals and
+  filter chips;</li>
+<li><code>record_access(...)</code> for explicit metadata/content/preview/download/export
+  counters.</li>
+</ul>
+<p><code>FileArtifactStore</code> maintains a repairable SQLite catalog for descriptor fields,
+time filters, exact counts, byte totals, and facets. The catalog is an index of
+Runtime-owned artifact metadata; the payload bytes and metadata files remain the
+source of truth.</p>
+<p>Plain <code>load(...)</code> and <code>get_metadata(...)</code> are side-effect free. UI and HTTP
+layers that want access statistics must call <code>record_access(...)</code> or use Gateway
+content routes that label the action.</p>
+<h2 id="gateway-and-observer">Gateway and Observer<a class="headerlink" href="#gateway-and-observer" title="Permanent link">&para;</a></h2>
+<p>AbstractGateway exposes Runtime artifacts through bounded HTTP APIs. Search
+responses include <code>artifact_envelope_v1</code>, which projects Runtime descriptors,
+media facts, access stats, and action links while preserving legacy row fields.
+Gateway only forwards descriptor action links that are relative Gateway/UI
+links; arbitrary external provider URLs should be represented as trace
+availability or Gateway-owned trace records instead.</p>
+<p>AbstractObserver renders Gateway envelopes. It should not infer canonical
+artifact meaning from filenames or raw content except as a visible legacy
+fallback. Use the Runtime tab for artifact inventory and the Observe tab for the
+workflow/ledger narrative.</p>
+<h2 id="retrieval-boundaries">Retrieval boundaries<a class="headerlink" href="#retrieval-boundaries" title="Permanent link">&para;</a></h2>
+<p>Artifact search answers questions about stored files and media by metadata,
+scope, type, time, producer, and links back to runs. It is not a semantic memory
+search system.</p>
+<ul>
+<li>Use the ledger for "what happened in this workflow?"</li>
+<li>Use artifact search for "what files/media exist and how were they produced?"</li>
+<li>Use AbstractMemory/KG retrieval for "what knowledge or relationships were
+  learned?"</li>
+<li>Use Gateway audit/provider links for system-level request traces when the
+  envelope reports them.</li>
+</ul>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<p>Legacy artifacts may only have MIME type and tags. Runtime projects them with
+fallback descriptor fields so clients can still list and preview them, but
+producer-level prompt/model/source provenance is only available for artifacts
+created through descriptor-aware paths.</p>
 
 
 

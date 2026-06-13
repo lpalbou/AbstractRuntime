@@ -1307,7 +1307,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.13.31 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, and the public local vision-cache catalog helper used by Runtime discovery.</p>
+<p>The base install includes AbstractCore 2.13.37 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, and vision adapter discovery plus batch/LoRA media controls.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -1498,9 +1498,9 @@ hello
 </ul>
 <p>For local one-shot subprocess image generation, runtime metadata also records <code>execution_mode="local_one_shot_subprocess"</code>.</p>
 <p>Long-running generated media may expose provider progress callbacks. Runtime injects a transient <code>on_progress</code> callback during <code>LLM_CALL</code> execution and persists each callback as an <code>EMIT_EVENT</code> ledger record named <code>abstract.progress</code>. The callback itself is never stored in the effect payload or run vars.</p>
-<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
-<p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> return:</p>
+<p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>image_upscale</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> return:</p>
 <ul>
 <li><code>code="model_residency_unsupported"</code></li>
 <li><code>requires_long_lived_server=true</code></li>
@@ -1863,6 +1863,16 @@ email and Telegram:</p>
   <code>/v1/vision/*</code> on the configured AbstractCore server. Per-request provider key overrides supplied as <code>api_key</code> /
   <code>provider_api_key</code> become <code>X-AbstractCore-Provider-API-Key</code> headers.</li>
 </ul>
+<p><code>list_provider_models(provider, ...)</code> accepts the legacy <code>input_type</code> and
+<code>output_type</code> filters plus Core's precise <code>capability_route</code> filter. Local mode
+normalizes route filters before calling AbstractCore's provider registry; remote
+mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">models</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_provider_models</span><span class="p">(</span>
+    <span class="s2">&quot;lmstudio&quot;</span><span class="p">,</span>
+    <span class="n">capability_route</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;input.image&quot;</span><span class="p">,</span> <span class="s2">&quot;output.text&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+<span class="n">embeddings</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_provider_models</span><span class="p">(</span><span class="s2">&quot;lmstudio&quot;</span><span class="p">,</span> <span class="n">capability_route</span><span class="o">=</span><span class="s2">&quot;embedding.text&quot;</span><span class="p">)</span>
+</code></pre></div>
 <p>Contract notes:</p>
 <ul>
 <li>This surface is query-oriented. It does not create durable Runtime history on its own.</li>
@@ -1892,6 +1902,11 @@ email and Telegram:</p>
 <span class="n">voices</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_voice_catalog</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">music</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_music_providers</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_music&quot;</span><span class="p">)</span>
 <span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_image&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">upscalers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;image_upscale&quot;</span><span class="p">)</span>
+<span class="n">adapters</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_adapters</span><span class="p">(</span>
+    <span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_video&quot;</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit&quot;</span><span class="p">,</span>
+<span class="p">)</span>
 </code></pre></div>
 <h2 id="durable-run-scoped-media-and-comms-execution">Durable run-scoped media and comms execution<a class="headerlink" href="#durable-run-scoped-media-and-comms-execution" title="Permanent link">&para;</a></h2>
 <p>Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
@@ -1904,6 +1919,7 @@ email and Telegram:</p>
 <li><code>resume_tool_calls(...)</code></li>
 <li><code>generate_image(...)</code></li>
 <li><code>edit_image(...)</code></li>
+<li><code>upscale_image(...)</code></li>
 <li><code>generate_video(...)</code></li>
 <li><code>image_to_video(...)</code></li>
 <li><code>generate_voice(...)</code></li>
@@ -1925,12 +1941,36 @@ email and Telegram:</p>
 <span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">generate_image</span><span class="p">(</span>
     <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
     <span class="n">prompt</span><span class="o">=</span><span class="s2">&quot;A red mug on a white table.&quot;</span><span class="p">,</span>
-    <span class="n">output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AbstractFramework/flux.2-klein-4b-4bit&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">},</span>
+    <span class="n">output</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AbstractFramework/qwen-image-2512-8bit&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">&quot;seeds&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">101</span><span class="p">,</span> <span class="mi">102</span><span class="p">],</span>
+        <span class="s2">&quot;lora_adapters&quot;</span><span class="p">:</span> <span class="p">[</span>
+            <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;pixel-art&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.7</span><span class="p">},</span>
+            <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;cool-grade&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">},</span>
+        <span class="p">],</span>
+    <span class="p">},</span>
 <span class="p">)</span>
 
 <span class="k">assert</span> <span class="n">child</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span>
 <span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">]</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;media_model&quot;</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
+</code></pre></div>
+<p>Image upscaling uses the same durable child-run boundary and Core-owned <code>image_upscale</code> selector:</p>
+<div class="highlight"><pre><span></span><code><span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">upscale_image</span><span class="p">(</span>
+    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
+    <span class="n">media</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;$artifact&quot;</span><span class="p">:</span> <span class="s2">&quot;source-image-artifact-id&quot;</span><span class="p">,</span> <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">},</span>
+    <span class="n">output</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">&quot;resolution&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span>
+    <span class="p">},</span>
+<span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">][</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
 </code></pre></div>
 <p>For video, use the same child-run boundary:</p>
 <div class="highlight"><pre><span></span><code><span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">generate_video</span><span class="p">(</span>
@@ -1938,9 +1978,13 @@ email and Telegram:</p>
     <span class="n">prompt</span><span class="o">=</span><span class="s2">&quot;Glowing data streams converge into a geometric logo.&quot;</span><span class="p">,</span>
     <span class="n">output</span><span class="o">=</span><span class="p">{</span>
         <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;Wan-AI/Wan2.2-TI2V-5B-Diffusers&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit&quot;</span><span class="p">,</span>
         <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;mp4&quot;</span><span class="p">,</span>
         <span class="s2">&quot;num_frames&quot;</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span>
+        <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">&quot;seeds&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">401</span><span class="p">,</span> <span class="mi">402</span><span class="p">],</span>
+        <span class="s2">&quot;flow_shift&quot;</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">,</span>
+        <span class="s2">&quot;lora_adapters&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;documentary-motion&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">}],</span>
     <span class="p">},</span>
 <span class="p">)</span>
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.29] - 2026-06-14
+
+### Changed
+- Raised the AbstractCore dependency floor to `abstractcore>=2.13.38`, so Runtime's base and hardware install profiles depend on the released Core utility surface and synchronized Voice-backed capability floor.
+
 ## [0.4.28] - 2026-06-06
 
 ### Added
@@ -612,7 +617,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.28...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...HEAD
+[0.4.29]: https://github.com/lpalbou/abstractruntime/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/lpalbou/abstractruntime/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/lpalbou/abstractruntime/compare/v0.4.26...v0.4.27
 [0.4.26]: https://github.com/lpalbou/abstractruntime/compare/v0.4.25...v0.4.26

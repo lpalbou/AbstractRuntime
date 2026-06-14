@@ -3,10 +3,10 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.28
+- Version: 0.4.29
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.13.37`
+- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.13.38`
 - Install profiles: base `abstractruntime` is remote-light with MCP, generated media routing, and Runtime-owned permissive PDF read/write nodes; `abstractruntime[apple]` and `abstractruntime[gpu]` add local inferencer stacks.
 - Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned config should be translated into explicit Runtime inputs or Runtime-owned env names. Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM client; Runtime treats it as an optional resolver hook, injects transient provider/base URL/key params for the call, and redacts secret-like params from persisted observability.
 

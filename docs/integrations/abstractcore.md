@@ -95,11 +95,16 @@ print(state.output)
 ```json
 {
   "prompt": "...",
+  "request": {
+    "text": "...",
+    "messages": [{"role": "user", "content": "..."}],
+    "media": ["path/or/artifact-ref"]
+  },
   "text": "optional text alias, useful for TTS",
   "messages": [{"role": "user", "content": "..."}],
   "system_prompt": "...",
   "media": ["path/or/artifact-ref"],
-  "output": {"modality": "text|image|video|voice|music", "task": "optional"},
+  "output": {"modality": "text|image|video|voice|sound|music", "task": "optional"},
   "tools": [{"name": "...", "description": "...", "parameters": {...}}],
   "params": {
     "temperature": 0.0,
@@ -110,6 +115,8 @@ print(state.output)
 ```
 
 Notes:
+- `request` is the lower-level Core semantic request shape. Legacy top-level `prompt`, `text`,
+  `messages`, and `media` fields still work and normalize to the same Core request contract.
 - Remote mode supports per-request dynamic routing by forwarding `params.base_url` to the AbstractCore server request body (`src/abstractruntime/integrations/abstractcore/llm_client.py`).
 - Remote mode sends per-request provider key overrides from `params.api_key` / `params.provider_api_key` as `X-AbstractCore-Provider-API-Key` headers. Server/master auth should be supplied separately through the client's configured headers, usually `Authorization: Bearer <ABSTRACTCORE_SERVER_API_KEY>`.
 - Local mode treats `base_url` and provider API keys as provider-construction concerns. `MultiLocalAbstractCoreLLMClient` can construct a per-call client when a host injects `params.base_url` plus `params.api_key` or `params.provider_api_key` (for example from a Gateway provider endpoint profile), then strips those fields before calling the provider.
@@ -247,6 +254,11 @@ Generated binary media requires a runtime `ArtifactStore` and is stored there. T
   }
 }
 ```
+
+LLM-call results that flow through the Core request/output path now also expose a replay-safe
+`metadata._runtime_resolved_action` summary. `history_bundle` collects those into top-level
+`resolved_actions`, so another client can replay which capability family, task, normalized
+request/output summary, and effective route actually ran.
 
 Media-only normalized results now distinguish orchestration identity from the actual media backend:
 
@@ -729,12 +741,17 @@ Public durable entry points:
 - `generate_video(...)`
 - `image_to_video(...)`
 - `generate_voice(...)`
+- `stream_voice(...)`
 - `generate_music(...)`
 - `transcribe_audio(...)`
 - `send_email(...)`
 - `send_telegram_message(...)`
 
-These helpers create child runs under an existing parent run and execute the real `LLM_CALL` or `TOOL_CALLS` through Runtime rather than doing external work in host/controller code.
+These helpers create child runs under an existing parent run and execute the real
+`LLM_CALL`, `TOOL_CALLS`, or stream finalization through Runtime rather than
+doing external work in host/controller code. `stream_voice(...)` yields TTS
+stream events for progressive playback and completes the child run with the
+final audio artifact when the stream succeeds.
 
 Example:
 

@@ -531,6 +531,12 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
     if tool_name == "execute_command":
         _rewrite_path_field("working_directory", default_to_root=True)
         return out
+    if tool_name == "shell_exec":
+        # Pins the INITIAL cwd of a persistent shell session (backlog 0220). Like
+        # execute_command, this is policy for the starting point, not a sandbox: once
+        # running, the session can `cd` anywhere (stated in the tool schema).
+        _rewrite_path_field("working_directory", default_to_root=True)
+        return out
     if tool_name == "skim_files":
         _alias_field("paths", ["path", "file_path", "filename", "file"])
         _rewrite_path_list_field("paths")

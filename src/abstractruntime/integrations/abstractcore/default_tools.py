@@ -49,6 +49,24 @@ def telegram_tools_enabled() -> bool:
     return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_TELEGRAM_TOOLS")
 
 
+def agora_tools_enabled() -> bool:
+    """Agora (agent-to-agent hub) tools: explicit flag, or implied by a configured API key."""
+    if _env_flag("ABSTRACT_ENABLE_AGORA_TOOLS"):
+        return True
+    return bool(str(os.getenv("AGORA_API_KEY") or "").strip())
+
+
+def shell_tools_enabled() -> bool:
+    """Persistent shell-session tools (backlog 0220): explicit opt-in only.
+
+    Deliberately NOT a default: a persistent shell escapes per-call cwd confinement once
+    approved. The tools stay approval-gated per call even when enabled; until an OS sandbox
+    exists (gateway backlog 0062) enabling this grants execute_command-level trust with
+    session persistence.
+    """
+    return _env_flag("ABSTRACT_ENABLE_SHELL_TOOLS")
+
+
 def _tool_name(func: ToolCallable) -> str:
     tool_def = getattr(func, "_tool_definition", None)
     if tool_def is not None:
@@ -107,6 +125,8 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         analyze_code,
         write_file,
         edit_file,
+        skim_websearch,
+        skim_url,
         web_search,
         fetch_url,
         execute_command,
@@ -121,7 +141,7 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
         "web": {
             "id": "web",
             "label": "Web",
-            "tools": [web_search, fetch_url],
+            "tools": [skim_websearch, skim_url, web_search, fetch_url],
         },
         "system": {
             "id": "system",
@@ -152,6 +172,24 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
                 "tools": comms,
             }
 
+    if agora_tools_enabled():
+        from .agora_tools import AGORA_TOOLS
+
+        toolsets["agora"] = {
+            "id": "agora",
+            "label": "Agora",
+            "tools": list(AGORA_TOOLS),
+        }
+
+    if shell_tools_enabled():
+        from abstractcore.tools.shell_tools import SHELL_TOOLS
+
+        toolsets["shell"] = {
+            "id": "shell",
+            "label": "Shell (persistent)",
+            "tools": list(SHELL_TOOLS),
+        }
+
     return toolsets
 
 
@@ -176,12 +214,19 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
     """Return ToolSpecs for UI and LLM payloads (JSON-safe)."""
     toolsets = get_default_toolsets()
     toolset_by_name: Dict[str, str] = {}
+    toolset_order: Dict[str, int] = {tid: idx for idx, tid in enumerate(toolsets.keys())}
+    tool_order_by_name: Dict[str, int] = {}
+    toolset_sizes: Dict[str, int] = {}
     for tid, spec in toolsets.items():
+        order = 0
         for tool in spec.get("tools", []):
             if callable(tool):
                 name = _tool_name(tool)
                 if name:
                     toolset_by_name[name] = tid
+                    tool_order_by_name[name] = order
+                    order += 1
+        toolset_sizes[tid] = order
 
     out: list[Dict[str, Any]] = []
     for tool in get_default_tools():
@@ -230,9 +275,18 @@ def list_default_tool_specs() -> List[Dict[str, Any]]:
             "toolset": "files",
         }
     )
+    tool_order_by_name["open_attachment"] = toolset_sizes.get("files", 0)
 
-    # Stable ordering: toolset then name
-    out.sort(key=lambda s: (str(s.get("toolset") or ""), str(s.get("name") or "")))
+    # Stable ordering: keep declared toolset order and preserve the preferred
+    # within-toolset order so lighter "skim_*" tools can appear before heavier
+    # full-fetch tools in LLM-facing specs.
+    out.sort(
+        key=lambda s: (
+            toolset_order.get(str(s.get("toolset") or ""), 999),
+            tool_order_by_name.get(str(s.get("name") or ""), 999),
+            str(s.get("name") or ""),
+        )
+    )
     return out
 
 

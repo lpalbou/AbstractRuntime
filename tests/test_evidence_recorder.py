@@ -61,6 +61,52 @@ def test_evidence_recorder_fetch_url_stores_raw_and_normalized_as_artifacts() ->
     assert isinstance(payload.get("artifacts"), dict)
 
 
+def test_evidence_recorder_fetch_url_compacts_large_rendered_output() -> None:
+    store = InMemoryArtifactStore()
+    run = RunState.new(workflow_id="wf", entry_node="n1", vars={})
+    large_rendered = "A" * 20_000
+
+    tool_calls = [{"name": "fetch_url", "arguments": {"url": "https://example.com"}, "call_id": "c1"}]
+    tool_results = {
+        "mode": "executed",
+        "results": [
+            {
+                "call_id": "c1",
+                "name": "fetch_url",
+                "success": True,
+                "output": {
+                    "url": "https://example.com",
+                    "final_url": "https://example.com",
+                    "content_type": "text/html",
+                    "size_bytes": 20000,
+                    "raw_text": "<html>hi</html>",
+                    "normalized_text": "hi",
+                    "rendered": large_rendered,
+                },
+                "error": None,
+            }
+        ],
+    }
+
+    stats = EvidenceRecorder(artifact_store=store).record_tool_calls(
+        run=run,
+        node_id="node-x",
+        tool_calls=tool_calls,
+        tool_results=tool_results,
+    )
+
+    assert stats.recorded == 1
+    out = tool_results["results"][0]["output"]
+    assert isinstance(out, dict)
+    assert out["rendered_truncated"] is True
+    assert out["rendered_chars"] == len(large_rendered)
+    assert "#TRUNCATION: rendered tool output compacted" in out["rendered"]
+    assert len(out["rendered"]) <= 12_000
+    rendered_ref = out.get("rendered_artifact")
+    assert isinstance(rendered_ref, dict)
+    assert store.load_text(get_artifact_id(rendered_ref)) == large_rendered
+
+
 def test_evidence_recorder_execute_command_stores_stdout_stderr_as_artifacts() -> None:
     store = InMemoryArtifactStore()
     run = RunState.new(workflow_id="wf", entry_node="n1", vars={})
@@ -133,4 +179,3 @@ def test_evidence_recorder_web_search_stores_results_as_artifact() -> None:
     artifacts = payload.get("artifacts")
     assert isinstance(artifacts, dict)
     assert isinstance(artifacts.get("results"), dict)
-

@@ -97,7 +97,22 @@ def test_export_run_history_bundle_filters_input_data_and_tails_ledgers() -> Non
                 node_id="n",
                 status=StepStatus.COMPLETED,
                 effect={"type": "llm_call", "payload": {"i": i + 1}, "result_key": None},
-                result={"ok": True, "i": i + 1},
+                result={
+                    "ok": True,
+                    "i": i + 1,
+                    "metadata": (
+                        {
+                            "_runtime_resolved_action": {
+                                "kind": "generate",
+                                "action_id": "generate_text",
+                                "modality": "text",
+                                "task": "text_generation",
+                            }
+                        }
+                        if i == 4
+                        else {}
+                    ),
+                },
                 error=None,
                 started_at=f"2026-01-01T00:00:0{i}+00:00",
                 ended_at=f"2026-01-01T00:00:0{i}+00:00",
@@ -150,6 +165,9 @@ def test_export_run_history_bundle_filters_input_data_and_tails_ledgers() -> Non
     turn0 = next((t for t in turns if t.get("run_id") == run_id), None)
     assert turn0 is not None
     assert turn0.get("answer") == "ok"
+    resolved_actions = bundle.get("resolved_actions") or []
+    assert resolved_actions[-1]["action_id"] == "generate_text"
+    assert resolved_actions[-1]["run_id"] == run_id
     stats = turn0.get("stats") or {}
     assert isinstance(stats, dict)
     assert stats.get("llm_calls") == 5

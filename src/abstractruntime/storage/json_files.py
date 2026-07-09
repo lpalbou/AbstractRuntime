@@ -32,6 +32,23 @@ class JsonFileRunStore(RunStore):
     Query operations scan all run_*.json files, which is acceptable for MVP
     but needs lightweight indexing for interactive workloads (e.g. WS tick loops)
     once the run directory grows.
+
+    OWNERSHIP CONTRACT (ruling 2026-07-09, runtime seat; the maintainer's
+    instinct "if you get something from a store you should not be able to
+    mutate the store" made explicit): `load()` may return the SAME RunState
+    object it cached on `save()` — loaded runs are ALIASED, not copies.
+    Within a process, only the run's OWNING thread (the tick/host thread
+    driving `Runtime.tick`) may mutate a loaded RunState; every other writer
+    goes through a durable side channel drained at tick boundaries (the
+    directive sidecar / command inbox — agency-parity 0222), never through
+    direct mutation of a loaded object. Rationale: a defensive deep-copy per
+    load would tax every tick in proportion to vars size (history bundles,
+    event inboxes), and a frozen view cannot distinguish the owner from
+    bystanders — the single-writer rule is the only contract that keeps the
+    hot path allocation-free AND makes `json.dump(asdict(run))` in `save()`
+    safe (no concurrent mutation mid-serialization can exist under it).
+    Cross-PROCESS readers are already safe: the cache is validated by file
+    mtime and re-reads on any external write.
     """
 
     def __init__(self, base_dir: str | Path):

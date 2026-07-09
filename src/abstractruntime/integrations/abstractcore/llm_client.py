@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import base64
 import hashlib
+import io
 import json
 import locale
 import mimetypes
@@ -29,6 +30,7 @@ import tempfile
 import threading
 import time
 import uuid
+import wave
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -394,6 +396,32 @@ _RUNTIME_METADATA_ENVELOPE_RE = re.compile(
     r"^\s*<runtime_metadata>\s*.*?\s*</runtime_metadata>\s*",
     re.IGNORECASE | re.DOTALL,
 )
+
+# A user turn whose ENTIRE content is a runtime metadata envelope. Such turns are
+# runtime-owned injection artifacts (see `_normalize_turn_grounding`): they are
+# dropped and re-appended fresh on every call, so injection stays idempotent when
+# both the runtime ledger pass and the LLM client pass normalize the same payload.
+_RUNTIME_METADATA_ONLY_RE = re.compile(
+    r"^\s*<runtime_metadata>\s*.*?\s*</runtime_metadata>\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_runtime_grounding_only_user_message(message: Any) -> bool:
+    """Return True for runtime-owned, envelope-only trailing user turns.
+
+    These are machine-generated grounding carriers (never user-authored text):
+    the runtime appends them for tool-loop shaped conversations so the per-call
+    timestamp entropy stays out of the cacheable message prefix.
+    """
+    if not isinstance(message, dict):
+        return False
+    if str(message.get("role") or "").strip().lower() != "user":
+        return False
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return False
+    return bool(_RUNTIME_METADATA_ONLY_RE.match(content))
 
 _ZONEINFO_TAB_CANDIDATES = [
     "/usr/share/zoneinfo/zone.tab",
@@ -886,7 +914,7 @@ def _normalize_turn_grounding(
     messages: Optional[List[Dict[str, Any]]],
     grounding: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, Optional[List[Dict[str, Any]]]]:
-    """Inject runtime context into the current user turn for LLM calls only.
+    """Inject runtime context into the current turn for LLM calls only.
 
     The envelope is deliberately tagged and machine-owned:
       <runtime_metadata>{...}</runtime_metadata>
@@ -894,7 +922,19 @@ def _normalize_turn_grounding(
     That keeps date/location/user context visible to the model without mutating
     the durable human text field into a natural-language prefix that downstream
     TTS may speak. Media-only requests call this function with `grounding=None`,
-    which strips legacy prefixes but does not inject new prompt text.
+    which strips legacy prefixes/artifacts but does not inject new prompt text.
+
+    Placement (prompt-prefix cache stability, backlog 0212):
+    - Chat shape (the last `user` message is the FINAL message): the envelope is
+      injected at the head of that final user turn — the turn is fresh bytes
+      anyway, so the cacheable prefix (all earlier messages) is untouched.
+    - Tool-loop shape (messages continue past the last `user` message, e.g.
+      `user task, assistant tool_calls, tool, ...`): rewriting the last user
+      message would mutate message[0] with per-second timestamp entropy on every
+      iteration and defeat provider prompt caching. Instead, the envelope rides
+      a TRAILING, envelope-only `user` message appended after the transcript.
+      Stale envelope-only messages from a previous pass are dropped first, so
+      double normalization (runtime ledger pass + client pass) stays idempotent.
     """
 
     def _clean_or_inject_text(value: str) -> str:
@@ -902,9 +942,12 @@ def _normalize_turn_grounding(
             return _inject_runtime_grounding_into_text(value, grounding)
         return _strip_runtime_grounding_prefix(value)
 
-    def _clean_content(content: Any) -> Any:
+    def _strip_text(value: str) -> str:
+        return _strip_runtime_grounding_prefix(value)
+
+    def _apply_to_content(content: Any, *, text_fn) -> Any:
         if isinstance(content, str):
-            return _clean_or_inject_text(content)
+            return text_fn(content)
         if isinstance(content, list):
             items: List[Any] = [dict(item) if isinstance(item, dict) else item for item in content]
             for idx, item in enumerate(items):
@@ -913,13 +956,13 @@ def _normalize_turn_grounding(
                 if str(item.get("type") or "").strip().lower() != "text":
                     continue
                 text_value = item.get("text")
-                item["text"] = _clean_or_inject_text(text_value if isinstance(text_value, str) else str(text_value or ""))
+                item["text"] = text_fn(text_value if isinstance(text_value, str) else str(text_value or ""))
                 items[idx] = item
                 return items
-            if grounding:
+            if grounding and text_fn is _clean_or_inject_text:
                 items.insert(0, {"type": "text", "text": _runtime_grounding_prompt_envelope(grounding)})
             return items
-        return _clean_or_inject_text(str(content or ""))
+        return text_fn(str(content or ""))
 
     prompt_str = str(prompt or "")
     if prompt_str.strip():
@@ -928,15 +971,36 @@ def _normalize_turn_grounding(
     if isinstance(messages, list) and messages:
         out: List[Dict[str, Any]] = []
         for m in messages:
-            out.append(dict(m) if isinstance(m, dict) else {"role": "user", "content": str(m)})
+            entry = dict(m) if isinstance(m, dict) else {"role": "user", "content": str(m)}
+            # Runtime-owned injection artifact from a previous normalization pass:
+            # drop it here and (when grounding is active) re-append a fresh one below.
+            if _is_runtime_grounding_only_user_message(entry):
+                continue
+            out.append(entry)
 
+        last_user_idx: Optional[int] = None
         for i in range(len(out) - 1, -1, -1):
             role = str(out[i].get("role") or "").strip().lower()
-            if role != "user":
-                continue
-            out[i]["content"] = _clean_content(out[i].get("content"))
+            if role == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx is None:
+            if grounding:
+                out.append({"role": "user", "content": _runtime_grounding_prompt_envelope(grounding)})
             return prompt_str, out
 
+        if last_user_idx == len(out) - 1:
+            # Chat shape: the final message is the current user turn.
+            out[last_user_idx]["content"] = _apply_to_content(
+                out[last_user_idx].get("content"), text_fn=_clean_or_inject_text
+            )
+            return prompt_str, out
+
+        # Tool-loop shape: keep the transcript prefix byte-stable — strip any legacy
+        # envelope prefix from the (earlier) user turn and carry fresh grounding in a
+        # trailing envelope-only user message instead.
+        out[last_user_idx]["content"] = _apply_to_content(out[last_user_idx].get("content"), text_fn=_strip_text)
         if grounding:
             out.append({"role": "user", "content": _runtime_grounding_prompt_envelope(grounding)})
         return prompt_str, out
@@ -1046,6 +1110,15 @@ class RequestSender(Protocol):
         timeout: float,
     ) -> Any: ...
 
+    def post_jsonl_stream(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Dict[str, Any],
+        timeout: float,
+    ) -> Any: ...
+
 
 class AbstractCoreLLMClient(Protocol):
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
@@ -1062,6 +1135,15 @@ class AbstractCoreLLMClient(Protocol):
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
+
+    def stream_tts(
+        self,
+        *,
+        text: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Yield JSON-safe TTS stream events and finalize a durable artifact on successful completion."""
 
     def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Return model capability metadata for a specific model or the default client model."""
@@ -1494,6 +1576,7 @@ def _run_local_image_subprocess(
     llm_kwargs: Dict[str, Any],
     prompt: str,
     specs: List[Dict[str, Any]],
+    media: Optional[List[Any]] = None,
     progress_callback: Optional[Any] = None,
 ) -> Dict[str, Any]:
     request = {
@@ -1502,6 +1585,7 @@ def _run_local_image_subprocess(
         "llm_kwargs": _jsonable(llm_kwargs or {}),
         "prompt": str(prompt or ""),
         "specs": _jsonable(specs),
+        "media": _jsonable(media or []),
     }
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -4972,6 +5056,94 @@ class LocalAbstractCoreLLMClient:
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._provider, self._model
 
+    def stream_tts(
+        self,
+        *,
+        text: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
+        spec = {"modality": "voice", "task": "tts"}
+        if isinstance(output, dict):
+            spec.update(output)
+        fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
+        if fmt == "wave":
+            fmt = "wav"
+        if fmt != "wav":
+            raise ValueError("Local TTS streaming currently supports wav only.")
+        voice_facade = getattr(self._llm, "voice", None)
+        method = getattr(voice_facade, "tts_stream", None)
+        if not callable(method):
+            method = getattr(self._llm, "tts_stream", None)
+        if not callable(method):
+            raise ValueError("Local AbstractCore client does not expose streaming TTS.")
+
+        stream_params = dict(params or {})
+        run_id, tags = _trace_run_id_and_tags_from_params(
+            stream_params,
+            task="tts",
+            modality="voice",
+            model=str(spec.get("model") or "") or None,
+        )
+        stream = method(
+            str(text or ""),
+            voice=spec.get("voice") or spec.get("voice_id"),
+            format="wav",
+            profile=spec.get("profile"),
+            speed=spec.get("speed"),
+            instructions=spec.get("instructions"),
+            quality_preset=spec.get("quality_preset") or spec.get("quality"),
+            provider=spec.get("provider"),
+            model=spec.get("model"),
+            cancel_event=stream_params.get("cancel_event"),
+        )
+        segments: List[bytes] = []
+        terminal_seen = False
+        for event in stream:
+            payload = dict(event) if isinstance(event, dict) else {"type": "event", "value": _jsonable(event)}
+            audio = payload.pop("audio", None)
+            if isinstance(audio, (bytes, bytearray)):
+                audio_bytes = bytes(audio)
+                segments.append(audio_bytes)
+                payload["audio_b64"] = base64.b64encode(audio_bytes).decode("ascii")
+                payload.setdefault("size_bytes", len(audio_bytes))
+            elif payload.get("type") == "audio":
+                audio_bytes = _decode_stream_audio_b64(payload)
+                if audio_bytes:
+                    segments.append(audio_bytes)
+            if payload.get("type") in {"done", "cancelled"}:
+                terminal_seen = True
+                if payload.get("type") == "done" and payload.get("ok") is not False:
+                    artifact = _finalize_tts_stream_artifact(
+                        segments=segments,
+                        artifact_store=self._artifact_store,
+                        run_id=run_id,
+                        tags=tags,
+                        text=text,
+                        spec=spec,
+                        provider=str(spec.get("provider") or payload.get("provider") or "abstractcore-local"),
+                        model=str(spec.get("model") or payload.get("model") or "") or None,
+                        metadata={
+                            "stream": {
+                                "chunks": len(segments),
+                                "transport": "in-process",
+                                "chunk_format": "wav-segment",
+                            },
+                            "terminal_event": _jsonable(payload),
+                        },
+                    )
+                    payload = dict(payload)
+                    payload["audio_artifact"] = artifact
+                yield payload
+                continue
+            yield payload
+        if not terminal_seen:
+            yield {
+                "type": "error",
+                "ok": False,
+                "error": "TTS stream ended without a terminal done/cancelled event.",
+            }
+
     def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:
         self._provider_endpoint_profile_resolver = resolver
         _attach_provider_endpoint_profile_resolver_to_client(self, resolver)
@@ -5332,7 +5504,14 @@ class LocalAbstractCoreLLMClient:
         system_hash = system_hash or "none"
         tools_hash = tools_hash or "none"
 
-        msg_list: List[Dict[str, Any]] = list(messages) if isinstance(messages, list) and messages else []
+        # The trailing runtime-grounding envelope is per-call ephemeral (fresh timestamp
+        # every call). Baking it into the durable per-session KV cache would poison the
+        # prefix for the next call, so it is excluded from the cached message lane.
+        msg_list: List[Dict[str, Any]] = [
+            m
+            for m in (messages if isinstance(messages, list) and messages else [])
+            if not _is_runtime_grounding_only_user_message(m)
+        ]
         msg_hashes: List[str] = [_prompt_cache_message_fingerprint(m) for m in msg_list]
 
         with self._prompt_cache_state_lock:
@@ -5521,6 +5700,11 @@ class LocalAbstractCoreLLMClient:
             else:
                 stream = bool(stream_raw) if stream_raw is not None else False
 
+            requested_base_url = params.get("base_url")
+            requested_provider = params.get("_provider")
+            requested_model = params.get("_model")
+            requested_thinking = params.get("thinking")
+
             # `base_url` is a provider construction concern in local mode. We intentionally
             # do not create new providers per call unless the host explicitly chooses to.
             params.pop("base_url", None)
@@ -5532,11 +5716,26 @@ class LocalAbstractCoreLLMClient:
                 params["output"] = _strip_runtime_output_metadata_for_core(params.get("output"))
 
             if acore_output_request and not tools:
+                from abstractcore.core.generate_contract import normalize_generate_request, resolve_generate_route  # type: ignore
+
                 capability_defaults = getattr(self, "_capability_defaults", {})
-                specs = [
-                    _with_capability_default_route(spec, capability_defaults)
-                    for spec in _normalize_output_specs_for_runtime(output_request)
-                ]
+                resolved_generate_route = resolve_generate_route(
+                    request=normalize_generate_request(
+                        prompt=str(prompt or ""),
+                        messages=messages,
+                        media=media,
+                    ),
+                    output=params.get("output"),
+                    scoped_routes=capability_defaults,
+                    explicit_text_route={
+                        "provider": requested_provider,
+                        "model": requested_model,
+                        "base_url": requested_base_url,
+                    },
+                    explicit_reasoning=requested_thinking,
+                )
+                resolved_generate_route_summary = resolved_generate_route.to_summary()
+                specs = [dict(spec) for spec in resolved_generate_route.output_specs]
                 media_only = bool(specs) and all(
                     isinstance(spec, dict)
                     and (
@@ -5557,6 +5756,7 @@ class LocalAbstractCoreLLMClient:
                             llm_kwargs=getattr(self, "_llm_kwargs", {}),
                             prompt=str(prompt or ""),
                             specs=[dict(spec) for spec in specs],
+                            media=media,
                             progress_callback=params.get("on_progress"),
                         )
                         result = _normalize_multimodal_response(
@@ -5566,6 +5766,9 @@ class LocalAbstractCoreLLMClient:
                             default_tags=default_artifact_tags,
                             generation_context=generation_context,
                         )
+                        meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+                        meta["_resolved_generate_route"] = resolved_generate_route_summary
+                        result["metadata"] = meta
                     elif _is_subprocess_safe_video_specs(specs, media):
                         result_obj = _run_local_video_subprocess(
                             provider=self._provider,
@@ -5583,6 +5786,9 @@ class LocalAbstractCoreLLMClient:
                             default_tags=default_artifact_tags,
                             generation_context=generation_context,
                         )
+                        meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+                        meta["_resolved_generate_route"] = resolved_generate_route_summary
+                        result["metadata"] = meta
                     else:
                         from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
 
@@ -5592,6 +5798,7 @@ class LocalAbstractCoreLLMClient:
                                 "media_only": True,
                                 "runtime_provider": self._provider,
                                 "runtime_model": self._model,
+                                "_resolved_generate_route": resolved_generate_route_summary,
                             }
                         )
                         for spec in specs:
@@ -6723,6 +6930,17 @@ class MultiLocalAbstractCoreLLMClient:
         llm_kwargs = dict(self._llm_kwargs)
         if llm_kwargs_override:
             llm_kwargs.update(dict(llm_kwargs_override))
+        # POOLED instances serve every run/session of this runtime, so a construction-time
+        # instance-default cache key (create_llm's prompt_cache_key convenience for
+        # instance-per-session callers) would stamp one session's identity onto all traffic.
+        # Session-scoped keys are injected PER CALL by the LLM_CALL effect handler instead.
+        if "prompt_cache_key" in llm_kwargs:
+            llm_kwargs.pop("prompt_cache_key", None)
+            logger.warning(
+                "#FALLBACK: dropping construction-time prompt_cache_key from pooled LLM client "
+                "kwargs (pooled instances serve many sessions; per-call keys are injected by the "
+                "runtime instead)"
+            )
         extra_kwargs: Dict[str, Any] = {
             name: value
             for name, value in {
@@ -7248,6 +7466,33 @@ class MultiLocalAbstractCoreLLMClient:
             media=media,
             params=params,
         )
+
+    def stream_tts(
+        self,
+        *,
+        text: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
+        stream_params = dict(params or {})
+        provider = stream_params.pop("_provider", None)
+        model = stream_params.pop("_model", None)
+
+        provider_str = (
+            str(provider).strip().lower() if isinstance(provider, str) and provider.strip() else self._default_provider
+        )
+        model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
+
+        llm_kwargs_override: Dict[str, Any] = {}
+        base_url = stream_params.pop("base_url", None)
+        if isinstance(base_url, str) and base_url.strip():
+            llm_kwargs_override["base_url"] = base_url.strip()
+        provider_api_key = _pop_provider_api_key(stream_params)
+        if provider_api_key:
+            llm_kwargs_override["api_key"] = provider_api_key
+
+        client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
+        return client.stream_tts(text=text, output=output, params=stream_params)
 
     def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         # Best-effort: use requested model name or the default client model.
@@ -8066,6 +8311,21 @@ class HttpxRequestSender:
         resp.raise_for_status()
         return HttpBinaryResponse(content=bytes(resp.content or b""), headers=dict(resp.headers))
 
+    def post_jsonl_stream(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Dict[str, Any],
+        timeout: float,
+    ) -> Any:
+        with self._httpx.stream("POST", url, headers=headers, json=json, timeout=timeout) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                yield line
+
     def post_multipart(
         self,
         url: str,
@@ -8119,6 +8379,121 @@ def _unwrap_binary_response(value: Any) -> Tuple[bytes, Dict[str, str]]:
             except Exception as e:
                 raise ValueError("Remote binary response string must be base64 or a data URL.") from e
     raise ValueError("Remote binary response did not contain bytes.")
+
+
+def _decode_stream_audio_b64(event: Dict[str, Any]) -> Optional[bytes]:
+    raw = event.get("audio_b64")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return base64.b64decode("".join(raw.strip().split()), validate=True)
+
+
+def _combine_wav_segments(segments: List[bytes]) -> bytes:
+    if not segments:
+        raise ValueError("TTS stream completed without audio chunks.")
+    channels: Optional[int] = None
+    sampwidth: Optional[int] = None
+    framerate: Optional[int] = None
+    frames: List[bytes] = []
+    for index, segment in enumerate(segments):
+        with wave.open(io.BytesIO(bytes(segment)), "rb") as wf:
+            c = int(wf.getnchannels())
+            sw = int(wf.getsampwidth())
+            fr = int(wf.getframerate())
+            if channels is None:
+                channels, sampwidth, framerate = c, sw, fr
+            elif (channels, sampwidth, framerate) != (c, sw, fr):
+                raise ValueError(f"TTS stream WAV segment {index} does not match the first segment format.")
+            frames.append(wf.readframes(wf.getnframes()))
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wf:
+        wf.setnchannels(int(channels or 1))
+        wf.setsampwidth(int(sampwidth or 2))
+        wf.setframerate(int(framerate or 24000))
+        wf.writeframes(b"".join(frames))
+    return out.getvalue()
+
+
+def _finalize_tts_stream_artifact(
+    *,
+    segments: List[bytes],
+    artifact_store: Optional[Any],
+    run_id: Optional[str],
+    tags: Dict[str, Any],
+    text: str,
+    spec: Dict[str, Any],
+    provider: str,
+    model: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    audio_bytes = _combine_wav_segments(segments)
+    result = _normalize_multimodal_response(
+        {
+            "outputs": {
+                "voice": [
+                    {
+                        "modality": "voice",
+                        "task": "tts",
+                        "data": audio_bytes,
+                        "content_type": "audio/wav",
+                        "format": "wav",
+                        "provider": provider,
+                        "model": model,
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                    }
+                ]
+            },
+            "metadata": {"model": model, "provider": provider, "streaming": True},
+        },
+        artifact_store=artifact_store,
+        run_id=run_id,
+        default_tags=tags,
+        generation_context=_generated_artifact_context(prompt=text, media=None, output_request=spec),
+    )
+    voice_items = result.get("outputs", {}).get("voice") if isinstance(result, dict) else None
+    if not isinstance(voice_items, list) or not voice_items:
+        raise ValueError("TTS stream finalization did not produce a voice artifact descriptor.")
+    return dict(voice_items[0])
+
+
+def _trace_run_id_and_tags_from_params(
+    params: Dict[str, Any],
+    *,
+    task: str,
+    modality: str,
+    model: Optional[str] = None,
+) -> tuple[Optional[str], Dict[str, Any]]:
+    trace_metadata = params.get("trace_metadata") if isinstance(params.get("trace_metadata"), dict) else {}
+    run_id = trace_metadata.get("run_id") if isinstance(trace_metadata, dict) else None
+    run_id = str(run_id).strip() if isinstance(run_id, str) and run_id.strip() else None
+    tags: Dict[str, Any] = {
+        "kind": "generated_media",
+        "source": "llm_call",
+        "modality": modality,
+        "task": task,
+    }
+    if isinstance(model, str) and model.strip():
+        tags["model"] = model.strip()
+    if isinstance(trace_metadata, dict):
+        for key in (
+            "workflow_id",
+            "node_id",
+            "step_id",
+            "effect_idempotency_key",
+            "actor_id",
+            "session_id",
+            "parent_run_id",
+            "request_id",
+        ):
+            raw = trace_metadata.get(key)
+            if raw is not None and str(raw).strip():
+                tags[key] = str(raw)
+    output_run_id, output_tags = _output_runtime_metadata(params.get("output"))
+    if run_id is None and output_run_id:
+        run_id = output_run_id
+    if output_tags:
+        tags.update(output_tags)
+    return run_id, tags
 
 
 def _mime_type_for_path(path: str, *, fallback: str = "application/octet-stream") -> str:
@@ -8347,6 +8722,8 @@ class RemoteAbstractCoreLLMClient:
         headers: Optional[Dict[str, str]] = None,
         request_sender: Optional[RequestSender] = None,
         artifact_store: Optional[Any] = None,
+        core_config_file: Optional[str | Path] = None,
+        capability_defaults: Optional[Any] = None,
     ):
         from .constants import DEFAULT_LLM_TIMEOUT_S
 
@@ -8356,6 +8733,13 @@ class RemoteAbstractCoreLLMClient:
         self._headers = dict(headers or {})
         self._sender = request_sender or HttpxRequestSender()
         self._artifact_store = artifact_store
+        self._core_config_file = _coerce_core_config_file(core_config_file)
+        self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
+        _attach_core_execution_context_to_client(
+            self,
+            core_config_file=self._core_config_file,
+            capability_defaults=self._capability_defaults,
+        )
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return "remote", self._model
@@ -9787,6 +10171,15 @@ class RemoteAbstractCoreLLMClient:
             run_id = output_run_id
         if output_tags:
             tags.update(output_tags)
+        # The pre-strip stash (see the strip site): when the output spec was
+        # already sanitized for core, the original runtime metadata rides here.
+        stash = params.get("_runtime_output_metadata")
+        if isinstance(stash, dict):
+            stash_run_id = stash.get("run_id")
+            if run_id is None and isinstance(stash_run_id, str) and stash_run_id.strip():
+                run_id = stash_run_id.strip()
+            if isinstance(stash.get("tags"), dict):
+                tags.update(stash["tags"])
         return run_id, tags
 
     def _post_bytes(self, url: str, *, headers: Dict[str, str], json_body: Dict[str, Any]) -> tuple[bytes, Dict[str, str]]:
@@ -9797,6 +10190,13 @@ class RemoteAbstractCoreLLMClient:
         else:
             raw = sender.post(url, headers=headers, json=json_body, timeout=self._timeout_s)
         return _unwrap_binary_response(raw)
+
+    def _post_jsonl_stream(self, url: str, *, headers: Dict[str, str], json_body: Dict[str, Any]) -> Any:
+        sender = self._sender
+        post_jsonl_stream = getattr(sender, "post_jsonl_stream", None)
+        if not callable(post_jsonl_stream):
+            raise ValueError("Configured request sender does not support JSONL streaming.")
+        return post_jsonl_stream(url, headers=headers, json=json_body, timeout=self._timeout_s)
 
     def _post_multipart(
         self,
@@ -10567,6 +10967,100 @@ class RemoteAbstractCoreLLMClient:
             generation_context=_generated_artifact_context(prompt=text, media=None, output_request=spec),
         )
 
+    def _remote_tts_stream(
+        self,
+        *,
+        spec: Dict[str, Any],
+        text: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ):
+        fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
+        if fmt == "wave":
+            fmt = "wav"
+        if fmt != "wav":
+            raise ValueError("Remote TTS streaming currently supports wav only.")
+        endpoint_model = str(spec.get("model") or "").strip()
+        voice = spec.get("voice") or spec.get("voice_id")
+        body: Dict[str, Any] = {
+            "input": str(text or ""),
+            "response_format": "wav",
+        }
+        if voice is not None:
+            body["voice"] = voice
+        if endpoint_model:
+            body["model"] = endpoint_model
+        endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
+        for key in ("speed", "instructions", "provider", "profile", "quality_preset"):
+            if key in spec and spec.get(key) is not None:
+                body[key] = spec.get(key)
+        if "quality" in spec and "quality_preset" not in body and spec.get("quality") is not None:
+            body["quality_preset"] = spec.get("quality")
+        base_url = params.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            body["base_url"] = base_url.strip()
+
+        if endpoint_provider:
+            body.pop("provider", None)
+            url = _join_core_provider_v1_url(self._server_base_url, endpoint_provider, "/audio/speech/stream")
+        else:
+            url = _join_core_v1_url(self._server_base_url, "/audio/speech/stream")
+
+        run_id, tags = self._trace_run_id_and_tags(
+            params,
+            task="tts",
+            modality="voice",
+            model=str(body.get("model") or "") or None,
+        )
+        segments: List[bytes] = []
+        terminal_seen = False
+        for raw_line in self._post_jsonl_stream(url, headers=headers, json_body=body):
+            if isinstance(raw_line, bytes):
+                line = raw_line.decode("utf-8", errors="replace")
+            else:
+                line = str(raw_line)
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                event = {"type": "event", "value": _jsonable(event)}
+            if event.get("type") == "audio":
+                audio_bytes = _decode_stream_audio_b64(event)
+                if audio_bytes:
+                    segments.append(audio_bytes)
+            if event.get("type") in {"done", "cancelled"}:
+                terminal_seen = True
+                if event.get("type") == "done" and event.get("ok") is not False:
+                    artifact = _finalize_tts_stream_artifact(
+                        segments=segments,
+                        artifact_store=self._artifact_store,
+                        run_id=run_id,
+                        tags=tags,
+                        text=text,
+                        spec=spec,
+                        provider="abstractcore-server",
+                        model=str(body.get("model") or "") or None,
+                        metadata={
+                            "_provider_request": {"url": url, "payload": body},
+                            "stream": {
+                                "chunks": len(segments),
+                                "transport": "jsonl",
+                                "chunk_format": "wav-segment",
+                            },
+                        },
+                    )
+                    event = dict(event)
+                    event["audio_artifact"] = artifact
+                yield event
+                continue
+            yield event
+        if not terminal_seen:
+            yield {
+                "type": "error",
+                "ok": False,
+                "error": "TTS stream ended without a terminal done/cancelled event.",
+            }
+
     def _remote_music(
         self,
         *,
@@ -10842,6 +11336,42 @@ class RemoteAbstractCoreLLMClient:
             if tmpdir is not None:
                 tmpdir.cleanup()
 
+    def stream_tts(
+        self,
+        *,
+        text: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
+        stream_params = _normalize_prompt_cache_binding_params(dict(params or {}))
+        provider_api_key = _pop_provider_api_key(stream_params)
+        req_headers = self._headers_with_provider_api_key(provider_api_key)
+        trace_metadata = stream_params.get("trace_metadata") if isinstance(stream_params.get("trace_metadata"), dict) else None
+        if isinstance(trace_metadata, dict) and trace_metadata:
+            req_headers["X-AbstractCore-Trace-Metadata"] = json.dumps(
+                trace_metadata, ensure_ascii=False, separators=(",", ":")
+            )
+            header_map = {
+                "actor_id": "X-AbstractCore-Actor-Id",
+                "session_id": "X-AbstractCore-Session-Id",
+                "run_id": "X-AbstractCore-Run-Id",
+                "parent_run_id": "X-AbstractCore-Parent-Run-Id",
+            }
+            for key, header in header_map.items():
+                val = trace_metadata.get(key)
+                if val is not None and header not in req_headers:
+                    req_headers[header] = str(val)
+
+        spec = {"modality": "voice", "task": "tts"}
+        if isinstance(output, dict):
+            spec.update(output)
+        return self._remote_tts_stream(
+            spec=spec,
+            text=str(text or ""),
+            headers=req_headers,
+            params=stream_params,
+        )
+
     def _generate_resolved(
         self,
         *,
@@ -10856,6 +11386,10 @@ class RemoteAbstractCoreLLMClient:
         prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)
+        requested_base_url = params.get("base_url")
+        requested_provider = params.get("_provider")
+        requested_model = params.get("_model")
+        requested_thinking = params.get("thinking")
         effective_model = self._effective_model_from_params(params)
 
         trace_metadata = params.pop("trace_metadata", None)
@@ -10899,6 +11433,57 @@ class RemoteAbstractCoreLLMClient:
                 if val is not None and header not in req_headers:
                     req_headers[header] = str(val)
 
+        resolved_generate_route_summary = None
+        scoped_capability_defaults = (
+            self._capability_defaults
+            or _normalize_core_capability_defaults(getattr(self, "_abstractcore_capability_defaults", None))
+        )
+        scoped_core_config_file = str(getattr(self, "_abstractcore_config_file", self._core_config_file) or "").strip() or None
+        if acore_output_request and "output" in params:
+            # Extract runtime trace metadata BEFORE stripping for core: the
+            # server must not see runtime keys, but artifact tracing needs
+            # them (regression caught at the landing audit: stripped specs
+            # reached _trace_run_id_and_tags and artifacts lost run_id/tags).
+            _stash_run_id, _stash_tags = _output_runtime_metadata(params.get("output"))
+            if _stash_run_id or _stash_tags:
+                params["_runtime_output_metadata"] = {
+                    "run_id": _stash_run_id,
+                    "tags": _stash_tags,
+                }
+            params["output"] = _strip_runtime_output_metadata_for_core(params.get("output"))
+
+        if acore_output_request and not tools and (scoped_capability_defaults or scoped_core_config_file):
+            from abstractcore.core.generate_contract import normalize_generate_request, resolve_generate_route  # type: ignore
+
+            resolved_generate_route = resolve_generate_route(
+                request=normalize_generate_request(
+                    prompt=str(prompt or ""),
+                    messages=messages,
+                    media=media,
+                ),
+                output=params.get("output"),
+                scoped_routes=scoped_capability_defaults,
+                config_file=scoped_core_config_file,
+                explicit_text_route={
+                    "provider": requested_provider,
+                    "model": requested_model,
+                    "base_url": requested_base_url,
+                },
+                explicit_reasoning=requested_thinking,
+            )
+            resolved_generate_route_summary = resolved_generate_route.to_summary()
+            maybe_specs = [dict(spec) for spec in resolved_generate_route.output_specs]
+            if (
+                len(maybe_specs) == 1
+                and maybe_specs[0].get("modality") == "text"
+                and maybe_specs[0].get("task") not in {"transcription"}
+                and str(prompt or "").strip()
+            ):
+                params.pop("output", None)
+                acore_output_request = False
+            else:
+                params["output"] = maybe_specs[0] if len(maybe_specs) == 1 else maybe_specs
+
         if acore_output_request and (skip_turn_grounding or (media and not str(prompt or "").strip())):
             params_for_mm = dict(params)
             if isinstance(trace_metadata, dict):
@@ -10910,6 +11495,10 @@ class RemoteAbstractCoreLLMClient:
                 params=params_for_mm,
                 headers=req_headers,
             )
+            if resolved_generate_route_summary is not None:
+                meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+                meta["_resolved_generate_route"] = resolved_generate_route_summary
+                result["metadata"] = meta
             _sanitize_runtime_grounding_echoes(result)
             _attach_runtime_grounding(result, runtime_grounding)
             return result

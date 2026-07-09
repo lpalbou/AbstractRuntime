@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .flow import Flow
@@ -60,6 +62,75 @@ def _is_flow(obj: Any) -> bool:
         )
     except Exception:
         return False
+
+
+def _resolve_artifact_backed_value_from_run(run: Any, value: Any) -> Any:
+    """Best-effort materialization for artifact-backed runtime values.
+
+    Durable run/ledger storage may replace large terminal payloads with
+    ``{"$artifact": ...}`` references. VisualFlow node handlers should consume the
+    logical value rather than assuming the payload was inlined.
+    """
+
+    artifact_store = getattr(run, "_runtime_artifact_store", None)
+    if artifact_store is None:
+        return value
+
+    def _resolve(cur: Any, *, depth: int) -> Any:
+        if depth > 12:
+            return cur
+        if isinstance(cur, dict):
+            artifact_id = cur.get("$artifact") or cur.get("artifact_id")
+            if isinstance(artifact_id, str) and artifact_id.strip():
+                aid = artifact_id.strip()
+                try:
+                    payload = artifact_store.load_json(aid)
+                    if payload is not None:
+                        return _resolve(payload, depth=depth + 1)
+                except Exception:
+                    pass
+
+                try:
+                    artifact = artifact_store.load(aid)
+                except Exception:
+                    artifact = None
+                if artifact is None:
+                    return cur
+
+                try:
+                    text = artifact.as_text()
+                except Exception:
+                    return cur
+                if not isinstance(text, str):
+                    return cur
+
+                try:
+                    return _resolve(json.loads(text), depth=depth + 1)
+                except Exception:
+                    return text
+
+            changed = False
+            out: Dict[str, Any] = {}
+            for key, item in cur.items():
+                new_item = _resolve(item, depth=depth + 1)
+                out[key] = new_item
+                if new_item is not item:
+                    changed = True
+            return out if changed else cur
+
+        if isinstance(cur, list):
+            changed = False
+            out_list: List[Any] = []
+            for item in cur:
+                new_item = _resolve(item, depth=depth + 1)
+                out_list.append(new_item)
+                if new_item is not item:
+                    changed = True
+            return out_list if changed else cur
+
+        return cur
+
+    return _resolve(value, depth=0)
 
 
 def _create_effect_node_handler(
@@ -1267,6 +1338,14 @@ def _create_visual_agent_effect_handler(
             phase = "init"
             bucket["phase"] = "init"
 
+        # A host may resume an async Agent subworkflow wait with max_steps=0, which
+        # durably stores `_temp.agent.<node>.sub` but leaves the parent current_node on
+        # this Agent until the next runner tick. Do not start a duplicate child run in
+        # that state; consume the stored subworkflow result instead.
+        if phase == "init" and isinstance(bucket.get("sub"), dict):
+            phase = "subworkflow"
+            bucket["phase"] = "subworkflow"
+
         resolved_inputs = bucket.get("resolved_inputs")
         if not isinstance(resolved_inputs, dict) or phase == "init":
             resolved_inputs = _resolve_inputs(run)
@@ -1801,10 +1880,35 @@ def _create_visual_agent_effect_handler(
                 return StepPlan(node_id=node_id, next_node=node_id)
 
             sub_run_id = sub.get("sub_run_id") if isinstance(sub.get("sub_run_id"), str) else None
-            output = sub.get("output")
+            output = _resolve_artifact_backed_value_from_run(run, sub.get("output"))
             output_dict = output if isinstance(output, dict) else {}
-            answer = str(output_dict.get("answer") or "")
+            answer = str(output_dict.get("answer") or output_dict.get("response") or "")
             iterations = output_dict.get("iterations")
+            raw_sub_error = output_dict.get("error")
+            sub_error = str(raw_sub_error or "").strip() if raw_sub_error is not None else ""
+            agent_success = not (output_dict.get("success") is False or bool(sub_error))
+            if not agent_success and not answer.strip():
+                # User-facing synthesis (2026-07-09 incident follow-through): the raw error
+                # string here can be internal-prefixed provider JSON ("Effect failed after N
+                # attempts: ... API error (400): {...}") — delivered verbatim as the CHAT REPLY
+                # in flows that wire `response` -> end. Summarize honestly for humans; full
+                # fidelity stays in `meta.error`/the ledger, and the sub_run_id names where.
+                details = sub_error or "Agent subworkflow failed before producing a final answer."
+                run_part = f" (run {sub_run_id})" if sub_run_id else ""
+                status_m = re.search(r"API error \((\d{3})\)", details) or re.search(r"Error code: (\d{3})", details)
+                if status_m:
+                    code = int(status_m.group(1))
+                    kind = "rejected the request" if 400 <= code < 500 else "failed"
+                    answer = (
+                        f"The agent stopped because the model provider {kind} (HTTP {code})."
+                        f" Full details are in the run ledger{run_part}."
+                    )
+                elif "timed out" in details.lower() or "timeout" in details.lower():
+                    answer = f"The agent stopped because the model call timed out. Full details are in the run ledger{run_part}."
+                else:
+                    #[WARNING:TRUNCATION] bounded user-facing summary; complete error preserved in meta.error + ledger
+                    head = details[:300] + ("…" if len(details) > 300 else "")
+                    answer = f"The agent failed before producing a final answer{run_part}. Error: {head}"
 
             node_traces = sub.get("node_traces")
             raw_messages = output_dict.get("messages")
@@ -1846,10 +1950,12 @@ def _create_visual_agent_effect_handler(
             bucket["messages"] = messages_out
             tc, tr = _extract_tool_activity_from_steps(scratchpad.get("steps"))
             bucket["answer"] = answer
-            bucket["success"] = True
+            bucket["success"] = bool(agent_success)
             bucket["provider"] = provider
             bucket["model"] = model
             bucket["output_mode"] = "unstructured"
+            if sub_error:
+                bucket["error"] = sub_error
             if iterations is not None:
                 bucket["iterations"] = iterations
             if sub_run_id:
@@ -1859,7 +1965,9 @@ def _create_visual_agent_effect_handler(
             # - The user-facing answer string is available on the `response` output pin.
             # - Execution metadata belongs in `meta`.
             # - The agent-internal transcript lives in `scratchpad.messages`.
-            result_obj: Dict[str, Any] = {"success": True}
+            result_obj: Dict[str, Any] = {"success": bool(agent_success)}
+            if sub_error:
+                result_obj["error"] = sub_error
 
             scratchpad_out = dict(scratchpad)
             scratchpad_out["tool_calls"] = tc
@@ -1878,6 +1986,8 @@ def _create_visual_agent_effect_handler(
                 meta["sub_run_id"] = sub_run_id
             if iterations is not None:
                 meta["iterations"] = iterations
+            if sub_error:
+                meta["error"] = sub_error
 
             # When "Include/Use context" is enabled on the Agent node, persist the turn
             # into the parent run's active context so subsequent Agent/Subflow/LLM_CALL
@@ -2025,7 +2135,7 @@ def _create_visual_agent_effect_handler(
                 # Context persistence must never break Agent execution.
                 pass
 
-            if schema_enabled and schema:
+            if agent_success and schema_enabled and schema:
                 bucket["phase"] = "structured"
                 messages = [
                     {
@@ -2066,13 +2176,15 @@ def _create_visual_agent_effect_handler(
             bucket["phase"] = "done"
             flow._node_outputs[node_id] = {
                 "response": answer,
-                "success": True,
+                "success": bool(agent_success),
                 "meta": meta,
                 "scratchpad": scratchpad_out,
                 # Backward-compat / convenience:
                 "tool_calls": tc,
                 "tool_results": tr,
             }
+            if sub_error:
+                flow._node_outputs[node_id]["error"] = sub_error
             run.vars["_last_output"] = dict(flow._node_outputs.get(node_id) or {})
             if next_node:
                 return StepPlan(node_id=node_id, next_node=next_node)
@@ -2080,9 +2192,10 @@ def _create_visual_agent_effect_handler(
                 node_id=node_id,
                 complete_output={
                     "response": answer,
-                    "success": True,
+                    "success": bool(agent_success),
                     "meta": meta,
                     "scratchpad": scratchpad_out,
+                    **({"error": sub_error} if sub_error else {}),
                 },
             )
 
@@ -2193,6 +2306,7 @@ def _create_visual_function_handler(
     output_key: Optional[str],
     flow: Flow,
     branch_map: Optional[Dict[str, str]] = None,
+    visual_type: Optional[str] = None,
 ) -> Callable:
     """Create a handler for visual flow function nodes.
 
@@ -2222,11 +2336,26 @@ def _create_visual_function_handler(
         # or from input_key if specified
         if input_key:
             input_data = run.vars.get(input_key)
+        elif visual_type == "on_flow_end":
+            # Flow-end nodes expose their declared input pins as the run output.
+            # Those pins are resolved by data edges into the per-node output cache;
+            # `_last_output` only contains the previous executable node's output and
+            # would drop independent file/export pins.
+            node_outputs = getattr(flow, "_node_outputs", None)
+            resolved = node_outputs.get(node_id) if isinstance(node_outputs, dict) else None
+            if isinstance(resolved, dict) and resolved:
+                input_data = resolved
+            else:
+                # No data pins resolved for this flow-end: pass through the
+                # previous node's output (the original behavior — a pin-less
+                # end must not swallow e.g. a switch's branch; landing-audit
+                # regression fix).
+                input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
         else:
             input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
 
         visual_node_type = getattr(func, "_visual_node_type", None)
-        if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf"} and isinstance(run.vars, dict):
+        if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx"} and isinstance(run.vars, dict):
             ambient: Dict[str, Any] = {}
             for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
                 if key in run.vars:
@@ -3318,9 +3447,9 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
         elif effect_type == "start_subworkflow":
             if isinstance(raw, dict):
                 current["sub_run_id"] = raw.get("sub_run_id")
-                out = raw.get("output")
+                out = _resolve_artifact_backed_value_from_run(run, raw.get("output"))
                 if isinstance(out, dict) and "result" in out:
-                    result_value = out.get("result")
+                    result_value = _resolve_artifact_backed_value_from_run(run, out.get("result"))
                     current["output"] = result_value
                     current["child_output"] = out
                 else:
@@ -4228,6 +4357,7 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                     output_key=getattr(flow_node, "output_key", None),
                     branch_map=branch_map,
                     flow=flow,
+                    visual_type=visual_type if isinstance(visual_type, str) else None,
                 )
         else:
             raise TypeError(

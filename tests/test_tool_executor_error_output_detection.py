@@ -26,3 +26,15 @@ def test_mapping_tool_executor_marks_cross_mark_outputs_as_failure() -> None:
     assert result["results"][0]["output"] is None
     assert result["results"][0]["error"] == "Permission denied: Cannot write"
 
+
+def test_mapping_tool_executor_marks_json_error_outputs_as_failure() -> None:
+    def tool_returns_json_error() -> str:
+        return '{"success":false,"status_hint":"error","error":"requests is not installed","results":[]}'
+
+    executor = MappingToolExecutor.from_tools([tool_returns_json_error])
+    result = executor.execute(tool_calls=[{"name": "tool_returns_json_error", "arguments": {}, "call_id": "c1"}])
+
+    assert result["mode"] == "executed"
+    assert result["results"][0]["success"] is False
+    assert result["results"][0]["output"] is None
+    assert result["results"][0]["error"] == "requests is not installed"

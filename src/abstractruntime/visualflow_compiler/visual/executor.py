@@ -566,6 +566,34 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _create_write_docx_handler(_data: Dict[str, Any]):
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_path = payload.get("file_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("write_docx requires a non-empty 'file_path' input.")
+
+            file_path = raw_path.strip()
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_docx")
+            if path.suffix.lower() != ".docx":
+                raise ValueError("write_docx requires a .docx file path.")
+
+            from abstractruntime.documents import render_docx_bytes
+
+            title = payload.get("title")
+            docx_title = title.strip() if isinstance(title, str) and title.strip() else None
+            docx_bytes, metadata = render_docx_bytes(payload.get("content"), title=docx_title)
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(docx_bytes)
+
+            return {
+                **metadata,
+                "file_path": virtual_path,
+            }
+
+        return handler
+
     def _create_list_folder_files_handler(_data: Dict[str, Any]):
         from abstractcore.tools.abstractignore import AbstractIgnore
         from abstractruntime.utils.file_filters import file_matches_filters, guess_file_family
@@ -1078,6 +1106,26 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return None
         return current
 
+    def _get_by_path_with_found(value: Any, path: str) -> tuple[bool, Any]:
+        """Best-effort dotted-path lookup that distinguishes missing from explicit None."""
+        current = value
+        for part in path.split("."):
+            if current is None:
+                return False, None
+            if isinstance(current, dict):
+                if part not in current:
+                    return False, None
+                current = current.get(part)
+                continue
+            if isinstance(current, list) and part.isdigit():
+                idx = int(part)
+                if idx < 0 or idx >= len(current):
+                    return False, None
+                current = current[idx]
+                continue
+            return False, None
+        return True, current
+
     def _create_get_var_handler(_data: Dict[str, Any]):
         # Pure node: reads from the current run vars (attached onto the Flow by the compiler).
         # Mark as volatile so it is recomputed whenever requested (avoids stale cached reads).
@@ -1085,10 +1133,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             payload = input_data if isinstance(input_data, dict) else {}
             raw_name = payload.get("name")
             name = (raw_name if isinstance(raw_name, str) else str(raw_name or "")).strip()
+            default = _clone_default(payload.get("default")) if "default" in payload else None
             run_vars = getattr(flow, "_run_vars", None)  # type: ignore[attr-defined]
             if not isinstance(run_vars, dict) or not name:
-                return {"value": None}
-            return {"value": _get_by_path(run_vars, name)}
+                return {"value": default}
+            found, value = _get_by_path_with_found(run_vars, name)
+            return {"value": value if found else default}
 
         return handler
 
@@ -3892,6 +3942,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         if type_str == "write_pdf":
             return _create_write_pdf_handler(data)
+
+        if type_str == "write_docx":
+            return _create_write_docx_handler(data)
 
         if type_str == "list_folder_files":
             return _create_list_folder_files_handler(data)

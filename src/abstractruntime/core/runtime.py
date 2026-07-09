@@ -54,6 +54,33 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def normalize_utc_iso(value: Any) -> Optional[str]:
+    """Normalize an ISO-8601 timestamp to aware-UTC isoformat (``+00:00``).
+
+    Due-ness is decided by lexicographic ISO string comparison (tick()'s
+    WAIT_UNTIL auto-unblock and every RunStore.list_due_wait_until
+    implementation), which is only correct when all timestamps share the UTC
+    offset representation. A ``+02:00`` timestamp compared as a string against
+    utc_now_iso() mis-orders silently, so all wait deadlines must be
+    normalized at the single write boundary that creates them.
+
+    Naive timestamps are assumed UTC. Returns None when the value cannot be
+    parsed as ISO-8601.
+    """
+    raw = str(value).strip() if value is not None else ""
+    if not raw:
+        return None
+    # Python 3.10's fromisoformat does not accept a trailing 'Z'.
+    candidate = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def _jsonable(value: Any, *, _path: Optional[set[int]] = None, _depth: int = 0) -> Any:
     """Best-effort conversion to JSON-safe objects.
 
@@ -129,6 +156,69 @@ def _jsonable(value: Any, *, _path: Optional[set[int]] = None, _depth: int = 0) 
         return value
     except Exception:
         return str(value)
+
+
+def _resolve_artifact_backed_value(value: Any, *, artifact_store: Any) -> Any:
+    """Best-effort materialization for artifact-backed payloads."""
+
+    if artifact_store is None:
+        return value
+
+    def _resolve(cur: Any, *, depth: int) -> Any:
+        if depth > 12:
+            return cur
+        if isinstance(cur, dict):
+            artifact_id = cur.get("$artifact") or cur.get("artifact_id")
+            if isinstance(artifact_id, str) and artifact_id.strip():
+                aid = artifact_id.strip()
+                try:
+                    payload = artifact_store.load_json(aid)
+                    if payload is not None:
+                        return _resolve(payload, depth=depth + 1)
+                except Exception:
+                    pass
+
+                try:
+                    artifact = artifact_store.load(aid)
+                except Exception:
+                    artifact = None
+                if artifact is None:
+                    return cur
+
+                try:
+                    text = artifact.as_text()
+                except Exception:
+                    return cur
+                if not isinstance(text, str):
+                    return cur
+
+                try:
+                    return _resolve(json.loads(text), depth=depth + 1)
+                except Exception:
+                    return text
+
+            changed = False
+            out: Dict[str, Any] = {}
+            for key, item in cur.items():
+                new_item = _resolve(item, depth=depth + 1)
+                out[key] = new_item
+                if new_item is not item:
+                    changed = True
+            return out if changed else cur
+
+        if isinstance(cur, list):
+            changed = False
+            out_list: List[Any] = []
+            for item in cur:
+                new_item = _resolve(item, depth=depth + 1)
+                out_list.append(new_item)
+                if new_item is not item:
+                    changed = True
+            return out_list if changed else cur
+
+        return cur
+
+    return _resolve(value, depth=0)
 
 
 def _effect_with_invocation_trace(
@@ -679,6 +769,10 @@ class EffectOutcome:
     result: Optional[Dict[str, Any]] = None
     wait: Optional[WaitState] = None
     error: Optional[str] = None
+    # Whether a FAILED outcome may be retried by the effect policy. Handlers set False for
+    # deterministic client errors (invalid request/auth/model-not-found): retrying a permanent
+    # 4xx burns attempts and user-facing latency for an identical failure.
+    retryable: bool = True
 
     @classmethod
     def completed(cls, result: Optional[Dict[str, Any]] = None) -> "EffectOutcome":
@@ -689,8 +783,8 @@ class EffectOutcome:
         return cls(status="waiting", wait=wait)
 
     @classmethod
-    def failed(cls, error: str) -> "EffectOutcome":
-        return cls(status="failed", error=error)
+    def failed(cls, error: str, *, retryable: bool = True) -> "EffectOutcome":
+        return cls(status="failed", error=error, retryable=retryable)
 
 
 class Runtime:
@@ -718,6 +812,11 @@ class Runtime:
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
+        # Best-effort callbacks invoked once per run when it reaches a terminal status
+        # (COMPLETED/FAILED/CANCELLED). Used by integrations to release run-scoped,
+        # process-local resources (e.g. persistent shell sessions). Never affects
+        # durability/execution: hook failures are swallowed.
+        self._terminal_hooks: list[Callable[[RunState], None]] = []
 
         self._handlers: Dict[EffectType, EffectHandler] = {}
         self._register_builtin_handlers()
@@ -1167,17 +1266,35 @@ class Runtime:
 
         self._run_store.save(run)
 
+    def add_terminal_hook(self, hook: Callable[[RunState], None]) -> None:
+        """Register a best-effort callback invoked when a run reaches a terminal status.
+
+        Hooks run at the same seam as the terminal `abstract.status` event (all terminal
+        transitions, including explicit cancel). They exist for integrations to release
+        run-scoped process-local resources; failures are swallowed (never affect the run).
+        """
+        if callable(hook):
+            self._terminal_hooks.append(hook)
+
     def _append_terminal_status_event(self, run: RunState) -> None:
         """Best-effort: append a durable `abstract.status` event on terminal runs.
 
         This exists for UI clients that rely on `emit_event` records (e.g. status bars)
         and should not be required for correctness. Failures must be non-fatal.
+        Also invokes registered terminal hooks (see add_terminal_hook) — this is the one
+        seam every terminal transition passes through, including explicit cancel.
         """
         try:
             status = getattr(getattr(run, "status", None), "value", None) or str(getattr(run, "status", "") or "")
             status_str = str(status or "").strip().lower()
             if status_str not in {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}:
                 return
+
+            for hook in list(self._terminal_hooks):
+                try:
+                    hook(run)
+                except Exception:
+                    pass
 
             node_id = str(getattr(run, "current_node", None) or "").strip() or "runtime"
             eff = Effect(
@@ -1585,7 +1702,7 @@ class Runtime:
                 tool_name = str(details.get("tool_name") or "start_subworkflow").strip() or "start_subworkflow"
                 call_id = str(details.get("call_id") or "subworkflow").strip() or "subworkflow"
                 sub_run_id = str(payload.get("sub_run_id") or details.get("sub_run_id") or "").strip()
-                child_output = payload.get("output")
+                child_output = _resolve_artifact_backed_value(payload.get("output"), artifact_store=self._artifact_store)
 
                 answer = ""
                 report = ""
@@ -2152,6 +2269,11 @@ class Runtime:
             rec.finish_failure(last_error)
             self._ledger_store.append(rec)
 
+            # Deterministic client errors (invalid request/auth/model-not-found) fail the same
+            # way every time; retrying them only adds latency and cost before the same failure.
+            if getattr(outcome, "retryable", True) is False:
+                return EffectOutcome.failed(last_error, retryable=False)
+
             if attempt < max_attempts:
                 # Wait before retry
                 backoff = self._effect_policy.backoff_seconds(
@@ -2455,14 +2577,21 @@ class Runtime:
         if not until:
             return EffectOutcome.failed("wait_until requires payload.until (ISO timestamp)")
 
+        # Normalize to aware-UTC at the single write boundary: due-ness is an
+        # ISO *string* comparison here and in RunStore.list_due_wait_until, so
+        # offset timestamps (e.g. +02:00) would silently mis-order otherwise.
+        until_utc = normalize_utc_iso(until)
+        if until_utc is None:
+            return EffectOutcome.failed(f"wait_until payload.until is not a valid ISO timestamp: {until!r}")
+
         resume_to = effect.payload.get("resume_to_node") or default_next_node
-        if utc_now_iso() >= str(until):
+        if utc_now_iso() >= until_utc:
             # immediate
-            return EffectOutcome.completed({"until": str(until), "ready": True})
+            return EffectOutcome.completed({"until": until_utc, "ready": True})
 
         wait = WaitState(
             reason=WaitReason.UNTIL,
-            until=str(until),
+            until=until_utc,
             resume_to_node=resume_to,
             result_key=effect.result_key,
         )
@@ -2560,6 +2689,7 @@ class Runtime:
             }
 
         def _tool_output_for_subworkflow(*, sub_run_id: str, output: Any) -> Dict[str, Any]:
+            output = _resolve_artifact_backed_value(output, artifact_store=self._artifact_store)
             rendered = ""
             answer = ""
             report = ""

@@ -13,10 +13,13 @@ from io import BytesIO
 import re
 from pathlib import Path
 from typing import Any
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 
 
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+_BARE_URL_RE = re.compile(r"https?://[^\s<>()]+")
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,7 @@ def _require_pypdf():
 
 def _require_reportlab():
     try:
+        from reportlab.lib import colors  # type: ignore[import-not-found]
         from reportlab.lib.pagesizes import letter  # type: ignore[import-not-found]
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore[import-not-found]
         from reportlab.lib.units import inch  # type: ignore[import-not-found]
@@ -49,10 +53,13 @@ def _require_reportlab():
             Preformatted,
             SimpleDocTemplate,
             Spacer,
+            Table,
+            TableStyle,
         )
     except ModuleNotFoundError as e:
         raise RuntimeError("PDF writing requires the BSD-licensed 'reportlab' package.") from e
     return {
+        "colors": colors,
         "letter": letter,
         "ParagraphStyle": ParagraphStyle,
         "getSampleStyleSheet": getSampleStyleSheet,
@@ -63,6 +70,8 @@ def _require_reportlab():
         "Preformatted": Preformatted,
         "SimpleDocTemplate": SimpleDocTemplate,
         "Spacer": Spacer,
+        "Table": Table,
+        "TableStyle": TableStyle,
     }
 
 
@@ -200,12 +209,58 @@ def _stringify_content(value: Any) -> str:
     return str(value)
 
 
-def _paragraph_markup(text: str) -> str:
+def _trim_url_punctuation(url: str) -> tuple[str, str]:
+    trailing = ""
+    while url and url[-1] in ".,;:!?)]}":
+        trailing = url[-1] + trailing
+        url = url[:-1]
+    return url, trailing
+
+
+def _inline_text_markup(text: str) -> str:
     escaped = escape(text)
     escaped = re.sub(r"`([^`]+)`", r"<font name='Courier'>\1</font>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", escaped)
-    return escaped.replace("\n", "<br/>")
+    return escaped
+
+
+def _link_markup(label: str, url: str) -> str:
+    label_markup = _inline_text_markup(label)
+    return f"<a href={quoteattr(url)} color='blue'><u>{label_markup}</u></a>"
+
+
+def _markup_bare_urls(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for match in _BARE_URL_RE.finditer(text):
+        parts.append(_inline_text_markup(text[cursor : match.start()]))
+        url, trailing = _trim_url_punctuation(match.group(0))
+        if url:
+            parts.append(_link_markup(url, url))
+        if trailing:
+            parts.append(_inline_text_markup(trailing))
+        cursor = match.end()
+    parts.append(_inline_text_markup(text[cursor:]))
+    return "".join(parts)
+
+
+def _paragraph_markup(text: str) -> str:
+    lines: list[str] = []
+    for line in str(text).split("\n"):
+        parts: list[str] = []
+        cursor = 0
+        for match in _MARKDOWN_LINK_RE.finditer(line):
+            parts.append(_markup_bare_urls(line[cursor : match.start()]))
+            url, trailing = _trim_url_punctuation(match.group(2))
+            if url:
+                parts.append(_link_markup(match.group(1), url))
+            if trailing:
+                parts.append(_inline_text_markup(trailing))
+            cursor = match.end()
+        parts.append(_markup_bare_urls(line[cursor:]))
+        lines.append("".join(parts))
+    return "<br/>".join(lines)
 
 
 def _parse_atx_heading(line: str) -> tuple[int, str] | None:
@@ -216,6 +271,92 @@ def _parse_atx_heading(line: str) -> tuple[int, str] | None:
     if not heading_text:
         return None
     return len(match.group(1)), heading_text
+
+
+def _is_table_start(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    first = lines[index].strip()
+    second = lines[index + 1].strip()
+    return "|" in first and bool(_TABLE_SEPARATOR_RE.match(second))
+
+
+def _split_table_row(line: str) -> list[str]:
+    raw = line.strip()
+    if raw.startswith("|"):
+        raw = raw[1:]
+    if raw.endswith("|"):
+        raw = raw[:-1]
+    return [cell.strip() for cell in raw.split("|")]
+
+
+def _normalize_table_rows(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return []
+    column_count = max(len(row) for row in rows)
+    normalized: list[list[str]] = []
+    for row in rows:
+        padded = [*row, *([""] * max(0, column_count - len(row)))]
+        normalized.append(padded[:column_count])
+    return normalized
+
+
+def _table_column_widths(headers: list[str], total_width: float) -> list[float]:
+    if not headers:
+        return []
+    weights: list[float] = []
+    for header in headers:
+        label = header.strip().lower()
+        if any(key in label for key in ("confidence", "status", "score")):
+            weights.append(0.72)
+        elif any(key in label for key in ("source", "reference", "evidence", "url")):
+            weights.append(1.05)
+        elif any(key in label for key in ("claim", "finding", "summary", "description")):
+            weights.append(1.5)
+        else:
+            weights.append(1.0)
+    weight_total = sum(weights) or float(len(headers))
+    return [total_width * weight / weight_total for weight in weights]
+
+
+def _append_table(
+    story: list[Any], rows: list[list[str]], styles: dict[str, Any], rl: dict[str, Any]
+) -> None:
+    normalized = _normalize_table_rows(rows)
+    if not normalized:
+        return
+
+    data: list[list[Any]] = []
+    for row_index, row in enumerate(normalized):
+        style_name = "TableHeader" if row_index == 0 else "TableCell"
+        data.append([rl["Paragraph"](_paragraph_markup(cell), styles[style_name]) for cell in row])
+
+    page_width = float(rl["letter"][0])
+    usable_width = page_width - (1.44 * rl["inch"])
+    table = rl["Table"](
+        data,
+        colWidths=_table_column_widths(normalized[0], usable_width),
+        hAlign="LEFT",
+        repeatRows=1,
+    )
+    table.setStyle(
+        rl["TableStyle"](
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), rl["colors"].HexColor("#E9EEF7")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), rl["colors"].HexColor("#111827")),
+                ("GRID", (0, 0), (-1, -1), 0.25, rl["colors"].HexColor("#CBD5E1")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.75, rl["colors"].HexColor("#64748B")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl["colors"].white, rl["colors"].HexColor("#F8FAFC")]),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(table)
+    story.append(rl["Spacer"](1, 0.12 * rl["inch"]))
 
 
 def _append_paragraph(story: list[Any], paragraph_lines: list[str], styles: dict[str, Any], rl: dict[str, Any]) -> None:
@@ -261,6 +402,19 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
         ),
         "BodyText": stylesheet["BodyText"],
         "Bullet": stylesheet["BodyText"],
+        "TableHeader": rl["ParagraphStyle"](
+            "AFTableHeader",
+            parent=stylesheet["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10,
+        ),
+        "TableCell": rl["ParagraphStyle"](
+            "AFTableCell",
+            parent=stylesheet["BodyText"],
+            fontSize=8,
+            leading=10,
+        ),
         "Code": rl["ParagraphStyle"](
             "CodeBlock",
             parent=stylesheet["Code"],
@@ -295,7 +449,10 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
             story.append(rl["Preformatted"]("\n".join(code_lines), styles["Code"]))
             code_lines.clear()
 
-    for raw_line in markdown_text.splitlines():
+    lines = markdown_text.splitlines()
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
         line = raw_line.rstrip()
         if line.strip().startswith("```"):
             if in_code:
@@ -305,13 +462,26 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
                 _append_paragraph(story, paragraph_lines, styles, rl)
                 flush_bullets()
                 in_code = True
+            i += 1
             continue
         if in_code:
             code_lines.append(line)
+            i += 1
+            continue
+        if _is_table_start(lines, i):
+            _append_paragraph(story, paragraph_lines, styles, rl)
+            flush_bullets()
+            table_rows = [_split_table_row(lines[i])]
+            i += 2
+            while i < len(lines) and "|" in lines[i].strip():
+                table_rows.append(_split_table_row(lines[i]))
+                i += 1
+            _append_table(story, table_rows, styles, rl)
             continue
         if not line.strip():
             _append_paragraph(story, paragraph_lines, styles, rl)
             flush_bullets()
+            i += 1
             continue
         heading = _parse_atx_heading(line)
         if heading:
@@ -319,19 +489,23 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
             flush_bullets()
             level, heading_text = heading
             story.append(rl["Paragraph"](_paragraph_markup(heading_text), styles[f"Heading{level}"]))
+            i += 1
             continue
         bullet = re.match(r"^\s*[-*]\s+(.+)$", line)
         if bullet:
             _append_paragraph(story, paragraph_lines, styles, rl)
             bullet_items.append(rl["ListItem"](rl["Paragraph"](_paragraph_markup(bullet.group(1).strip()), styles["Bullet"])))
+            i += 1
             continue
         numbered = re.match(r"^\s*\d+[.)]\s+(.+)$", line)
         if numbered:
             _append_paragraph(story, paragraph_lines, styles, rl)
             bullet_items.append(rl["ListItem"](rl["Paragraph"](_paragraph_markup(numbered.group(1).strip()), styles["Bullet"])))
+            i += 1
             continue
         flush_bullets()
         paragraph_lines.append(line)
+        i += 1
 
     if in_code:
         flush_code()

@@ -66,6 +66,38 @@ class EffectType(str, Enum):
     MEMORY_KG_QUERY = "memory_kg_query"
     MEMORY_KG_RESOLVE = "memory_kg_resolve"
 
+    # Usage-weighted graph memory (host-provided handlers; abstractmemory seam v1).
+    # Stimulus-driven reconstruction of the emergent working set, the Hebbian
+    # trail deposit for what became prompt-visible, and per-turn formation of the
+    # verbatim<->digest records that feed selection. Contract:
+    # a2a/threads/0001-runtime-memory-orchestration/004-memory--to--runtime.md
+    MEMORY_RECALL = "memory_recall"
+    MEMORY_ACCESS = "memory_access"
+    MEMORY_FORM = "memory_form"
+    # Active remembering: the agent deliberately reshapes salience
+    # (reinforce/attenuate/refocus) or retracts a record (close). One
+    # parameterized effect (op field) per a2a 0001/015; replay-safe via a
+    # turn-derived idempotency key (a2a 0001/016).
+    MEMORY_ADJUST = "memory_adjust"
+    # Affect/valence deposit (a2a 0003, identity wave): signed appraisal of an
+    # experience against the entity's values — orthogonal to attention, never
+    # gates recall. One parameterized effect (op: appraise | heal_scar |
+    # break_bond | gradation); replay-safe via turn-derived event ids riding
+    # memory's supplied-id journal dedup.
+    MEMORY_APPRAISE = "memory_appraise"
+
+    # Entity diary (host-provided handlers, registered ONLY on an entity's
+    # home runtime). The voluntary, entity-elected episodic record — distinct
+    # from the involuntary MEMORY_FORM path by construction: workplaces have
+    # no handler for it, so only-entity-writes is structural, not a prompt
+    # convention. Dual-plane per a2a 0003: the chain (hash-chained book at the
+    # home) is truth; the graph gets the involuntary MEMORY OF THE ACT
+    # (kind="diary", gist + entry_id address, never the prose). DIARY_READ is
+    # the progressive-disclosure fetch: "I remember I wrote X... what was it
+    # again?" — entry_id -> the book's verbatim entry into context.
+    DIARY_WRITE = "diary_write"
+    DIARY_READ = "diary_read"
+
     # Debug / inspection (schema-only tools -> runtime effects)
     VARS_QUERY = "vars_query"
 

@@ -54,6 +54,9 @@ dependencies = [
   "unstructured[docx,odt,pptx,rtf,xlsx]<0.19.0,>=0.18.32",
   "python-pptx<2.0.0,>=1.0.2",
   "pandas<3.0.0,>=1.0.0",
+  # The entity chat driver reads the home's attested spark.yaml (the gateway
+  # learned this lesson first: spark.yaml makes pyyaml load-bearing).
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

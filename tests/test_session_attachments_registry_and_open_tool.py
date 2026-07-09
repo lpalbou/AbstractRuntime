@@ -534,6 +534,76 @@ def test_llm_call_handler_injects_session_attachment_index_when_enabled() -> Non
 
 
 @pytest.mark.basic
+def test_llm_call_handler_appends_session_attachment_index_at_tail() -> None:
+    """Prompt-prefix cache stability (backlog 0212): the attachment index is rebuilt on
+    every call (each read_file registers an attachment), so it must ride the TAIL of the
+    message list. Prepending it mutated byte 0 of the conversation mid-session and
+    invalidated the provider prompt-cache prefix on every new file read."""
+    store = InMemoryArtifactStore()
+    sid = "s1"
+    rid = session_memory_owner_run_id(sid)
+
+    def _register(name: str, content: bytes) -> None:
+        sha = hashlib.sha256(content).hexdigest()
+        store.store(
+            content,
+            content_type="text/plain",
+            run_id=rid,
+            tags={"kind": "attachment", "path": name, "filename": name, "session_id": sid, "sha256": sha},
+        )
+
+    _register("notes.txt", b"hello\nworld\n")
+
+    captured: list[dict] = []
+
+    class _StubLLM:
+        def generate(self, **kwargs):
+            captured.append(dict(kwargs))
+            return {"content": "ok", "metadata": {}}
+
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id=sid, vars={})
+    transcript = [
+        {"role": "user", "content": "Summarize the notes"},
+        {
+            "role": "assistant",
+            "content": "Reading.",
+            "tool_calls": [{"type": "function", "id": "c1", "function": {"name": "read_file", "arguments": "{}"}}],
+        },
+        {"role": "tool", "content": "[read_file]: hello", "tool_call_id": "c1"},
+    ]
+
+    def _effect() -> Effect:
+        return Effect(
+            type=EffectType.LLM_CALL,
+            payload={
+                "messages": [dict(m) for m in transcript],
+                "tools": [{"name": "open_attachment", "parameters": {}}],
+                "params": {"temperature": 0.0},
+            },
+        )
+
+    handler = make_llm_call_handler(llm=_StubLLM(), artifact_store=store)
+    assert handler(run, _effect(), None).status == "completed"
+
+    msgs1 = captured[-1].get("messages")
+    assert isinstance(msgs1, list) and msgs1
+    # Transcript prefix untouched; index appended at the tail.
+    assert msgs1[: len(transcript)] == transcript
+    assert msgs1[-1].get("role") == "system"
+    assert "Stored session attachments" in str(msgs1[-1].get("content") or "")
+
+    # A new registration (e.g. mid-session read_file) must change ONLY the tail:
+    # earlier messages stay byte-identical between consecutive calls.
+    _register("extra.txt", b"more\n")
+    assert handler(run, _effect(), None).status == "completed"
+    msgs2 = captured[-1].get("messages")
+    assert isinstance(msgs2, list) and msgs2
+    assert msgs2[:-1] == msgs1[:-1]
+    assert "extra.txt" in str(msgs2[-1].get("content") or "")
+    assert str(msgs2[-1].get("content") or "") != str(msgs1[-1].get("content") or "")
+
+
+@pytest.mark.basic
 def test_llm_call_handler_injects_active_attachments_when_media_present(tmp_path: Path) -> None:
     store = InMemoryArtifactStore()
     sid = "s1"

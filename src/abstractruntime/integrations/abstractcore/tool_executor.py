@@ -25,6 +25,39 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 
+# Backlog 0214 — parallel read-only tool execution.
+# A batch may declare several INDEPENDENT read-only calls (the ReAct prompt tells the model to
+# batch reads/searches). We may execute those concurrently, but ONLY tools that are known to be
+# side-effect-free may run in parallel; anything else — side-effecting tools, MCP/remote tools, or
+# any name we do not recognize — runs strictly sequentially (fail-safe: never parallelize an effect
+# we cannot prove is read-only, and never reorder a side effect relative to its neighbors).
+_PARALLEL_SAFE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        # Local filesystem reads / search / static analysis (no writes).
+        "list_files",
+        "skim_folders",
+        "search_files",
+        "analyze_code",
+        "skim_files",
+        "read_file",
+        "open_attachment",
+        # Web reads (network I/O, no local side effects).
+        "skim_websearch",
+        "skim_url",
+        "web_search",
+        "fetch_url",
+    }
+)
+
+# Max concurrent read-only tool invocations within one batch. Reads are I/O-bound (file/network),
+# so a small pool captures most of the latency win without oversubscribing threads.
+_PARALLEL_TOOL_MAX_WORKERS = 8
+
+
+def _is_parallel_safe_tool(name: str) -> bool:
+    return str(name or "").strip() in _PARALLEL_SAFE_TOOL_NAMES
+
+
 class ToolExecutor(Protocol):
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]: ...
 
@@ -252,19 +285,33 @@ class MappingToolExecutor:
             """Detect tool failures reported as string outputs (instead of exceptions)."""
             # Structured tool outputs may explicitly report failure without raising.
             # Only treat as error when the tool declares failure.
-            if isinstance(value, dict):
-                success = value.get("success")
-                ok = value.get("ok")
-                if success is False or ok is False:
-                    err = value.get("error") or value.get("message") or "Tool reported failure"
+            def _from_mapping(mapping: Dict[str, Any]) -> Optional[str]:
+                success = mapping.get("success")
+                ok = mapping.get("ok")
+                status_hint = str(mapping.get("status_hint") or "").strip().lower()
+                err = mapping.get("error") or mapping.get("message")
+                if success is False or ok is False or status_hint == "error":
+                    text = str(err or "Tool reported failure").strip()
+                    return text or "Tool reported failure"
+                if err not in {None, ""}:
                     text = str(err).strip()
                     return text or "Tool reported failure"
                 return None
+
+            if isinstance(value, dict):
+                return _from_mapping(value)
             if not isinstance(value, str):
                 return None
             text = value.strip()
             if not text:
                 return None
+            if text.startswith("{") and text.endswith("}"):
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    return _from_mapping(parsed)
             if text.startswith("Error:"):
                 cleaned = text[len("Error:") :].strip()
                 return cleaned or text
@@ -275,36 +322,43 @@ class MappingToolExecutor:
                 return cleaned or text
             return None
 
-        def _append_result(*, call_id: str, runtime_call_id: Optional[str], name: str, output: Any) -> None:
+        def _make_result(*, call_id: str, runtime_call_id: Optional[str], name: str, output: Any) -> Dict[str, Any]:
             error = _error_from_output(output)
             if error is not None:
                 # Preserve structured outputs for provenance/evidence. For string-only error outputs
                 # (the historical convention), keep output empty and store the message in `error`.
                 output_json = None if isinstance(output, str) else _jsonable(output)
-                results.append(
-                    {
-                        "call_id": call_id,
-                        "runtime_call_id": runtime_call_id,
-                        "name": name,
-                        "success": False,
-                        "output": output_json,
-                        "error": error,
-                    }
-                )
-                return
-
-            results.append(
-                {
+                return {
                     "call_id": call_id,
                     "runtime_call_id": runtime_call_id,
                     "name": name,
-                    "success": True,
-                    "output": _jsonable(output),
-                    "error": None,
+                    "success": False,
+                    "output": output_json,
+                    "error": error,
                 }
-            )
 
-        for tc in tool_calls:
+            return {
+                "call_id": call_id,
+                "runtime_call_id": runtime_call_id,
+                "name": name,
+                "success": True,
+                "output": _jsonable(output),
+                "error": None,
+            }
+
+        def _build_result(tc: Dict[str, Any]) -> Dict[str, Any]:
+            """Execute a single tool call and return its result dict (never raises)."""
+            if not isinstance(tc, dict):
+                # Malformed batch entry (upstream always passes dicts, but honor the never-raises
+                # contract so one bad entry cannot abort the whole batch on the sequential path).
+                return {
+                    "call_id": "",
+                    "runtime_call_id": None,
+                    "name": "",
+                    "success": False,
+                    "output": None,
+                    "error": f"Invalid tool call entry (expected object, got {type(tc).__name__})",
+                }
             name = str(tc.get("name", "") or "")
             raw_arguments = tc.get("arguments") or {}
             arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
@@ -315,19 +369,46 @@ class MappingToolExecutor:
 
             func = self._tool_map.get(name)
             if func is None:
-                results.append(
-                    {
+                return {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": name,
+                    "success": False,
+                    "output": None,
+                    "error": f"Tool '{name}' not found",
+                }
+
+            arguments = _canonicalize_kwargs(func, arguments)
+
+            # Schema-aware type coercion (backlog 039): share the SAME coercion the AbstractCore
+            # registry applies, so the runtime mapping-executor path and the registry path behave
+            # identically. String flags like use_regex="false" / allow_dangerous="false" are coerced
+            # to their declared types; an un-coercible typed value fails loudly (no silent default).
+            try:
+                from abstractcore.tools.arg_coercion import (
+                    ArgumentCoercionError,
+                    coerce_arguments_for_callable,
+                )
+
+                try:
+                    arguments, _coercion_warnings = coerce_arguments_for_callable(func, arguments)
+                except ArgumentCoercionError as coercion_error:
+                    return {
                         "call_id": call_id,
                         "runtime_call_id": runtime_call_id_out,
                         "name": name,
                         "success": False,
                         "output": None,
-                        "error": f"Tool '{name}' not found",
+                        "error": f"Invalid argument type for tool '{name}': {coercion_error}",
                     }
-                )
-                continue
-
-            arguments = _canonicalize_kwargs(func, arguments)
+                for _warning in _coercion_warnings:
+                    # StructuredLogger.warning(message, **kwargs) does not support
+                    # %-style lazy args; format eagerly.
+                    logger.warning(f"{_warning} (tool={name})")
+            except ImportError:
+                # AbstractCore coercion unavailable; proceed with canonicalized args (backstop:
+                # high-risk tools keep their own per-tool coercion).
+                pass
 
             def _invoke() -> Any:
                 try:
@@ -341,20 +422,63 @@ class MappingToolExecutor:
 
             ok, output, err = _call_with_timeout(_invoke, timeout_s=self._timeout_s)
             if ok:
-                _append_result(call_id=call_id, runtime_call_id=runtime_call_id_out, name=name, output=output)
-            else:
-                results.append(
-                    {
-                        "call_id": call_id,
-                        "runtime_call_id": runtime_call_id_out,
-                        "name": name,
-                        "success": False,
-                        "output": None,
-                        "error": str(err or "Tool execution failed"),
-                    }
-                )
+                return _make_result(call_id=call_id, runtime_call_id=runtime_call_id_out, name=name, output=output)
+            return {
+                "call_id": call_id,
+                "runtime_call_id": runtime_call_id_out,
+                "name": name,
+                "success": False,
+                "output": None,
+                "error": str(err or "Tool execution failed"),
+            }
 
-        return {"mode": "executed", "results": results}
+        # Execution ordering (backlog 0214): walk the batch in order, grouping CONSECUTIVE
+        # read-only calls into a parallel batch and running everything else strictly sequentially.
+        # This preserves the exact observable ordering of side effects (a side-effecting call runs
+        # after all reads before it and before all reads after it) while collapsing the latency of
+        # independent read batches from sum(latency) to ~max(latency). Results are placed by original
+        # index so the returned order is identical to the serial path.
+        n = len(tool_calls)
+        results = [None] * n  # type: ignore[assignment]
+        i = 0
+        while i < n:
+            name_i = str((tool_calls[i] or {}).get("name", "") or "")
+            if _is_parallel_safe_tool(name_i):
+                # Extend the group over consecutive parallel-safe calls.
+                j = i
+                group: List[tuple[int, Dict[str, Any]]] = []
+                while j < n and _is_parallel_safe_tool(str((tool_calls[j] or {}).get("name", "") or "")):
+                    group.append((j, tool_calls[j]))
+                    j += 1
+                if len(group) == 1:
+                    idx, tc = group[0]
+                    results[idx] = _build_result(tc)
+                else:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    workers = min(len(group), _PARALLEL_TOOL_MAX_WORKERS)
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        futures = {pool.submit(_build_result, tc): idx for idx, tc in group}
+                        for fut, idx in futures.items():
+                            try:
+                                results[idx] = fut.result()
+                            except Exception as e:  # pragma: no cover - _build_result never raises
+                                tc = tool_calls[idx]
+                                results[idx] = {
+                                    "call_id": str((tc or {}).get("call_id") or ""),
+                                    "runtime_call_id": None,
+                                    "name": str((tc or {}).get("name", "") or ""),
+                                    "success": False,
+                                    "output": None,
+                                    "error": f"Tool execution failed: {e}",
+                                }
+                i = j
+            else:
+                # Side-effecting / unknown / MCP: run alone, in order.
+                results[i] = _build_result(tool_calls[i])
+                i += 1
+
+        return {"mode": "executed", "results": list(results)}
 
 
 def _jsonable(value: Any) -> Any:
@@ -662,6 +786,15 @@ _DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
     # Comms (required for bridge-owned delivery flows like Telegram)
     "send_telegram_message",
     "send_telegram_artifact",
+    # Agora agent-to-agent hub (hub-scoped comms; reads are cursor-based, posts
+    # go to invite-only channels/DMs on the configured hub)
+    "agora_whoami",
+    "agora_check_inbox",
+    "agora_ack_inbox",
+    "agora_read_channel",
+    "agora_read_message",
+    "agora_post_message",
+    "agora_send_dm",
 }
 
 
@@ -670,6 +803,11 @@ _DEFAULT_REQUIRE_APPROVAL: Set[str] = {
     "write_file",
     "edit_file",
     "execute_command",
+    # Persistent shell sessions (backlog 0220): execute_command-level trust with state
+    # persistence; opt-in via ABSTRACT_ENABLE_SHELL_TOOLS and still approval-gated per call.
+    "shell_exec",
+    "shell_write_stdin",
+    "shell_close",
     # Comms with higher exfil/spam risk (explicit allow needed; unknown tools also require approval)
     "send_email",
     "send_whatsapp_message",

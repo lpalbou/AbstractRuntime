@@ -208,6 +208,38 @@ def _extract_usage_from_ledger_record(rec: Dict[str, Any]) -> Optional[Dict[str,
     return _parse_usage_summary(usage)
 
 
+def _extract_resolved_action_from_ledger_record(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(rec, dict):
+        return None
+    result = rec.get("result")
+    if not isinstance(result, dict):
+        return None
+    metadata = result.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    action = metadata.get("_runtime_resolved_action")
+    if not isinstance(action, dict):
+        return None
+    return dict(action)
+
+
+def _collect_resolved_actions(ledgers: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for run_id, ledger in (ledgers or {}).items():
+        items = ledger.get("items") if isinstance(ledger, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            rec = item.get("record") if isinstance(item, dict) else None
+            action = _extract_resolved_action_from_ledger_record(rec)
+            if action is None:
+                continue
+            enriched = dict(action)
+            enriched.setdefault("run_id", str(run_id or ""))
+            out.append(enriched)
+    return out
+
+
 def _extract_repl_stats_from_ledger(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     llm_calls = 0
     tool_calls = 0
@@ -966,6 +998,7 @@ def export_run_history_bundle(
         "input_data": filtered_input_data,
         "ledgers": ledgers,
         "timeline": timeline,
+        "resolved_actions": _collect_resolved_actions(ledgers),
         "session": session_section,
     }
     return bundle

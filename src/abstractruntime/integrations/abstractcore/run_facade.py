@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import copy
 import re
+import threading
+import uuid
 from typing import Any, Dict, Optional, Protocol
 
 from ...core.models import Effect, EffectType, RunState, RunStatus, StepPlan
@@ -150,6 +152,45 @@ def _build_tool_calls_resume_workflow(
         workflow_id=workflow_id,
         entry_node=node_id,
         nodes={node_id: done},
+    )
+
+
+def _build_stream_wait_workflow(
+    *,
+    workflow_id: str,
+    wait_key: str,
+    payload: Dict[str, Any],
+    result_key: str,
+) -> WorkflowSpec:
+    def wait(run: RunState, ctx: Any) -> StepPlan:
+        _ = run, ctx
+        return StepPlan(
+            node_id="wait",
+            effect=Effect(
+                type=EffectType.WAIT_EVENT,
+                payload={
+                    "wait_key": wait_key,
+                    "resume_to_node": "done",
+                    "prompt": "Streaming voice synthesis is running.",
+                    "allow_free_text": False,
+                    "details": copy.deepcopy(payload),
+                },
+                result_key=result_key,
+            ),
+            next_node="done",
+        )
+
+    def done(run: RunState, ctx: Any) -> StepPlan:
+        _ = ctx
+        return StepPlan(
+            node_id="done",
+            complete_output={"result": copy.deepcopy(run.vars.get(result_key))},
+        )
+
+    return WorkflowSpec(
+        workflow_id=workflow_id,
+        entry_node="wait",
+        nodes={"wait": wait, "done": done},
     )
 
 
@@ -477,6 +518,208 @@ class AbstractCoreRunFacade:
             params=params,
             child_vars=child_vars,
         )
+
+    def stream_voice(
+        self,
+        run_id: str,
+        *,
+        text: str,
+        output: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ):
+        """Create a durable child run and yield Runtime-owned TTS stream events."""
+
+        client = getattr(self._runtime, "_abstractcore_llm_client", None)
+        stream_fn = getattr(client, "stream_tts", None)
+        if not callable(stream_fn):
+            raise ValueError("Runtime AbstractCore client does not expose streaming TTS.")
+
+        parent = self._runtime.get_state(run_id)
+        spec = {"modality": "voice", "task": "tts"}
+        if isinstance(output, dict):
+            spec.update(copy.deepcopy(output))
+        stream_params = copy.deepcopy(params) if isinstance(params, dict) else {}
+        wait_key = f"abstractcore.voice.tts.stream:{uuid.uuid4()}"
+        result_key = _RESULT_KEY
+        payload = {
+            "mode": "abstractcore_voice_stream",
+            "text": str(text or ""),
+            "output": copy.deepcopy(spec),
+            "params": copy.deepcopy(stream_params),
+        }
+        workflow = _build_stream_wait_workflow(
+            workflow_id=f"{_workflow_id_for_output(spec)}_stream",
+            wait_key=wait_key,
+            payload=payload,
+            result_key=result_key,
+        )
+        child_run_id = self._runtime.start(
+            workflow=workflow,
+            vars=_build_child_vars(parent=parent, child_vars=child_vars),
+            actor_id=parent.actor_id,
+            session_id=parent.session_id,
+            parent_run_id=parent.run_id,
+        )
+        child = self._runtime.tick(workflow=workflow, run_id=child_run_id)
+        if child.status != RunStatus.WAITING or child.waiting is None:
+            raise ValueError("Runtime failed to initialize streaming voice child run.")
+
+        cancel_event = threading.Event()
+        trace_metadata = dict(stream_params.get("trace_metadata") or {}) if isinstance(stream_params.get("trace_metadata"), dict) else {}
+        trace_metadata.setdefault("run_id", child.run_id)
+        trace_metadata.setdefault("parent_run_id", parent.run_id)
+        if parent.session_id is not None:
+            trace_metadata.setdefault("session_id", parent.session_id)
+        if parent.actor_id is not None:
+            trace_metadata.setdefault("actor_id", parent.actor_id)
+        trace_metadata.setdefault("workflow_id", child.workflow_id)
+        stream_params["trace_metadata"] = trace_metadata
+        stream_params["output"] = copy.deepcopy(spec)
+        stream_params["cancel_event"] = cancel_event
+
+        stream = stream_fn(text=str(text or ""), output=copy.deepcopy(spec), params=stream_params)
+
+        def _final_result_for_event(event: Dict[str, Any]) -> Dict[str, Any]:
+            artifact = event.get("audio_artifact") if isinstance(event, dict) else None
+            if event.get("type") == "done" and isinstance(artifact, dict):
+                return {
+                    "content": None,
+                    "outputs": {"voice": [copy.deepcopy(artifact)]},
+                    "metadata": {
+                        "streaming": True,
+                        "terminal_event": copy.deepcopy(event),
+                    },
+                }
+            if event.get("type") == "cancelled":
+                return {
+                    "content": None,
+                    "outputs": {},
+                    "errors": [{"message": "TTS stream was cancelled.", "code": "cancelled"}],
+                    "metadata": {"streaming": True, "cancelled": True, "terminal_event": copy.deepcopy(event)},
+                }
+            return {
+                "content": None,
+                "outputs": {},
+                "errors": [{"message": str(event.get("error") or "TTS stream failed"), "code": "stream_error"}],
+                "metadata": {"streaming": True, "terminal_event": copy.deepcopy(event)},
+            }
+
+        def _resume_cancelled(reason: str) -> None:
+            event = {
+                "type": "cancelled",
+                "ok": False,
+                "cancelled": True,
+                "error": str(reason or "TTS stream was cancelled."),
+                "child_run_id": child.run_id,
+                "run_id": parent.run_id,
+            }
+            try:
+                self._runtime.resume(
+                    workflow=workflow,
+                    run_id=child.run_id,
+                    wait_key=wait_key,
+                    payload=_final_result_for_event(event),
+                    max_steps=100,
+                )
+                return
+            except Exception:
+                pass
+            cancel_run = getattr(self._runtime, "cancel_run", None)
+            if callable(cancel_run):
+                try:
+                    cancel_run(child.run_id, reason=str(reason or "TTS stream was cancelled."))
+                except Exception:
+                    pass
+
+        def _events():
+            terminal_seen = False
+            try:
+                yield {
+                    "type": "runtime_start",
+                    "schema": "abstractruntime.tts_stream.start.v1",
+                    "ok": True,
+                    "run_id": parent.run_id,
+                    "child_run_id": child.run_id,
+                    "wait_key": wait_key,
+                    "durability": "runtime_child_run",
+                    "transport": "jsonl",
+                    "chunk_format": "wav-segment",
+                }
+                for raw_event in stream:
+                    event = dict(raw_event) if isinstance(raw_event, dict) else {"type": "event", "value": str(raw_event)}
+                    event.setdefault("child_run_id", child.run_id)
+                    event.setdefault("run_id", parent.run_id)
+                    event_type = str(event.get("type") or "").strip().lower()
+                    if event_type in {"done", "cancelled", "error"}:
+                        terminal_seen = True
+                        final_result = _final_result_for_event(event)
+                        final_state = self._runtime.resume(
+                            workflow=workflow,
+                            run_id=child.run_id,
+                            wait_key=wait_key,
+                            payload=final_result,
+                            max_steps=100,
+                        )
+                        event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                        yield event
+                        return
+                    yield event
+                if not terminal_seen:
+                    event = {
+                        "type": "error",
+                        "ok": False,
+                        "error": "TTS stream ended without a terminal event.",
+                        "child_run_id": child.run_id,
+                        "run_id": parent.run_id,
+                    }
+                    final_state = self._runtime.resume(
+                        workflow=workflow,
+                        run_id=child.run_id,
+                        wait_key=wait_key,
+                        payload=_final_result_for_event(event),
+                        max_steps=100,
+                    )
+                    event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                    yield event
+            except GeneratorExit:
+                cancel_event.set()
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+                if not terminal_seen:
+                    _resume_cancelled("TTS stream disconnected before completion")
+                raise
+            except Exception as exc:
+                event = {
+                    "type": "error",
+                    "ok": False,
+                    "error": str(exc),
+                    "child_run_id": child.run_id,
+                    "run_id": parent.run_id,
+                }
+                try:
+                    final_state = self._runtime.resume(
+                        workflow=workflow,
+                        run_id=child.run_id,
+                        wait_key=wait_key,
+                        payload=_final_result_for_event(event),
+                        max_steps=100,
+                    )
+                    event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                except Exception:
+                    cancel_run = getattr(self._runtime, "cancel_run", None)
+                    if callable(cancel_run):
+                        try:
+                            cancel_run(child.run_id, reason=str(exc))
+                        except Exception:
+                            pass
+                yield event
+
+        return _events()
 
     def generate_music(
         self,

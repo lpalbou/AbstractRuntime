@@ -9,6 +9,7 @@ Provides:
 - Convenience runtime factories for local/remote/hybrid modes
 - Public discovery facade for provider/media/catalog snapshot queries
 - Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
+- Public config facade for AbstractCore capability-default routes and config API keys
 - Public comms facade for host-local email helper operations
 - Public Telegram host wrappers for TDLib bootstrap/global-client/send parity
 - Public durable run facade for run-scoped AbstractCore LLM/tool child runs, including outbound comms sends
@@ -35,6 +36,14 @@ from .comms_facade import (
     list_emails,
     read_email,
     send_email,
+)
+from .config_facade import (
+    capability_default_config_file,
+    capability_default_specs,
+    clear_capability_default,
+    list_capability_defaults,
+    read_config_api_key,
+    set_capability_default,
 )
 from .discovery_facade import (
     AbstractCoreDiscoveryFacade,
@@ -93,6 +102,12 @@ __all__ = [
     "bootstrap_telegram_auth_from_env",
     "get_abstractcore_discovery_facade",
     "get_abstractcore_host_facade",
+    "capability_default_config_file",
+    "capability_default_specs",
+    "clear_capability_default",
+    "list_capability_defaults",
+    "read_config_api_key",
+    "set_capability_default",
     "list_email_accounts",
     "list_emails",
     "read_email",

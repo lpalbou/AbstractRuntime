@@ -18,10 +18,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..core.models import RunState
-from ..storage.artifacts import ArtifactStore, artifact_ref, is_artifact_ref
+from ..storage.artifacts import ArtifactStore, artifact_ref, get_artifact_id, is_artifact_ref
 
 
 DEFAULT_EVIDENCE_TOOL_NAMES: tuple[str, ...] = ("web_search", "fetch_url", "execute_command")
+MAX_INLINE_RENDERED_CHARS = 12_000
 
 
 def utc_now_iso() -> str:
@@ -59,6 +60,19 @@ def _json_loads_maybe(text: str) -> Optional[Any]:
         return json.loads(t)
     except Exception:
         return None
+
+
+def _compact_rendered_text(text: str, *, artifact_id: str, max_chars: int = MAX_INLINE_RENDERED_CHARS) -> str:
+    """Return an explicit model-visible preview for large rendered tool observations."""
+    s = str(text or "")
+    if len(s) <= max_chars:
+        return s
+    marker = (
+        f"\n#TRUNCATION: rendered tool output compacted to {max_chars} chars "
+        f"from {len(s)} chars. Full rendered output artifact_id={artifact_id}."
+    )
+    keep = max(0, max_chars - len(marker))
+    return s[:keep].rstrip() + marker
 
 
 def _store_text(
@@ -178,6 +192,7 @@ class EvidenceRecorder:
                     norm_text = output_dict.pop("normalized_text", None)
                     content_type = output_dict.get("content_type")
                     content_type_str = str(content_type) if isinstance(content_type, str) else ""
+                    rendered_text = output_dict.get("rendered")
 
                     raw_ref = None
                     if isinstance(raw_text, str) and raw_text:
@@ -202,6 +217,25 @@ class EvidenceRecorder:
                         )
                         output_dict["normalized_artifact"] = norm_ref
                         artifacts["normalized_text"] = norm_ref
+
+                    if isinstance(rendered_text, str) and len(rendered_text) > MAX_INLINE_RENDERED_CHARS:
+                        rendered_ref = _store_text(
+                            self._store,
+                            text=rendered_text,
+                            run_id=run.run_id,
+                            tags={**tags, "part": "rendered"},
+                            content_type="text/plain",
+                        )
+                        if rendered_ref is not None:
+                            rendered_id = get_artifact_id(rendered_ref)
+                            output_dict["rendered_artifact"] = rendered_ref
+                            output_dict["rendered_truncated"] = True
+                            output_dict["rendered_chars"] = len(rendered_text)
+                            output_dict["rendered"] = _compact_rendered_text(
+                                rendered_text,
+                                artifact_id=rendered_id,
+                            )
+                            artifacts["rendered"] = rendered_ref
 
                     evidence_payload["url"] = str(output_dict.get("url") or url)
                     evidence_payload["final_url"] = str(output_dict.get("final_url") or "")
@@ -322,4 +356,3 @@ class EvidenceRecorder:
             recorded += 1
 
         return EvidenceCaptureStats(recorded=recorded)
-

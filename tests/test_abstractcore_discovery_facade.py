@@ -1186,6 +1186,36 @@ def test_local_provider_models_reject_invalid_capability_filters(monkeypatch) ->
     assert called is False
 
 
+def test_local_provider_models_preserve_provider_errors(monkeypatch) -> None:
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    calls: list[Dict[str, Any]] = []
+
+    def fake_models(provider: str, **kwargs: Any) -> list[str]:
+        calls.append({"provider": provider, **kwargs})
+        raise RuntimeError("Missing or invalid bearer token")
+
+    monkeypatch.setattr("abstractcore.providers.registry.get_available_models_for_provider", fake_models)
+
+    payload = discovery_queries.local_list_provider_models(
+        "openai-compatible",
+        base_url="https://endpoint.example.test/v1",
+        provider_api_key="secret",
+    )
+
+    assert payload["available"] is False
+    assert payload["models"] == []
+    assert payload["error"] == "Missing or invalid bearer token"
+    assert calls == [
+        {
+            "provider": "openai-compatible",
+            "base_url": "https://endpoint.example.test/v1",
+            "api_key": "secret",
+            "raise_on_error": True,
+        }
+    ]
+
+
 def test_discovery_facade_preserves_model_capability_lookup_failures(monkeypatch) -> None:
     monkeypatch.setattr(
         "abstractcore.architectures.detection.get_model_capabilities",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zipfile import ZipFile
 
 from abstractruntime.core.runtime import Runtime
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
@@ -188,6 +189,88 @@ def test_write_pdf_and_read_pdf_use_run_workspace(tmp_path: Path) -> None:
     assert state.output["metadata"]["content_type"] == "application/pdf"
     assert state.output["pdf_path"] == relpath
     assert len(state.output["sha256"]) == 64
+
+
+def test_write_docx_uses_run_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    relpath = "reports/research-report.docx"
+
+    vf = load_visualflow_json(
+        {
+            "id": "test-docx-workspace",
+            "name": "test-docx-workspace",
+            "nodes": [
+                {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+                {
+                    "id": "build_markdown",
+                    "type": "code",
+                    "data": {
+                        "nodeType": "code",
+                        "codeBody": (
+                            "return '# Research Report\\n\\n'"
+                            "+ '| Claim | Evidence |\\n|---|---|\\n| A | Source 1 |\\n\\n'"
+                            "+ '- Contrary evidence is preserved.\\n'"
+                        ),
+                    },
+                },
+                {
+                    "id": "write_docx",
+                    "type": "write_docx",
+                    "data": {
+                        "nodeType": "write_docx",
+                        "pinDefaults": {"file_path": relpath, "title": "Research Report"},
+                    },
+                },
+                {
+                    "id": "end",
+                    "type": "on_flow_end",
+                    "data": {
+                        "nodeType": "on_flow_end",
+                        "inputs": [
+                            {"id": "exec-in", "label": "", "type": "execution"},
+                            {"id": "docx_path", "label": "docx_path", "type": "string"},
+                            {"id": "sha256", "label": "sha256", "type": "string"},
+                            {"id": "content_type", "label": "content_type", "type": "string"},
+                        ],
+                    },
+                },
+            ],
+            "edges": [
+                {"source": "start", "sourceHandle": "exec-out", "target": "build_markdown", "targetHandle": "exec-in"},
+                {"source": "build_markdown", "sourceHandle": "exec-out", "target": "write_docx", "targetHandle": "exec-in"},
+                {"source": "write_docx", "sourceHandle": "exec-out", "target": "end", "targetHandle": "exec-in"},
+                {"source": "build_markdown", "sourceHandle": "output", "target": "write_docx", "targetHandle": "content"},
+                {"source": "write_docx", "sourceHandle": "file_path", "target": "end", "targetHandle": "docx_path"},
+                {"source": "write_docx", "sourceHandle": "sha256", "target": "end", "targetHandle": "sha256"},
+                {"source": "write_docx", "sourceHandle": "content_type", "target": "end", "targetHandle": "content_type"},
+            ],
+        }
+    )
+
+    workflow = compile_flow(visual_to_flow(vf))
+    runtime = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+
+    run_id = runtime.start(
+        workflow=workflow,
+        vars={"workspace_root": str(workspace), "workspace_access_mode": "workspace_only"},
+    )
+    state = runtime.tick(workflow=workflow, run_id=run_id, max_steps=20)
+
+    report = workspace / relpath
+    assert state.status.value == "completed"
+    assert report.read_bytes().startswith(b"PK")
+    assert state.output["docx_path"] == relpath
+    assert len(state.output["sha256"]) == 64
+    assert (
+        state.output["content_type"]
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    with ZipFile(report) as zf:
+        document_xml = zf.read("word/document.xml").decode("utf-8")
+    assert "Research Report" in document_xml
+    assert "Contrary evidence is preserved" in document_xml
+    assert "# Research Report" not in document_xml
 
 
 def test_read_pdf_reports_explicit_truncation(tmp_path: Path) -> None:

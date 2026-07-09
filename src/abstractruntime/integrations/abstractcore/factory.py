@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ...core.config import RuntimeConfig
+from ...core.policy import RetryPolicy
 from ...core.runtime import Runtime
 from ...storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from ...storage.json_files import JsonFileRunStore, JsonlLedgerStore
@@ -50,6 +51,30 @@ def _ensure_observable_ledger(ledger_store: LedgerStore) -> LedgerStore:
     if isinstance(ledger_store, ObservableLedgerStoreProtocol):
         return ledger_store
     return ObservableLedgerStore(ledger_store)
+
+
+def register_shell_session_teardown(runtime: Runtime) -> None:
+    """Close a run's persistent shell sessions when the run reaches a terminal state.
+
+    Backlog 0220: shell sessions are process-local resources namespaced by run id
+    (`namespaced_session_id`); this hook guarantees an approved session never outlives
+    the run it was approved for — including explicit cancel, which flows through the
+    same terminal seam. Safe to call on any runtime (no-op when shell tools are unused
+    or abstractcore is absent).
+    """
+    try:
+        from abstractcore.tools.shell_session import get_shell_session_registry
+    except Exception:  # pragma: no cover - abstractcore always present in this integration
+        return
+
+    def _close_run_sessions(run: Any) -> None:
+        run_id = str(getattr(run, "run_id", "") or "").strip()
+        if run_id:
+            get_shell_session_registry().close_namespace(run_id)
+
+    add = getattr(runtime, "add_terminal_hook", None)
+    if callable(add):
+        add(_close_run_sessions)
 
 
 def _attach_runtime_abstractcore_client(runtime: Runtime, llm_client: Any) -> None:
@@ -177,12 +202,25 @@ def create_local_runtime(
         max_output_tokens=config.max_output_tokens if config.max_output_tokens is not None else -1,
     )
 
+    # Default to retries for transient LLM failures (backlog 0217). A single provider hiccup
+    # (rate limit, connection reset) should not fail an entire durable run; an LLM_CALL is
+    # side-effect-free, so re-issuing it is safe. TOOL_CALLS are NOT retried by default
+    # (tool_max_attempts=1): a batch that raised mid-execution may have already applied a side
+    # effect (write_file/execute_command), and the idempotency key only makes REPLAY of a
+    # *completed* result safe, not re-execution of a partially-applied one. Callers can override
+    # via an explicit `effect_policy`.
+    effective_policy = (
+        effect_policy
+        if effect_policy is not None
+        else RetryPolicy(llm_max_attempts=3, tool_max_attempts=1)
+    )
+
     rt = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         effect_handlers=handlers,
         context=context,
-        effect_policy=effect_policy,
+        effect_policy=effective_policy,
         config=config,
         artifact_store=artifact_store,
         chat_summarizer=summarizer,
@@ -194,6 +232,7 @@ def create_local_runtime(
             setter(tools)
     except Exception:
         pass
+    register_shell_session_teardown(rt)
     _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 
@@ -204,11 +243,14 @@ def create_remote_runtime(
     model: str,
     headers: Optional[Dict[str, str]] = None,
     timeout_s: Optional[float] = None,
+    core_config_file: Optional[str | Path] = None,
+    capability_defaults: Optional[Any] = None,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     tool_executor: Optional[ToolExecutor] = None,
     context: Optional[Any] = None,
     artifact_store: Optional[ArtifactStore] = None,
+    effect_policy: Optional[Any] = None,
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
@@ -232,15 +274,26 @@ def create_remote_runtime(
         headers=headers,
         timeout_s=resolved_timeout_s,
         artifact_store=artifact_store,
+        core_config_file=core_config_file,
+        capability_defaults=capability_defaults,
     )
     tools = tool_executor or PassthroughToolExecutor()
     handlers = build_effect_handlers(llm=llm_client, tools=tools, artifact_store=artifact_store, run_store=run_store)
+    # Match create_local_runtime: default to retries for transient LLM failures (backlog 0217).
+    # Remote LLM calls are equally side-effect-free; tools are NOT retried (tool_max_attempts=1) for
+    # the same partial-application reason. Previously the remote path silently had NO retries.
+    effective_policy = (
+        effect_policy
+        if effect_policy is not None
+        else RetryPolicy(llm_max_attempts=3, tool_max_attempts=1)
+    )
     rt = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,
         effect_handlers=handlers,
         context=context,
         artifact_store=artifact_store,
+        effect_policy=effective_policy,
     )
     try:  # pragma: no cover
         setter = getattr(rt, "set_tool_executor_for_resume", None)
@@ -248,6 +301,7 @@ def create_remote_runtime(
             setter(tools)
     except Exception:
         pass
+    register_shell_session_teardown(rt)
     _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 
@@ -259,6 +313,8 @@ def create_hybrid_runtime(
     headers: Optional[Dict[str, str]] = None,
     timeout_s: Optional[float] = None,
     tool_timeout_s: Optional[float] = None,
+    core_config_file: Optional[str | Path] = None,
+    capability_defaults: Optional[Any] = None,
     run_store: Optional[RunStore] = None,
     ledger_store: Optional[LedgerStore] = None,
     context: Optional[Any] = None,
@@ -294,6 +350,8 @@ def create_hybrid_runtime(
         headers=headers,
         timeout_s=resolved_timeout_s,
         artifact_store=artifact_store,
+        core_config_file=core_config_file,
+        capability_defaults=capability_defaults,
     )
     tools = AbstractCoreToolExecutor(timeout_s=resolved_tool_timeout_s)
     try:
@@ -317,6 +375,7 @@ def create_hybrid_runtime(
             setter(tools)
     except Exception:
         pass
+    register_shell_session_teardown(rt)
     _attach_runtime_abstractcore_client(rt, llm_client)
     return rt
 

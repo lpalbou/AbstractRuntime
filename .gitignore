@@ -87,3 +87,6 @@ venv.bak/
 ```
 
 .DS_Store
+
+# Agent session artifacts
+.cursor/

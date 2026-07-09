@@ -93,6 +93,33 @@ generated-media path should use `build_artifact_descriptor_payload(...)` from
 schema, bounded secret-key redaction, and prompt/text sensitivity labels without
 making Gateway invent a parallel descriptor contract.
 
+## Tool-output offload
+
+Large tool outputs are stored as session artifacts instead of being carried
+inline in prompts and ledger records. The agent keeps a bounded preview plus an
+`open_attachment` handle, so full content stays retrievable on demand while the
+durable record stays lean.
+
+Offload applies to:
+
+- `read_file` content above the inline threshold;
+- `execute_command` `stdout` and `stderr`, regardless of exit code (verbose
+  failures are offloaded like verbose successes);
+- any other host tool whose string output exceeds the inline threshold.
+
+Thresholds (environment-configurable):
+
+- `ABSTRACTRUNTIME_MAX_INLINE_BYTES` (default 256 KiB): outputs at or below
+  this size stay inline.
+- `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES` (default 50 MB): the retention cap for
+  offloaded outputs.
+
+Output above the retention cap is not stored and is never kept inline. The tool
+result carries an explicit notice stating the size, the cap, and how to proceed
+(narrow the command, for example with `head` or `grep`, or redirect to a file
+and read a bounded range). The decision on how to proceed belongs to the agent
+or user; the runtime never drops output silently.
+
 ## Catalog and search
 
 `InMemoryArtifactStore` and `FileArtifactStore` support:

@@ -714,7 +714,11 @@ def local_list_provider_models(
     try:
         from abstractcore.providers.registry import get_available_models_for_provider
 
-        models = get_available_models_for_provider(provider_text, **kwargs)
+        models = get_available_models_for_provider(
+            provider_text,
+            raise_on_error=True,
+            **kwargs,
+        )
     except Exception as exc:
         return _with_status(
             {"provider": provider_text, "models": []},

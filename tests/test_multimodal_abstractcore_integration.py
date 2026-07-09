@@ -423,6 +423,89 @@ def test_local_image_media_only_runs_in_subprocess_and_stores_generated_bytes(mo
     assert out["model"] == "AbstractFramework/flux.2-klein-4b-4bit"
 
 
+def test_local_image_edit_subprocess_receives_resolved_source_media(monkeypatch, tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "runtime")
+    image_meta = store.store(
+        b"png-source",
+        content_type="image/png",
+        tags={"filename": "source.png"},
+    )
+    calls = []
+    seen = {}
+
+    class _InProcessImageLLM:
+        def _run_multimodal_spec(self, **_kwargs):
+            raise AssertionError("image edit must stay isolated from the runtime process")
+
+    def fake_subprocess(**kwargs):
+        calls.append(kwargs)
+        media_item = kwargs["media"][0]
+        seen["source_bytes"] = Path(media_item["file_path"]).read_bytes()
+        return {
+            "outputs": {
+                "image": [
+                    {
+                        "modality": "image",
+                        "task": "image_edit",
+                        "data": b"png-edited",
+                        "content_type": "image/png",
+                        "format": "png",
+                        "provider": "mlx-gen",
+                        "model": "AbstractFramework/qwen-image-edit-2511-8bit",
+                    }
+                ]
+            },
+            "metadata": {
+                "media_only": True,
+                "subprocess": True,
+                "runtime_provider": "mlx",
+                "runtime_model": "qwen3.5-2b",
+                "execution_mode": "local_one_shot_subprocess",
+            },
+        }
+
+    monkeypatch.setattr(
+        "abstractruntime.integrations.abstractcore.llm_client._run_local_image_subprocess",
+        fake_subprocess,
+    )
+
+    client = object.__new__(LocalAbstractCoreLLMClient)
+    client._provider = "mlx"
+    client._model = "qwen3.5-2b"
+    client._llm_kwargs = {}
+    client._artifact_store = store
+    client._generate_lock = None
+    client._llm = _InProcessImageLLM()
+    client._maybe_prepare_prompt_cache = lambda **_kwargs: None
+
+    out = client.generate(
+        prompt="Add color.",
+        media=[{"$artifact": image_meta.artifact_id, "type": "image", "role": "source"}],
+        params={
+            "output": {
+                "modality": "image",
+                "task": "image_edit",
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-edit-2511-8bit",
+            },
+        },
+    )
+
+    assert calls
+    assert len(calls[0]["media"]) == 1
+    media_item = calls[0]["media"][0]
+    assert media_item["role"] == "source"
+    assert media_item["type"] == "image"
+    assert media_item["$artifact"] == image_meta.artifact_id
+    assert media_item["artifact_id"] == image_meta.artifact_id
+    assert media_item["content_type"] == "image/png"
+    assert media_item["file_path"].endswith(".png")
+    assert seen["source_bytes"] == b"png-source"
+    artifact = store.load(out["outputs"]["image"][0]["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"png-edited"
+
+
 def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -> None:
     from abstractruntime.integrations.abstractcore import llm_client
 
@@ -1329,6 +1412,32 @@ def test_remote_image_output_does_not_reuse_chat_model_as_generation_model() -> 
     client.generate(prompt="A red cube.", params={"output": {"modality": "image", "format": "png"}})
 
     assert "model" not in sender.calls[0]["json"]
+
+
+def test_remote_image_output_applies_task_specific_capability_default_route() -> None:
+    sender = _RemoteImageSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=InMemoryArtifactStore(),
+        capability_defaults={
+            "output.image.text_to_image": {
+                "provider": "mlx-gen",
+                "model": "AbstractFramework/qwen-image-2512-8bit",
+            }
+        },
+    )
+
+    result = client.generate(
+        prompt="A red cube.",
+        params={"output": {"modality": "image", "format": "png"}},
+    )
+
+    assert sender.calls[0]["url"] == "http://core.test/v1/images/generations"
+    assert sender.calls[0]["json"]["provider"] == "mlx-gen"
+    assert sender.calls[0]["json"]["model"] == "AbstractFramework/qwen-image-2512-8bit"
+    assert result["metadata"]["_resolved_generate_route"]["output_routes"][0]["route_key"] == "output.image.text_to_image"
 
 
 def test_remote_image_output_preserves_mflux_provider_and_model_separately() -> None:

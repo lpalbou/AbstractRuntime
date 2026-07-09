@@ -26,18 +26,46 @@ def _import_root(module: str) -> str:
 
 
 def test_runtime_kernel_does_not_import_optional_capability_stacks() -> None:
+    """MODULE-LEVEL optional-stack imports are forbidden in kernel dirs.
+
+    Contract ruling (landing audit, 2026-07-07): the boundary's INTENT is
+    import-time cleanliness — `import abstractruntime` must never pull the
+    optional stacks (the companion subprocess test enforces exactly that).
+    FUNCTION-LEVEL (lazy) imports are the sanctioned mechanism for kernel
+    features that USE optional stacks when present (the identity drivers:
+    chat/life/tools/digest) — they are deliberate, labeled, and only run
+    when the operator invokes those features. The static scan therefore
+    checks module scope only: an optional import that executes at import
+    time is a violation; one inside a function body is the design.
+    """
     violations: list[str] = []
     for base in KERNEL_DIRS:
         for path in sorted(base.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
+            # Collect module-level statements only (direct children of the
+            # Module node, plus module-level try/if blocks — the common
+            # guarded-import patterns that still execute at import time).
+            def _module_level_nodes(root: ast.Module):
+                stack = list(root.body)
+                while stack:
+                    stmt = stack.pop()
+                    yield stmt
+                    if isinstance(stmt, (ast.Try, ast.If, ast.With)):
+                        for field in ("body", "orelse", "finalbody", "handlers"):
+                            for child in getattr(stmt, field, []) or []:
+                                if isinstance(child, ast.ExceptHandler):
+                                    stack.extend(child.body)
+                                else:
+                                    stack.append(child)
+
+            for node in _module_level_nodes(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if _import_root(alias.name) in OPTIONAL_STACK_ROOTS:
-                            violations.append(f"{path.relative_to(ROOT)} imports {alias.name}")
+                            violations.append(f"{path.relative_to(ROOT)} imports {alias.name} at module level")
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     if _import_root(node.module) in OPTIONAL_STACK_ROOTS:
-                        violations.append(f"{path.relative_to(ROOT)} imports {node.module}")
+                        violations.append(f"{path.relative_to(ROOT)} imports {node.module} at module level")
 
     assert violations == []
 

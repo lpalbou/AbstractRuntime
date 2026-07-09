@@ -170,12 +170,14 @@ VisualFlow authoring note (media and document nodes):
   follow the shared canonical contract: `rel/path` for the main workspace root
   and `mount_alias/rel/path` for approved mounts. `read_pdf` extracts text and
   metadata from PDF paths with `pypdf`; `write_pdf` renders text or
-  Markdown-style content to real PDF bytes with `reportlab`; `list_folder_files`
-  enumerates workspace-scoped folders with family/extension filters;
+  Markdown-style content to real PDF bytes with `reportlab`; `write_docx`
+  renders Markdown-style content to real `.docx` bytes with the standard
+  library; `list_folder_files` enumerates workspace-scoped folders with
+  family/extension filters;
   `import_workspace_file` snapshots a workspace file into a durable artifact;
   `read_artifact` projects saved file content back out as text/JSON/bounded
   binary metadata; and `export_artifact` writes a durable artifact back to a
-  workspace path. PDF bytes are written to the workspace path and only
+  workspace path. PDF/DOCX bytes are written to the workspace path and only
   JSON-safe metadata/path values are stored in run state. In local Runtime-only
   runs with no workspace scope, relative file-node paths still fall back to the
   process working directory.
@@ -195,6 +197,8 @@ Implementation: `src/abstractruntime/history_bundle.py`.
 - `persist_workflow_snapshot(...)`
 
 This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
+When available, it also includes `resolved_actions`: bounded capability/action summaries derived
+from Core route resolution and persisted from `LLM_CALL` results.
 
 ## Runtime-owned integrations
 

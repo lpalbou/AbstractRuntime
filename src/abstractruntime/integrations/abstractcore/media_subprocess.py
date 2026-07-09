@@ -458,7 +458,7 @@ def main() -> int:
                 raise ValueError("Output spec must be an object.")
             modality = str(spec.get("modality") or "").strip().lower()
             task = str(spec.get("task") or "").strip().lower()
-            if modality == "image" and (not task or task in {"image_generation", "t2i", "text_to_image"}):
+            if modality == "image":
                 for item in _run_image_spec(registry, prompt=prompt, spec=dict(spec), media=media):
                     response.add_output("image", item)
                 continue

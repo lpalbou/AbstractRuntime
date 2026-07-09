@@ -1161,7 +1161,7 @@ the recorded result rather than resending the external message.
 
 ## Should a host execute image / TTS / music / STT directly for an existing run?
 
-No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `edit_image(...)`, `upscale_image(...)`, `generate_voice(...)`, `generate_music(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.
+No. If the work is run-scoped and should become part of durable run history, the host should ask Runtime to execute it. Use `abstractruntime.integrations.abstractcore.get_abstractcore_run_facade(runtime)` and create a child run with `generate_image(...)`, `edit_image(...)`, `upscale_image(...)`, `generate_voice(...)`, `stream_voice(...)`, `generate_music(...)`, `transcribe_audio(...)`, or the lower-level `execute_llm_call(...)`.
 
 That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/run_facade.py`.
@@ -2702,6 +2702,33 @@ generated-media path should use `build_artifact_descriptor_payload(...)` from
 `abstractruntime.storage.artifacts`. That helper applies the Runtime descriptor
 schema, bounded secret-key redaction, and prompt/text sensitivity labels without
 making Gateway invent a parallel descriptor contract.
+
+## Tool-output offload
+
+Large tool outputs are stored as session artifacts instead of being carried
+inline in prompts and ledger records. The agent keeps a bounded preview plus an
+`open_attachment` handle, so full content stays retrievable on demand while the
+durable record stays lean.
+
+Offload applies to:
+
+- `read_file` content above the inline threshold;
+- `execute_command` `stdout` and `stderr`, regardless of exit code (verbose
+  failures are offloaded like verbose successes);
+- any other host tool whose string output exceeds the inline threshold.
+
+Thresholds (environment-configurable):
+
+- `ABSTRACTRUNTIME_MAX_INLINE_BYTES` (default 256 KiB): outputs at or below
+  this size stay inline.
+- `ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES` (default 50 MB): the retention cap for
+  offloaded outputs.
+
+Output above the retention cap is not stored and is never kept inline. The tool
+result carries an explicit notice stating the size, the cap, and how to proceed
+(narrow the command, for example with `head` or `grep`, or redirect to a file
+and read a bounded range). The decision on how to proceed belongs to the agent
+or user; the runtime never drops output silently.
 
 ## Catalog and search
 

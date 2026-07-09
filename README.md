@@ -39,10 +39,11 @@ default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
 profile or another package-specific local extra.
 
-VisualFlow PDF document nodes use permissive dependencies in Runtime's base
-install: `Read PDF` extracts text and metadata with `pypdf`, and `Write PDF`
-renders text or Markdown-style report content to real PDF bytes with
-`reportlab`.
+VisualFlow document nodes use permissive dependencies in Runtime's base install:
+`Read PDF` extracts text and metadata with `pypdf`, `Write PDF` renders text or
+Markdown-style report content to real PDF bytes with `reportlab`, and
+`Write DOCX` renders Markdown-style report content to Word-compatible `.docx`
+bytes with the Python standard library.
 
 Native Python hardware profiles add local inferencer stacks:
 
@@ -124,6 +125,9 @@ Drivers + distribution:
   Core media controls, including `count`/`n`, `seeds`, ordered
   `lora_adapters`, and video `flow_shift`, while keeping provider/model/task
   truth in AbstractCore and AbstractVision.
+- `history_bundle` now exports replay-safe `resolved_actions` summaries derived
+  from Core request/output route resolution, so thin clients can reconstruct
+  what capability ran without reverse-engineering prompt prose.
 - VisualFlow structured LLM/Agent results preserve `response` as text and expose
   the schema-conformant object on `data`, so Break Object and Switch can consume
   fields without reparsing the response string.

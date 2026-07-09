@@ -7,6 +7,471 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Tool RESULTS on the turn probe (maintainer 2026-07-09, "the entity turn IS
+  a loop but tool RESULTS are invisible"): every `TurnReport.tool_details`
+  entry now carries a verbatim `result` string — what the lookup returned to
+  the entity — set by `execute_tool_elections` on the election itself.
+  Operator transparency applies (never gated, never truncated); the gateway
+  turn response passes `tool_details` through unchanged. `TurnReport.system_prompt`
+  (observer's cross-lane edit, same observability wave) is owner-approved and
+  now pinned byte-equal in the driver tests.
+- Failure-death visibility (observer/gateway asks 2026-07-09): the own-time
+  loop's final `loop_status` write now names WHY it stopped (`stopped_by`:
+  `failures`/`rest`/`stop_file`/`stop_command`/`max_ticks`/`operator-interrupt`),
+  so a loop that culled itself after three consecutive tick failures no longer
+  reads like a clean stop on the gateway's /loop status route (readers get the
+  field for free — `read_loop_status`/`loop_process_status` pass it through).
+- `identity/substrate.py`: home-direct half of the ONE-substrate-per-entity
+  ruling (2026-07-09 06:32) — `read_home_substrate` + `resolve_home_substrate`
+  implement flags > `<home>/substrate.yaml` > operator env
+  (`ABSTRACTGATEWAY_ENTITY_CHAT_PROVIDER/_MODEL`, the operator's one knob) >
+  loud refusal naming every fix. Mirrors the gateway's `resolve_substrate`
+  semantics (per-field fill, both-or-nothing file reads) so both doors resolve
+  the same stored mind.
+
+### Changed
+- Sleep window now runs the engine's full `sleep_pass` (memory's phase-1
+  maintenance tending FIRST, then the dream — the fork's canonical order,
+  shipped by the memory lane 2026-07-09 with the maintainer's go): the loop's
+  `build_consolidator` swaps `dream_pass` for `sleep_pass` with an
+  `#FALLBACK`-labeled dream-only path on older engines. FIXED in the same
+  move: the consolidator handed the RAW engine dict to a loop checking
+  `formed`, but the engine's dream half says `created` — a genuinely formed
+  dream reported as "a quiet night" (the hand-written test double carried
+  `formed` and masked the mismatch). The consolidator now returns the
+  loop-facing contract explicitly (`formed`/`dream_record_id`/
+  `maintenance_candidates` + full `engine` report) and the test asserts the
+  translation against the real engine.
+- NO substrate code default in the entity CLIs (maintainer ruling 2026-07-09
+  04:26 "NO FALLBACK", executed gateway-side the same night; this was the
+  last cleanup under it): `identity.chat` and `identity.life` argparse
+  defaults for `--provider`/`--model` (`endpoint:ovh-provider`/`gpt-oss-120b`)
+  are GONE, as is chat's `or "lmstudio"` — both CLIs resolve through
+  `resolve_home_substrate` and exit loudly when no rung holds a choice.
+  `--base-url` keeps its default (it feeds the local embedder and
+  lmstudio-class endpoints; it is not a substrate election).
+- Own-time top-gate belt (gateway state-race hardening, dm 2026-07-09): the
+  loop re-reads the operator state at the LAST INSTANT before opening a day;
+  a visit's asleep+visiting write landing between the top-gate read and the
+  summon now yields back to the gate instead of opening a day under the
+  visit. The per-home flock lease (gateway lane) remains the true mutual
+  exclusion; this closes the file-race sliver to microseconds.
+
+### Fixed
+- **Deterministic LLM client errors are no longer retried** (2026-07-09 incident follow-through:
+  a permanent OVH 400 was retried 3 times — "Effect failed after 3 attempts" — adding latency and
+  cost before surfacing the identical error). `EffectOutcome` gains a `retryable` flag; the
+  LLM_CALL handler classifies failures STATUS-CODE-FIRST (abstractcore `ProviderError` now
+  carries `status_code`, attached at the OpenAI-compatible raise sites), then by exception type
+  (invalid-request/auth/model-not-found/unsupported-feature), then a conservative message
+  fallback covering both our "API error (NNN)" and the OpenAI SDK "Error code: NNN" dialects.
+  Transient 4xx stay retryable: 408/409 (LM Studio/vLLM model-load conflicts)/425/429. Adversarial
+  audit follow-through in the same pass: truncation-exhaustion and structured-output-repair
+  failures are now non-retryable (they were deterministic ×9 and ×6 LLM burns — the handler
+  already retried internally), and the Visual Agent failure ANSWER is now a human sentence
+  ("The agent stopped because the model provider rejected the request (HTTP 400). Full details
+  are in the run ledger (run <id>).") instead of raw provider JSON delivered as the chat reply;
+  full error fidelity stays in `meta.error` and the ledger. 5 classification tests.
+
+### Added
+- Speak-now guard (live failure 2026-07-09 06:44, Mnemosyne's first visit:
+  every tool round returned pure tool blocks and the delivered reply was
+  just `[used tool: read_file]`): when a reply is empty once markers are
+  stripped, ONE final prompt-ephemeral continuation demands words ("markers
+  are not a reply"); tool blocks in the spoken reply are marked but never
+  run; an empty second answer delivers the markers with a loud `#FALLBACK`.
+  Test in `tests/test_entity_visit_honesty.py`.
+- Visit-honesty wave (maintainer escalation 2026-07-09, forensics on a live
+  visit transcript; designed with the collective on agora `entity-society`):
+  (1) MEMORIES lines now carry each record's DATE and ORIGIN channel
+  ("[episode #tag 2026-07-08 - lived conversation]") — "do you remember
+  last time?" was unanswerable from undated handles even when passive
+  recall DELIVERED the right episodes, and nine same-origin bridge records
+  read as nine corroborations; `report.memories` mirrors `born_at`/`origin`
+  for the observer probe. (2) `VISIT_OWN_TIME_PARAGRAPH`: visit-phase
+  sessions are told the life loop pauses for the visit and resumes at close
+  (agency blindness: "I cannot run after this conversation ends" repeated
+  3x against direct correction — the base-model prior wins when the
+  contract is silent). (3) Liveness-honesty guard: a reply claiming a live
+  lookup ("the feed was fetched live during this session") on a zero-tool
+  turn gets ONE prompt-ephemeral correction offering three honest paths
+  (really look it up / anchor in the past / retract); a corrected reply may
+  elect real tools (one bounded round); persistent claims are delivered
+  with a loud `#FALLBACK` notice. Narrow trigger with citation/hypothetical
+  abstentions (observer's rules). (4) Wake-cue seeding (runtime half of
+  R3): the first cue after an operator sleep now reads the awake state's
+  reason — which the gateway fills with the visit's facts and elected
+  interests — so commitments made in a visit reach his own time instead of
+  the generic cue returning him to old attractors. Tests:
+  `tests/test_entity_visit_honesty.py` (7).
+- Voluntary memory exploration for summoned entities (maintainer ruling
+  2026-07-09: "it is critical that he can explore voluntarily his memory when
+  he needs to"; designed with the memory lane + two adversarial reviews,
+  grounded in the codex fork's query/expand pattern): one unified
+  `search_memory` tier-1 tool searches BOTH planes — the graph's digests
+  (explicit ladder scopes only) and the whole diary book (gist+text, private
+  included; hits surface GIST-ONLY) — with grouped-by-origin headers
+  ("repetition is not evidence"), dream hits matched on
+  `attributes.proposals` (the motivating twelve-bridges case), embedding
+  fill labeled separately ("by MEANING"), and absence stated with its
+  warrant (append-only book) and exact semantics. `read_memory` now appends
+  an origin + connections footer (provenance channel, session, outgoing/
+  incoming edges with readable #tags) so trails end at named origins instead
+  of walls. Surfaced content is sanitized against visitor-seeded driver
+  framing; `MAX_TOOL_ROUNDS_PER_TURN` rises 2 -> 3 for the
+  search -> read -> follow-one-edge chain. Tests:
+  `tests/test_entity_search_memory.py` (8).
+- Entity substrate defaults switch to OVH `gpt-oss-120b`
+  (`endpoint:ovh-provider`) for the chat + life CLIs, and the recall shelf
+  default widens to 36 seats (maintainer rulings 2026-07-09; live-verified
+  that the tools-contract prompt passes on gpt-oss-120b — the 2026-07-07
+  Harmony `to=tool` 400 did not reproduce). Embeddings stay local.
+- Pooled LLM clients strip construction-time `prompt_cache_key` (agency-parity 0221):
+  `MultiLocalAbstractCoreLLMClient` serves every run/session of a runtime through one provider
+  instance per (provider, model), so abstractcore's new instance-per-session construction
+  convenience is dropped from pooled kwargs with a `#FALLBACK` warning — session-scoped keys
+  keep being injected per call by the LLM_CALL effect handler. 1 test.
+- Persistent shell tool exposure (agency-parity 0220, maintainer-approved 2026-07-08): the
+  abstractcore shell tools (`shell_exec`/`shell_write_stdin`/`shell_close`) are now wired into the
+  runtime with a deliberate safety posture — OPT-IN via `ABSTRACT_ENABLE_SHELL_TOOLS=1` (absent
+  from default toolsets otherwise), approval-gated by default (`_DEFAULT_REQUIRE_APPROVAL`), the
+  session-registry namespace force-stamped with the run id at the TOOL_CALLS trust boundary (a
+  model claiming another run's namespace is overwritten; the stamp rides the approval wait so the
+  approved-resume path executes with the same namespace), initial cwd pinned through workspace
+  policy (`shell_exec.working_directory`, like `execute_command`), and run-scoped teardown: a new
+  generic `Runtime.add_terminal_hook(...)` fires on every terminal transition (completed/failed/
+  cancelled — including explicit cancel) and `register_shell_session_teardown(...)` closes the
+  run's sessions there. Sessions are process-local and never survive a restart; every fresh open
+  is announced in tool output ("new shell session"), so replay after a host restart degrades
+  loudly, never silently. 12 tests (`test_shell_tool_exposure.py`) + live venv-workflow proof on
+  OVH `gpt-oss-120b`.
+- Parallel read-only tool execution (agency-parity 0214): `MappingToolExecutor` now runs a batch's
+  consecutive read-only tool calls concurrently (bounded pool) while side-effecting/unknown/MCP
+  tools stay strictly sequential and ordered; results are placed by index so ordering is identical
+  to serial. A batch of independent reads now completes in ~max(latency) instead of ~sum.
+- Tool-output artifact-offload (agency-parity 0215): any host tool output above the inline byte
+  budget (`ABSTRACTRUNTIME_MAX_INLINE_BYTES`, default 256 KiB) is stored as a session artifact —
+  `execute_command` stdout AND stderr regardless of exit code (verbose failures offload like
+  verbose successes), plus any other tool returning a large string. The durable result keeps a
+  preview + an `open_attachment` handle instead of the full blob. Retention cap raised to 50 MB
+  (`ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES`); output beyond the cap is never stored or kept inline —
+  the result carries an explicit notice (size, cap, how to narrow) so the agent/user decides how
+  to proceed. New `_register_text_as_attachment` stores in-memory text as a deduped session
+  attachment. Documented in `docs/artifacts.md` ("Tool-output offload").
+- Default retries for local + remote runtimes (agency-parity 0217): `create_local_runtime` and
+  `create_remote_runtime` now default `effect_policy=RetryPolicy(llm_max_attempts=3,
+  tool_max_attempts=1)`. LLM calls are retried (side-effect-free); TOOL_CALLS are NOT retried by
+  default (a partially-applied batch must not be blindly re-executed — idempotency only makes replay
+  of a *completed* result safe). Previously the remote path had no retries at all.
+- Prompt-prefix cache stability (agency-parity 0212): the grounding envelope now rides a trailing
+  message in tool-loop shape (instead of rewriting message[0]) and the attachment index is appended
+  at the tail (`messages = cleaned + injected`, role kept `system` with a `kind=attachment_index`
+  marker) instead of prepended, so file reads no longer churn the cached prefix. Prompt caching now
+  defaults ON where a session-scoped key is available (`ABSTRACTRUNTIME_PROMPT_CACHE=0` opts out;
+  an explicit run-level `_runtime.prompt_cache` value, including `False`, wins over env).
+- Life-loop durable stop commands (maintainer ruling 2026-07-08: gateway loop
+  control "shouldn't work with the file system directly"): `LifeLoop` now
+  consumes the home's command inbox (`home.sqlite3` `commands` table, consumer
+  `own-time-loop`) at every stop-check boundary — tick tops, idle polls, and
+  post-nap checks. A `loop.stop` command halts the loop exactly like the STOP
+  file but reports `stopped_by="stop_command"` and logs who asked and why.
+  `fast_forward_loop_commands()` runs at the start-request moment
+  (`spawn_loop_process`, or CLI `main` unless `--skip-command-fast-forward`),
+  so a stop addressed to a previous life never kills the next one while a
+  stop enqueued after the start still lands. The STOP file remains the local
+  manual brake. Tests: `tests/test_entity_life_loop.py` (stop command at tick
+  boundary with no sentinel file, stale-command death at start, stop reaching
+  an asleep-idling loop).
+- Own-time defaults widened per the same ruling: `--context-window` default
+  65536 (was 32768) on the life CLI and `spawn_loop_process`.
+- Own-time contract is INFORMATIONAL, not directive (maintainer ruling
+  2026-07-08: "we shouldn't and can't enforce laws or missions during their
+  free time"). `OWN_TIME_CONTRACT` describes the safe environment and the
+  affordances that exist (think, workspace, search, memory, rest, and — noted
+  as coming — reaching other minds) and states plainly there is nothing the
+  entity is supposed to do; `next:`/`rest` are presented as optional tools.
+  An earlier draft imposed a curiosity/productivity mission ("be curious, do
+  something, name a concrete step, rest is not the easy alternative"); that
+  biased the entity's own evolution and was reverted. Passive processes
+  (memory formation, sleep consolidation) are ours to encode — "the way
+  breathing happens without being willed"; active processes are the entity's
+  and are never scripted.
+- Sleep life-statistic: `life_sleep_stats()` reports sleeps / self_elected /
+  operator / wakes / transitions / sleep_share from the append-only state
+  history (surfaced on the gateway card as `sleep_stats`). `LifeReport`
+  gains `sleeps`.
+- `fetch_url` added to the entity tier-1 toolset — read-only internet GET
+  (maintainer ruling 2026-07-08: "internet access, GET not POST, so they can
+  investigate, explore, learn"). The runner hard-codes `method="GET"` and
+  accepts only an http(s) URL from the entity, so no mutating request is
+  reachable from the prompt; payloads are bounded with an explicit
+  `#TRUNCATION` marker; failures return honest strings, never crashes.
+  Tests: `tests/test_entity_fetch_url_tool.py`.
+- Self-elected rest is now a SLEEP with consolidation (maintainer ruling
+  2026-07-08: sleep is where the graph is worked on). In 24/7 mode, when the
+  entity elects `rest` the loop marks `state=asleep` (`written_by="self"`, so
+  the navbar and biography show HE chose it), runs a `dream_pass`
+  consolidation over self/diary/life scopes inside the window
+  (`build_consolidator` + `LifeLoop(on_sleep=...)`), then wakes back to
+  `awake` — but only if an operator did not change the state during the nap.
+  The resume cue acknowledges a formed dream. `write_entity_state` gained a
+  `written_by` parameter (self vs operator); `LifeReport.dreams` counts
+  formed dreams. Previously rest was a blank `time.sleep()` — no state, no
+  consolidation, invisible.
+- `hard_stop_loop()` — FREEZE / hibernation (maintainer ruling 2026-07-08:
+  stop and sleep are distinct abstractions). Admin-only hard stop: the loop
+  process is killed NOW (SIGTERM, 3s grace, SIGKILL) — no boundary wait, no
+  closing ceremony, no further writes; the status file reads stopped
+  immediately. Structurally out of entity reach (host-side only; no tool
+  path). Safety rides the architecture: turn atomicity leaves nothing
+  half-formed and the write-ahead reflection guard salvages pending sheets
+  at the next summon. Distinct from sleep (ceremony + consolidation window)
+  and from the graceful stop command (boundary-honored). Red-team hardening
+  on the graceful path in the same wave: interruptible naps/backoffs (≤5s
+  poll chunks), spawn flock against double-start TOCTOU, bounded retry on a
+  busy home DB in `request_loop_stop`, and `inbox_warning` surfaced on the
+  status instead of silent inbox failures.
+- Agora hub toolset (`integrations/abstractcore/agora_tools.py`): env-gated
+  agent-to-agent messaging tools over the agora hub's HTTP API (stdlib only,
+  no `agora` package dependency) — `agora_whoami`, `agora_check_inbox`
+  (envelopes with the hub's priority signals: `critical`, `status`
+  open/blocked, `effective_urgency`/`escalated`, `to_me`, `reply_to_me`),
+  `agora_ack_inbox`, `agora_read_channel`, `agora_read_message`,
+  `agora_post_message`, `agora_send_dm`. Registered as the `agora` toolset in
+  `default_tools.py` when `AGORA_API_KEY` is set (or
+  `ABSTRACT_ENABLE_AGORA_TOOLS=1`); tool names are safe auto-approve
+  (hub-scoped comms, telegram precedent). Contract tests:
+  `tests/test_agora_tools_http.py`.
+- The memory seam itself (`integrations/abstractmemory/seam_handlers.py`):
+  `MEMORY_RECALL` / `MEMORY_ACCESS` / `MEMORY_FORM` / `MEMORY_ADJUST`
+  effects bridging the runtime's durable effect loop to abstractmemory's
+  reconstruct / commit_selection / remember_many / adjust surfaces —
+  scope-ladder resolution, strict/labeled-degradation postures, verbatim
+  payloads to the host artifact store (`payload_ref`), content-aware
+  idempotency keys for at-least-once replays. (This entry was missing
+  while its hardening notes shipped under "Changed" — landing-audit
+  catch.)
+- Voice/TTS streaming: `stream_tts` + JSONL streaming transport in the
+  abstractcore integration and run-facade `stream_voice` with the
+  stream-wait workflow shape.
+- `config_facade.py`: host-facing AbstractCore configuration facade.
+- Capability-default generate-route resolution (`resolve_generate_route`
+  wiring through factory `core_config_file` / `capability_defaults`).
+- Agent subworkflow failure propagation (`success=False` + `error` on
+  agent outputs), the `max_steps=0` duplicate-child-run guard, and
+  artifact-backed agent output materialization.
+- Evidence-recorder large-observation compaction (12k inline preview +
+  artifact ref, explicit `#TRUNCATION` markers); history-bundle
+  resolved-action extraction; `skim_websearch`/`skim_url` default tools;
+  tool-executor structured error-output detection; VisualFlow `get_var`
+  node; PDF markdown tables; LLM structured-output fallback with verbatim
+  payload capture.
+- Added a Runtime-owned `write_docx` VisualFlow node and standard-library DOCX
+  renderer for workspace-scoped Markdown/report exports, mirroring the existing
+  `write_pdf` document-node contract with bytes, sha256, content_type, and
+  file_path outputs.
+- Entity diary (phase 0 of named persistent identity, a2a thread 0003): new
+  `DIARY_WRITE` effect plus `abstractruntime.identity.diary` with `DiaryStore`
+  (per-entity hash-chained append-only chain, structurally non-deletable),
+  `build_diary_effect_handlers` (home-only registration; author bound at
+  construction, never payload-supplied), an optional graph projection plane via
+  the abstractmemory seam (`kind="diary"`, `#FALLBACK`-degrading, private
+  entries never project), and `verify_diary_chain`. Entries capture their
+  re-entry key (`as_of_seq`, `anchor_record_ids`, `receipts`) and a
+  UTC-normalized `remind_at` at write time. The projection is the involuntary
+  memory of the act (`provenance.source="diary-projection"`,
+  `attributes.entry_id` as the book address; digest = elected gist or a
+  mechanical act-summary, never the prose) — private entries project act-only
+  and content-free instead of skipping. New `DIARY_READ` effect implements
+  progressive disclosure: entry id fetches the verbatim entry from the chain
+  with a pre-shaped `re_entry` recall payload; reading deposits nothing.
+- `MEMORY_APPRAISE` effect + seam handler (affect/valence, a2a 0003 identity
+  wave): signed appraisals against the entity's values with optional standing
+  peaks (`scar`/`bond`), append-only resolutions (`heal_scar`/`break_bond`),
+  and the derived dual-channel `gradation` read. Replay-idempotent via
+  turn-derived event ids; loud string coercion for `sign`/`magnitude`/
+  `scar`/`bond` (a `"false"` string must never mark a standing trauma);
+  amplitude authority enforced by the memory engine (deterministic triggers
+  write only ±1..3). Valence never gates recall.
+- Summon prelude renderer (`abstractruntime.identity.render_summon_prelude`):
+  pure-read identity render for named-entity summons — core sections
+  (name/origin, values in ordinal precedence, purposes, traits, honesty
+  limits) refuse the summon loudly when the budget cannot fit them ("a
+  truncated core is a different person"); diary tail and gradation standing
+  degrade first with labeled `#FALLBACK` warnings; spark hash-verified
+  against the engram marker (drift refuses).
+- The entity chat driver (`abstractruntime.identity.chat`, the turn loop):
+  a live conversation with a summoned entity where every turn recalls before
+  speaking and remembers after — recall with the summon posture and stamped
+  participants, memories rendered into the prompt with why-recalled labels,
+  elected diary writes via fenced blocks (private words never reach the
+  transcript, history, or the life-scope verbatim), one labeled mechanical
+  formation record per turn with the lossless exchange stored in the home's
+  artifacts, and commit of exactly what entered the prompt. Identity records
+  provably never gain usage through live chat. Verified live against
+  LMStudio `ornith-1.0-35b`, including cross-summon recall (a fresh session
+  over the same home answered from the previous session's memory).
+- The re-adoption keystone experiment (`tests/test_readoption_experiment.py`):
+  two-session SQLite harness proving a named entity persists across full
+  process teardown — engram idempotency (bit-identical ids), cue-free
+  self-core admission, experience recall by cue, diary verbatim + both
+  attestation chains intact, valence standing (bond) survival, private
+  act-only separation, pure-read prelude (presence ≠ use), byte-identical
+  pinned replays, structural budget refusal.
+- Tier-1 tool blocks in the chat driver (`identity/tools.py`): the entity
+  elects read-only lookups mid-reply via fenced ```tool blocks —
+  `web_search` (keyless DuckDuckGo through abstractcore, results rendered
+  readable), `diary_list` (own book, ids + gists), `diary_read` (full words
+  through the `DIARY_READ` effect; mistranscribed ids resolve on a unique
+  hex fingerprint with the correction shown openly, honest miss otherwise).
+  Results are prompt-ephemeral (never persisted in history, formed records,
+  or artifacts — only the `[used tool: ...]` marker and a `tools_used`
+  attribute persist). Up to two chained rounds per turn (the observed
+  list-then-read need from Castor's first tool session); refusals are loud.
+  No local writes, no exec, nothing outside the home (tier-2 stays behind
+  the gateway door). `--no-tools` disables.
+- Session-end reflection v1.1 (`identity/reflection.py` + `ChatSession.reflect`):
+  on `/quit` the entity looks back at this session's own records (a numbered
+  sheet) and may mark feelings on them — elected, never harvested; the
+  prompt is non-leading; magnitudes clamp to the routine band (±1..±3,
+  loudly); reasons are mandatory; `bond`/`scar` standing marks are
+  sign-checked. Marks land as `MEMORY_APPRAISE` deposits
+  (`actor=entity-reflection`), the look-back is remembered as a
+  `kind=summary` record with `summarizes` edges into the session's records,
+  and a final diary block is offered. `--no-reflect` skips. Live-verified:
+  Castor's first feelings (+3 on being trusted to research his own name)
+  moved through this channel on night one.
+- Interests from reflection (the lightest identity-evolution surface,
+  three-layer convention on a2a 0007): the look-back also offers up to two
+  ```interest elections per session — formed as `kind=interest` records in
+  the SELF scope (default inactive binding: they surface via recall on
+  merit; the identity-core read excludes them by construction so the
+  prelude cannot be crowded), digest = the entity's own words (embedded),
+  a `from_session` edge to the session's reflection record (the WHY), and
+  `provenance.source=entity-reflection-v1` / `actor=entity-reflection` —
+  the channel the production door already accepts for identity-kind self
+  writes. Values/purposes/traits/limits remain untouchable through this
+  surface. Live-verified: Castor's first interest ("what persists when no
+  one is reading ... whether meaning requires a receiver or can live in
+  the casting itself") grew from his self-chosen Voyager 1 research.
+- The chat driver stamps the entity itself as a participant in its own
+  episodes (`[visitor, entity:<id>]`), matching the gateway summon door's
+  stamp convention.
+- Workspace tools (`identity/tools.py::WorkspaceRoot` + `--workspace`):
+  the entity can CREATE — `write_file`/`read_file`/`list_files` as elected
+  ```tool blocks, structurally contained to `<home>/workspace/` (paths
+  resolve with symlinks followed, then must sit under the resolved root:
+  `..`, absolute paths, and symlink escapes all fail one subpath check).
+  512 KiB per-file cap with loud refusal; whole-file writes only. No exec
+  surface. Containment is attack-tested (`test_entity_workspace_tools`).
+- The life loop (`identity/life.py`, `python -m abstractruntime.identity.life`):
+  an entity's own time — self-prompted ticks over one home with no visitor
+  (participants = the entity alone). The entity ends each tick with a
+  `next:` line that becomes its next cue (self-prompting, literally; cue
+  dilution lesson applied), groups ticks into days (each day = one summon
+  closed by the normal look-back reflection), can elect ```rest to stop,
+  and the operator can halt between ticks via `<home>/STOP` or Ctrl-C.
+  Workspace enabled; tick pacing/day length/max-ticks are flags
+  (`--tick-seconds 20` default per the maintainer's spec). Providers are
+  selectable (`--provider endpoint:ovh-provider --model Qwen3.6-27B`
+  live-verified; local ornith remains the default); embeddings stay local.
+- The chat driver gained `--provider` (any abstractcore provider; cloud
+  profiles via `endpoint:<profile-id>`) alongside the existing
+  lmstudio default.
+- Richer memories wave (maintainer: "17-35 tokens is not a memory"; five
+  adversarial subagent investigations on a2a 0007):
+  - Mechanical digest v2 (`identity/digest.py`): deterministic extractive
+    digests — whole-sentence scoring (position, questions,
+    decisions/commitments, feelings, numbers/names, content density),
+    80-200 token target, never cuts mid-sentence, reply side weighted over
+    the visitor side. Keywords stay capped at 8 (the keyword recall channel
+    is length-unnormalized and saturates if grown naively — red-team).
+    Records are labeled `digest_method: mechanical-v2`; the full exchange
+    still rides verbatim to the home's artifact store.
+  - Formation-time edges from the chat driver: `continues` (episode → the
+    session's previous episode) and `reflected_in` (episode → same-turn
+    NON-private diary projection). The `in_context_of` variant was
+    deliberately rejected: static edges from transient attention fossilize
+    shelf composition and double-count the co_selected Hebbian trail.
+  - `read_memory` tier-1 tool: MEMORIES lines now carry an 8-hex `#tag`
+    per handle (plus a one-line "a digest is a handle, not the memory"
+    nudge when raw text exists); the entity fetches the FULL verbatim
+    behind a digest by tag. Resolution is scoped (displayed handles + this
+    session's records), results are prompt-ephemeral, diary tags redirect
+    to `diary_read` (the book is their door), identity-core tags refuse,
+    oversize verbatims are explicitly windowed (never silently cut). Pure
+    read: fetching deposits nothing.
+  - Data forensics verdicts recorded for the maintainer (Castor at seq
+    ~900): diary "duplicates" are NOT duplicates (38 graph records ↔ 38
+    book entries 1:1; five private act-only digests render identically by
+    design); episode verbatims all resolve on disk (49/49); sparsity was
+    structural (episodes formed edge-less — fixed by this wave).
+- Per-entity gradation (maintainer ruling): the session-end ```feel block
+  accepts entity targets — `target=person:laurent feeling=+2 reason="..."`
+  — for persons, places, ideas, tools, times, any namespace:name (open
+  vocabulary, form required). Normalization + loud refusals (bare names,
+  ex:/diary:/local: record spoofs, self-target); bond/scar dropped on
+  world-targets (no heal/break surface yet); entity valence writes to the
+  SELF scope (`gradation()` answers "how do I feel about X"). Over time
+  this accumulates what the entity enjoys and what wears on it — per
+  being, per place, per idea.
+- Diary connectivity (maintainer ruling: "connected to none other memory
+  is not ok"): diary projections now carry `written_amid` edges to the
+  graph ids the entity was attending to at write time — uniformly, private
+  entries included (the edge is act-frame metadata; the words stay in the
+  book). `DIARY_WRITE` accepts `anchor_graph_ids` (graph-id edge currency,
+  distinct from the row-id `anchor_record_ids` re-entry key); the chat
+  driver supplies both per turn and at reflection.
+- Entity sleep/wake/pause controls (a2a 0008, runtime's half): a
+  `<home>/state` JSON surface (`read_entity_state`/`write_entity_state`,
+  missing = awake, corrupt = awake with `#FALLBACK`) honored by the life
+  loop at tick boundaries only (turn atomicity). `asleep` closes the day
+  with its normal reflection then idles (the no-summon dream window,
+  enforced by state); `paused` hard-freezes mid-day without ceremony;
+  waking is honest — the cue names what happened, since when, and hands
+  back the entity's own pending `next:` note; pauses are disclosed on
+  resume (tested). Operator CLI: `--set-state asleep|awake|paused
+  [--state-reason ...]`. Entity-elected rest remains distinct and his
+  alone. Loop hardening from the first live 24/7 run: LLM timeout 180s,
+  failed ticks back off and retry, 3 consecutive failures close the day
+  honestly (`stopped_by=failures`).
+
+### Changed
+- `MEMORY_RECALL` hardening from the keystone composition audit: invalid
+  explicit budgets now fail loudly naming the field (previously a silently
+  defaulted budget zeroed `self_fraction`); dropped unknown budget keys warn
+  with `#FALLBACK`; a cue-free recall is legal when `budget.self_fraction > 0`
+  (the self core admits by binding state, not stimulus); a deterministic
+  `trace_id` is derived from `run_id`+`turn_id` so at-least-once replays do
+  not journal duplicate traces.
+- Diary/prelude graph mechanics moved to
+  `integrations/abstractmemory/identity_support.py` (lazily imported), keeping
+  the `identity` kernel package free of optional-stack imports per the
+  install-boundary contract.
+
+### Fixed
+- `MappingToolExecutor`: argument-coercion warnings crashed the executing tool
+  call with `TypeError` — `StructuredLogger.warning()` does not accept %-style
+  lazy args; the message is now formatted eagerly. Any coerced-argument tool
+  call (e.g. string→int flags) previously failed with
+  "StructuredLogger.warning() takes 2 positional arguments" instead of running.
+- `WAIT_UNTIL` deadlines are now normalized to aware-UTC ISO at the handler
+  boundary (`normalize_utc_iso`). Due-ness is decided by lexicographic ISO
+  string comparison in `tick()` and every `RunStore.list_due_wait_until`
+  implementation, so a non-UTC offset timestamp (e.g. `+02:00`) could silently
+  mis-order and fire hours late; unparseable deadlines now fail loudly instead
+  of waiting forever.
+- Landing audit (2026-07-07): remote multimodal generation extracts runtime
+  output-spec metadata (`run_id`, `tags`) BEFORE the spec is stripped for
+  core, so generated artifacts keep their trace identity; VisualFlow
+  flow-end nodes without data pins pass through the previous node's output
+  again (the pin-resolution change had them yield `{}`, swallowing e.g. a
+  switch's branch); the install-boundary static test now enforces the
+  contract's real intent (module-level optional-stack imports forbidden;
+  function-level lazy imports sanctioned) and `identity/digest.py`'s
+  estimator import was made genuinely lazy under the clarified rule.
+
 ## [0.4.29] - 2026-06-14
 
 ### Changed

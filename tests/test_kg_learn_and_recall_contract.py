@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 from abstractruntime import Runtime, RunStatus
 from abstractruntime.integrations.abstractcore.effect_handlers import build_effect_handlers
 from abstractruntime.integrations.abstractcore.tool_executor import MappingToolExecutor
@@ -21,8 +23,17 @@ def _repo_root() -> Path:
 
 
 def _load_flow(flow_id: str) -> dict:
-    p = _repo_root() / "abstractflow" / "web" / "flows" / f"{flow_id}.json"
-    return json.loads(p.read_text(encoding="utf-8"))
+    # AbstractFlow moved its bundled flows from web/flows/ to examples/flows/;
+    # accept both layouts and skip cleanly when the sibling checkout lacks them
+    # (this is a cross-repo contract test, not an abstractruntime unit test).
+    candidates = [
+        _repo_root() / "abstractflow" / "examples" / "flows" / f"{flow_id}.json",
+        _repo_root() / "abstractflow" / "web" / "flows" / f"{flow_id}.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    pytest.skip(f"abstractflow flow {flow_id!r} not present in this checkout ({candidates[0]})")
 
 
 class _ConstantEmbedder:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import io
 from typing import Any, Dict
+import wave
 
 import pytest
 
@@ -30,6 +33,16 @@ def _completed_parent_workflow() -> WorkflowSpec:
         return StepPlan(node_id="done", complete_output={"ok": True})
 
     return WorkflowSpec("wf_parent", "done", {"done": done})
+
+
+def _wav_segment(payload: bytes = b"\x00\x00" * 120, *, sample_rate: int = 24000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(payload)
+    return buf.getvalue()
 
 
 def test_public_run_facade_exports_are_available() -> None:
@@ -559,6 +572,125 @@ def test_run_facade_generate_voice_creates_durable_child_run_with_artifact_descr
     assert descriptor.security["recorded_user_content_fields"] == ["text"]
     assert artifact.metadata.metadata["capability_metadata"]["voice_id"] == "narrator"
     assert artifact.metadata.metadata["capability_metadata"]["cloned_voice"] is False
+
+
+def test_run_facade_stream_voice_creates_child_run_and_final_artifact() -> None:
+    store = InMemoryArtifactStore()
+    segment_a = _wav_segment(b"\x01\x00" * 80)
+    segment_b = _wav_segment(b"\x02\x00" * 40)
+    seen: Dict[str, Any] = {}
+
+    class _StreamingVoiceClient:
+        def stream_tts(self, *, text: str, output=None, params=None):
+            seen["text"] = text
+            seen["output"] = dict(output or {})
+            seen["params"] = dict(params or {})
+            yield {"type": "start", "ok": True}
+            yield {
+                "type": "audio",
+                "sequence": 0,
+                "content_type": "audio/wav",
+                "audio_b64": base64.b64encode(segment_a).decode("ascii"),
+            }
+            yield {
+                "type": "audio",
+                "sequence": 1,
+                "content_type": "audio/wav",
+                "audio_b64": base64.b64encode(segment_b).decode("ascii"),
+            }
+            yield {
+                "type": "done",
+                "ok": True,
+                "chunks": 2,
+                "audio_artifact": {
+                    "artifact_id": store.store(b"combined-wav", content_type="audio/wav").artifact_id,
+                    "content_type": "audio/wav",
+                    "modality": "voice",
+                    "task": "tts",
+                },
+            }
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=_NoopTools(), tools=_NoopTools(), artifact_store=store),
+    )
+    runtime._abstractcore_llm_client = _StreamingVoiceClient()
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-voice-stream")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    events = list(
+        facade.stream_voice(
+            parent_run_id,
+            text="Read this incrementally.",
+            output={"provider": "abstractvoice", "model": "tts-test", "format": "wav", "voice": "narrator"},
+        )
+    )
+
+    assert events[0]["type"] == "runtime_start"
+    assert [e["type"] for e in events if e["type"] == "audio"] == ["audio", "audio"]
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["child_run_status"] == RunStatus.COMPLETED.value
+    child = runtime.get_state(done["child_run_id"])
+    assert child.status == RunStatus.COMPLETED
+    item = child.output["result"]["outputs"]["voice"][0]
+    artifact = store.load(item["artifact_id"])
+    assert artifact is not None
+    assert artifact.content == b"combined-wav"
+    assert seen["text"] == "Read this incrementally."
+    assert seen["params"]["trace_metadata"]["run_id"] == child.run_id
+    assert seen["params"]["trace_metadata"]["parent_run_id"] == parent_run_id
+
+
+def test_run_facade_stream_voice_close_completes_child_run_as_cancelled() -> None:
+    store = InMemoryArtifactStore()
+    closed = {"value": False}
+
+    class _CloseAwareStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise AssertionError("upstream stream should not be consumed before close")
+
+        def close(self):
+            closed["value"] = True
+
+    class _StreamingVoiceClient:
+        def stream_tts(self, *, text: str, output=None, params=None):
+            return _CloseAwareStream()
+
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        artifact_store=store,
+        effect_handlers=build_effect_handlers(llm=_NoopTools(), tools=_NoopTools(), artifact_store=store),
+    )
+    runtime._abstractcore_llm_client = _StreamingVoiceClient()
+    parent = _completed_parent_workflow()
+    parent_run_id = runtime.start(workflow=parent, session_id="sess-voice-stream-cancel")
+    runtime.tick(workflow=parent, run_id=parent_run_id)
+
+    facade = get_abstractcore_run_facade(runtime)
+    events = facade.stream_voice(
+        parent_run_id,
+        text="This stream will be closed before audio.",
+        output={"provider": "abstractvoice", "model": "tts-test", "format": "wav"},
+    )
+    first = next(events)
+    child_run_id = first["child_run_id"]
+    events.close()
+
+    assert closed["value"] is True
+    child = runtime.get_state(child_run_id)
+    assert child.status == RunStatus.COMPLETED
+    result = child.output["result"]
+    assert result["errors"][0]["code"] == "cancelled"
+    assert result["metadata"]["cancelled"] is True
 
 
 def test_run_facade_generate_music_creates_durable_child_run_with_artifact_backed_output() -> None:

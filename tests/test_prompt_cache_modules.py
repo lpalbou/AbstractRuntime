@@ -447,61 +447,86 @@ def test_llm_call_does_not_derive_prompt_cache_key_for_generated_media_outputs()
     assert "prompt_cache_key" not in llm.calls[-1]["params"]
 
 
-def test_llm_call_ignores_gateway_prompt_cache_env(monkeypatch) -> None:
+class _KeyCapturingLLM:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def default_prompt_cache_identity(self) -> Tuple[str, str]:
+        return "stub-provider", "default-model"
+
+    def generate(self, *, prompt, messages, system_prompt, media, tools, params):
+        self.calls.append({"params": dict(params or {})})
+        return {"content": "ok"}
+
+
+def _run_cache_probe(monkeypatch, *, vars: Dict[str, Any], session_id: Optional[str] = "sess-cache") -> Dict[str, Any]:
     from abstractruntime.core.models import Effect, EffectType, RunState
     from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
 
-    monkeypatch.setenv("ABSTRACTGATEWAY_PROMPT_CACHE", "1")
-    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
-
-    class _CapturingLLM:
-        def __init__(self) -> None:
-            self.calls: List[Dict[str, Any]] = []
-
-        def default_prompt_cache_identity(self) -> Tuple[str, str]:
-            return "stub-provider", "default-model"
-
-        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
-            self.calls.append({"params": dict(params or {})})
-            return {"content": "ok"}
-
-    llm = _CapturingLLM()
+    llm = _KeyCapturingLLM()
     handler = make_llm_call_handler(llm=llm)
-    run = RunState.new(workflow_id="wf-cache", entry_node="node-a", session_id="sess-cache", vars={})
+    run = RunState.new(workflow_id="wf-cache", entry_node="node-a", session_id=session_id, vars=vars)
     run.current_node = "node-a"
 
     outcome = handler(run, Effect(type=EffectType.LLM_CALL, payload={"prompt": "hello", "params": {}}), None)
-
     assert outcome.status == "completed"
-    assert "prompt_cache_key" not in llm.calls[-1]["params"]
+    return llm.calls[-1]["params"]
+
+
+def test_llm_call_prompt_cache_defaults_on_for_session_scoped_runs(monkeypatch) -> None:
+    """Backlog 0212: caching defaults ON. The derived key is session-scoped (requires a
+    session_id), so the default cannot cause cross-session reuse."""
+    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
+    monkeypatch.delenv("ABSTRACTGATEWAY_PROMPT_CACHE", raising=False)
+
+    params = _run_cache_probe(monkeypatch, vars={})
+    assert "prompt_cache_key" in params
+
+
+def test_llm_call_prompt_cache_default_requires_session_id(monkeypatch) -> None:
+    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
+
+    params = _run_cache_probe(monkeypatch, vars={}, session_id=None)
+    assert "prompt_cache_key" not in params
+
+
+def test_llm_call_ignores_gateway_prompt_cache_env(monkeypatch) -> None:
+    """Ownership boundary: the runtime must not read Gateway-owned env names. With caching
+    default-ON, a gateway-side opt-OUT env must have no effect here (Gateway translates its
+    env into `_runtime.prompt_cache` explicitly)."""
+    monkeypatch.setenv("ABSTRACTGATEWAY_PROMPT_CACHE", "0")
+    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
+
+    params = _run_cache_probe(monkeypatch, vars={})
+    assert "prompt_cache_key" in params
 
 
 def test_llm_call_honors_runtime_prompt_cache_env(monkeypatch) -> None:
-    from abstractruntime.core.models import Effect, EffectType, RunState
-    from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
-
     monkeypatch.setenv("ABSTRACTRUNTIME_PROMPT_CACHE", "1")
 
-    class _CapturingLLM:
-        def __init__(self) -> None:
-            self.calls: List[Dict[str, Any]] = []
+    params = _run_cache_probe(monkeypatch, vars={})
+    assert "prompt_cache_key" in params
 
-        def default_prompt_cache_identity(self) -> Tuple[str, str]:
-            return "stub-provider", "default-model"
 
-        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
-            self.calls.append({"params": dict(params or {})})
-            return {"content": "ok"}
+def test_llm_call_runtime_prompt_cache_env_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("ABSTRACTRUNTIME_PROMPT_CACHE", "0")
 
-    llm = _CapturingLLM()
-    handler = make_llm_call_handler(llm=llm)
-    run = RunState.new(workflow_id="wf-cache", entry_node="node-a", session_id="sess-cache", vars={})
-    run.current_node = "node-a"
+    params = _run_cache_probe(monkeypatch, vars={})
+    assert "prompt_cache_key" not in params
 
-    outcome = handler(run, Effect(type=EffectType.LLM_CALL, payload={"prompt": "hello", "params": {}}), None)
 
-    assert outcome.status == "completed"
-    assert "prompt_cache_key" in llm.calls[-1]["params"]
+def test_llm_call_runtime_prompt_cache_false_disables(monkeypatch) -> None:
+    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
+
+    params = _run_cache_probe(monkeypatch, vars={"_runtime": {"prompt_cache": False}})
+    assert "prompt_cache_key" not in params
+
+
+def test_llm_call_runtime_prompt_cache_enabled_false_dict_disables(monkeypatch) -> None:
+    monkeypatch.delenv("ABSTRACTRUNTIME_PROMPT_CACHE", raising=False)
+
+    params = _run_cache_probe(monkeypatch, vars={"_runtime": {"prompt_cache": {"enabled": False}}})
+    assert "prompt_cache_key" not in params
 
 
 def test_llm_call_preserves_explicit_matching_prompt_cache_key_with_binding() -> None:

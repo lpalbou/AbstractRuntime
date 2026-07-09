@@ -272,6 +272,81 @@ def _apply_provider_endpoint_profile_resolution(*, llm: AbstractCoreLLMClient, p
     params["_provider_endpoint_profile"] = {k: v for k, v in metadata.items() if v not in ("", None)}
 
 
+def _resolved_generate_route_outputs(summary: Dict[str, Any]) -> list[Dict[str, Any]]:
+    outputs = summary.get("outputs")
+    if not isinstance(outputs, list):
+        return []
+    return [dict(item) for item in outputs if isinstance(item, dict)]
+
+
+def _resolved_action_id_from_output(summary: Dict[str, Any]) -> str:
+    outputs = _resolved_generate_route_outputs(summary)
+    if not outputs:
+        return "generate_text"
+    first = outputs[0]
+    modality = str(first.get("modality") or "").strip().lower()
+    task = str(first.get("task") or "").strip().lower()
+    if modality == "text":
+        if task == "transcription":
+            return "transcribe_audio"
+        return "generate_text"
+    if modality == "image":
+        if task in {"image_edit", "image_to_image"}:
+            return "edited_image"
+        if task in {"image_upscale", "upscale_image"}:
+            return "upscaled_image"
+        return "generated_image"
+    if modality == "video":
+        if task in {"image_to_video", "i2v"}:
+            return "image_to_video"
+        return "generated_video"
+    if modality == "voice":
+        return "generated_voice"
+    if modality == "music":
+        if task == "text_to_audio":
+            return "generated_sound"
+        return "generated_music"
+    return "generate_text"
+
+
+def _runtime_resolved_action_from_generate_metadata(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    summary = metadata.get("_resolved_generate_route")
+    if not isinstance(summary, dict):
+        return None
+    request_summary = summary.get("request") if isinstance(summary.get("request"), dict) else {}
+    outputs = _resolved_generate_route_outputs(summary)
+    text_route = summary.get("text_route") if isinstance(summary.get("text_route"), dict) else None
+    input_routes = summary.get("input_routes") if isinstance(summary.get("input_routes"), list) else []
+    output_routes = summary.get("output_routes") if isinstance(summary.get("output_routes"), list) else []
+    effective_route = {
+        "text_route": text_route,
+        "input_routes": [dict(item) for item in input_routes if isinstance(item, dict)],
+        "output_routes": [dict(item) for item in output_routes if isinstance(item, dict)],
+        "reasoning": summary.get("reasoning"),
+        "reasoning_source": summary.get("reasoning_source"),
+    }
+    first_output = outputs[0] if outputs else {}
+    family = str(first_output.get("modality") or "text").strip().lower() or "text"
+    task = str(first_output.get("task") or "text_generation").strip().lower() or "text_generation"
+    return {
+        "kind": "generate",
+        "action_id": _resolved_action_id_from_output(summary),
+        "family": family,
+        "modality": family,
+        "task": task,
+        "normalized_request": dict(request_summary) if isinstance(request_summary, dict) else {},
+        "normalized_output": outputs,
+        "effective_route": effective_route,
+        "requested_override": {
+            "text_route": text_route.get("field_sources") if isinstance(text_route, dict) else None,
+            "output_routes": [item.get("field_sources") for item in output_routes if isinstance(item, dict)],
+            "reasoning_source": summary.get("reasoning_source"),
+        },
+        "override_disposition": "resolved",
+        "policy_class": "runtime_call",
+    }
+
+
 def _coerce_media_input(media: Any) -> Any:
     """Accept AbstractCore's single-media convenience shapes while keeping payloads JSON-safe."""
     if media is None:
@@ -616,6 +691,66 @@ def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Ty
     return _model(schema, name=name)
 
 
+def _validate_structured_output_candidate(candidate: Any, *, response_model: Type[Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    try:
+        validated = response_model.model_validate(candidate)
+    except Exception as e:
+        return None, str(e)
+
+    try:
+        dumped = validated.model_dump(mode="json")
+    except Exception:
+        try:
+            dumped = validated.model_dump()
+        except Exception:
+            dumped = candidate
+
+    if isinstance(dumped, dict):
+        return dict(dumped), None
+    return None, "validated structured output did not serialize to an object"
+
+
+def _stringify_structured_output_candidate(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        rendered = json.dumps(_jsonable(value), ensure_ascii=True, sort_keys=True, indent=2)
+    except Exception:
+        rendered = str(value)
+    return rendered.strip()
+
+
+def _truncate_prompt_block(value: Any, *, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return f"{text[: max_chars - 3]}..."
+
+
+def _build_structured_output_repair_prompt(
+    *,
+    original_task: str,
+    schema: Dict[str, Any],
+    invalid_output: str,
+    error: str,
+) -> str:
+    schema_text = json.dumps(_jsonable(schema), ensure_ascii=True, sort_keys=True, indent=2)
+    task_text = _truncate_prompt_block(original_task, max_chars=4000)
+    invalid_text = _truncate_prompt_block(invalid_output, max_chars=4000)
+    error_text = _truncate_prompt_block(error, max_chars=2000)
+    return (
+        "You returned structured output that does not satisfy the required JSON schema.\n"
+        "Return corrected JSON only.\n\n"
+        f"Original task:\n{task_text}\n\n"
+        f"Required JSON schema:\n{schema_text}\n\n"
+        f"Previous invalid output:\n{invalid_text}\n\n"
+        f"Validation error:\n{error_text}\n\n"
+        "Return exactly one JSON object that satisfies the schema. Do not include markdown or explanation."
+    )
+
+
 def _trace_context(run: RunState) -> Dict[str, str]:
     ctx: Dict[str, str] = {
         "run_id": run.run_id,
@@ -632,12 +767,17 @@ def _trace_context(run: RunState) -> Dict[str, str]:
     return ctx
 
 
-def _truthy_env(name: str) -> bool:
+def _env_flag(name: str) -> Optional[bool]:
+    """Tri-state env flag: True/False when explicitly set, None when unset/unparseable."""
     raw = os.getenv(name)
     if raw is None:
-        return False
+        return None
     s = str(raw).strip().lower()
-    return s in {"1", "true", "yes", "y", "on"}
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -756,9 +896,13 @@ def _maybe_inject_prompt_cache_key(
             params["prompt_cache_key"] = key_override.strip()
             return
     else:
-        # Runtime-owned operator-wide opt-in. Hosts with their own env namespace
-        # should translate that config into `_runtime.prompt_cache` explicitly.
-        enabled = _truthy_env("ABSTRACTRUNTIME_PROMPT_CACHE")
+        # Default ON (backlog 0212): the derived key below is session-scoped (it requires a
+        # session_id and hashes it together with provider/model/workflow/node), so reuse can
+        # never cross sessions. Operators can opt out process-wide via
+        # ABSTRACTRUNTIME_PROMPT_CACHE=0; hosts with their own env namespace should translate
+        # that config into `_runtime.prompt_cache` explicitly.
+        env_pref = _env_flag("ABSTRACTRUNTIME_PROMPT_CACHE")
+        enabled = True if env_pref is None else env_pref
 
     if not enabled:
         return
@@ -1341,26 +1485,48 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             if active_msg or session_msg:
                 if not isinstance(messages, list):
                     messages = []
-                # Remove any previous injected attachment system messages to avoid staleness/duplication.
-                cleaned: list[Dict[str, Any]] = []
-                for m in messages:
-                    if not isinstance(m, dict):
-                        continue
-                    if m.get("role") != "system":
-                        cleaned.append(m)
-                        continue
-                    c = m.get("content")
-                    c_str = str(c or "")
-                    if c_str.strip().startswith("Active attachments") or c_str.strip().startswith("Stored session attachments") or c_str.strip().startswith("Session attachments"):
-                        continue
-                    cleaned.append(m)
 
+                def _is_attachment_index_message(m: Dict[str, Any]) -> bool:
+                    # Prefer a robust metadata marker; fall back to the legacy content-prefix
+                    # heuristic on system messages (older transcripts injected these as system).
+                    meta = m.get("metadata")
+                    if isinstance(meta, dict) and meta.get("kind") == "attachment_index":
+                        return True
+                    if m.get("role") == "system":
+                        c_str = str(m.get("content") or "").strip()
+                        return (
+                            c_str.startswith("Active attachments")
+                            or c_str.startswith("Stored session attachments")
+                            or c_str.startswith("Session attachments")
+                        )
+                    return False
+
+                # Remove any previously injected attachment index to avoid staleness/duplication.
+                cleaned: list[Dict[str, Any]] = [
+                    m for m in messages if isinstance(m, dict) and not _is_attachment_index_message(m)
+                ]
+
+                # The attachment index rides the TAIL as a SYSTEM message (backlog 0212 cache
+                # stability). It MUST stay role=system: it is context, not user speech, and both the
+                # grounding-envelope placement and durable-context extraction key off "the last user
+                # message" — a user-role index would be mistaken for user input and polluted into
+                # durable context.messages.
+                # PROVIDER DELIVERY CONTRACT (updated after the 2026-07-09 production incident):
+                # non-leading system messages are a TRANSPORT concern each provider must handle —
+                # native OpenAI passes them through (accepted anywhere), Anthropic converts them to
+                # <system_instruction>-wrapped user turns, and OpenAICompatibleProvider normalizes
+                # them the same way because strict vLLM-class servers (e.g. OVH Qwen templates)
+                # HARD-REJECT them with HTTP 400 "System message must be at the beginning." — which
+                # failed a production assistant's first message when this index was tail-injected.
+                # Template strictness is a per-model-endpoint property: never assume a family is
+                # tolerant because one model on it is. Pinned by
+                # abstractcore tests/providers/test_openai_compatible_strict_system_messages.py.
                 injected: list[Dict[str, Any]] = []
                 if active_msg:
-                    injected.append({"role": "system", "content": active_msg})
+                    injected.append({"role": "system", "content": active_msg, "metadata": {"kind": "attachment_index"}})
                 if session_msg:
-                    injected.append({"role": "system", "content": session_msg})
-                messages = injected + cleaned
+                    injected.append({"role": "system", "content": session_msg, "metadata": {"kind": "attachment_index"}})
+                messages = cleaned + injected
         except Exception:
             session_attachments = None
 
@@ -1391,6 +1557,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
             structured_requested = isinstance(response_schema, dict) and response_schema
             params_for_call = dict(params)
+            structured_model_name = "StructuredOutput"
+            structured_response_model: Optional[Type[Any]] = None
 
             # Runtime-owned defaults (run-scoped): allow workflows/clients to set once at
             # run start via `run.vars["_runtime"]` and have all LLM calls inherit them.
@@ -1412,15 +1580,21 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     params_for_call["stt_language"] = stt_language.strip()
 
             if structured_requested:
-                model_name = (
+                structured_model_name = (
                     str(response_schema_name).strip()
                     if isinstance(response_schema_name, str) and response_schema_name.strip()
                     else "StructuredOutput"
                 )
-                params_for_call["response_model"] = _pydantic_model_from_json_schema(response_schema, name=model_name)
+                structured_response_model = _pydantic_model_from_json_schema(
+                    response_schema, name=structured_model_name
+                )
+                params_for_call["response_model"] = structured_response_model
 
             structured_failed = False
             structured_error: Optional[str] = None
+            structured_repair_used = False
+            structured_repair_error: Optional[str] = None
+            structured_validation_error: Optional[str] = None
 
             messages_for_call = messages
             media_for_call = media
@@ -1684,10 +1858,14 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         ][:6]
                     )
                     suffix = " …" if len(truncation_attempts) > 6 else ""
-                    raise RuntimeError(
+                    # NON-RETRYABLE: the handler already retried truncation internally with
+                    # escalating budgets; the outer policy would replay the identical bump
+                    # sequence (params rebuilt from the payload) — a deterministic x9 LLM burn.
+                    return EffectOutcome.failed(
                         "LLM_CALL output was truncated (finish_reason=length). "
                         f"Attempted max_output_tokens: {budgets}{suffix}. "
-                        "Increase max_output_tokens/max_out_tokens (or set allow_truncation=true)."
+                        "Increase max_output_tokens/max_out_tokens (or set allow_truncation=true).",
+                        retryable=False,
                     )
 
                 if had_truncation and not _finish_reason_is_truncation(last_finish_reason):
@@ -1717,37 +1895,119 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
             if structured_requested and isinstance(result, dict):
                 # Best-effort: when structured outputs fail (or providers ignore response_model),
-                # try to parse the returned text into `data` so downstream nodes can consume it.
-                try:
-                    existing_data = result.get("data")
-                except Exception:
-                    existing_data = None
+                # try to parse the returned text into `data`, then validate it against the
+                # requested schema. When `structured_output_fallback` is enabled, ask the model
+                # to repair one invalid response before failing.
+                parse_error: Optional[str] = None
 
-                content_value = result.get("content") if isinstance(result.get("content"), str) else None
-
-                if existing_data is None and isinstance(content_value, str) and content_value.strip():
-                    parsed: Any = None
-                    parse_error: Optional[str] = None
+                def _extract_candidate(current_result: Dict[str, Any]) -> tuple[Any, Optional[str], Optional[str]]:
                     try:
-                        from abstractruntime.visualflow_compiler.visual.builtins import data_parse_json
+                        existing_data = current_result.get("data")
+                    except Exception:
+                        existing_data = None
 
-                        parsed = data_parse_json({"text": content_value, "wrap_scalar": True})
-                    except Exception as e:
-                        parse_error = str(e)
-                        parsed = None
+                    content_text = current_result.get("content") if isinstance(current_result.get("content"), str) else None
+                    if existing_data is not None:
+                        return existing_data, content_text, None
 
-                    # Response schemas in this system are object-only; wrap non-dicts for safety.
-                    if parsed is not None and not isinstance(parsed, dict):
-                        parsed = {"value": parsed}
-                    if parsed is not None:
-                        result["data"] = parsed
+                    if isinstance(content_text, str) and content_text.strip():
+                        parsed: Any = None
+                        err: Optional[str] = None
+                        try:
+                            from abstractruntime.visualflow_compiler.visual.builtins import data_parse_json
 
-                    if parse_error is not None:
-                        meta = result.get("metadata")
-                        if not isinstance(meta, dict):
-                            meta = {}
-                            result["metadata"] = meta
-                        meta["_structured_output_parse_error"] = parse_error
+                            parsed = data_parse_json({"text": content_text, "wrap_scalar": True})
+                        except Exception as e:
+                            err = str(e)
+                            parsed = None
+
+                        if parsed is not None and not isinstance(parsed, dict):
+                            parsed = {"value": parsed}
+                        if parsed is not None:
+                            current_result["data"] = parsed
+                        return parsed, content_text, err
+
+                    return None, content_text, None
+
+                candidate, content_value, parse_error = _extract_candidate(result)
+                if parse_error is not None:
+                    meta = result.get("metadata")
+                    if not isinstance(meta, dict):
+                        meta = {}
+                        result["metadata"] = meta
+                    meta["_structured_output_parse_error"] = parse_error
+
+                validated_data: Optional[Dict[str, Any]] = None
+                if candidate is not None and structured_response_model is not None:
+                    validated_data, structured_validation_error = _validate_structured_output_candidate(
+                        candidate, response_model=structured_response_model
+                    )
+                    if validated_data is not None:
+                        result["data"] = validated_data
+
+                needs_repair = validated_data is None and (
+                    parse_error is not None or structured_validation_error is not None
+                )
+                if needs_repair and fallback_enabled and structured_response_model is not None:
+                    invalid_output = ""
+                    if isinstance(content_value, str) and content_value.strip():
+                        invalid_output = content_value.strip()
+                    elif candidate is not None:
+                        invalid_output = _stringify_structured_output_candidate(candidate)
+                    repair_error_text = structured_validation_error or parse_error or "response did not satisfy the schema"
+                    repair_prompt = _build_structured_output_repair_prompt(
+                        original_task=user_text_for_context or str(prompt or ""),
+                        schema=response_schema,
+                        invalid_output=invalid_output,
+                        error=repair_error_text,
+                    )
+                    repair_params = dict(base_params_attempt)
+                    repair_params.pop("output", None)
+                    repair_params.pop("glyph_compression", None)
+
+                    logger.warning(
+                        "LLM_CALL structured output invalid after parse; requesting repair",
+                        error=repair_error_text,
+                        model=structured_model_name,
+                    )
+                    structured_repair_used = True
+                    repaired_result = llm.generate(
+                        prompt=repair_prompt,
+                        messages=None,
+                        system_prompt=system_prompt,
+                        media=None,
+                        tools=None,
+                        params=repair_params,
+                    )
+                    if not isinstance(repaired_result, dict):
+                        return EffectOutcome.failed("LLM_CALL structured output repair returned a non-object result", retryable=False)
+
+                    repaired_candidate, repaired_content, repaired_parse_error = _extract_candidate(repaired_result)
+                    repaired_validated: Optional[Dict[str, Any]] = None
+                    repaired_validation_error: Optional[str] = None
+                    if repaired_candidate is not None:
+                        repaired_validated, repaired_validation_error = _validate_structured_output_candidate(
+                            repaired_candidate, response_model=structured_response_model
+                        )
+
+                    if repaired_validated is None:
+                        structured_repair_error = repaired_validation_error or repaired_parse_error or "repair response did not satisfy the schema"
+                        if isinstance(repaired_content, str) and repaired_content.strip():
+                            structured_repair_error = (
+                                f"{structured_repair_error}; repair content={_truncate_prompt_block(repaired_content, max_chars=400)}"
+                            )
+                        return EffectOutcome.failed(f"LLM_CALL structured output repair failed: {structured_repair_error}", retryable=False)
+
+                    repaired_result["data"] = repaired_validated
+                    result = repaired_result
+                    structured_validation_error = None
+                    parse_error = repaired_parse_error
+                elif structured_validation_error is not None:
+                    meta = result.get("metadata")
+                    if not isinstance(meta, dict):
+                        meta = {}
+                        result["metadata"] = meta
+                    meta["_structured_output_validation_error"] = structured_validation_error
 
             if isinstance(result, dict):
                 meta = result.get("metadata")
@@ -1756,6 +2016,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     result["metadata"] = meta
                 if structured_failed:
                     meta["_structured_output_fallback"] = {"used": True, "error": structured_error or ""}
+                if structured_repair_used or structured_repair_error is not None:
+                    meta["_structured_output_repair"] = {
+                        "used": structured_repair_used,
+                        "error": structured_repair_error or "",
+                    }
                 if had_truncation or len(truncation_attempts) > 1:
                     meta["_truncation"] = {
                         "attempts": truncation_attempts,
@@ -1766,6 +2031,9 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     existing = {}
                     meta["_runtime_observability"] = existing
                 existing.update(runtime_observability)
+                resolved_action = _runtime_resolved_action_from_generate_metadata(meta)
+                if resolved_action is not None:
+                    meta["_runtime_resolved_action"] = _jsonable(resolved_action)
 
             # VisualFlow "Use context" UX: when requested, persist the turn into the run's
             # active context (`vars.context.messages`) so subsequent LLM/Agent/Subflow nodes
@@ -1825,9 +2093,68 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             return EffectOutcome.completed(result=result)
         except Exception as e:
             logger.error("LLM_CALL failed", error=str(e))
-            return EffectOutcome.failed(str(e))
+            return EffectOutcome.failed(str(e), retryable=_llm_error_is_retryable(e))
 
     return _handler
+
+
+# 4xx statuses that are legitimately TRANSIENT: request timeout, conflict during model
+# load/warm-up (LM Studio JIT, vLLM), too-early, and rate limiting.
+_TRANSIENT_4XX = (408, 409, 425, 429)
+# Server-side Harmony parse failure of the model's own output (vllm#23567,
+# openai/harmony#38/#80): a 400 that is actually a sampling race.
+_HARMONY_ARTIFACT_RE = re.compile(
+    r"unexpected tokens remaining in message header|HarmonyError|harmony generation artifact",
+    re.IGNORECASE,
+)
+
+
+def _llm_error_is_retryable(exc: Exception) -> bool:
+    """Classify LLM provider failures for the retry policy.
+
+    Deterministic CLIENT errors — invalid request shape, authentication, unknown model,
+    unsupported features, bad configuration — fail identically on every attempt; retrying them
+    burns attempts, latency, and (for paid APIs) money before surfacing the same message.
+    Classification order (adversarial-review hardened): (1) the HTTP STATUS CODE attribute when
+    the raise site attached it (the one unambiguous fact an HTTP error carries — message prose
+    is not a contract), (2) abstractcore exception types, (3) a conservative message fallback
+    for our own providers' "API error (NNN)" / OpenAI SDK "Error code: NNN" dialects.
+    """
+    # Harmony generation artifact (gpt-oss on vLLM, maintainer directive
+    # 2026-07-09 "maybe it's something our parser could self-correct"): the
+    # server's strict openai-harmony parser 400s when the MODEL'S OWN sampled
+    # output violates its template (unclosed `to=...` header). The request is
+    # valid and a resample usually passes — transient, ALWAYS retryable. This
+    # check precedes the status-code rule because these arrive as 400.
+    if _HARMONY_ARTIFACT_RE.search(str(exc or "")):
+        return True
+
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        if 400 <= status < 500 and status not in _TRANSIENT_4XX:
+            return False
+        return True
+
+    try:
+        from abstractcore.exceptions import (  # type: ignore
+            AuthenticationError,
+            InvalidRequestError,
+            ModelNotFoundError,
+            UnsupportedFeatureError,
+        )
+
+        if isinstance(exc, (InvalidRequestError, AuthenticationError, ModelNotFoundError, UnsupportedFeatureError)):
+            return False
+    except Exception:
+        pass
+
+    text = str(exc or "")
+    m = re.search(r"API error \((\d{3})\)", text) or re.search(r"Error code: (\d{3})", text)
+    if m:
+        code = int(m.group(1))
+        if 400 <= code < 500 and code not in _TRANSIENT_4XX:
+            return False
+    return True
 
 
 def make_tool_calls_handler(
@@ -1951,7 +2278,7 @@ def make_tool_calls_handler(
             parsed = _coerce_positive_int(os.getenv("ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES"))
             if parsed is not None:
                 return parsed
-            return 25 * 1024 * 1024
+            return 50 * 1024 * 1024
 
         def _enqueue_pending_media(media_items: Any) -> None:
             if not isinstance(media_items, list) or not media_items:
@@ -2084,6 +2411,69 @@ def make_tool_calls_handler(
             return {
                 "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
                 "handle": str(handle),
+                "sha256": sha256,
+                "content_type": content_type,
+                "size_bytes": len(content),
+            }
+
+        def _register_text_as_attachment(
+            *, session_id: str, text: str, filename: str, source: str
+        ) -> Optional[Dict[str, Any]]:
+            """Store an in-memory STRING (e.g. large command output) as a session attachment.
+
+            Symmetric with `_register_read_file_as_attachment`, but the content is the given text
+            rather than a file on disk (command output is ephemeral). Dedups by sha256 within the
+            session so re-running the same command doesn't accumulate duplicate artifacts.
+            """
+            if artifact_store is None:
+                return None
+            sid = str(session_id or "").strip()
+            if not sid:
+                return None
+            content = str(text or "").encode("utf-8", errors="replace")
+            if len(content) > _max_attachment_bytes():
+                # Too large even to store as an attachment; keep it out of the store.
+                return None
+            sha256 = hashlib.sha256(content).hexdigest()
+            handle = str(filename or f"command-output-{sha256[:8]}.txt")
+            content_type = "text/plain"
+
+            rid = session_memory_owner_run_id(sid)
+            try:
+                existing = artifact_store.list_by_run(str(rid))
+            except Exception:
+                existing = []
+            for m in existing or []:
+                tags = getattr(m, "tags", None)
+                if not isinstance(tags, dict):
+                    continue
+                if str(tags.get("kind") or "") != "attachment":
+                    continue
+                if str(tags.get("sha256") or "") == sha256 and str(tags.get("path") or "") == handle:
+                    return {
+                        "artifact_id": str(getattr(m, "artifact_id", "") or ""),
+                        "handle": handle,
+                        "sha256": sha256,
+                        "content_type": content_type,
+                        "size_bytes": len(content),
+                    }
+
+            _ensure_session_memory_run_exists(session_id=sid)
+            tags2: Dict[str, str] = {
+                "kind": "attachment",
+                "source": str(source or "tool.output"),
+                "path": handle,
+                "filename": handle,
+                "session_id": sid,
+                "sha256": sha256,
+            }
+            try:
+                meta = artifact_store.store(content, content_type=content_type, run_id=str(rid), tags=tags2)
+            except Exception:
+                return None
+            return {
+                "artifact_id": str(getattr(meta, "artifact_id", "") or ""),
+                "handle": handle,
                 "sha256": sha256,
                 "content_type": content_type,
                 "size_bytes": len(content),
@@ -2578,6 +2968,14 @@ def make_tool_calls_handler(
             raw_arguments = tc.get("arguments") or {}
             arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
 
+            # Persistent shell tools (backlog 0220): the session registry namespace is a TRUST
+            # BOUNDARY argument — always stamped with this run's id, overwriting anything the
+            # model supplied, so one run can never reach another run's sessions. The stamped
+            # value rides the approval wait's stored tool_calls, so the approved-resume path
+            # executes with the same namespace.
+            if name in ("shell_exec", "shell_write_stdin", "shell_close"):
+                arguments["_registry_namespace"] = str(getattr(run, "run_id", "") or "")
+
             if name == "open_attachment":
                 tool_calls_for_evidence.append(
                     {
@@ -2947,6 +3345,40 @@ def make_tool_calls_handler(
             except Exception:
                 max_inline_bytes = 256 * 1024
 
+            def _offload_text(text: str, *, source: str) -> tuple[Optional[str], bool, int]:
+                """Offload a large tool-output string to a session artifact (backlog 0215).
+
+                Returns (artifact_id, too_large, n_bytes):
+                - small (<= max_inline_bytes): (None, False, n) — caller keeps it inline.
+                - offloadable (<= max_attachment_bytes): (artifact_id, False, n) — stored; caller
+                  replaces the inline blob with a preview + open_attachment handle.
+                - too large (> max_attachment_bytes): (None, True, n) — NOT stored and MUST NOT be
+                  kept inline; caller surfaces an explicit, actionable notice so the agent/user
+                  decides (narrow the command, redirect to a file). This is a marked decision point,
+                  never a silent drop (ADR-0026).
+                """
+                try:
+                    n = len(str(text or "").encode("utf-8"))
+                except Exception:
+                    n = len(str(text or ""))
+                if n <= max_inline_bytes:
+                    return (None, False, n)
+                if artifact_store is None or not sid_str:
+                    return (None, False, n)  # cannot offload without a store/session; keep inline
+                if n > _max_attachment_bytes():
+                    return (None, True, n)
+                att = _register_text_as_attachment(session_id=sid_str, text=str(text), filename="", source=source)
+                aid = str(att.get("artifact_id") or "").strip() if att else ""
+                return (aid or None, False, n)
+
+            def _too_large_notice(n_bytes: int, *, what: str) -> str:
+                cap = _max_attachment_bytes()
+                return (
+                    f"\n\n[{what} was {n_bytes} bytes, exceeding the {cap}-byte retention limit — "
+                    f"it was NOT stored to keep the run record bounded. Re-run narrowing the output "
+                    f"(e.g. pipe through head/grep, or redirect to a file and read a bounded range).]"
+                )
+
             for seg_item, r in zip(seg_items, seg_results):
                 idx = int(seg_item.get("idx") or 0)
                 r_out: Any = r
@@ -2963,7 +3395,55 @@ def make_tool_calls_handler(
                         "error": "Invalid tool result",
                     }
 
+                # execute_command output offload (backlog 0215): the full stdout/stderr live in the
+                # result dict and land in the durable ledger. Symmetric with read_file, offload a
+                # large stdout OR stderr to a session artifact and keep the ledger lean + give the
+                # model an open_attachment handle. Applies regardless of exit code (a failed-but-
+                # verbose command is exactly when offload matters); the bounded `rendered` preview
+                # the model sees is preserved. Output beyond the retention cap is surfaced as an
+                # explicit narrow-the-command notice, never silently kept inline or dropped.
+                if seg_item.get("name") == "execute_command":
+                    out_obj = r_out.get("output") if isinstance(r_out, dict) else None
+                    if isinstance(out_obj, dict):
+                        for field in ("stdout", "stderr"):
+                            val = out_obj.get(field)
+                            if not isinstance(val, str) or not val:
+                                continue
+                            aid, too_large, n_bytes = _offload_text(val, source=f"tool.execute_command.{field}")
+                            if aid:
+                                out_obj[field] = ""
+                                out_obj[f"{field}_offloaded_artifact_id"] = aid
+                                hint = (
+                                    f"\n\n(Full {field} was {n_bytes} bytes; stored as attachment id={aid}. "
+                                    f"Use open_attachment(artifact_id='{aid}', start_line=1, end_line=200) for bounded excerpts.)"
+                                )
+                                rendered = out_obj.get("rendered")
+                                if isinstance(rendered, str):
+                                    out_obj["rendered"] = rendered + hint
+                            elif too_large:
+                                out_obj[field] = ""
+                                notice = _too_large_notice(n_bytes, what=f"Command {field}")
+                                rendered = out_obj.get("rendered")
+                                out_obj["rendered"] = (rendered if isinstance(rendered, str) else "") + notice
+                    results_by_index[idx] = _jsonable(r_out)
+                    continue
+
                 if seg_item.get("name") != "read_file":
+                    # Generic offload for ANY other host tool that returns a large string output
+                    # (backlog 0215: "any output of any tool execution"). Structured/dict outputs are
+                    # left untouched (we can't know which field is the payload); read_file and
+                    # execute_command have dedicated branches above.
+                    generic_out = r_out.get("output") if isinstance(r_out, dict) else None
+                    if isinstance(generic_out, str) and generic_out:
+                        aid, too_large, n_bytes = _offload_text(generic_out, source=f"tool.{seg_item.get('name') or 'output'}")
+                        if aid:
+                            r_out["output"] = (
+                                f"(Output was {n_bytes} bytes; stored as attachment id={aid}. "
+                                f"Use open_attachment(artifact_id='{aid}', start_line=1, end_line=200) for bounded excerpts.)"
+                            )
+                            r_out["output_offloaded_artifact_id"] = aid
+                        elif too_large:
+                            r_out["output"] = _too_large_notice(n_bytes, what="Tool output").strip()
                     results_by_index[idx] = _jsonable(r_out)
                     continue
                 tc2 = seg_item.get("tc")

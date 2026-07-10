@@ -50,6 +50,20 @@ resolver is the run's own DIARY_READ handler — raw at the home-direct
 driver, stamp-verified behind the gateway door (`install_entity_routing`),
 so "under the run's verified stamp" holds by construction wherever the
 door wired the handlers.
+
+THE LEDGER CONTRACT, both divergences in one place (memory's co-sign note,
+a2a 0014/094344Z): the run ledger records LLM_CALL payloads and results as
+the RUNTIME held them, which differs from the provider wire in exactly two
+documented, deterministic ways — READ: act-only refs appear UNRESOLVED in
+the ledgered payload (the wire carried the dereferenced words; media
+`$artifact` refs behave identically); WRITE: the ledgered result carries
+the MARKED reply (the wire's raw reply carried the diary fences, which
+flew to the book at the result boundary and never rested). Reconstruction
+re-resolves refs through doors that enforce authority; nothing else about
+the payload/result diverges. The non-private gist fallback (first line of
+the entry text, ≤120 chars, when the author gave no gist) is a DECISION on
+the record — gist-grade under the operator-audience ruling — not an
+accident of truncation.
 """
 
 from __future__ import annotations

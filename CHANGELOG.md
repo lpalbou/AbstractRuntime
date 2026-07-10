@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- G1 WRITE DIRECTION at the result boundary + the item-10 A/B fixture. The
+  A/B privacy grep (arm A = ChatSession, arm B = visit workflow, one
+  scripted visit with a PRIVATE diary election on twin homes) caught what
+  the plan's pre-condition predicted: in the durable mapping the raw reply
+  — diary fences included — rested in the run store (result_key) and the
+  ledger's LLM_CALL result. Fix: the act-only wrapper now captures diary
+  elections AT THE RESULT BOUNDARY (`capture_diary_elections`) — the words
+  fly to the book through the home's DIARY_WRITE handler before the result
+  persists; the durable result carries the MARKED reply + word-free
+  `diary_entries` metadata (gist only for non-private). Elections without
+  a payload `turn_id` fail loud and non-retryable (losing elected words
+  silently and leaking them are both worse). The visit workflow's ELECT
+  node becomes a pure fold of the captured metadata. A/B pins criterion 1
+  (memory-plane equivalence: same record kinds, same participants, same
+  diary words, D2 zero on both arms) and criterion 6's offline half (the
+  private words rest ONLY in the book's file family — every file of the
+  durable arm's home is grepped).
 - Visit-as-durable-run workflow (`identity/visit_workflow.py` — plan items
   7-10 v0, the phase-3 centerpiece made executable): `build_visit_workflow`
   maps the entity turn loop onto runtime effects over a per-entity runtime

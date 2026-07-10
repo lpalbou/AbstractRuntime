@@ -119,18 +119,23 @@ def open_entity_runtime(
         handlers.update(extra_handlers)
 
     # G1 IS STRUCTURAL, NOT OPTIONAL (frozen seam spec, thread 0013): every
-    # host-supplied LLM handler on an ENTITY runtime is wrapped with the
-    # act-only dereference — refs rest in the transcript/ledger, words are
-    # resolved fresh from the book at send time through the run's own
-    # DIARY_READ handler (raw here; stamp-verified when the door wraps the
-    # routing). A host cannot forget the privacy boundary because the
-    # composition never offers it unwrapped.
+    # host-supplied LLM handler on an ENTITY runtime is wrapped with BOTH
+    # G1 directions — READ: act-only refs rest in the transcript/ledger,
+    # words resolve fresh from the book at send time through the run's own
+    # DIARY_READ handler; WRITE: the reply's diary fences are captured at
+    # the result boundary and written through DIARY_WRITE BEFORE the result
+    # persists (the A/B privacy grep found the raw reply resting in the run
+    # store otherwise). Raw handlers here; stamp-verified when the door
+    # wraps the routing. A host cannot forget the privacy boundary because
+    # the composition never offers it unwrapped.
     from ..core.models import EffectType as _ET
     from .act_only import wrap_llm_handler_with_act_only
 
     if _ET.LLM_CALL in handlers and _ET.DIARY_READ in handlers:
         handlers[_ET.LLM_CALL] = wrap_llm_handler_with_act_only(
-            handlers[_ET.LLM_CALL], diary_read_handler=handlers[_ET.DIARY_READ]
+            handlers[_ET.LLM_CALL],
+            diary_read_handler=handlers[_ET.DIARY_READ],
+            diary_write_handler=handlers.get(_ET.DIARY_WRITE),
         )
 
     runtime = Runtime(

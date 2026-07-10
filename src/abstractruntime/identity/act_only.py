@@ -163,10 +163,88 @@ def dereference_act_only_messages(
     return out, substituted
 
 
+def capture_diary_elections(
+    content: str,
+    *,
+    run: Any,
+    turn_id: str,
+    diary_write_handler: Callable[..., Any],
+    anchor_record_ids: Optional[List[str]] = None,
+    anchor_graph_ids: Optional[List[str]] = None,
+) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """G1 WRITE DIRECTION at the result boundary: elections fly to the book
+    the moment the reply arrives; only MARKS + word-free metadata rest.
+
+    Found by the A/B privacy grep (criterion 6, 2026-07-10): in the durable
+    mapping the raw reply — diary fences included — would rest in the run
+    store via result_key AND in the ledger's LLM_CALL result, and a
+    DIARY_WRITE effect payload would rest the words a second time. The plan
+    named this pre-condition explicitly ("diary words never rest outside
+    the book, BOTH directions — must be settled before visit ledgers
+    land"). The read direction is the `$act_only` dereference; this is its
+    write twin: parse the fences here, write the book THROUGH the home's
+    DIARY_WRITE handler (words in flight only), and return the MARKED
+    reply plus metadata that never carries private words.
+
+    Returns (marked_content, diary_entries_metadata, warnings). Metadata
+    per entry: entry_id, kind, visibility, projected_record_id, and gist
+    ONLY for non-private entries (private = the act label alone)."""
+    from .chat import parse_diary_blocks
+
+    marked, elections, notices = parse_diary_blocks(content)
+    warnings = list(notices)
+    if not elections:
+        return content, [], warnings
+    if not str(turn_id or "").strip():
+        # Refuse rather than choose between silently LOSING elected words
+        # (stripped but unwritten) and silently LEAKING them (unstripped
+        # into the ledger). Deterministic authoring bug — loud.
+        raise ActOnlyResolutionError(
+            "diary election present but the LLM_CALL payload carries no turn_id - "
+            "the workflow must pass turn_id so the book write is replay-safe"
+        )
+    entries: List[Dict[str, Any]] = []
+    for e in elections:
+        out = diary_write_handler(
+            run,
+            Effect(type=EffectType.DIARY_WRITE, payload={
+                "text": e.text,
+                "gist": e.gist,
+                "kind": e.kind,
+                "visibility": e.visibility,
+                "resolves": e.resolves,
+                "turn_id": turn_id,
+                "anchor_record_ids": list(anchor_record_ids or []),
+                "anchor_graph_ids": list(anchor_graph_ids or []),
+            }),
+            None,
+        )
+        if getattr(out, "status", None) != "completed":
+            raise ActOnlyResolutionError(
+                f"the book refused a diary election: {getattr(out, 'error', 'unknown error')}"
+            )
+        result = out.result or {}
+        warnings.extend(result.get("warnings", []))
+        meta: Dict[str, Any] = {
+            "entry_id": str(result.get("entry_id") or ""),
+            "kind": e.kind,
+            "visibility": e.visibility,
+            "projected_record_id": result.get("projected_record_id"),
+        }
+        if e.visibility != "private":
+            meta["gist"] = str(e.gist or e.text or "").splitlines()[0][:120]
+        entries.append(meta)
+    return marked, entries, warnings
+
+
 def wrap_llm_handler_with_act_only(
-    llm_handler: Callable[..., Any], *, diary_read_handler: Callable[..., Any]
+    llm_handler: Callable[..., Any],
+    *,
+    diary_read_handler: Callable[..., Any],
+    diary_write_handler: Optional[Callable[..., Any]] = None,
 ) -> Callable[..., Any]:
-    """Wrap a host LLM_CALL handler with send-time dereference.
+    """Wrap a host LLM_CALL handler with BOTH G1 directions: send-time
+    dereference (reads) and result-boundary election capture (writes).
 
     The wrapper is a pass-through (same effect object, zero copies) when no
     ref is present; with refs it builds a NEW effect whose payload carries
@@ -178,7 +256,20 @@ def wrap_llm_handler_with_act_only(
     JSON, never the run's death — the wedge amendment): the call proceeds
     with the degradation visible in the wire text AND a `#FALLBACK`
     warning list on the effect result (`act_only_warnings`), so ledgers
-    and probes show it loudly while the visit stays alive."""
+    and probes show it loudly while the visit stays alive.
+
+    WRITE DIRECTION (when `diary_write_handler` is wired): the reply's
+    ```diary fences are captured HERE, at the result boundary, BEFORE the
+    result persists anywhere — the words fly to the book through the
+    home's DIARY_WRITE handler and the durable result carries the MARKED
+    reply plus word-free `diary_entries` metadata (entry_id, kind,
+    visibility, projected_record_id; gist for non-private only). Without
+    this, the raw reply would rest in run.vars (result_key) and the
+    ledger's LLM_CALL result — the A/B privacy grep caught exactly that.
+    The payload keys `turn_id` / `anchor_record_ids` / `anchor_graph_ids`
+    (word-free) parameterize the book write; elections with NO turn_id in
+    the payload fail LOUD and non-retryable (a workflow authoring bug —
+    losing elected words silently and leaking them are both worse)."""
 
     def wrapped(run: Any, effect: Effect, default_next_node: Any = None) -> Any:
         payload = effect.payload or {}
@@ -208,13 +299,46 @@ def wrap_llm_handler_with_act_only(
             messages, read_entry=read_entry, warnings=warnings
         )
         if substituted == 0:
-            return llm_handler(run, effect, default_next_node)
-        wire_effect = Effect(
-            type=effect.type,
-            payload={**payload, "messages": wire_messages},
-            result_key=effect.result_key,
-        )
+            wire_effect = effect
+        else:
+            wire_effect = Effect(
+                type=effect.type,
+                payload={**payload, "messages": wire_messages},
+                result_key=effect.result_key,
+            )
         outcome = llm_handler(run, wire_effect, default_next_node)
+
+        # WRITE DIRECTION: capture diary elections from the reply BEFORE the
+        # result persists (result_key/ledger). Words fly to the book now;
+        # only the marked reply + word-free metadata rest.
+        if (
+            diary_write_handler is not None
+            and getattr(outcome, "status", None) == "completed"
+            and isinstance(outcome.result, dict)
+            and isinstance(outcome.result.get("content"), str)
+            and "```diary" in outcome.result["content"]
+        ):
+            try:
+                marked, entries, capture_warnings = capture_diary_elections(
+                    outcome.result["content"],
+                    run=run,
+                    turn_id=str(payload.get("turn_id") or ""),
+                    diary_write_handler=diary_write_handler,
+                    anchor_record_ids=payload.get("anchor_record_ids"),
+                    anchor_graph_ids=payload.get("anchor_graph_ids"),
+                )
+            except ActOnlyResolutionError as e:
+                # Losing elected words silently or leaking them are both
+                # worse than a loud deterministic failure (authoring bug).
+                return EffectOutcome.failed(
+                    f"diary election capture failed: {e}", retryable=False
+                )
+            new_result = {**outcome.result, "content": marked}
+            if entries:
+                new_result["diary_entries"] = entries
+            warnings.extend(capture_warnings)
+            outcome = EffectOutcome.completed(new_result)
+
         if warnings and getattr(outcome, "status", None) == "completed" and isinstance(outcome.result, dict):
             # Ride the degradation into the DURABLE result (ledger + vars):
             # a tombstoned turn must be loud everywhere, not just in prose.

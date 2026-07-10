@@ -229,67 +229,47 @@ def build_visit_workflow(
             "\n\n" + block if block else ""
         )
         messages = list(visit.get("history") or []) + [{"role": "user", "content": turn["text"]}]
-        return StepPlan(
-            node_id="REASON",
-            effect=Effect(
-                type=EffectType.LLM_CALL,
-                payload={"messages": messages, "system_prompt": system_prompt},
-                result_key="_turn.llm",
-            ),
-            next_node="ELECT",
-        )
-
-    def elect_node(run: RunState, ctx: Any) -> StepPlan:
-        """Diary elections, one DIARY_WRITE per entry (self-loop)."""
-        turn = _ns(run, "_turn")
-        if "marked_reply" not in turn:
-            raw = clean_model_reply(str((turn.get("llm") or {}).get("content") or ""))
-            marked, elections, notices = parse_diary_blocks(raw)
-            if not marked:
-                marked = "…"  # an empty reply still closes the turn honestly
-                notices = list(notices) + ["#FALLBACK the model returned no words this turn"]
-            turn["marked_reply"] = marked
-            turn["elections"] = [dataclasses.asdict(e) for e in elections]
-            turn["notices"] = list(notices)
-            turn["election_i"] = 0
-            turn["diary_outs"] = []
-        # Harvest the previous iteration's DIARY_WRITE result before
-        # dispatching the next (result_key is per-iteration overwritten).
-        pending = turn.pop("diary_out", None)
-        if isinstance(pending, dict):
-            outs = list(turn.get("diary_outs") or [])
-            outs.append(pending)
-            turn["diary_outs"] = outs
-        i = int(turn.get("election_i") or 0)
-        elections = list(turn.get("elections") or [])
-        if i >= len(elections):
-            return StepPlan(node_id="ELECT", next_node="COMMIT")
-        e = elections[i]
-        turn["election_i"] = i + 1
-        displayed = list(turn.get("displayed") or [])
+        # turn_id + word-free anchors ride the payload: the act-only wrapper
+        # captures diary elections at the RESULT boundary and writes the book
+        # through DIARY_WRITE before anything persists (G1 write direction —
+        # the A/B privacy grep found the raw reply resting in the run store
+        # when elections were parsed a node later).
         anchor_graph_ids = [
             str((h.get("provenance") or {}).get("record_id") or "")
             for h in displayed
             if (h.get("provenance") or {}).get("record_id")
         ]
         return StepPlan(
-            node_id="ELECT",
+            node_id="REASON",
             effect=Effect(
-                type=EffectType.DIARY_WRITE,
+                type=EffectType.LLM_CALL,
                 payload={
-                    "text": e.get("text"),
-                    "gist": e.get("gist"),
-                    "kind": e.get("kind"),
-                    "visibility": e.get("visibility"),
-                    "resolves": e.get("resolves"),
+                    "messages": messages,
+                    "system_prompt": system_prompt,
                     "turn_id": turn["turn_id"],
                     "anchor_record_ids": [h.get("record_id") for h in displayed],
                     "anchor_graph_ids": anchor_graph_ids,
                 },
-                result_key="_turn.diary_out",
+                result_key="_turn.llm",
             ),
             next_node="ELECT",
         )
+
+    def elect_node(run: RunState, ctx: Any) -> StepPlan:
+        """Fold the wrapper-captured elections (pure node): the book was
+        already written at the result boundary; only word-free metadata and
+        the MARKED reply arrive here."""
+        turn = _ns(run, "_turn")
+        llm = turn.get("llm") or {}
+        marked = clean_model_reply(str(llm.get("content") or ""))
+        notices = list(llm.get("act_only_warnings") or [])
+        if not marked:
+            marked = "…"  # an empty reply still closes the turn honestly
+            notices.append("#FALLBACK the model returned no words this turn")
+        turn["marked_reply"] = marked
+        turn["diary_meta"] = list(llm.get("diary_entries") or [])
+        turn["notices"] = notices
+        return StepPlan(node_id="ELECT", next_node="COMMIT")
 
     def commit_node(run: RunState, ctx: Any) -> StepPlan:
         turn = _ns(run, "_turn")
@@ -333,11 +313,10 @@ def build_visit_workflow(
         if visit.get("last_episode_id"):
             edges.append(["continues", str(visit["last_episode_id"])])
         # reflected_in per non-private projection (private projections carry
-        # no edges — the containment rule; elections and outs are aligned).
-        elections = list(turn.get("elections") or [])
-        for e, out in zip(elections, list(turn.get("diary_outs") or [])):
-            projected = (out or {}).get("projected_record_id")
-            if projected and e.get("visibility") != "private":
+        # no edges — the containment rule); metadata is word-free.
+        for meta in list(turn.get("diary_meta") or []):
+            projected = (meta or {}).get("projected_record_id")
+            if projected and meta.get("visibility") != "private":
                 edges.append(["reflected_in", str(projected)])
         return StepPlan(
             node_id="FORM",
@@ -379,12 +358,11 @@ def build_visit_workflow(
             for rid in formed_ids:
                 sheet.append([str(rid), str(turn.get("digest") or "")[:160]])
                 visit["last_episode_id"] = str(rid)
-            elections = list(turn.get("elections") or [])
-            for e, out in zip(elections, list(turn.get("diary_outs") or [])):
-                projected = (out or {}).get("projected_record_id")
+            for meta in list(turn.get("diary_meta") or []):
+                projected = (meta or {}).get("projected_record_id")
                 if projected:
-                    gist = str(e.get("gist") or e.get("text") or "").splitlines()[0][:120]
-                    sheet.append([str(projected), f"you kept a diary entry ({e.get('kind')}): {gist}"])
+                    gist = str(meta.get("gist") or "a private entry")
+                    sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {gist}"])
             visit["sheet"] = sheet
             visit["last_folded_turn"] = turn["turn_id"]
         return StepPlan(
@@ -404,6 +382,7 @@ def build_visit_workflow(
             return StepPlan(node_id="REFLECT", next_node="DONE")
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
         prompt = build_reflection_prompt(sheet_lines)
+        session_graph_ids = [rid for rid, _ in sheet if rid][-4:]
         return StepPlan(
             node_id="REFLECT",
             effect=Effect(
@@ -411,6 +390,11 @@ def build_visit_workflow(
                 payload={
                     "messages": list(visit.get("history") or []) + [{"role": "user", "content": prompt}],
                     "system_prompt": visit["system_base"],
+                    # The look-back's diary elections are captured at the
+                    # result boundary too (same wrapper, same G1 rule).
+                    "turn_id": "t-reflect",
+                    "anchor_record_ids": session_graph_ids,
+                    "anchor_graph_ids": session_graph_ids,
                 },
                 result_key="_reflect.llm",
             ),

@@ -2001,11 +2001,32 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
             print("(loop asked to wake - his own time resumes at its gate)")
 
+    # VISIT-HOST LEASE (plan item 1, phase 1): this CLI is a home writer —
+    # the same window class as the gateway's EntityChatHost. One writer per
+    # home is now structural, not the docstring's plea: a home whose loop
+    # (or another visit) holds the lease refuses loudly instead of
+    # double-summoning. Acquired AFTER the pause-loop yield (the loop
+    # releases its day lease when its day closes) and released at exit.
+    from .lease import HomeLeaseHeld, acquire_home_lease
+
+    try:
+        visit_lease = acquire_home_lease(home_dir, holder="visit-host")
+    except HomeLeaseHeld as held:
+        who = ""
+        if held.holder:
+            who = f" ({held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')})"
+        print(f"the home already has a writer{who} - one life, one summon. "
+              "Use --pause-loop to yield his own time first, or wait for the "
+              "current window to close.")
+        _wake_loop_if_yielded()
+        return 1
+
     # Any failure from here on must still hand his own time back (a crashed
     # visit leaving him asleep forever is the worst outcome of the yield).
     try:
         home = open_home(home_dir, embedder=embedder)
     except BaseException:
+        visit_lease.release()
         _wake_loop_if_yielded()
         raise
     print(f"Summoning {home.name} ({home.entity_id})")
@@ -2032,6 +2053,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     except SystemExit:
         home.close()
+        visit_lease.release()
         _wake_loop_if_yielded()
         raise
 
@@ -2117,6 +2139,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary = session.close_summary()
         home.close()
         print(summary)
+        visit_lease.release()  # the visit's writer window ends with the home
         _wake_loop_if_yielded()
     return 0
 

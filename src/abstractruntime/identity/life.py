@@ -821,7 +821,11 @@ class LifeLoop:
     def _sleep_window(self, reason: str) -> Optional[Dict[str, Any]]:
         """Enter a self-elected sleep: mark state=asleep (written_by=self, so
         the navbar and biography show HE chose it), then run consolidation/
-        dreams if a hook is wired. Returns the dream result (or None)."""
+        dreams if a hook is wired. Returns the dream result (or None).
+
+        The consolidation pass is a HOME WRITER (plan item 1): it runs under
+        the lease (holder="dream"). A held home skips the pass honestly —
+        the night is quiet, the pass is idempotent and runs next sleep."""
         if self.state_home is not None:
             try:
                 write_entity_state(
@@ -833,6 +837,19 @@ class LifeLoop:
         self.out("(sleeping - consolidating the day)")
         if self.on_sleep is None:
             return None
+        dream_lease: Optional["HomeLease"] = None
+        if self.state_home is not None:
+            from .lease import HomeLease, HomeLeaseHeld  # noqa: F811 - annotation name
+
+            try:
+                dream_lease = HomeLease(self.state_home, holder="dream")
+                dream_lease.acquire()
+            except HomeLeaseHeld:
+                self.out(
+                    "#FALLBACK another writer holds the home; sleeping without a "
+                    "dream this night (the pass is idempotent - next sleep runs it)"
+                )
+                return None
         try:
             result = self.on_sleep()
             if isinstance(result, dict) and result.get("formed"):
@@ -843,6 +860,9 @@ class LifeLoop:
         except Exception as e:  # noqa: BLE001 - a failed dream never breaks the loop
             self.out(f"#FALLBACK consolidation pass failed ({e}); sleeping without a dream")
             return None
+        finally:
+            if dream_lease is not None:
+                dream_lease.release()
 
     def _wake_from_self_sleep(self) -> None:
         """Return to awake after a self-elected sleep — but only if the state
@@ -922,16 +942,45 @@ class LifeLoop:
             # quiescence — but its write can land in the window between the
             # gate read above and the summon below, and this loop would open
             # a day under the visit. One re-read here closes that sliver to
-            # microseconds; the per-home flock lease (gateway lane) is the
-            # true mutual exclusion when it lands.
+            # microseconds; the per-home LEASE below is the true mutual
+            # exclusion (this belt just avoids a pointless acquire).
             belt = self._operator_state()
             if belt["state"] in ("asleep", "paused"):
                 self.out(f"({belt['state']} written while opening the day - yielding before the summon)")
                 continue  # back to the top gate, which idles honestly
 
+            # DAY-WINDOW LEASE (plan item 1 / GW-A, phase 1): the loop is one
+            # of the four home writers — the day holds the lease from summon
+            # to close. Refusal is a YIELD, never a crash: another writer
+            # (visit host, dream, maintenance) owns the home right now; idle
+            # one poll and return to the gate, which re-reads state honestly.
+            day_lease: Optional["HomeLease"] = None
+            if self.state_home is not None:
+                from .lease import HomeLease, HomeLeaseHeld  # noqa: F811 - annotation name
+
+                try:
+                    day_lease = HomeLease(self.state_home, holder="loop")
+                    day_lease.acquire()
+                except HomeLeaseHeld as held:
+                    who = ""
+                    if held.holder:
+                        who = f" ({held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')})"
+                    self.out(f"(another writer holds the home{who} - yielding at the gate)")
+                    day_lease = None
+                    if self._interruptible_sleep(STATE_POLL_SECONDS):
+                        report.stopped_by = self.stop_cause or "stop_file"
+                        break
+                    continue
+
             day += 1
             report.days = day
-            session = self.open_session()
+            try:
+                session = self.open_session()
+            except BaseException:
+                # A failed summon must hand the home back before dying.
+                if day_lease is not None:
+                    day_lease.release()
+                raise
             self._status("day")
             self.out(f"(day {day} begins - session {session.session_id})")
             consecutive_failures = 0
@@ -1036,6 +1085,8 @@ class LifeLoop:
                 self.out(session.close_summary())
                 session.home.close()
                 self._status("between")
+                if day_lease is not None:
+                    day_lease.release()  # the day's writer window ends HERE
 
             if report.stopped_by == "rest" and self.rest_minutes > 0:
                 # 24/7 mode: rest is SLEEP, not a blank nap (maintainer ruling

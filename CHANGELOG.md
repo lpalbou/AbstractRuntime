@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Per-home lease (`identity/lease.py` — consensus plan item 1 / GW-A, phase 1):
+  ONE writer per home at a time, `flock(LOCK_EX|LOCK_NB)` on `<home>/.home_lease`
+  (the spawn-lock precedent). Holder metadata (kind/pid/acquired_at/session/run)
+  is diagnostics only — flock is the truth; refusal raises `HomeLeaseHeld`
+  naming the incumbent (loud 409-class, never a silent wait). Release truncates
+  to a released record, never unlinks (unlink races a holder's fd onto a dead
+  inode); a crashed holder releases with its fd (kernel semantics); a COPIED
+  home's stale lease bytes are inert (`read_home_lease` answers `held` by a
+  non-destructive flock probe, never by trusting metadata). Wired at the three
+  runtime writer windows: loop day-open→close (a held home YIELDS back to the
+  gate, never crashes the loop), the self-elected sleep's dream window (held
+  home = honest quiet night; the pass is idempotent), and the home-direct CLI
+  visit (one life, one summon is now structural, not a docstring plea). The
+  gateway wires its two sites (EntityChatHost, dream verb) against the same
+  primitive. 7 tests incl. cross-process exclusion + kill-releases.
 - Tool RESULTS on the turn probe (maintainer 2026-07-09, "the entity turn IS
   a loop but tool RESULTS are invisible"): every `TurnReport.tool_details`
   entry now carries a verbatim `result` string — what the lookup returned to

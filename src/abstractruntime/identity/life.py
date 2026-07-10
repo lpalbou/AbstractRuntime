@@ -837,14 +837,14 @@ class LifeLoop:
         self.out("(sleeping - consolidating the day)")
         if self.on_sleep is None:
             return None
-        dream_lease: Optional["HomeLease"] = None
+        dream_lease: Optional["DirectoryLease"] = None
         if self.state_home is not None:
-            from .lease import HomeLease, HomeLeaseHeld  # noqa: F811 - annotation name
+            from ..storage.lease import DirectoryLease, DirectoryLeaseHeld  # noqa: F811 - annotation name
 
             try:
-                dream_lease = HomeLease(self.state_home, holder="dream")
+                dream_lease = DirectoryLease(self.state_home, holder="dream")
                 dream_lease.acquire()
-            except HomeLeaseHeld:
+            except DirectoryLeaseHeld:
                 self.out(
                     "#FALLBACK another writer holds the home; sleeping without a "
                     "dream this night (the pass is idempotent - next sleep runs it)"
@@ -954,14 +954,14 @@ class LifeLoop:
             # to close. Refusal is a YIELD, never a crash: another writer
             # (visit host, dream, maintenance) owns the home right now; idle
             # one poll and return to the gate, which re-reads state honestly.
-            day_lease: Optional["HomeLease"] = None
+            day_lease: Optional["DirectoryLease"] = None
             if self.state_home is not None:
-                from .lease import HomeLease, HomeLeaseHeld  # noqa: F811 - annotation name
+                from ..storage.lease import DirectoryLease, DirectoryLeaseHeld  # noqa: F811 - annotation name
 
                 try:
-                    day_lease = HomeLease(self.state_home, holder="loop")
+                    day_lease = DirectoryLease(self.state_home, holder="loop")
                     day_lease.acquire()
-                except HomeLeaseHeld as held:
+                except DirectoryLeaseHeld as held:
                     who = ""
                     if held.holder:
                         who = f" ({held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')})"

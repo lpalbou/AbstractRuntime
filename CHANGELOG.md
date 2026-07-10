@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Writer lease re-homed to its mechanism layer** (2026-07-10 vocabulary
+  sign-off, a2a/fs/renaming.md, maintainer-approved): `identity/lease.py`
+  → `storage/lease.py` with neutral spellings — `HomeLease` →
+  `DirectoryLease`, `HomeLeaseHeld` → `DirectoryLeaseHeld`,
+  `acquire_home_lease` → `acquire_directory_lease`, `read_home_lease` →
+  `read_directory_lease`, refusal text "one writer per **directory**", and
+  the on-disk dotfile `.home_lease` → `.writer_lease` (option 2, six
+  voices: the file travels inside every copied directory, so the neutral
+  name matters at rest). The mechanism is generic one-writer-per-directory
+  mutual exclusion — entity homes are the first consumer, item-15 project
+  workplaces the designed second; semantics byte-identical (flock truth,
+  holder-metadata diagnostics, release-truncates, crash-release,
+  stale-copy inertness, one-lease relay rule). `identity.lease` remains as
+  a thin re-export shim for the migration window (same class objects, same
+  lock file — mixed old/new callers keep excluding each other; pinned by
+  test) and DIES BEFORE RELEASE. Stale `.home_lease` files in existing
+  homes are inert bytes (flock state never lived in the bytes); safe to
+  delete or ignore. Exports added to `abstractruntime.storage`. Design
+  validation recorded in the sign-off document: two maintainer-driven
+  adversarial passes confirmed the lease arbitrates PROCESSES (not
+  principals — visitor writes are refused at the deposit gate regardless),
+  that three writers legitimately bypass the gateway's ticking (detached
+  loop, home-direct CLI, CLI maintenance verbs), and that the damage class
+  under collision is permanent on append-only stores (hash-chain fork,
+  seq-axis interleave) — which justifies a kernel lock despite low
+  collision frequency.
+
 ### Added
 - Production merge home for the adapter cycle (a2a 0014 merge-ownership
   ask, ruled): `build_visit_workflow(react_middle=ReactMiddle(...))` — ONE

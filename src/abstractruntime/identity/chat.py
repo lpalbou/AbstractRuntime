@@ -2007,11 +2007,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # (or another visit) holds the lease refuses loudly instead of
     # double-summoning. Acquired AFTER the pause-loop yield (the loop
     # releases its day lease when its day closes) and released at exit.
-    from .lease import HomeLeaseHeld, acquire_home_lease
+    from ..storage.lease import DirectoryLeaseHeld, acquire_directory_lease
 
     try:
-        visit_lease = acquire_home_lease(home_dir, holder="visit-host")
-    except HomeLeaseHeld as held:
+        visit_lease = acquire_directory_lease(home_dir, holder="visit-host")
+    except DirectoryLeaseHeld as held:
         who = ""
         if held.holder:
             who = f" ({held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')})"

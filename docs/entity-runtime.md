@@ -20,39 +20,45 @@ entities/castor/
   runtime_castor.sqlite3   # run store + ledger (THIS page)
   artifacts/               # verbatims and run artifacts
   workspace/               # the entity's own files
-  .home_lease              # writer lease (see below)
+  .writer_lease            # writer lease (see below)
 ```
 
 **Copying the directory moves the whole life** — including pending runs,
 durable waits, and commitments. Nothing at rest references the door's
 address (relocation-stable keys).
 
-## One writer per home: the lease (`identity/lease.py`)
+## One writer per directory: the lease (`storage/lease.py`)
+
+The lease is a **generic one-writer-per-directory mechanism** (entity homes
+are its first consumer; project workplaces are the designed second — the
+2026-07-10 vocabulary sign-off re-homed it from `identity/` to `storage/`).
+It arbitrates *processes*, never principals: visitors' write-rights are
+denied structurally at the deposit gate regardless of the lease.
 
 Four writer windows exist for a home: a visit host, the own-time loop's
 day, the dream window, and maintenance passes. Exactly one may hold the
-home at a time:
+directory at a time:
 
 ```python
-from abstractruntime.identity.lease import acquire_home_lease, HomeLeaseHeld, read_home_lease
+from abstractruntime.storage.lease import acquire_directory_lease, DirectoryLeaseHeld, read_directory_lease
 
-with acquire_home_lease(home_dir, holder="visit-host", session_id="visit-1"):
-    ...  # the home is yours for this window
+with acquire_directory_lease(home_dir, holder="visit-host", session_id="visit-1"):
+    ...  # the directory is yours for this window
 
-read_home_lease(home_dir)   # {"holder": ..., "pid": ..., "held": True/False}
+read_directory_lease(home_dir)   # {"holder": ..., "pid": ..., "held": True/False}
 ```
 
-- Mechanics: `flock(LOCK_EX|LOCK_NB)` on `<home>/.home_lease`. The flock is
-  the truth; the file's JSON metadata (holder kind, pid, acquired_at,
+- Mechanics: `flock(LOCK_EX|LOCK_NB)` on `<dir>/.writer_lease`. The flock
+  is the truth; the file's JSON metadata (holder kind, pid, acquired_at,
   session/run id) is diagnostics for refusal messages and "who holds
   Castor?".
-- Refusal raises `HomeLeaseHeld` **naming the incumbent** — loud, never a
-  silent wait. The own-time loop treats a held home as a *yield* back to
-  its gate; the home-direct chat CLI refuses to double-summon.
+- Refusal raises `DirectoryLeaseHeld` **naming the incumbent** — loud,
+  never a silent wait. The own-time loop treats a held home as a *yield*
+  back to its gate; the home-direct chat CLI refuses to double-summon.
 - A crashed holder releases with its process (kernel drops the flock with
-  the fd). A **copied** home carries stale lease bytes but no lock —
-  `read_home_lease` answers `held` by a non-destructive flock probe, never
-  by trusting metadata.
+  the fd). A **copied** directory carries stale lease bytes but no lock —
+  `read_directory_lease` answers `held` by a non-destructive flock probe,
+  never by trusting metadata.
 - Release truncates the file to a released record; it never unlinks
   (unlink races a concurrent acquirer onto a dead inode).
 - The one-lease relay rule: cross-home delivery acquires ONE home's lease
@@ -130,7 +136,7 @@ Effect(type=EffectType.WAIT_EVENT, payload={
 
 ## Tests
 
-`tests/test_home_lease.py`, `tests/test_entity_runtime.py`,
+`tests/test_directory_lease.py`, `tests/test_entity_runtime.py`,
 `tests/test_act_only_dereference.py`, `tests/test_wait_event_deadline.py` —
 including cross-process lease exclusion, waits-traveling-on-home-copy, the
 ledger-keeps-the-ref end-to-end pin, and the three-backend due-scan.

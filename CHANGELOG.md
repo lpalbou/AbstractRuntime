@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Visual `wait_event` D3 passthrough (flow's follow-through ask): the
+  VisualFlow adapter's wait_event node now passes `until` (idle deadline,
+  UTC-normalized by the runtime; labeled `{"timed_out": true}` resume) and
+  `details` (self-describing wait metadata, e.g. `kind="visitor_message"`)
+  through to the WAIT_EVENT effect — visual residents get durable idle
+  deadlines and self-describing parks; absent pins stay absent
+  (byte-unchanged older flows). 2 tests.
 - Door-shape folds from the GW-C confirmations (a2a 0014): (1) moved-home
   refusal home-direct — `open_entity_runtime` refuses a directory whose
   manifest names a different entity (both id generations parsed) BEFORE a

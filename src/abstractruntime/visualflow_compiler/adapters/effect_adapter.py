@@ -223,7 +223,13 @@ def create_wait_event_handler(
         else:
             input_data = run.vars
 
-        # Extract event key + optional host UX fields (prompt/choices).
+        # Extract event key + optional host UX fields (prompt/choices) +
+        # the D3 pair (flow's follow-through ask, 2026-07-10): `until` (an
+        # idle deadline — the runtime normalizes it to aware-UTC and resumes
+        # with {"timed_out": true} past it) and `details` (self-describing
+        # wait metadata, e.g. kind="visitor_message", riding the ledger wait
+        # record for client rendering). Visual residents get durable idle
+        # deadlines and self-describing parks with zero new transport.
         if isinstance(input_data, dict):
             event_key = input_data.get("event_key")
             if event_key is None:
@@ -235,11 +241,15 @@ def create_wait_event_handler(
             allow_free_text = input_data.get("allow_free_text")
             if allow_free_text is None:
                 allow_free_text = input_data.get("allowFreeText")
+            until = input_data.get("until")
+            details = input_data.get("details")
         else:
             event_key = str(input_data) if input_data else "default"
             prompt = None
             choices = None
             allow_free_text = None
+            until = None
+            details = None
 
         # Create the effect
         effect = Effect(
@@ -249,6 +259,8 @@ def create_wait_event_handler(
                 **({"prompt": prompt} if isinstance(prompt, str) and prompt.strip() else {}),
                 **({"choices": choices} if isinstance(choices, list) else {}),
                 **({"allow_free_text": bool(allow_free_text)} if allow_free_text is not None else {}),
+                **({"until": until} if isinstance(until, str) and until.strip() else {}),
+                **({"details": details} if isinstance(details, dict) else {}),
             },
             result_key=output_key or "_temp.event_data",
         )

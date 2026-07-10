@@ -1655,7 +1655,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "retrieve more memories to function'; narrow only for constrained runs)",
     )
     parser.add_argument("--prelude-budget", type=int, default=1600)
-    parser.add_argument("--max-output-tokens", type=int, default=2048)
+    # Default None = OMIT from the LLM kwargs: core's registry upgrades an
+    # unset value to the model's true ceiling (agency-caps ruling,
+    # 2026-07-11 — an explicit 2048 was the caller pinning itself).
+    parser.add_argument("--max-output-tokens", type=int, default=None)
     parser.add_argument(
         "--embedding-model", default="text-embedding-qwen3-embedding-0.6b",
         help="embeddings model at --base-url (vectors from record one; the maintainer's "
@@ -1790,7 +1793,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     from abstractcore import create_llm  # lazy: keeps the kernel import-light
 
-    llm_kwargs: Dict[str, Any] = {"model": model, "max_output_tokens": args.max_output_tokens}
+    llm_kwargs: Dict[str, Any] = {"model": model}
+    if args.max_output_tokens is not None:
+        llm_kwargs["max_output_tokens"] = args.max_output_tokens
     if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
         llm_kwargs["base_url"] = args.base_url  # cloud providers resolve their own endpoint
     llm = create_llm(provider, **llm_kwargs)

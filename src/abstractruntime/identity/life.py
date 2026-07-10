@@ -1207,7 +1207,7 @@ def build_session_factory(
     embedding_model: Optional[str],
     embedding_base_url: str,
     context_window: int,
-    max_output_tokens: int = 2048,
+    max_output_tokens: Optional[int] = None,
     session_prefix: str = "owntime",
     shelf_size: Optional[int] = None,
     out: Callable[[str], None] = print,
@@ -1244,11 +1244,16 @@ def build_session_factory(
         # Unattended loop: a hung request must become a failed tick (the
         # loop's backoff handles it), never an indefinite stall (observed
         # live: an SSL read with no timeout froze the first 24/7 attempt).
+        # Output tokens: OMIT by default — core's registry upgrades an
+        # unset value to the model's true ceiling; an explicit 2048 pinned
+        # the resident below it (agency-caps ruling, 2026-07-11: a long
+        # report turn must not be cut mid-thought by a caller's own pin).
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_output_tokens": max_output_tokens,
             "timeout": 180,
         }
+        if max_output_tokens is not None:
+            kwargs["max_output_tokens"] = max_output_tokens
         if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
             kwargs["base_url"] = base_url
         llm = create_llm(provider, **kwargs)

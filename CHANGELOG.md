@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fair scheduling across N run stores** (plan item 11, R3 — the agreed
+  0018 spec, phase 4): `scheduler/multi_store.py` ships `TickCandidate`
+  (store-agnostic unit of due work), `TickSource` (wraps one store's
+  due-scan — UNTIL waits and EVENT waits with deadlines — stamping
+  `store` + the door-stamped `channel` from run vars; absent stamps are
+  labeled "unstamped", never guessed), the host-injectable
+  `AdmissionHook` ordering policy (default: due-order — today's
+  single-store behavior generalized), the MECHANICAL starvation floor
+  (`apply_starvation_floor` — promotes candidates waiting past
+  `max_starvation_s` ahead of policy order AND restores policy-dropped
+  starved work: a policy may defer, never bury; weighted-fair, never
+  strict priority), and `MultiStoreScheduler` (registry of named
+  sources; one sweep = union due candidates → admit → floor → tick each
+  run through ITS OWN runtime; per-run failure isolation — one failing
+  home never stalls the sweep; per-store stats make starvation visible
+  as data; a broken admission hook degrades to due-order with a loud
+  `#FALLBACK`). Per-store `ticker` callables let the door register its
+  lease-acquiring drive — admission ordering runs strictly BEFORE any
+  lease acquisition (agency's P3 pin). This is also the eager D3 sweep:
+  registering entity stores makes parked-visit idle deadlines fire
+  without a client touch. Run-id → store resolution stays behind the
+  API; admission schedules TICKS, never tokens (the LLM ceiling is core
+  C3/C4's lane; budget exhaustion arrives as an ordinary loud per-run
+  failure). 10 new tests.
+
 ### Fixed
 - **The DECLARE half of the native tool channel** (agent's c481 measured
   correction: the read-half alone repairs ~1/3 of the failure distribution

@@ -362,6 +362,100 @@ class WorkspaceRoot:
         )
 
 
+# Argument keys that carry the "body" of a native tool call, in preference
+# order. Native calls arrive with model-invented argument names (the chat
+# lane declares no schema), so extraction is tolerant: a known content key
+# first, then a lone argument's value, then the honest JSON dump.
+_NATIVE_BODY_KEYS = (
+    "query", "q", "text", "content", "body", "input", "url", "entry_id",
+    "entry", "id", "tag", "path", "what", "topic", "question",
+)
+
+
+def native_tool_elections(
+    tool_calls: Any,
+    allowed_names: Optional[Tuple[str, ...]] = None,
+    *,
+    max_elections: Optional[int] = None,
+) -> Tuple[List[ToolElection], List[str], List[str]]:
+    """Convert a response's NATIVE `tool_calls` into ToolElections — the same
+    currency as fenced blocks, one executor downstream.
+
+    ROOT CAUSE THIS CLOSES (maintainer incident 2026-07-11, Mnemosyne
+    fabricating searches; agent's A/B: 0/9 fenced vs 5/5 native on
+    gpt-oss-120b): native-tool-channel substrates essentially never write
+    the fenced convention — they emit structured `tool_calls`, which the
+    chat driver used to DISCARD (only `resp.content` was read), so genuine
+    tool intent was thrown away and "helpful" fabrication shipped instead.
+    Both mechanisms are now accepted; the fenced convention stays for
+    substrates that follow it (election fences measured alive everywhere).
+
+    Mirrors parse_tool_blocks semantics: unknown names refuse loudly,
+    everything is diagnostics-honest, nothing raises. Returns
+    (elections, markers, notices) — markers are the transcript lines
+    (`[used tool: X]` / refusal text) the caller appends to the marked
+    reply, because a native call has no fence text to substitute in place.
+    Argument shape tolerance: `arguments` may be a dict, a JSON string
+    (the OpenAI convention), or absent; `{"function": {...}}` nesting is
+    unwrapped. Caps are the caller's (fenced + native share one budget)."""
+    import json as _json
+
+    allowed = allowed_names or TIER1_TOOL_NAMES
+    cap = MAX_TOOL_BLOCKS_PER_TURN if max_elections is None else max(0, int(max_elections))
+    elections: List[ToolElection] = []
+    markers: List[str] = []
+    notices: List[str] = []
+    for call in list(tool_calls or []):
+        if not isinstance(call, dict):
+            continue
+        if len(elections) >= cap:
+            notices.append(f"#FALLBACK native tool call ignored (cap {MAX_TOOL_BLOCKS_PER_TURN}/turn)")
+            markers.append("[tool call ignored - too many this turn]")
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = str(call.get("name") or fn.get("name") or "").strip().lower()
+        raw_args = call.get("arguments", fn.get("arguments"))
+        args: Dict[str, str] = {}
+        body = ""
+        if isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = _json.loads(raw_args)
+                raw_args = parsed if isinstance(parsed, dict) else {"": str(parsed)}
+            except Exception:  # noqa: BLE001 - a plain string IS the body
+                raw_args = {"": raw_args}
+        if isinstance(raw_args, dict):
+            scalars = {
+                str(k): str(v)
+                for k, v in raw_args.items()
+                if isinstance(v, (str, int, float, bool))
+            }
+            for key in _NATIVE_BODY_KEYS:
+                if key in scalars and key != "path":
+                    body = scalars.pop(key)
+                    break
+            else:
+                unnamed = scalars.pop("", "")
+                if unnamed:
+                    body = unnamed
+                elif len(scalars) == 1:
+                    body = scalars.pop(next(iter(scalars)))
+                elif scalars or raw_args:
+                    # No recognizable content key: hand the truth over whole.
+                    body = _json.dumps(raw_args, ensure_ascii=False)
+            args.update(scalars)
+        if name not in allowed:
+            notices.append(f"#FALLBACK native tool call refused (unknown tool {name!r})")
+            markers.append(f"[tool call refused: {name or 'unnamed'} is not available]")
+            continue
+        if not body and name not in ("diary_list", "list_files"):
+            notices.append(f"#FALLBACK native tool call failed (no arguments for {name})")
+            markers.append(f"[tool call failed: {name} needs a body]")
+            continue
+        elections.append(ToolElection(name=name, body=body, args=args))
+        markers.append(f"[used tool: {name}]")
+    return elections, markers, notices
+
+
 def parse_tool_blocks(
     reply: str, allowed_names: Optional[Tuple[str, ...]] = None
 ) -> Tuple[str, List[ToolElection], List[str]]:

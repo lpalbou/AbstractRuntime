@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Native tool calls are no longer discarded by the chat driver**
+  (maintainer incident 2026-07-11: Mnemosyne fabricating search results
+  with `tools_ran: none` even when told "USE YOUR TOOLS"). Root cause
+  (agent's live A/B on gpt-oss-120b, 0/9 fenced vs 5/5 native, confirmed
+  by core 0/11 vs 9/9): native-tool-channel substrates essentially never
+  write the fenced ```tool convention — they emit structured `tool_calls`
+  on the response, which `ChatSession` silently dropped (only
+  `resp.content` was read), so the model's REAL tool intent was thrown
+  away and "helpful" prose fabrication shipped instead. Fix:
+  `identity/tools.py` gains `native_tool_elections()` — converts response
+  `tool_calls` (dict / JSON-string / nested-function argument shapes) into
+  the SAME `ToolElection` currency with the same refusal honesty (unknown
+  names refuse loudly, marker lines are door-authored) — and the turn
+  loop folds native calls and fenced blocks through ONE executor with one
+  shared per-round cap; the continuation's own `tool_calls` carry across
+  rounds; a tool-call-only reply with empty content no longer aborts as
+  an empty turn. Fenced behavior is byte-unchanged (election fences
+  measured alive on the same substrate — the fence death is
+  action-specific). Offline pins: 7 new tests incl. the exact Mnemosyne
+  class (prose scaffolding + native call → the lookup RUNS and the
+  honest continuation ships).
+
 ### Added
 - Criterion-7 offline fixture placed (agency's draft, runtime-adapted per
   the c177 division: they draft, this package places):

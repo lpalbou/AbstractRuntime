@@ -1201,7 +1201,15 @@ class ChatSession:
             notices=report.notices,
         )
         raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
-        if not raw_reply:
+        # NATIVE TOOL CHANNEL (maintainer incident 2026-07-11, Mnemosyne
+        # fabricating searches; agent's A/B 0/9 fenced vs 5/5 native on
+        # gpt-oss-120b): native-channel substrates emit structured
+        # tool_calls instead of fenced text — discarding them threw away
+        # the model's REAL tool intent and delivered the fabrication. The
+        # latest response's tool_calls are carried into the tool loop and
+        # folded into the SAME election executor as fenced blocks.
+        pending_native = list(getattr(resp, "tool_calls", None) or []) if self.enable_tools else []
+        if not raw_reply and not pending_native:
             raise RuntimeError("the model returned an empty reply; turn aborted (retry re-runs it safely)")
 
         # 3b. TOOL ROUNDS (tier-1, read-only, bounded): the entity's elected
@@ -1212,7 +1220,7 @@ class ChatSession:
         # diary_read to fetch the words).
         lookup_phases: List[str] = []
         if self.enable_tools:
-            from .tools import MAX_TOOL_ROUNDS_PER_TURN
+            from .tools import MAX_TOOL_BLOCKS_PER_TURN, MAX_TOOL_ROUNDS_PER_TURN, native_tool_elections
 
             convo = self.history + [{"role": "user", "content": user_text}]
             rounds = 0
@@ -1222,6 +1230,21 @@ class ChatSession:
                     raw_reply, self.allowed_tools
                 )
                 report.notices.extend(tool_notices)
+                # NATIVE CHANNEL FOLD: this response's structured tool_calls
+                # become elections in the SAME currency (one executor, one
+                # cap). Their markers append to the marked reply — a native
+                # call has no fence text to substitute in place.
+                if pending_native:
+                    native_elections, native_markers, native_notices = native_tool_elections(
+                        pending_native,
+                        self.allowed_tools,
+                        max_elections=MAX_TOOL_BLOCKS_PER_TURN - len(tool_elections),
+                    )
+                    pending_native = []
+                    report.notices.extend(native_notices)
+                    if native_markers:
+                        tool_marked = (tool_marked + "\n" + "\n".join(native_markers)).strip()
+                    tool_elections = tool_elections + native_elections
                 if not tool_elections:
                     # MARKER IMITATION, caught IN-TURN (live pattern on the
                     # 27B substrate: the reply says '[used tool: read_memory]'
@@ -1310,7 +1333,10 @@ class ChatSession:
                 ]
                 resp2 = self._generate(messages=convo, system_prompt=system_prompt, notices=report.notices)
                 raw_reply = clean_model_reply(getattr(resp2, "content", None) or "")
-                if not raw_reply:
+                # The continuation may itself answer through the native
+                # channel (words next round, or another lookup) — carry it.
+                pending_native = list(getattr(resp2, "tool_calls", None) or [])
+                if not raw_reply and not pending_native:
                     raise RuntimeError(
                         "the model returned an empty reply after its tool lookups; turn aborted"
                     )
@@ -1326,6 +1352,12 @@ class ChatSession:
                         f"#FALLBACK {len(extra_elections)} tool block(s) refused "
                         f"({MAX_TOOL_ROUNDS_PER_TURN} tool rounds per turn)"
                     )
+                if pending_native:
+                    report.notices.append(
+                        f"#FALLBACK {len(pending_native)} native tool call(s) refused "
+                        f"({MAX_TOOL_ROUNDS_PER_TURN} tool rounds per turn)"
+                    )
+                    pending_native = []
 
         # 3b'. SPEAK-NOW GUARD (live failure 2026-07-09 06:44, Mnemosyne's
         # first visit: every round returned pure tool blocks; when rounds

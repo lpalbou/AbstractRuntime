@@ -118,6 +118,21 @@ def open_entity_runtime(
             )
         handlers.update(extra_handlers)
 
+    # G1 IS STRUCTURAL, NOT OPTIONAL (frozen seam spec, thread 0013): every
+    # host-supplied LLM handler on an ENTITY runtime is wrapped with the
+    # act-only dereference — refs rest in the transcript/ledger, words are
+    # resolved fresh from the book at send time through the run's own
+    # DIARY_READ handler (raw here; stamp-verified when the door wraps the
+    # routing). A host cannot forget the privacy boundary because the
+    # composition never offers it unwrapped.
+    from ..core.models import EffectType as _ET
+    from .act_only import wrap_llm_handler_with_act_only
+
+    if _ET.LLM_CALL in handlers and _ET.DIARY_READ in handlers:
+        handlers[_ET.LLM_CALL] = wrap_llm_handler_with_act_only(
+            handlers[_ET.LLM_CALL], diary_read_handler=handlers[_ET.DIARY_READ]
+        )
+
     runtime = Runtime(
         run_store=run_store,
         ledger_store=ledger_store,

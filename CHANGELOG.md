@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Act-only dereference (`identity/act_only.py` — the frozen seam spec's G1
+  wire shape, a2a thread 0013: references at rest, words only in flight):
+  durable tool messages carry a typed `{"$act_only": {...}}` ref as exact
+  JSON content (parse-not-regex detection; tool-role messages only — a
+  visitor pasting ref-looking JSON stays inert text); the LLM_CALL wrapper
+  dereferences at SEND time through the run's own DIARY_READ handler (raw
+  home-direct, stamp-verified behind the door) into a WIRE COPY —
+  in-place content substitution preserving message identity; the original
+  payload (ledger, run store) keeps the ref. Unresolvable refs fail LOUD
+  and NON-RETRYABLE (deterministic against an append-only book); the
+  provider never sees a degraded payload. `open_entity_runtime` wraps every
+  host LLM handler automatically — G1 is structural, a host cannot forget
+  it. 6 tests incl. the end-to-end pin: ledger + run.vars + the store file
+  carry the ref while only the provider-facing handler saw the words.
 - Per-entity runtime rooted in the home (`identity/entity_runtime.py` —
   consensus plan item 8, runtime R2 half): `open_entity_runtime(home_dir)`
   composes one `Runtime` per entity over a REAL run store

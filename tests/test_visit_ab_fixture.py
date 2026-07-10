@@ -179,6 +179,13 @@ def _run_arm_b(home_dir: Path) -> Tuple[Path, str]:
             workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY, payload=payload, max_steps=200
         )
     assert state.status == RunStatus.COMPLETED
+    # The kernel's per-node trace (_runtime.node_traces) copies every raw
+    # effect result into run.vars — the write-direction twin agent named.
+    # Because the election capture lives INSIDE the handler boundary, the
+    # trace only ever sees the MARKED result: no private words, explicitly.
+    traces = ert.runtime.get_node_traces(run_id)
+    assert PRIVATE_WORDS not in json.dumps(traces)
+    assert "[kept a private diary entry]" in json.dumps(traces)  # the mark, not the words
     store_path = ert.store_path
     ert.close()
     return store_path, run_id

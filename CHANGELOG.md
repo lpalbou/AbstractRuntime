@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Visit workflow: head discipline + item-14 correlation key (party asks,
+  a2a 0014). NEW `RENDER` node moves presence + MEMORIES to the MESSAGE
+  LANE — the system prompt is `_visit.system_base` only, byte-stable for
+  the whole visit (frozen spec §4 line 9; the v0 per-turn head mutation
+  would have broken the adapter's multi-iteration prefix contract).
+  Decorated user messages are APPEND-ONCE in the transcript (all-but-last
+  byte-identical across turns = the cross-turn cache property; blocks are
+  dated + as_of-labeled so old ones read as honest history); the formed
+  verbatim keeps the visitor's RAW words. `build_visit_workflow` accepts
+  the door-stamped `visit_id` and stamps it as `attributes.visit_id` on
+  every episode + the reflection summary (item 14: both legs of a
+  cross-runtime visit pin ONE string, correlating as data never shared
+  rows). A/B extends: `_runtime.node_traces` grep pins that the kernel
+  trace only ever sees the MARKED reply (the result-boundary capture means
+  the raw private words never exist in any durable channel).
 - G1 WRITE DIRECTION at the result boundary + the item-10 A/B fixture. The
   A/B privacy grep (arm A = ChatSession, arm B = visit workflow, one
   scripted visit with a PRIVATE diary election on twin homes) caught what

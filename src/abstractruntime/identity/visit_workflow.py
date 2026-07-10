@@ -97,14 +97,19 @@ def build_visit_workflow(
     idle_seconds: float = DEFAULT_IDLE_SECONDS,
     history_turns: int = DEFAULT_HISTORY_TURNS,
     model_info: Optional[Dict[str, str]] = None,
+    visit_id: Optional[str] = None,
 ) -> WorkflowSpec:
     """Build the visit workflow over one OPEN home.
 
-    `participants`/`budget_profile` are the STAMP-TIME facts (the door
-    writes them at run creation; the home-direct caller passes them here):
-    participants are door-verified — the entity itself is appended, door
-    parity with the driver. The budget profile defaults to the summon
-    posture over the entity floor when not supplied."""
+    `participants`/`budget_profile`/`visit_id` are the STAMP-TIME facts
+    (the door writes them at run creation; the home-direct caller passes
+    them here): participants are door-verified — the entity itself is
+    appended, door parity with the driver. The budget profile defaults to
+    the summon posture over the entity floor when not supplied. `visit_id`
+    is the door-stamped correlation key for two-sided visits (item 14):
+    when present it is stamped as `attributes.visit_id` on every episode
+    and the reflection summary — both legs of a cross-runtime visit carry
+    the SAME string, correlating as DATA, never as shared rows."""
 
     stamp_participants = [p for p in (participants or []) if str(p).strip()] or ["person:operator"]
     if home.entity_id not in stamp_participants:
@@ -208,12 +213,18 @@ def build_visit_workflow(
                 },
                 result_key="_turn.recall",
             ),
-            next_node="REASON",
+            next_node="RENDER",
         )
 
-    def reason_node(run: RunState, ctx: Any) -> StepPlan:
-        """v0 reason: ONE LLM_CALL. The ReAct adapter replaces THIS node
-        (and only this node) in the full integration — the seam boundary."""
+    def render_node(run: RunState, ctx: Any) -> StepPlan:
+        """HEAD DISCIPLINE (agent's ruling ask, adopted — frozen spec §4:
+        the head is byte-stable for the WHOLE visit; volatile
+        MEMORIES/presence ride the MESSAGE LANE). This pure node renders
+        the turn's user message: presence + MEMORIES + the visitor's words.
+        The decoration is PER-TURN PROMPT CURRENCY: the fold (ANSWER)
+        stores the RAW visitor text in history, so stale MEMORIES blocks
+        never accumulate in the transcript presenting themselves as
+        current — memories are re-recalled fresh every turn."""
         visit = _ns(run, "_visit")
         turn = _ns(run, "_turn")
         recall = turn.get("recall") or {}
@@ -225,10 +236,28 @@ def build_visit_workflow(
         block = _memories_block(displayed, recall.get("as_of_seq"))
         others = [p for p in visit["participants"] if p != home.entity_id]
         presence = f"(present with you: {', '.join(others)})" if others else ""
-        system_prompt = visit["system_base"] + ("\n\n" + presence if presence else "") + (
-            "\n\n" + block if block else ""
+        decoration = "\n\n".join(s for s in (presence, block) if s)
+        # The decorated message is APPEND-ONCE: it enters the transcript at
+        # the fold and STAYS (all-but-last message byte-identical across
+        # turns = the cross-turn cache property; each block is dated +
+        # as_of-labeled, so an old block reads as the honest record of what
+        # that moment reminded him of, never as current recall). The RECORD
+        # keeps the human's raw words: formation verbatim uses turn.text.
+        turn["rendered_user"] = (
+            (decoration + "\n\n" if decoration else "") + turn["text"]
         )
-        messages = list(visit.get("history") or []) + [{"role": "user", "content": turn["text"]}]
+        return StepPlan(node_id="RENDER", next_node="REASON")
+
+    def reason_node(run: RunState, ctx: Any) -> StepPlan:
+        """v0 reason: ONE LLM_CALL with the BYTE-STABLE head (system_base
+        only — never mutated after OPEN). The ReAct adapter replaces THIS
+        node (and only this node) in the full integration."""
+        visit = _ns(run, "_visit")
+        turn = _ns(run, "_turn")
+        displayed = list(turn.get("displayed") or [])
+        messages = list(visit.get("history") or []) + [
+            {"role": "user", "content": turn["rendered_user"]}
+        ]
         # turn_id + word-free anchors ride the payload: the act-only wrapper
         # captures diary elections at the RESULT boundary and writes the book
         # through DIARY_WRITE before anything persists (G1 write direction —
@@ -245,7 +274,7 @@ def build_visit_workflow(
                 type=EffectType.LLM_CALL,
                 payload={
                     "messages": messages,
-                    "system_prompt": system_prompt,
+                    "system_prompt": visit["system_base"],
                     "turn_id": turn["turn_id"],
                     "anchor_record_ids": [h.get("record_id") for h in displayed],
                     "anchor_graph_ids": anchor_graph_ids,
@@ -307,6 +336,8 @@ def build_visit_workflow(
             "participants": list(visit["participants"]),
             "digest_method": "mechanical-v2",
         }
+        if visit_id:
+            attributes["visit_id"] = str(visit_id)  # item-14 correlation key
         if visit.get("model_info"):
             attributes["mind_substrate"] = dict(visit["model_info"])
         edges: List[List[str]] = []
@@ -350,7 +381,10 @@ def build_visit_workflow(
         # double history).
         if visit.get("last_folded_turn") != turn["turn_id"]:
             history = list(visit.get("history") or [])
-            history.append({"role": "user", "content": turn["text"]})
+            # Append-once decorated user message (head discipline: the
+            # transcript IS what was sent — all-but-last stays byte-stable
+            # across turns); the raw words live in the formed verbatim.
+            history.append({"role": "user", "content": turn.get("rendered_user") or turn["text"]})
             history.append({"role": "assistant", "content": turn["marked_reply"]})
             visit["history"] = history[-2 * int(history_turns):]
             sheet = list(visit.get("sheet") or [])
@@ -440,6 +474,7 @@ def build_visit_workflow(
                             "attributes": {
                                 "participants": list(visit["participants"]),
                                 "session_id": str(run.session_id or ""),
+                                **({"visit_id": str(visit_id)} if visit_id else {}),
                             },
                             "provenance": {"source": "entity-visit-run-reflection-v0"},
                         }],
@@ -587,6 +622,7 @@ def build_visit_workflow(
             "PARK": park_node,
             "ROUTE": route_node,
             "RECALL": recall_node,
+            "RENDER": render_node,
             "REASON": reason_node,
             "ELECT": elect_node,
             "COMMIT": commit_node,

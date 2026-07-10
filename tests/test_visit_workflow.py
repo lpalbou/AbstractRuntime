@@ -80,6 +80,7 @@ def _open(home_dir: Path, llm: _ScriptedLLMHandler):
         participants=["person:albou"],
         idle_seconds=3600,
         model_info={"provider": "test", "model": "scripted"},
+        visit_id="visit-abc123",  # the door-stamped item-14 correlation key
     )
     return ert, wf
 
@@ -141,6 +142,9 @@ def test_full_visit_lifecycle_turns_elections_reflection(tmp_path: Path) -> None
         assert all(
             a.get("participants") == ["person:albou", ert.entity_id] for a in episode_attrs
         )
+        # Item-14 correlation key: every episode carries the door-stamped
+        # visit_id as DATA (both legs of a cross-runtime visit pin one string).
+        assert all(a.get("visit_id") == "visit-abc123" for a in episode_attrs)
         self_rows = ert.home.ms.query(TripleQuery(scope="self", owner_id=ert.entity_id, limit=0))
         self_kinds = [
             (a.attributes or {}).get("record_kind") for a in self_rows if isinstance(a.attributes, dict)

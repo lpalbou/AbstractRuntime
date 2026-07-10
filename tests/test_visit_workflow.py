@@ -268,6 +268,9 @@ def test_pause_close_skips_reflection_hard_freeze(tmp_path: Path) -> None:
         assert state.status == RunStatus.COMPLETED
         assert state.output["closed_by"] == "pause"
         assert llm.replies == []  # exactly one LLM call happened: the turn
+        # The look-back DEBT is explicit: the door's next open consumes it.
+        assert state.output["reflection_pending"] is True
+        assert state.output["sheet"]  # word-free session sheet rides along
     finally:
         ert.close()
 

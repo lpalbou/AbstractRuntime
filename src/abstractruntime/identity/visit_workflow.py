@@ -635,6 +635,15 @@ def build_visit_workflow(
             out["closed_by"] = str(visit["closed_by"])
         if visit.get("close_note"):
             out["close_note"] = str(visit["close_note"])
+        sheet = list(visit.get("sheet") or [])
+        if visit.get("skip_reflection") and sheet:
+            # The look-back DEBT is explicit on the run output (a paused
+            # visit's reflection is owed, not forgotten): the door's next
+            # open runs the pending look-back over this sheet. The sheet is
+            # word-free by construction — episode digests + non-private
+            # gists; private entries appear as their act label only.
+            out["reflection_pending"] = True
+            out["sheet"] = sheet
         return StepPlan(node_id="DONE", complete_output=out)
 
     return WorkflowSpec(

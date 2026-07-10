@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Door-shape folds from the GW-C confirmations (a2a 0014): (1) moved-home
+  refusal home-direct — `open_entity_runtime` refuses a directory whose
+  manifest names a different entity (both id generations parsed) BEFORE a
+  stray `runtime_<straydir>.sqlite3` could mint beside the true one
+  (gateway's GW-B wall, now also at the raw-path surface); (2) the PARK
+  idle deadline reads door-seeded `_visit.idle_seconds` from run vars
+  (setdefault from the build kwarg for home-direct callers — the workflow
+  hardcodes nothing); (3) the door-authored close payload's
+  `closed_by`/`reason` ride ROUTE into the look-back context and the run
+  output (the wake-cue seeding rule wants how-it-ended).
 - Visit workflow: head discipline + item-14 correlation key (party asks,
   a2a 0014). NEW `RENDER` node moves presence + MEMORIES to the MESSAGE
   LANE — the system prompt is `_visit.system_base` only, byte-stable for

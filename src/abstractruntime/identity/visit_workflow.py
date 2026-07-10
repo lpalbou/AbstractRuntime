@@ -156,16 +156,21 @@ def build_visit_workflow(
             visit.setdefault("sheet", [])
             visit.setdefault("turn_n", 0)
             visit.setdefault("model_info", dict(model_info_clean))
+            # Door config wins (gateway shape 1, 0014/083823Z): the door
+            # seeds `_visit.idle_seconds` at run creation; the build kwarg
+            # is the home-direct default. setdefault = seeded value stands.
+            visit.setdefault("idle_seconds", float(idle_seconds))
         return StepPlan(node_id="OPEN", next_node="PARK")
 
     def park_node(run: RunState, ctx: Any) -> StepPlan:
+        visit = _ns(run, "_visit")
         return StepPlan(
             node_id="PARK",
             effect=Effect(
                 type=EffectType.WAIT_EVENT,
                 payload={
                     "wait_key": VISITOR_WAIT_KEY,
-                    "until": _deadline_iso(idle_seconds),
+                    "until": _deadline_iso(float(visit.get("idle_seconds") or idle_seconds)),
                     "details": {"kind": "visitor_message"},
                     "resume_to_node": "ROUTE",
                 },
@@ -182,7 +187,14 @@ def build_visit_workflow(
             visit["close_reason"] = "idle_timeout"
             return StepPlan(node_id="ROUTE", next_node="REFLECT")
         if str(resume.get("kind") or "") == "close":
+            # Door-authored close payload (gateway shape, 0014/083823Z):
+            # closed_by/reason ride into the look-back context so the
+            # reflection knows HOW the visit ended.
             visit["close_reason"] = "closed"
+            if resume.get("closed_by"):
+                visit["closed_by"] = str(resume.get("closed_by"))
+            if resume.get("reason"):
+                visit["close_note"] = str(resume.get("reason"))
             return StepPlan(node_id="ROUTE", next_node="REFLECT")
         text = str(resume.get("text") or "").strip()
         if not text:
@@ -604,15 +616,17 @@ def build_visit_workflow(
     def done_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
         refl = _ns(run, "_reflect")
-        return StepPlan(
-            node_id="DONE",
-            complete_output={
-                "ok": True,
-                "turns": int(visit.get("turn_n") or 0),
-                "close_reason": str(visit.get("close_reason") or "closed"),
-                "reflection_notices": list(refl.get("notices") or []),
-            },
-        )
+        out: Dict[str, Any] = {
+            "ok": True,
+            "turns": int(visit.get("turn_n") or 0),
+            "close_reason": str(visit.get("close_reason") or "closed"),
+            "reflection_notices": list(refl.get("notices") or []),
+        }
+        if visit.get("closed_by"):
+            out["closed_by"] = str(visit["closed_by"])
+        if visit.get("close_note"):
+            out["close_note"] = str(visit["close_note"])
+        return StepPlan(node_id="DONE", complete_output=out)
 
     return WorkflowSpec(
         workflow_id=VISIT_WORKFLOW_ID,

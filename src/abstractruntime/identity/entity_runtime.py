@@ -54,6 +54,39 @@ def entity_run_store_path(home_dir: Path) -> Path:
     return home_dir / f"{RUN_STORE_PREFIX}{home_dir.name}.sqlite3"
 
 
+def _manifest_name(home_dir: Path) -> str:
+    """The entity NAME the manifest claims: `entity:<name>` or the legacy
+    `entity:<name>@<home_id>` — both generations parse to <name>."""
+    import json
+
+    try:
+        manifest = json.loads((Path(home_dir) / "manifest.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - open_home gives the missing-manifest refusal
+        return ""
+    entity_id = str(manifest.get("entity_id") or "")
+    tail = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
+    return tail.split("@", 1)[0].strip().lower()
+
+
+def _refuse_moved_home(home_dir: Path) -> None:
+    """GW-B's moved-home refusal, home-direct (gateway extension ask,
+    0014/081145Z): a copied/renamed directory whose manifest names a
+    DIFFERENT entity must refuse before a stray `runtime_<straydir>.sqlite3`
+    is minted beside the true one. The door already refuses at lookup
+    (manifest_for); this gives raw-path callers the same wall. The legacy
+    in-process driver's open_home stays permissive until the migration
+    retires it — this guard covers the NEW surface with zero legacy risk."""
+    home_dir = Path(home_dir)
+    claimed = _manifest_name(home_dir)
+    if claimed and claimed != home_dir.name.strip().lower():
+        raise ValueError(
+            f"moved-home collision: directory {home_dir.name!r} carries a manifest "
+            f"for entity {claimed!r} - the directory name IS the registry key; "
+            "a moved or copied home must keep its name (or be adopted through "
+            "the door, which refuses occupied names)"
+        )
+
+
 @dataclass
 class EntityRuntime:
     """One entity's runtime: the home plus a Runtime bound to its stores.
@@ -99,6 +132,7 @@ def open_entity_runtime(
     - Artifacts: the home's own store — visit-run verbatims/artifacts live
       IN the home like every other part of the life.
     """
+    _refuse_moved_home(Path(home_dir))
     home = open_home(home_dir, embedder=embedder, attention_window=attention_window)
     store_path = entity_run_store_path(Path(home_dir))
     db = SqliteDatabase(store_path)

@@ -214,6 +214,21 @@ def test_two_homes_two_isolated_run_stores(tmp_path: Path) -> None:
         b.close()
 
 
+def test_moved_home_refuses_before_minting_a_stray_store(tmp_path: Path) -> None:
+    """GW-B's refusal, home-direct (gateway extension ask): a copied home
+    under a DIFFERENT directory name refuses at open — no
+    runtime_<straydir>.sqlite3 ever mints beside the true one."""
+    origin = _make_home(tmp_path, slug="truename")
+    stray = tmp_path / "entities" / "wrongname"
+    shutil.copytree(origin, stray)
+    with pytest.raises(ValueError, match="moved-home collision"):
+        open_entity_runtime(stray)
+    assert not (stray / "runtime_wrongname.sqlite3").exists()
+    # The true home still opens.
+    ert = open_entity_runtime(origin)
+    ert.close()
+
+
 def test_extra_handlers_extend_but_never_shadow(tmp_path: Path) -> None:
     from abstractruntime.core.runtime import EffectOutcome
 

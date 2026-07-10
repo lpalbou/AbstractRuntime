@@ -61,11 +61,13 @@ class QueryableRunStore(Protocol):
         now_iso: str,
         limit: int = 100,
     ) -> List[RunState]:
-        """List runs waiting for a time threshold that has passed.
+        """List runs whose wait DEADLINE has passed.
 
         This finds runs where:
         - status == WAITING
-        - waiting.reason == UNTIL
+        - waiting.reason == UNTIL, or waiting.reason == EVENT with a
+          deadline (`waiting.until` set — the D3 idle-timeout shape:
+          an event wait that times out into its resume path)
         - waiting.until <= now_iso
 
         Args:

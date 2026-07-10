@@ -113,16 +113,17 @@ class InMemoryRunStore(RunStore):
         now_iso: str,
         limit: int = 100,
     ) -> List[RunState]:
-        """List runs waiting for a time threshold that has passed."""
+        """List runs whose wait DEADLINE has passed: UNTIL waits always;
+        EVENT waits when they carry `until` (the D3 idle-timeout shape —
+        the scheduler must wake a parked visit whose deadline passed)."""
         results: List[RunState] = []
 
         for run in self._runs.values():
-            # Must be WAITING with reason UNTIL
             if run.status != RunStatus.WAITING:
                 continue
             if run.waiting is None:
                 continue
-            if run.waiting.reason != WaitReason.UNTIL:
+            if run.waiting.reason not in (WaitReason.UNTIL, WaitReason.EVENT):
                 continue
             if run.waiting.until is None:
                 continue

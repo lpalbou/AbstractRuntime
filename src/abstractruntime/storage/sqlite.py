@@ -287,7 +287,11 @@ class SqliteRunStore(RunStore):
                 wait_reason = str(getattr(run.waiting.reason, "value", run.waiting.reason))
             except Exception:
                 wait_reason = None
-            if run.waiting.reason == WaitReason.UNTIL:
+            # Deadline-carrying waits enter the due index: UNTIL always;
+            # EVENT when it carries `until` (the D3 idle-timeout shape) —
+            # the scheduler's due-scan must wake a parked visit whose
+            # deadline passed, not just pure timers.
+            if run.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT):
                 wait_until = str(run.waiting.until) if run.waiting.until else None
 
         payload = json.dumps(asdict(run), ensure_ascii=False)
@@ -329,8 +333,12 @@ class SqliteRunStore(RunStore):
                 ),
             )
 
-            # Maintain WAIT_UNTIL index (only applies to WAITING runs).
-            if run.status == RunStatus.WAITING and wait_reason == WaitReason.UNTIL.value and wait_until:
+            # Maintain the due index (WAITING runs with a deadline: UNTIL
+            # always; EVENT when it carries an idle deadline — D3).
+            if run.status == RunStatus.WAITING and wait_until:
+                index_status = (
+                    "waiting_until" if wait_reason == WaitReason.UNTIL.value else "waiting_event_deadline"
+                )
                 conn.execute(
                     """
                     INSERT INTO wait_index (run_id, next_due_iso, updated_at_iso, status)
@@ -340,7 +348,7 @@ class SqliteRunStore(RunStore):
                       updated_at_iso=excluded.updated_at_iso,
                       status=excluded.status;
                     """,
-                    (str(run.run_id), str(wait_until), str(run.updated_at), "waiting_until"),
+                    (str(run.run_id), str(wait_until), str(run.updated_at), index_status),
                 )
             else:
                 conn.execute("DELETE FROM wait_index WHERE run_id = ?;", (str(run.run_id),))

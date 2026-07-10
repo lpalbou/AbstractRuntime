@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- EVENT wait with a DEADLINE (frozen seam spec D3): `WAIT_EVENT` accepts
+  optional `payload.until` (UTC-normalized at the single write boundary —
+  the WAIT_UNTIL invariant). The event resume wins before the deadline;
+  past it, `tick()` resolves the wait as a LABELED timeout
+  (`{"timed_out": true}` in the wait's result_key) so a parked visit times
+  out into its close path — retiring the in-process idle-reaper class.
+  Deadline-carrying EVENT waits join `list_due_wait_until` on all three
+  backends (sqlite wait_index rows carry status `waiting_event_deadline`;
+  in-memory + json scans widened) so the scheduler wakes parked runs.
+  The ledger wait record carries `wait_key` + `until` + `details` together
+  (flow's render contract: zero new transport). 8 tests incl. the
+  three-backend due-scan parametrization.
 - Act-only dereference (`identity/act_only.py` — the frozen seam spec's G1
   wire shape, a2a thread 0013: references at rest, words only in flight):
   durable tool messages carry a typed `{"$act_only": {...}}` ref as exact

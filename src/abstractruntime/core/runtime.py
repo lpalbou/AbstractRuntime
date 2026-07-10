@@ -1404,6 +1404,21 @@ class Runtime:
                     self._apply_resume_payload(run, payload={}, override_node=run.waiting.resume_to_node)
                 else:
                     return run
+            elif run.waiting and run.waiting.reason == WaitReason.EVENT and run.waiting.until:
+                # EVENT wait with a DEADLINE (frozen seam spec D3): the event
+                # resume wins before the deadline; past it, the wait resolves
+                # as a labeled timeout — {"timed_out": true} lands in the
+                # wait's result_key so the workflow's routing node can take
+                # the close path. Same lexicographic-UTC due-ness as UNTIL.
+                if utc_now_iso() >= run.waiting.until:
+                    timeout_payload = {"timed_out": True, "until": run.waiting.until}
+                    if run.waiting.result_key:
+                        _set_nested(run.vars, run.waiting.result_key, timeout_payload)
+                    self._apply_resume_payload(
+                        run, payload=timeout_payload, override_node=run.waiting.resume_to_node
+                    )
+                else:
+                    return run
             else:
                 return run
 
@@ -2386,9 +2401,28 @@ class Runtime:
                 details = dict(d)
         except Exception:
             details = None
+
+        # Optional DEADLINE beside the event key (frozen seam spec D3, thread
+        # 0013: a visit parked on the visitor's next message times out into
+        # its close path instead of needing a reaper daemon). Semantics: the
+        # event resume wins any time before the deadline; once `until`
+        # passes, the tick/scheduler due-scan resumes the run with
+        # {"timed_out": true} in result_key. Normalized to aware-UTC at this
+        # single write boundary — due-ness is a lexicographic ISO string
+        # comparison everywhere (the WAIT_UNTIL invariant).
+        until_utc: Optional[str] = None
+        raw_until = effect.payload.get("until")
+        if raw_until:
+            until_utc = normalize_utc_iso(raw_until)
+            if until_utc is None:
+                return EffectOutcome.failed(
+                    f"wait_event payload.until is not a valid ISO timestamp: {raw_until!r}"
+                )
+
         wait = WaitState(
             reason=WaitReason.EVENT,
             wait_key=str(wait_key),
+            until=until_utc,
             resume_to_node=resume_to,
             result_key=effect.result_key,
             prompt=prompt,

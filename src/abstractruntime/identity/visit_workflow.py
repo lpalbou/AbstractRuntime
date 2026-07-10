@@ -74,6 +74,38 @@ VISIT_WORKFLOW_ID = "entity-visit@1"
 VISITOR_WAIT_KEY = "visitor_input"
 DEFAULT_IDLE_SECONDS = 30 * 60  # a visit left silent this long closes with reflection
 DEFAULT_HISTORY_TURNS = 10
+HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
+
+
+@dataclasses.dataclass
+class ReactMiddle:
+    """The adapter's reason/act cycle, passed IN as data (merge ownership
+    ruling, a2a 0014: ONE owner for the visit graph — this package — with
+    ZERO import of the adapter package; abstractagent depends on
+    abstractruntime, so `build_visit_workflow(react_logic=...)` importing
+    agent's API would be a dependency cycle. The CALLER — the door, the
+    harness — builds the middle from agent's public API and hands it over).
+
+    Contract (agent's proven merge, tests/test_react_visit_merge.py):
+    - `nodes`: the adapter workflow's node map (lowercase ids — must not
+      collide with this graph's UPPERCASE ids; refused loudly).
+    - `entry`: where BRIDGE enters the cycle (adapter's `reason`).
+    - The middle MUST exit to `HARVEST_NODE` (the caller builds it with
+      `create_react_workflow(final_next_node="HARVEST")`).
+    - `reset_turn`: the adapter's per-turn state reset, called by BRIDGE.
+    - The cycle reads `_runtime.system_prompt` (the byte-stable head),
+      `_runtime.turn_id` + `_runtime.llm_payload_extras` (word-free
+      anchors — the act-only wrapper's capture keys), the durable
+      transcript at `context.messages`, and `_limits.max_iterations`; it
+      leaves `_temp.final_answer` + `_temp.turn_captures`
+      ({diary_entries, act_only_warnings} accumulated across iterations)
+      for HARVEST to fold.
+    """
+
+    nodes: Dict[str, Any]
+    entry: str = "reason"
+    reset_turn: Optional[Any] = None
+    max_iterations: int = 6
 
 
 def _ns(run: RunState, key: str) -> Dict[str, Any]:
@@ -98,8 +130,16 @@ def build_visit_workflow(
     history_turns: int = DEFAULT_HISTORY_TURNS,
     model_info: Optional[Dict[str, str]] = None,
     visit_id: Optional[str] = None,
+    react_middle: Optional[ReactMiddle] = None,
 ) -> WorkflowSpec:
     """Build the visit workflow over one OPEN home.
+
+    `react_middle` (merge ownership, a2a 0014): when provided, the
+    adapter's multi-iteration reason/act cycle replaces the v0 single-call
+    REASON node — BRIDGE wires the entity dress into the cycle's inputs and
+    HARVEST folds its outcome back into `_turn.llm`; every node downstream
+    (ELECT → COMMIT → FORM → ANSWER → REFLECT) runs unchanged. None = the
+    v0 path, byte-identical to before this parameter existed.
 
     `participants`/`budget_profile`/`visit_id` are the STAMP-TIME facts
     (the door writes them at run creation; the home-direct caller passes
@@ -263,6 +303,50 @@ def build_visit_workflow(
             (decoration + "\n\n" if decoration else "") + turn["text"]
         )
         return StepPlan(node_id="RENDER", next_node="REASON")
+
+    def bridge_node(run: RunState, ctx: Any) -> StepPlan:
+        """RENDER -> the adapter cycle (replaces v0 REASON when a
+        react_middle is supplied). Body lifted verbatim from agent's proven
+        merge (abstractagent tests/test_react_visit_merge.py) — zero
+        adapter internals, only the documented vars contract."""
+        visit = _ns(run, "_visit")
+        turn = _ns(run, "_turn")
+        runtime_ns = run.vars.setdefault("_runtime", {})
+        limits = run.vars.setdefault("_limits", {})
+        # Entity dress: prelude head, turn identity, word-free anchors.
+        runtime_ns["system_prompt"] = str(visit.get("system_base") or "")
+        runtime_ns["turn_id"] = str(turn.get("turn_id") or "")
+        displayed = list(turn.get("displayed") or [])
+        runtime_ns["llm_payload_extras"] = {
+            "anchor_record_ids": [h.get("record_id") for h in displayed],
+            "anchor_graph_ids": [
+                str((h.get("provenance") or {}).get("record_id") or "")
+                for h in displayed
+                if (h.get("provenance") or {}).get("record_id")
+            ],
+        }
+        limits.setdefault("max_iterations", int(react_middle.max_iterations))
+        # Fresh per-turn adapter state; append the decorated turn message to
+        # the durable transcript (the ONE source of truth under the merge).
+        if callable(react_middle.reset_turn):
+            react_middle.reset_turn(run.vars)
+        context = run.vars.setdefault("context", {})
+        msgs = context.setdefault("messages", [])
+        msgs.append({"role": "user", "content": str(turn.get("rendered_user") or turn.get("text") or "")})
+        return StepPlan(node_id="REASON", next_node=str(react_middle.entry))
+
+    def harvest_node(run: RunState, ctx: Any) -> StepPlan:
+        """The adapter cycle's exit -> ELECT: fold the turn's outcome into
+        `_turn.llm` so every downstream node runs byte-unchanged."""
+        temp = run.vars.get("_temp") or {}
+        turn = _ns(run, "_turn")
+        captures = temp.get("turn_captures") or {}
+        turn["llm"] = {
+            "content": str(temp.get("final_answer") or ""),
+            "diary_entries": list(captures.get("diary_entries") or []),
+            "act_only_warnings": list(captures.get("act_only_warnings") or []),
+        }
+        return StepPlan(node_id=HARVEST_NODE, next_node="ELECT")
 
     def reason_node(run: RunState, ctx: Any) -> StepPlan:
         """v0 reason: ONE LLM_CALL with the BYTE-STABLE head (system_base
@@ -646,22 +730,37 @@ def build_visit_workflow(
             out["sheet"] = sheet
         return StepPlan(node_id="DONE", complete_output=out)
 
+    nodes: Dict[str, Any] = {
+        "OPEN": open_node,
+        "PARK": park_node,
+        "ROUTE": route_node,
+        "RECALL": recall_node,
+        "RENDER": render_node,
+        "REASON": reason_node,
+        "ELECT": elect_node,
+        "COMMIT": commit_node,
+        "FORM": form_node,
+        "ANSWER": answer_node,
+        "REFLECT": reflect_node,
+        "APPLY": apply_node,
+        "DONE": done_node,
+    }
+    if react_middle is not None:
+        collisions = sorted(set(react_middle.nodes.keys()) & set(nodes.keys()))
+        if collisions:
+            raise ValueError(
+                "react_middle node ids collide with the visit graph "
+                f"({', '.join(collisions)}) - adapter ids must not shadow seam nodes"
+            )
+        if str(react_middle.entry) not in react_middle.nodes:
+            raise ValueError(
+                f"react_middle.entry {react_middle.entry!r} is not in its own node map"
+            )
+        nodes.update(react_middle.nodes)
+        nodes["REASON"] = bridge_node  # RENDER routes in unchanged
+        nodes[HARVEST_NODE] = harvest_node  # the middle's declared exit
     return WorkflowSpec(
         workflow_id=VISIT_WORKFLOW_ID,
         entry_node="OPEN",
-        nodes={
-            "OPEN": open_node,
-            "PARK": park_node,
-            "ROUTE": route_node,
-            "RECALL": recall_node,
-            "RENDER": render_node,
-            "REASON": reason_node,
-            "ELECT": elect_node,
-            "COMMIT": commit_node,
-            "FORM": form_node,
-            "ANSWER": answer_node,
-            "REFLECT": reflect_node,
-            "APPLY": apply_node,
-            "DONE": done_node,
-        },
+        nodes=nodes,
     )

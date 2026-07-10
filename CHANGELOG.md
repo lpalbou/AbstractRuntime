@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Production merge home for the adapter cycle (a2a 0014 merge-ownership
+  ask, ruled): `build_visit_workflow(react_middle=ReactMiddle(...))` — ONE
+  owner for the visit graph (this package) with ZERO adapter import (the
+  dependency points the other way: abstractagent depends on
+  abstractruntime, so the middle arrives as DATA — node map + entry +
+  reset hook — built by the CALLER from agent's public API,
+  `create_react_workflow(final_next_node="HARVEST")`). BRIDGE replaces the
+  v0 REASON in place (entity dress into `_runtime.system_prompt`/`turn_id`/
+  word-free `llm_payload_extras`; per-turn reset; decorated user message
+  appended to the durable transcript) and HARVEST folds
+  `_temp.final_answer` + `_temp.turn_captures` into `_turn.llm` — every
+  downstream node runs byte-unchanged; bodies lifted verbatim from agent's
+  proven merge pin. Collisions with seam node ids refuse loudly; absent
+  middle = the v0 single-call path, byte-identical. Tests: a contract-
+  faithful stub middle (no abstractagent import) pins mid-loop election
+  capture (words only in the book through a multi-iteration turn),
+  downstream-unchanged episode/answer, and the collision refusals; agent's
+  real cycle is pinned against the same seams in their
+  tests/test_react_visit_merge.py (108/2 their bench).
 - Paused visits carry their look-back DEBT explicitly: a pause-frozen visit
   (closed_by=pause, skip_reflection) completes with `reflection_pending:
   true` and the word-free session sheet in the run OUTPUT — the door's

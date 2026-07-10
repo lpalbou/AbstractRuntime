@@ -67,6 +67,7 @@ from .tools import (
     WORKSPACE_TOOL_NAMES,
     WorkspaceRoot,
     execute_tool_elections,
+    native_tool_specs,
     parse_tool_blocks,
 )
 
@@ -659,6 +660,31 @@ class ChatSession:
                     + ", ".join(self.allowed_tools)
                     + " - blocks naming any other tool are refused)"
                 )
+        # THE DECLARE HALF of the native tool channel (agent's arm-N
+        # measurement, 2026-07-11: tools DECLARED in the payload = 5/5
+        # structured calls, zero fabrication; undeclared = the majority arm
+        # fabricates in pure prose with no tool_calls to read). Specs are
+        # built from the GRANT only (single authority — ungranted names get
+        # no declaration and refuse at execution regardless) and describe
+        # the entity-WALLED implementations, never registry twins. Substrate
+        # compatibility by signature, not folklore: an LLM whose generate()
+        # takes no `tools` kwarg (scripted test doubles, fence-convention
+        # clients) is called exactly as before.
+        self._native_tool_specs: List[Dict[str, Any]] = (
+            native_tool_specs(tuple(self.allowed_tools)) if self.enable_tools else []
+        )
+        self._llm_accepts_tools = False
+        try:
+            import inspect
+
+            params = inspect.signature(self.llm.generate).parameters
+            self._llm_accepts_tools = "tools" in params or any(
+                p.kind == p.VAR_KEYWORD for p in params.values()
+            )
+        except (TypeError, ValueError):
+            # Uninspectable callable (C extension / mock): assume the real
+            # client shape — abstractcore's generate() accepts tools.
+            self._llm_accepts_tools = True
 
     # ------------------------------------------------------------ read_memory
     def _register_memory_tags(self, handles: List[Dict[str, Any]]) -> None:
@@ -1100,11 +1126,21 @@ class ChatSession:
     _HARMONY_RETRIES = 2
 
     def _generate(self, *, messages: List[Dict[str, str]], system_prompt: str,
-                  notices: Optional[List[str]] = None) -> Any:
+                  notices: Optional[List[str]] = None, declare_tools: bool = False) -> Any:
+        # THE DECLARE HALF (arm-N): granted tools ride the payload on the
+        # calls whose responses the tool loop READS (the initial turn call
+        # and post-TOOL-RESULTS continuations) — a native-channel substrate
+        # then emits structured tool_calls instead of fabricating prose.
+        # Guard/reflection continuations demand WORDS and never declare
+        # (a call elicited there would be dropped, worse than none).
+        # Clients without a tools kwarg are called exactly as before.
+        kwargs: Dict[str, Any] = {}
+        if declare_tools and self._native_tool_specs and self._llm_accepts_tools:
+            kwargs["tools"] = [dict(s) for s in self._native_tool_specs]
         last_error: Optional[Exception] = None
         for attempt in range(1 + self._HARMONY_RETRIES):
             try:
-                return self.llm.generate(messages=messages, system_prompt=system_prompt)
+                return self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
             except Exception as e:  # noqa: BLE001 - only the known race retries
                 if self._HARMONY_HEADER_400 not in str(e):
                     raise
@@ -1199,6 +1235,7 @@ class ChatSession:
             messages=self.history + [{"role": "user", "content": user_text}],
             system_prompt=system_prompt,
             notices=report.notices,
+            declare_tools=True,
         )
         raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
         # NATIVE TOOL CHANNEL (maintainer incident 2026-07-11, Mnemosyne
@@ -1331,7 +1368,10 @@ class ChatSession:
                     {"role": "assistant", "content": tool_marked},
                     {"role": "user", "content": results_msg},
                 ]
-                resp2 = self._generate(messages=convo, system_prompt=system_prompt, notices=report.notices)
+                resp2 = self._generate(
+                    messages=convo, system_prompt=system_prompt,
+                    notices=report.notices, declare_tools=True,
+                )
                 raw_reply = clean_model_reply(getattr(resp2, "content", None) or "")
                 # The continuation may itself answer through the native
                 # channel (words next round, or another lookup) — carry it.

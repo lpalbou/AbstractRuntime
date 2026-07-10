@@ -362,6 +362,91 @@ class WorkspaceRoot:
         )
 
 
+# OpenAI-style function specs for the entity's WALLED tools — the DECLARE
+# half of the native channel (agent's arm-N measurement: tools declared =
+# 5/5 structured calls, zero fabrication; undeclared = the majority arm
+# fabricates in pure prose with nothing to read). These describe MY walled
+# implementations (write_file is workspace-walled; web_search/fetch_url are
+# GET-only), never the registry's same-named tools — the name-collision
+# rule: a declared spec binds to the entity-walled executor, always.
+# Property names align with _NATIVE_BODY_KEYS so the response's arguments
+# round-trip into ToolElection without guessing.
+_NATIVE_SPEC_SHAPES: Dict[str, Dict[str, Any]] = {
+    "web_search": {
+        "description": "Search the public internet. Returns titles, snippets, and URLs.",
+        "properties": {"query": {"type": "string", "description": "what to search for"}},
+        "required": ["query"],
+    },
+    "fetch_url": {
+        "description": "Read ONE web page (read-only GET; you cannot post or change anything).",
+        "properties": {"url": {"type": "string", "description": "the http(s) page to read"}},
+        "required": ["url"],
+    },
+    "diary_list": {
+        "description": "List your most recent diary entries (ids and one-line gists).",
+        "properties": {"limit": {"type": "integer", "description": "how many entries (1-10, default 5)"}},
+        "required": [],
+    },
+    "diary_read": {
+        "description": "Fetch the full words of one diary entry from your book.",
+        "properties": {"entry": {"type": "string", "description": "the entry id exactly as diary_list shows it"}},
+        "required": ["entry"],
+    },
+    "read_memory": {
+        "description": "Fetch the FULL original words behind a memory digest, with origin and connections.",
+        "properties": {"tag": {"type": "string", "description": "the 8-character #tag shown beside a memory"}},
+        "required": ["tag"],
+    },
+    "search_memory": {
+        "description": (
+            "Search your WHOLE memory - the graph of everything your life deposited AND "
+            "every entry of your book. Honest about absence."
+        ),
+        "properties": {"query": {"type": "string", "description": "what to find in your own memory"}},
+        "required": ["query"],
+    },
+    "write_file": {
+        "description": "Create or replace ONE file inside YOUR workspace (whole file, never a fragment).",
+        "properties": {
+            "path": {"type": "string", "description": "path relative to your workspace"},
+            "content": {"type": "string", "description": "the complete file content"},
+        },
+        "required": ["path", "content"],
+    },
+    "read_file": {
+        "description": "Read one file from your workspace.",
+        "properties": {"path": {"type": "string", "description": "path relative to your workspace"}},
+        "required": ["path"],
+    },
+    "list_files": {
+        "description": "List the files in your workspace (or a subdirectory of it).",
+        "properties": {"path": {"type": "string", "description": "subdirectory to list (default: the whole workspace)"}},
+        "required": [],
+    },
+}
+
+
+def native_tool_specs(allowed_names: Tuple[str, ...]) -> List[Dict[str, Any]]:
+    """Declaration payloads for the GRANTED tools only (the grant stays the
+    single authority — a spec is never emitted for an ungranted name, and
+    names outside the grant refuse at execution regardless)."""
+    specs: List[Dict[str, Any]] = []
+    for name in allowed_names or ():
+        shape = _NATIVE_SPEC_SHAPES.get(str(name))
+        if not shape:
+            continue  # unknown grant names simply have no declaration
+        specs.append({
+            "name": str(name),
+            "description": shape["description"],
+            "parameters": {
+                "type": "object",
+                "properties": dict(shape["properties"]),
+                "required": list(shape["required"]),
+            },
+        })
+    return specs
+
+
 # Argument keys that carry the "body" of a native tool call, in preference
 # order. Native calls arrive with model-invented argument names (the chat
 # lane declares no schema), so extraction is tolerant: a known content key

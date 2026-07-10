@@ -193,6 +193,68 @@ def test_native_call_with_empty_content_still_completes_the_turn(tmp_path: Path)
         home.close()
 
 
+class _DeclaringLLM(_NativeLLM):
+    """Test double whose generate() ACCEPTS tools= — records what each call
+    declared (None when the kwarg was not passed)."""
+
+    def __init__(self, replies: List[Any]) -> None:
+        super().__init__(replies)
+        self.declared: List[Optional[List[Dict[str, Any]]]] = []
+
+    def generate(self, *, messages: List[Dict[str, str]], system_prompt: str,
+                 tools: Optional[List[Dict[str, Any]]] = None) -> Any:
+        self.declared.append(tools)
+        return super().generate(messages=messages, system_prompt=system_prompt)
+
+
+def test_declare_half_grants_ride_the_payload(tmp_path: Path) -> None:
+    """THE ARM-N FIX: a tools-capable client gets the GRANTED tools declared
+    on the turn call and post-results continuations — and ONLY the granted
+    ones (the grant is the single authority)."""
+    home = open_home(_make_home(tmp_path))
+
+    def fake_search(query: str) -> str:
+        return "RESULT: declared and found."
+
+    llm = _DeclaringLLM([
+        ("", [{"name": "web_search", "arguments": {"query": "declared search"}}]),
+        "Found it through the declared channel.",
+    ])
+    try:
+        session = ChatSession(
+            home, llm, participants=["agent:tester"], context_window=20000,
+            web_search_fn=fake_search, out=lambda s: None,
+        )
+        reply, report = session.turn("Search please.")
+        assert report.tools == ["web_search"]
+        assert "declared channel" in reply
+        # Both reads-capable calls declared; the declared set == the grant.
+        assert len(llm.declared) == 2
+        for declared in llm.declared:
+            assert declared is not None
+            assert sorted(t["name"] for t in declared) == sorted(session.allowed_tools)
+            assert all("parameters" in t for t in declared)
+    finally:
+        home.close()
+
+
+def test_fence_convention_clients_are_called_unchanged(tmp_path: Path) -> None:
+    """A client whose generate() takes no tools kwarg (the scripted-double /
+    fence-substrate shape) is never handed the kwarg — byte-compatible."""
+    home = open_home(_make_home(tmp_path))
+    llm = _NativeLLM(["Just words, no tools."])
+    try:
+        session = ChatSession(
+            home, llm, participants=["agent:tester"], context_window=20000,
+            out=lambda s: None,
+        )
+        assert session._llm_accepts_tools is False
+        reply, _report = session.turn("Say something.")
+        assert reply == "Just words, no tools."
+    finally:
+        home.close()
+
+
 def test_native_unknown_tool_is_refused_and_turn_stays_honest(tmp_path: Path) -> None:
     """A hallucinated function name (the repo_browser.* class) refuses
     loudly; no tool runs; the delivered words carry the refusal marker."""

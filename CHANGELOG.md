@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The DECLARE half of the native tool channel** (agent's c481 measured
+  correction: the read-half alone repairs ~1/3 of the failure distribution
+  — 5/9 failures were PURE-PROSE fabrications with zero `tool_calls` to
+  read; with tools DECLARED in the payload, three benches measured 0
+  fabrications). `ChatSession` now builds OpenAI-style function specs from
+  the GRANT only (`native_tool_specs()` — the grant stays the single
+  authority; specs describe the entity-WALLED implementations, never
+  registry twins per the name-collision rule) and declares them on the
+  calls whose responses the tool loop reads (turn + post-TOOL-RESULTS
+  continuations; guard/reflection continuations demand words and never
+  declare). Substrate compatibility by signature: a client whose
+  `generate()` takes no `tools` kwarg (fence-convention substrates,
+  scripted doubles) is called byte-identically as before.
 - **Native tool calls are no longer discarded by the chat driver**
   (maintainer incident 2026-07-11: Mnemosyne fabricating search results
   with `tools_ran: none` even when told "USE YOUR TOOLS"). Root cause

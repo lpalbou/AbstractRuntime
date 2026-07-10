@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **JSON run store cache is LRU-bounded** (flow's 2026-07-11 P0 incident
+  review, runtime-lane follow-up): `JsonFileRunStore._run_cache` retained
+  every RunState a full directory scan ever loaded — ~1.5GB RSS after one
+  scan of a 3k-run dir with history-bearing vars, paid permanently by
+  long-lived serving processes. The cache is now an LRU bounded at 512
+  entries (`run_cache_max` constructor param). Eviction is safe under the
+  documented ownership contract: a re-load after eviction re-reads the
+  last saved state from disk — exactly what any non-owner reader is
+  entitled to see; in-cache aliasing (save→load returns the same object)
+  is preserved and pinned by test. The `list_runs` starvation hole above
+  `limit` concurrent RUNNING runs (mtime rich-get-richer) remains
+  documented in the docstring as a designed follow-up — it needs a status
+  index or terminal-run archival, not a cache tweak.
+
 ### Added
 - **Session-free memory exploration** (`identity/memory_reader.py`,
   gateway ask e-s 206): `HomeMemoryReader` extracts `search_memory` /

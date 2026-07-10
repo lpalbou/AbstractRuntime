@@ -51,15 +51,32 @@ class JsonFileRunStore(RunStore):
     mtime and re-reads on any external write.
     """
 
-    def __init__(self, base_dir: str | Path):
+    def __init__(self, base_dir: str | Path, *, run_cache_max: int = 512):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
         self._index_lock = threading.Lock()
         self._children_index: Optional[Dict[str, set[str]]] = None
         self._run_parent_index: Dict[str, Optional[str]] = {}
         self._run_cache_lock = threading.Lock()
-        # run_id -> (mtime_ns, RunState)
-        self._run_cache: Dict[str, tuple[int, RunState]] = {}
+        # run_id -> (mtime_ns, RunState), LRU-BOUNDED (flow's 2026-07-11
+        # incident finding: the unbounded cache retained every RunState a
+        # full directory scan ever loaded — ~1.5GB RSS on a 3k-run dir with
+        # history-bearing vars, paid permanently by long-lived processes).
+        # Eviction is safe under the ownership contract above: a re-load
+        # after eviction re-reads the last SAVED state from disk, which is
+        # exactly what any non-owner reader is entitled to see.
+        from collections import OrderedDict
+
+        self._run_cache: "OrderedDict[str, tuple[int, RunState]]" = OrderedDict()
+        self._run_cache_max = max(1, int(run_cache_max))
+
+    def _cache_put(self, rid: str, mtime_ns: int, run: RunState) -> None:
+        """Insert/refresh under the lock, evicting least-recently-used."""
+        with self._run_cache_lock:
+            self._run_cache[rid] = (mtime_ns, run)
+            self._run_cache.move_to_end(rid)
+            while len(self._run_cache) > self._run_cache_max:
+                self._run_cache.popitem(last=False)
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"run_{run_id}.json"
@@ -144,8 +161,7 @@ class JsonFileRunStore(RunStore):
         except Exception:
             mtime_ns = 0
         if mtime_ns > 0:
-            with self._run_cache_lock:
-                self._run_cache[str(run.run_id)] = (mtime_ns, run)
+            self._cache_put(str(run.run_id), mtime_ns, run)
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)
@@ -179,8 +195,9 @@ class JsonFileRunStore(RunStore):
         if rid_hint and mtime_ns > 0:
             with self._run_cache_lock:
                 cached = self._run_cache.get(rid_hint)
-            if cached is not None and int(cached[0]) == int(mtime_ns):
-                return cached[1]
+                if cached is not None and int(cached[0]) == int(mtime_ns):
+                    self._run_cache.move_to_end(rid_hint)  # LRU touch
+                    return cached[1]
         try:
             with p.open("r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -227,8 +244,7 @@ class JsonFileRunStore(RunStore):
         )
         rid = str(getattr(run, "run_id", "") or "").strip() or rid_hint
         if rid and mtime_ns > 0:
-            with self._run_cache_lock:
-                self._run_cache[rid] = (mtime_ns, run)
+            self._cache_put(rid, mtime_ns, run)
         return run
 
     def _iter_all_runs(self) -> List[RunState]:
@@ -272,9 +288,11 @@ class JsonFileRunStore(RunStore):
           The gateway runner issues 3 such scans per 0.25 s poll. Linear in
           total run files, including terminal ones — archive/prune terminal
           runs or add an index before this directory reaches ~10k files.
-        - MEMORY: `_run_cache` retains every RunState ever loaded (mtime-keyed,
-          never evicted) — ~1.5 GB RSS after one full scan of a 3k-run dir with
-          history-bearing vars. Long-lived processes pay this permanently.
+        - MEMORY: `_run_cache` is LRU-BOUNDED (default 512 entries,
+          `run_cache_max` constructor param) since the 2026-07-11 incident
+          review — the unbounded cache retained every RunState a full scan
+          ever loaded (~1.5 GB RSS on a 3k-run dir). Eviction is safe under
+          the ownership contract: a re-load re-reads the last saved state.
         """
         lim = max(1, int(limit or 100))
         ranked: list[tuple[int, Path]] = []

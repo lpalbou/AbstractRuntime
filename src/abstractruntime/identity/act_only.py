@@ -27,11 +27,23 @@ The four frozen mechanics this module implements:
    injector mutates pre-ledger BY DESIGN so the ledger shows what was sent;
    act-only inverts that deliberately — the ledger must NOT show the words;
    two documented boundary behaviors).
-4. FAILURE IS LOUD AND DETERMINISTIC (agency line 1): a ref that does not
-   resolve fails the effect, classified NON-RETRYABLE (the same ref
-   resolves the same way against an append-only book — retrying burns
-   attempts for an identical failure). Never a silent gist substitution;
-   never unresolved ref JSON shipped as degraded payload.
+4. FAILURE IS LOUD, DETERMINISTIC, AND SURVIVABLE (amended 2026-07-10 on
+   agent's wedge finding, 0013/080636Z): refs are DURABLE — a transcript
+   message survives every later turn — and a failed effect is a TERMINAL
+   run, so "fail the effect" turned one bad historical ref into a
+   permanently dead visit (every resume re-failed identically; the visit
+   could never speak again). Against an APPEND-ONLY book a well-authored
+   ref can never dangle, so an unresolvable ref is always a BUG
+   (malformed authoring, cross-home composition, book damage) — and the
+   failure-direction principle (memory's own G1 argument) applies: a bug
+   must surface loudly without killing the life-session. An unresolvable
+   ref therefore resolves to a LABELED TOMBSTONE
+   (`[act-only content unavailable: …]`) and the call carries a loud
+   `#FALLBACK` warning into the result (ledger- and vars-visible). The
+   original guarantees hold unchanged: never silent, never a retry burn
+   (deterministic), never raw ref JSON on the wire, and the words never
+   leak (a tombstone names the entry id and failure class — exactly what
+   the old error string exposed).
 
 Resolution AUTHORITY comes from composition, not from this module: the
 resolver is the run's own DIARY_READ handler — raw at the home-direct
@@ -92,15 +104,39 @@ def parse_act_only_ref(content: Any) -> Optional[Dict[str, Any]]:
     return ref if isinstance(ref, dict) else None
 
 
+def tombstone_content(ref: Dict[str, Any], failure: str) -> str:
+    """The survivable substitution for a ref that cannot resolve — labeled,
+    deterministic, word-free. Names the entry id and failure class (the
+    same facts the old fatal error exposed) so the model AND the operator
+    see honestly that content is missing; the words stay in the book."""
+    entry_id = str(ref.get("entry_id") or "").strip() or "<no entry_id>"
+    tool = str(ref.get("tool") or "").strip() or "<no tool>"
+    return (
+        f"[act-only content unavailable: {tool} {entry_id} - {failure}; "
+        "the words remain in the book - re-elect the read if you need them]"
+    )
+
+
 def dereference_act_only_messages(
-    messages: List[Any], *, read_entry: Callable[[Dict[str, Any]], str]
+    messages: List[Any],
+    *,
+    read_entry: Callable[[Dict[str, Any]], str],
+    warnings: Optional[List[str]] = None,
 ) -> Tuple[List[Any], int]:
-    """Return (wire_copy, resolved_count). The input list and its messages
-    are never mutated; non-ref messages pass through by reference. Refs on
-    non-tool roles stay inert text (mechanic 2). `read_entry(ref)` returns
-    the resolved words or raises ActOnlyResolutionError."""
+    """Return (wire_copy, substituted_count). The input list and its
+    messages are never mutated; non-ref messages pass through by reference.
+    Refs on non-tool roles stay inert text (mechanic 2).
+
+    `read_entry(ref)` returns the resolved words or raises
+    ActOnlyResolutionError. A failed resolution SUBSTITUTES A LABELED
+    TOMBSTONE instead of raising out (mechanic 4, the wedge amendment):
+    refs are durable, so a fatal failure here would re-fail every later
+    call in the run — one bad historical ref must degrade one message,
+    never kill the life-session. Each failure appends a loud `#FALLBACK`
+    line to `warnings` (caller-supplied accumulator; the wrapper rides it
+    into the effect result so the ledger shows the degradation)."""
     out: List[Any] = []
-    resolved = 0
+    substituted = 0
     for msg in messages:
         if not isinstance(msg, dict) or str(msg.get("role") or "") != "tool":
             out.append(msg)
@@ -110,16 +146,21 @@ def dereference_act_only_messages(
             out.append(msg)
             continue
         tool = str(ref.get("tool") or "")
-        if tool not in ACT_ONLY_TOOLS:
-            raise ActOnlyResolutionError(
-                f"unknown act-only tool {tool!r} in ref (known: {', '.join(ACT_ONLY_TOOLS)}) - "
-                "refusing to guess a resolver"
-            )
-        words = read_entry(ref)
-        resolved += 1
+        try:
+            if tool not in ACT_ONLY_TOOLS:
+                raise ActOnlyResolutionError(
+                    f"unknown act-only tool {tool!r} (known: {', '.join(ACT_ONLY_TOOLS)}) - "
+                    "refusing to guess a resolver"
+                )
+            content = read_entry(ref)
+        except ActOnlyResolutionError as e:
+            content = tombstone_content(ref, str(e))
+            if warnings is not None:
+                warnings.append(f"#FALLBACK act-only ref did not resolve: {e}")
+        substituted += 1
         # In-place substitution on the copy: content only; identity untouched.
-        out.append({**msg, "content": words})
-    return out, resolved
+        out.append({**msg, "content": content})
+    return out, substituted
 
 
 def wrap_llm_handler_with_act_only(
@@ -131,7 +172,13 @@ def wrap_llm_handler_with_act_only(
     ref is present; with refs it builds a NEW effect whose payload carries
     the resolved wire messages — the original effect (what the ledger and
     run state hold) keeps the refs. The resolver is the run's DIARY_READ
-    handler, so door postures (raw vs stamp-verified) apply unchanged."""
+    handler, so door postures (raw vs stamp-verified) apply unchanged.
+
+    Unresolvable refs substitute a LABELED TOMBSTONE (never the raw ref
+    JSON, never the run's death — the wedge amendment): the call proceeds
+    with the degradation visible in the wire text AND a `#FALLBACK`
+    warning list on the effect result (`act_only_warnings`), so ledgers
+    and probes show it loudly while the visit stays alive."""
 
     def wrapped(run: Any, effect: Effect, default_next_node: Any = None) -> Any:
         payload = effect.payload or {}
@@ -156,19 +203,22 @@ def wrap_llm_handler_with_act_only(
             # Deterministic v1 resolved form: an act-frame header + the words.
             return f"[diary_read {entry_id} - resolved from the book at send time]\n{text}"
 
-        try:
-            wire_messages, resolved = dereference_act_only_messages(messages, read_entry=read_entry)
-        except ActOnlyResolutionError as e:
-            # Loud + deterministic: same ref, same failure — never retried,
-            # never degraded into sending the raw ref JSON to the provider.
-            return EffectOutcome.failed(f"act-only dereference failed: {e}", retryable=False)
-        if resolved == 0:
+        warnings: List[str] = []
+        wire_messages, substituted = dereference_act_only_messages(
+            messages, read_entry=read_entry, warnings=warnings
+        )
+        if substituted == 0:
             return llm_handler(run, effect, default_next_node)
         wire_effect = Effect(
             type=effect.type,
             payload={**payload, "messages": wire_messages},
             result_key=effect.result_key,
         )
-        return llm_handler(run, wire_effect, default_next_node)
+        outcome = llm_handler(run, wire_effect, default_next_node)
+        if warnings and getattr(outcome, "status", None) == "completed" and isinstance(outcome.result, dict):
+            # Ride the degradation into the DURABLE result (ledger + vars):
+            # a tombstoned turn must be loud everywhere, not just in prose.
+            outcome = EffectOutcome.completed({**outcome.result, "act_only_warnings": list(warnings)})
+        return outcome
 
     return wrapped

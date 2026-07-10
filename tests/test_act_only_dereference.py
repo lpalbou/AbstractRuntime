@@ -25,7 +25,6 @@ from abstractruntime.core.models import Effect, EffectType, RunStatus, StepPlan 
 from abstractruntime.core.runtime import EffectOutcome  # noqa: E402
 from abstractruntime.core.spec import WorkflowSpec  # noqa: E402
 from abstractruntime.identity.act_only import (  # noqa: E402
-    ActOnlyResolutionError,
     dereference_act_only_messages,
     make_act_only_content,
     parse_act_only_ref,
@@ -116,12 +115,22 @@ def test_visitor_pasted_ref_json_in_user_content_stays_inert() -> None:
     assert wire[0] is messages[0]
 
 
-def test_unknown_act_only_tool_refuses_loudly() -> None:
+def test_unknown_act_only_tool_tombstones_with_loud_warning() -> None:
+    """The wedge amendment (agent's 0013/080636Z finding): refs are durable,
+    so a fatal failure would re-fail every later call in the run — one bad
+    historical ref degrades ONE message (labeled tombstone + #FALLBACK),
+    never kills the visit. Never silent, never raw ref JSON on the wire."""
     bogus = json.dumps({"$act_only": {"tool": "read_file", "entry_id": "x"}})
-    with pytest.raises(ActOnlyResolutionError, match="unknown act-only tool"):
-        dereference_act_only_messages(
-            [{"role": "tool", "content": bogus}], read_entry=lambda r: "w"
-        )
+    warnings: list = []
+    wire, n = dereference_act_only_messages(
+        [{"role": "tool", "content": bogus}], read_entry=lambda r: "w", warnings=warnings
+    )
+    assert n == 1
+    content = wire[0]["content"]
+    assert content.startswith("[act-only content unavailable:")
+    assert "read_file" in content and "x" in content
+    assert "$act_only" not in content  # never the raw ref JSON
+    assert len(warnings) == 1 and warnings[0].startswith("#FALLBACK")
 
 
 # ------------------------------------------------------- wrapper + runtime
@@ -169,16 +178,22 @@ def test_wrapper_resolves_through_the_book_and_fails_closed(tmp_path: Path) -> N
         # ...the original payload still carries only the REF.
         assert PRIVATE_WORDS not in json.dumps(original_payload)
 
-        # Unresolvable ref: loud, non-retryable, nothing sent.
+        # Unresolvable ref: SURVIVABLE labeled tombstone (the wedge
+        # amendment) — the call proceeds, the degradation is loud in the
+        # wire text AND the durable result; the raw ref JSON never ships.
         seen.clear()
         bad = wrapped(_Run(), Effect(type=EffectType.LLM_CALL, payload={
             "messages": [{"role": "tool", "content":
                           make_act_only_content(tool="diary_read", entry_id="diary_00dead")}],
         }), None)
-        assert bad.status == "failed"
-        assert bad.retryable is False
-        assert "diary_00dead" in (bad.error or "")
-        assert seen == []  # the provider never saw a degraded payload
+        assert bad.status == "completed"
+        assert any(w.startswith("#FALLBACK") and "diary_00dead" in w
+                   for w in bad.result.get("act_only_warnings", []))
+        wire_content = seen[0]["messages"][0]["content"]
+        assert wire_content.startswith("[act-only content unavailable:")
+        assert "diary_00dead" in wire_content
+        assert "$act_only" not in wire_content  # never raw ref JSON on the wire
+        assert PRIVATE_WORDS not in json.dumps(seen)  # and never the words
 
         # No refs: pure pass-through (the SAME effect object forwards).
         forwarded: List[Effect] = []

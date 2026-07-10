@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host LLM handler automatically — G1 is structural, a host cannot forget
   it. 6 tests incl. the end-to-end pin: ledger + run.vars + the store file
   carry the ref while only the provider-facing handler saw the words.
+  AMENDED same day (agent's wedge finding, a2a 0013/080636Z): refs are
+  DURABLE, so failing the effect on an unresolvable ref made one bad
+  historical ref re-fail every later LLM call in the run — a permanently
+  dead visit. Unresolvable refs now substitute a LABELED TOMBSTONE
+  (`[act-only content unavailable: …]`, never raw ref JSON, never the
+  words) and the effect result carries loud `#FALLBACK`
+  `act_only_warnings` (ledger- and vars-visible). Never silent, no retry
+  burn, and the life-session survives its own history.
 - Per-entity runtime rooted in the home (`identity/entity_runtime.py` —
   consensus plan item 8, runtime R2 half): `open_entity_runtime(home_dir)`
   composes one `Runtime` per entity over a REAL run store

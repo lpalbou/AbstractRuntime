@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Per-entity runtime rooted in the home (`identity/entity_runtime.py` —
+  consensus plan item 8, runtime R2 half): `open_entity_runtime(home_dir)`
+  composes one `Runtime` per entity over a REAL run store
+  `runtime_<slug>.sqlite3` INSIDE the home (slug = directory name, the
+  registry key; never derived from an address), bound to the home's own seam
+  + diary handlers (strict entity posture) and the home's artifact store.
+  Copying the home directory now moves pending runs and durable waits with
+  the life (test-pinned: a visit parked on WAIT_EVENT resumes in the copy).
+  Host handlers may EXTEND (LLM/tools at composition) but never shadow the
+  home's own (loud refusal — the routing-refuses-to-shadow rule).
+  `SqliteDatabase` gains `close()` (checkpoints WAL so the home is
+  copy-clean). The gateway's GW-C half wraps door-served instances with
+  stamp verification; these handlers stay raw exactly like the home-direct
+  driver's. 5 tests.
 - Per-home lease (`identity/lease.py` — consensus plan item 1 / GW-A, phase 1):
   ONE writer per home at a time, `flock(LOCK_EX|LOCK_NB)` on `<home>/.home_lease`
   (the spawn-lock precedent). Holder metadata (kind/pid/acquired_at/session/run)

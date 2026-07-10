@@ -113,6 +113,25 @@ class SqliteDatabase:
             self._local.conn = conn
         return conn
 
+    def close(self) -> None:
+        """Close the CALLING thread's connection (checkpoints WAL so the file
+        is copy-clean). Per-thread connections mean each thread closes its
+        own; other threads' connections close on their next close()/GC.
+        Needed by per-entity runtimes (plan item 8): copying a home must
+        carry a checkpointed run store, not a dangling -wal sidecar."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        self._local.conn = None
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     def _apply_pragmas(self, conn: sqlite3.Connection) -> None:
         # WAL improves writer/reader concurrency for the API+runner split.
         try:

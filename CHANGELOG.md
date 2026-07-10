@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Criterion-7 offline fixture placed (agency's draft, runtime-adapted per
+  the c177 division: they draft, this package places):
+  `tests/test_act_only_resume_criterion7.py` — a private diary entry is
+  planted (election at the result boundary), turn 2 runs an act-only
+  `diary_read` round through a contract-faithful ReactMiddle, the process
+  dies mid-turn AT THE EXACT STEP the `$act_only` ref first rests in
+  durable vars (single-step ticking, deterministic against node-graph
+  changes), and a fresh runtime over the same home completes the turn.
+  Pins all five assertions: ref-at-rest mid-turn (never the words),
+  dereference-at-send on resume, byte-identity of wire words against the
+  book, no tool re-execution (one tool message in the durable transcript),
+  and refs-only at rest after completion + word-free ledger at close.
+  Adaptations on package facts recorded in the docstring (fence syntax is
+  `visibility=private`; the draft's `private=true` would be refused by the
+  parser). The LIVE half stays walkthrough step 5b.
+
+### Fixed
+- **Hash-chain fork under concurrent handles** (found by the
+  maintainer-driven lease adversarial review, 2026-07-10):
+  `HashChainedLedgerStore` cached the chain head per process, so two
+  handles over one persisted ledger (two processes, or two store instances
+  in one process) each computed `prev_hash` from their own stale head —
+  the inner store serialized both inserts and the chain forked permanently
+  (`verify_ledger_chain` reports `prev_hash_mismatch`; on the never-purge
+  diary book there is no repair). The per-directory writer lease makes
+  this unreachable in normal topology; the chain now refuses to fork even
+  without it: the head is re-read from the PERSISTED tail on every append
+  (new `last_record()` fast path on `SqliteLedgerStore`), appends
+  serialize on a per-instance lock (two threads over one instance could
+  previously fork in-process), and `SqliteLedgerStore.append_chained`
+  derives head + hash + insert inside ONE `BEGIN IMMEDIATE` transaction —
+  cross-process fork-free by construction, not by lock discipline. Fork
+  repro pinned by test (two handles, interleaved appends, verify green).
+
 ### Changed
 - **Writer lease re-homed to its mechanism layer** (2026-07-10 vocabulary
   sign-off, a2a/fs/renaming.md, maintainer-approved): `identity/lease.py`

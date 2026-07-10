@@ -583,36 +583,104 @@ class SqliteLedgerStore(LedgerStore):
         payload = json.dumps(asdict(record), ensure_ascii=False)
         conn = self._db.connection()
         with conn:
-            conn.execute(
-                """
-                INSERT INTO ledger_heads (run_id, last_seq)
-                VALUES (?, 0)
-                ON CONFLICT(run_id) DO NOTHING;
-                """,
+            self._insert_in_txn(conn, run_id, payload)
+
+    def last_record(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """The run's LAST persisted record (cheap indexed tail read) — the
+        authoritative chain head for `HashChainedLedgerStore`, so appenders
+        never trust a per-process cache across processes."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        conn = self._db.connection()
+        row = conn.execute(
+            "SELECT record_json FROM ledger WHERE run_id = ? ORDER BY seq DESC LIMIT 1;",
+            (rid,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            obj = json.loads(str(row["record_json"] or "{}"))
+        except Exception:  # noqa: BLE001 - a torn row reads as no head; verify reports it
+            return None
+        return obj if isinstance(obj, dict) else None
+
+    def append_chained(self, record: StepRecord, compute_hash: Any) -> None:
+        """Append with the hash chain derived INSIDE one write transaction
+        (the fork fix, 2026-07-10 adversarial finding): `BEGIN IMMEDIATE`
+        takes the database write lock BEFORE the head is read, so two
+        processes appending to one run can never both link to the same
+        head — safe by construction, not by lock discipline. The per-home
+        writer lease keeps this unreachable in normal topology; this is
+        the data layer refusing to fork even if every belt above fails.
+
+        `compute_hash(record_dict, prev_hash) -> record_hash` stays the
+        chain policy's callable (`ledger_chain.compute_record_hash`); the
+        store owns atomicity, never the hash policy."""
+        run_id = str(record.run_id or "").strip()
+        if not run_id:
+            raise ValueError("StepRecord.run_id must be non-empty")
+        conn = self._db.connection()
+        # Explicit IMMEDIATE: the default deferred txn would read the head
+        # under a read lock and race the upgrade; IMMEDIATE serializes
+        # writers at the head read (busy_timeout absorbs the wait).
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            row = conn.execute(
+                "SELECT record_json FROM ledger WHERE run_id = ? ORDER BY seq DESC LIMIT 1;",
                 (run_id,),
-            )
-            conn.execute("UPDATE ledger_heads SET last_seq = last_seq + 1 WHERE run_id = ?;", (run_id,))
-            row = conn.execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", (run_id,)).fetchone()
-            if row is None:
-                raise RuntimeError("Failed to allocate ledger seq")
-            seq = int(row["last_seq"] or 0)
+            ).fetchone()
+            prev: Optional[str] = None
+            if row is not None:
+                try:
+                    tail = json.loads(str(row["record_json"] or "{}"))
+                    if isinstance(tail, dict):
+                        prev = tail.get("record_hash")
+                except Exception:  # noqa: BLE001 - torn tail: chain from None; verify reports it
+                    prev = None
+            record.prev_hash = prev
+            record.record_hash = compute_hash(asdict(record), prev)
+            payload = json.dumps(asdict(record), ensure_ascii=False)
+            self._insert_in_txn(conn, run_id, payload)
+            conn.execute("COMMIT;")
+        except BaseException:
             try:
-                conn.execute(
-                    "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
-                    (run_id, int(seq), payload),
+                conn.execute("ROLLBACK;")
+            except Exception:  # noqa: BLE001 - rollback of a failed txn best-effort
+                pass
+            raise
+
+    def _insert_in_txn(self, conn: sqlite3.Connection, run_id: str, payload: str) -> None:
+        conn.execute(
+            """
+            INSERT INTO ledger_heads (run_id, last_seq)
+            VALUES (?, 0)
+            ON CONFLICT(run_id) DO NOTHING;
+            """,
+            (run_id,),
+        )
+        conn.execute("UPDATE ledger_heads SET last_seq = last_seq + 1 WHERE run_id = ?;", (run_id,))
+        row = conn.execute("SELECT last_seq FROM ledger_heads WHERE run_id = ?;", (run_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("Failed to allocate ledger seq")
+        seq = int(row["last_seq"] or 0)
+        try:
+            conn.execute(
+                "INSERT INTO ledger (run_id, seq, record_json) VALUES (?, ?, ?);",
+                (run_id, int(seq), payload),
+            )
+        except sqlite3.IntegrityError as e:
+            msg = str(e)
+            if "UNIQUE constraint failed: ledger.run_id, ledger.seq" in msg:
+                logger.error(
+                    "SqliteLedgerStore.append failed due to duplicate seq allocation "
+                    "(run_id=%s seq=%s db=%s). This usually indicates concurrent writers running "
+                    "a non-atomic seq allocator or a corrupted ledger_heads table.",
+                    run_id,
+                    seq,
+                    self._db.path,
                 )
-            except sqlite3.IntegrityError as e:
-                msg = str(e)
-                if "UNIQUE constraint failed: ledger.run_id, ledger.seq" in msg:
-                    logger.error(
-                        "SqliteLedgerStore.append failed due to duplicate seq allocation "
-                        "(run_id=%s seq=%s db=%s). This usually indicates concurrent writers running "
-                        "a non-atomic seq allocator or a corrupted ledger_heads table.",
-                        run_id,
-                        seq,
-                        self._db.path,
-                    )
-                raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
+            raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id or "").strip()

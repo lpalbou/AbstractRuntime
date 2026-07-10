@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
@@ -48,38 +49,61 @@ def compute_record_hash(*, record: Dict[str, Any], prev_hash: Optional[str]) -> 
 
 
 class HashChainedLedgerStore(LedgerStore):
-    """LedgerStore decorator adding a SHA-256 hash chain."""
+    """LedgerStore decorator adding a SHA-256 hash chain.
+
+    FORK SAFETY (2026-07-10 adversarial finding, maintainer-driven lease
+    review): the original implementation cached the chain head PER PROCESS,
+    so two handles over one persisted ledger (two processes, or two store
+    instances in one process) each computed `prev_hash` from their own
+    stale head — the inner store serialized both inserts and the chain
+    FORKED permanently (`verify` reports prev_hash_mismatch forever; on
+    never-purge stores like the diary book there is no repair). The
+    per-directory writer lease makes that unreachable in normal topology;
+    the chain now refuses to fork even without it:
+
+    - The head is re-read from the PERSISTED tail on every append (cheap
+      `last_record()` fast path when the inner store provides it; full
+      `list()` tail otherwise). No trust in process-local state.
+    - When the inner store offers `append_chained` (SqliteLedgerStore),
+      head-read + hash + insert run inside ONE write transaction
+      (`BEGIN IMMEDIATE`) — cross-process fork-free BY CONSTRUCTION.
+    - A per-instance lock serializes same-instance threaded appenders
+      (two gateway threads could previously fork the chain in-process).
+    """
 
     def __init__(self, inner: LedgerStore):
         self._inner = inner
-        self._head_by_run: Dict[str, Optional[str]] = {}
+        self._append_lock = threading.Lock()
 
-    def _get_head(self, run_id: str) -> Optional[str]:
-        if run_id in self._head_by_run:
-            return self._head_by_run[run_id]
-
-        # Best-effort bootstrap for process restarts.
+    def _persisted_head(self, run_id: str) -> Optional[str]:
+        """The chain head as PERSISTED — never a process-local cache."""
+        last_record = getattr(self._inner, "last_record", None)
+        if callable(last_record):
+            tail = last_record(run_id)
+            return tail.get("record_hash") if isinstance(tail, dict) else None
         records = self._inner.list(run_id)
         if not records:
-            self._head_by_run[run_id] = None
             return None
-
-        last = records[-1]
-        head = last.get("record_hash")
-        self._head_by_run[run_id] = head
-        return head
+        return records[-1].get("record_hash")
 
     def append(self, record: StepRecord) -> None:
-        prev = self._get_head(record.run_id)
-
-        # Compute hash from record dict + prev hash.
-        record.prev_hash = prev
-        record_dict = asdict(record)
-        record_hash = compute_record_hash(record=record_dict, prev_hash=prev)
-        record.record_hash = record_hash
-
-        self._inner.append(record)
-        self._head_by_run[record.run_id] = record_hash
+        with self._append_lock:
+            append_chained = getattr(self._inner, "append_chained", None)
+            if callable(append_chained):
+                # Transaction-internal derivation: the store reads the head
+                # under its write lock; the hash policy stays ours.
+                append_chained(
+                    record,
+                    lambda record_dict, prev: compute_record_hash(
+                        record=record_dict, prev_hash=prev
+                    ),
+                )
+                return
+            prev = self._persisted_head(record.run_id)
+            record.prev_hash = prev
+            record_dict = asdict(record)
+            record.record_hash = compute_record_hash(record=record_dict, prev_hash=prev)
+            self._inner.append(record)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
@@ -89,10 +113,7 @@ class HashChainedLedgerStore(LedgerStore):
         if not callable(fn):
             raise NotImplementedError("Inner LedgerStore does not support delete")
         rid = str(run_id or "").strip()
-        deleted = int(fn(rid))
-        if rid:
-            self._head_by_run.pop(rid, None)
-        return deleted
+        return int(fn(rid))
 
 
 def verify_ledger_chain(records: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Paused visits carry their look-back DEBT explicitly: a pause-frozen visit
+  (closed_by=pause, skip_reflection) completes with `reflection_pending:
+  true` and the word-free session sheet in the run OUTPUT — the door's
+  pending-look-back at the next open consumes it directly instead of
+  inferring the debt from run vars. The sheet is private-word-free by
+  construction (episode digests + non-private gists; private entries appear
+  as their act label only).
 - Visual `wait_event` D3 passthrough (flow's follow-through ask): the
   VisualFlow adapter's wait_event node now passes `until` (idle deadline,
   UTC-normalized by the runtime; labeled `{"timed_out": true}` resume) and

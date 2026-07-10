@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Session-free memory exploration** (`identity/memory_reader.py`,
+  gateway ask e-s 206): `HomeMemoryReader` extracts `search_memory` /
+  `read_memory` (and the tag/origin/trail machinery behind them) from
+  `ChatSession` into ONE session-free implementation over a home —
+  `ChatSession` delegates (sharing its session tag map so sheet-registered
+  tags stay addressable), and the gateway door's per-entity TOOL_CALLS
+  executor can construct a reader per home and declare both tools with
+  driver parity. `memory_tag` moved with it (re-exported from `chat` for
+  existing consumers). Pure reads throughout: no record_access, no commit,
+  no journal writes on any path (identity findability ≠ use).
+- Atomic writes for the home's operator config files (adversary P2 from
+  the prompt-overlay review): `utils/atomic_files.atomic_write_text`
+  (tmp + fsync + `os.replace`) now backs `tool_policy.yaml` and
+  `system_prompt.yaml` writers — a crash mid-write can no longer leave a
+  torn file that silently resolves as "no operator word".
 - **Fair scheduling across N run stores** (plan item 11, R3 — the agreed
   0018 spec, phase 4): `scheduler/multi_store.py` ships `TickCandidate`
   (store-agnostic unit of due work), `TickSource` (wraps one store's

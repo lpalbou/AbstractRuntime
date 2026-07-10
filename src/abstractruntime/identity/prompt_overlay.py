@@ -133,8 +133,12 @@ def write_prompt_overlay(home_dir: Path, overlay: Mapping[str, Any]) -> Path:
         return path
     import yaml
 
+    from ..utils.atomic_files import atomic_write_text
+
     body = yaml.safe_dump(clean, sort_keys=True, allow_unicode=True, width=88)
-    path.write_text(_HEADER_COMMENT + body, encoding="utf-8")
+    # Atomic: a torn overlay would read as malformed and silently drop the
+    # operator's word to defaults (adversary P2, 2026-07-11).
+    atomic_write_text(path, _HEADER_COMMENT + body)
     return path
 
 

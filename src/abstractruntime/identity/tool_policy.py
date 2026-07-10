@@ -162,7 +162,11 @@ def write_policy_file(home_dir: Path, policy: Dict[str, Optional[Sequence[str]]]
     if not merged:
         path.unlink(missing_ok=True)
         return path
-    path.write_text(yaml.safe_dump(merged, sort_keys=True), encoding="utf-8")
+    from ..utils.atomic_files import atomic_write_text
+
+    # Atomic: a crash mid-write must never leave a torn policy that
+    # silently resolves as "no operator word" (adversary P2, 2026-07-11).
+    atomic_write_text(path, yaml.safe_dump(merged, sort_keys=True))
     return path
 
 

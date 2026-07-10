@@ -187,14 +187,18 @@ def build_visit_workflow(
             visit["close_reason"] = "idle_timeout"
             return StepPlan(node_id="ROUTE", next_node="REFLECT")
         if str(resume.get("kind") or "") == "close":
-            # Door-authored close payload (gateway shape, 0014/083823Z):
-            # closed_by/reason ride into the look-back context so the
-            # reflection knows HOW the visit ended.
+            # Door-authored close payload (gateway shape, 0014/083823Z,
+            # superseded by 0014/094354Z: THREE closed_by kinds — operator
+            # and sleep close gracefully; PAUSE is a hard freeze that must
+            # not run the reflection LLM call; the look-back debt is the
+            # door's pending-look-back pattern at the next open).
             visit["close_reason"] = "closed"
             if resume.get("closed_by"):
                 visit["closed_by"] = str(resume.get("closed_by"))
             if resume.get("reason"):
                 visit["close_note"] = str(resume.get("reason"))
+            if resume.get("skip_reflection"):
+                visit["skip_reflection"] = True
             return StepPlan(node_id="ROUTE", next_node="REFLECT")
         text = str(resume.get("text") or "").strip()
         if not text:
@@ -424,6 +428,11 @@ def build_visit_workflow(
     def reflect_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
         sheet = list(visit.get("sheet") or [])
+        if visit.get("skip_reflection"):
+            # closed_by=pause is a HARD FREEZE (gateway 0014/094354Z):
+            # nothing runs — no reflection LLM call. The look-back debt is
+            # honored by the door's pending-look-back at the next open.
+            return StepPlan(node_id="REFLECT", next_node="DONE")
         if not sheet:
             return StepPlan(node_id="REFLECT", next_node="DONE")
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]

@@ -245,6 +245,33 @@ def test_idle_deadline_closes_the_visit_with_reflection(tmp_path: Path) -> None:
         ert.close()
 
 
+def test_pause_close_skips_reflection_hard_freeze(tmp_path: Path) -> None:
+    """closed_by=pause carries skip_reflection (gateway 0014/094354Z): a
+    hard freeze completes the run WITHOUT the reflection LLM call — the
+    look-back debt rides the door's pending-look-back at the next open."""
+    home_dir = _make_home(tmp_path, slug="frozling")
+    llm = _ScriptedLLMHandler(["One reply."])  # NO reflection reply queued
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "One turn.", "speaker": "person:albou"}, max_steps=100,
+        )
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"kind": "close", "closed_by": "pause",
+                     "reason": "operator pause", "skip_reflection": True},
+            max_steps=200,
+        )
+        assert state.status == RunStatus.COMPLETED
+        assert state.output["closed_by"] == "pause"
+        assert llm.replies == []  # exactly one LLM call happened: the turn
+    finally:
+        ert.close()
+
+
 def test_refused_prelude_completes_with_reasons_never_truncates(tmp_path: Path) -> None:
     """A virgin home (no engram) refuses the summon on the durable record."""
     from abstractruntime.identity.chat import open_home

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Visit-as-durable-run workflow (`identity/visit_workflow.py` — plan items
+  7-10 v0, the phase-3 centerpiece made executable): `build_visit_workflow`
+  maps the entity turn loop onto runtime effects over a per-entity runtime
+  — OPEN (prelude rendered ONCE into run vars: the stable head; refused
+  prelude completes with reasons, identity never truncated) → PARK
+  (WAIT_EVENT `visitor_input` + D3 idle deadline, self-describing
+  `details.kind`) → ROUTE → RECALL → REASON (v0: one LLM_CALL; the
+  abstractagent ReAct adapter replaces exactly this node) → ELECT (one
+  DIARY_WRITE per diary election, per-projection `reflected_in` edges) →
+  COMMIT (same-trace MEMORY_ACCESS) → FORM (episode + lossless verbatim,
+  stamped participants, `continues` chain) → ANSWER (ANSWER_USER) → park;
+  close/timeout → REFLECT → staged APPLY (summary → interests → diary →
+  feelings via MEMORY_APPRAISE, entity-reflection actor) → DONE. Replay
+  guards: turn-id folds (history/sheet fold once), idempotent effects.
+  4 tests pin the lifecycle, the RESTART-MID-VISIT resume (the phase's
+  payoff: process dies between turns, a fresh runtime over the same home
+  continues the visit with history intact), idle-timeout close, refused
+  prelude, and D2 (identity access counts stay 0 through a full visit).
 - EVENT wait with a DEADLINE (frozen seam spec D3): `WAIT_EVENT` accepts
   optional `payload.until` (UTC-normalized at the single write boundary —
   the WAIT_UNTIL invariant). The event resume wins before the deadline;

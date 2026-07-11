@@ -5,31 +5,41 @@ cognition tools (read-only — the six TIER1_TOOL_NAMES in tools.py:
 web_search, fetch_url, diary_list, diary_read, read_memory, search_memory)
 are safe for a persistent agent 24/7; the workspace tools write inside the
 home's walls. Grants are per PHASE of life — the FOUR ruled keys
-(semantics c607, config-object consensus 2026-07-11):
+(laurent's single-human-words ruling, c786 2026-07-11 20:30 — "like for
+us human: visit/work/personal/sleep"):
 
 - "visit"    — turns driven by a verified human/operator visitor
-- "tasked"   — pursuing operator-GIVEN tasks; ticks until done, then sleeps
-- "own_time" — no given tasks: self-directed exploration (the life loop).
-               OFF BY DEFAULT at the door (enabled flag + durable grant —
-               gateway lane); the TOOL default here is the full set per
-               laurent's Q1 ruling (c684): the brake is the grant, never
-               handlessness.
+- "work"     — pursuing operator-GIVEN tasks; ticks until done, then sleeps
+- "personal" — no given tasks: the entity's own time, self-directed
+               exploration (the life loop). OFF BY DEFAULT at the door
+               (personal_grant — gateway lane); the TOOL default here is
+               the full set per laurent's Q1 ruling (c684): the brake is
+               the grant, never handlessness.
 - "sleep"    — consolidation/dream window. FIRST-CLASS and operator-
                widenable (laurent c653); no EXECUTION path consumes this
                grant yet — display endpoints resolve it for the matrix;
                the dream pass honors it when it grows tool use.
 
-LEGACY SPELLING (migration window, dies before release — the lease-shim
-policy): "resident" was own_time's pre-consensus name. Both resolve paths
-accept it LOUDLY (arg + file section map to own_time with a #FALLBACK
-note; writes normalize the key on disk) so no home file or caller is
-bricked mid-migration and an operator's narrow resident grant is NEVER
-silently widened to the own_time default (adversary F7, gateway-verified).
+DEFINITION (semantics c794, the one adjacency named in both files):
+`personal_grant` = the OPERATOR'S AUTHORIZATION for the personal phase's
+loop (may-it-run: mode disabled|timer|until_revoked — a config-object
+section, gateway lane, never a key in this file); distinct from the
+ToolGrant this module resolves (which tools a session holds once a phase
+RUNS). The brake is the personal_grant, the hands are the ToolGrant.
+
+LEGACY SPELLINGS (migration window, dies before release — the lease-shim
+policy): "tasked"→work and "own_time"→personal were the pre-ruling
+consensus names; "resident" was own_time's own predecessor and maps
+transitively to personal. All resolve paths accept them LOUDLY (arg +
+file section map to the ruled key with a #FALLBACK note; writes normalize
+keys on disk) so no home file or caller is bricked mid-migration and an
+operator's narrow legacy grant is NEVER silently widened to the ruled
+default (adversary F7, gateway-verified).
 
 The policy lives IN THE HOME (`<home>/tool_policy.yaml`) — operator config
 beside spark.yaml, never a code constant. Missing file = the defaults
 below — THE MAINTAINER'S RULED DEFAULTS (12:37 matrix ruling + Q1 c684):
-visit, tasked and own_time hold the FULL set (an entity has its hands by
+visit, work and personal hold the FULL set (an entity has its hands by
 default; narrowing is the operator's explicit act, via the matrix or this
 file); sleep holds the read-only exploration set MINUS the diary — his
 rationale verbatim: "the entity can't act/change the environment while
@@ -47,7 +57,7 @@ be an explicit ZERO grant, not the default):
       tiers: [tier1]              # tier names
       add: [write_file]           # extra tool names on top of the tiers
       remove: [web_search]        # denied tool names (final word)
-    own_time:
+    personal:
       tools: [diary_list, diary_read, read_memory, list_files, read_file]
     sleep:
       tools: [web_search, fetch_url, read_memory, search_memory, read_file, list_files]
@@ -66,10 +76,10 @@ __all__ = [
     "ALL_TOOL_NAMES",
     "LEGACY_PHASE_ALIASES",
     "PHASES",
-    "PHASE_OWN_TIME",
+    "PHASE_PERSONAL",
     "PHASE_SLEEP",
-    "PHASE_TASKED",
     "PHASE_VISIT",
+    "PHASE_WORK",
     "POLICY_FILENAME",
     "SLEEP_DEFAULT_TOOL_NAMES",
     "TIERS",
@@ -80,19 +90,28 @@ __all__ = [
     "write_policy_file",
 ]
 
-# The four ruled phase keys (semantics c607) — named constants so callers
-# never re-type the strings (the two-vocabularies drift that motivated F7).
+# The four ruled phase keys (laurent c786: single human words, "like for
+# us human: visit/work/personal/sleep") — named constants so callers never
+# re-type the strings (the two-vocabularies drift that motivated F7).
 PHASE_VISIT = "visit"
-PHASE_TASKED = "tasked"
-PHASE_OWN_TIME = "own_time"
+PHASE_WORK = "work"
+PHASE_PERSONAL = "personal"
 PHASE_SLEEP = "sleep"
-PHASES = (PHASE_VISIT, PHASE_TASKED, PHASE_OWN_TIME, PHASE_SLEEP)
+PHASES = (PHASE_VISIT, PHASE_WORK, PHASE_PERSONAL, PHASE_SLEEP)
 
 # Migration-window aliases (old spelling -> ruled key). DIES BEFORE RELEASE:
 # once gateway's literals flip and existing home files have been written
-# once (writes normalize keys), this map empties and the old spelling
-# becomes unknown again — the removal flips the alias test to expects-raise.
-LEGACY_PHASE_ALIASES: Dict[str, str] = {"resident": PHASE_OWN_TIME}
+# once (writes normalize keys), this map empties and the old spellings
+# become unknown again — the removal flips the alias tests to expects-raise.
+# History of the spellings: "resident" (pre-consensus) -> "own_time"
+# (consensus c607) -> "personal" (laurent's human-words ruling c786);
+# "tasked" (c607) -> "work" (c786). All map to the RULED keys directly —
+# transitive chains resolve in one hop.
+LEGACY_PHASE_ALIASES: Dict[str, str] = {
+    "resident": PHASE_PERSONAL,
+    "own_time": PHASE_PERSONAL,
+    "tasked": PHASE_WORK,
+}
 TIERS: Dict[str, Tuple[str, ...]] = {
     "tier1": TIER1_TOOL_NAMES,
     "workspace": WORKSPACE_TOOL_NAMES,
@@ -137,8 +156,8 @@ class ToolGrant:
 
 
 def _default_tools(phase: str, *, enable_workspace: bool) -> Tuple[str, ...]:
-    # MAINTAINER'S RULED DEFAULTS (12:37 matrix ruling; own_time confirmed
-    # full-set by Q1, c684): visit, tasked and own_time hold the FULL set —
+    # MAINTAINER'S RULED DEFAULTS (12:37 matrix ruling; the personal phase
+    # confirmed full-set by Q1, c684): visit, work and personal hold the FULL set —
     # an entity has its hands by default; narrowing is the operator's
     # explicit act (matrix / policy file). The historical per-session
     # `enable_workspace` gate no longer SUBTRACTS from the default visit
@@ -231,9 +250,14 @@ def write_policy_file(home_dir: Path, policy: Dict[str, Optional[Sequence[str]]]
         if legacy in merged:
             legacy_spec = merged.pop(legacy)
             if target in merged:
+                # Accurate attribution (adversary F2): the surviving section
+                # may be the file's own ruled key OR an earlier-resolved
+                # legacy twin that already migrated — name the mechanism,
+                # not a "ruled key" the file may never have carried.
                 pending_warnings.append(
-                    f"tool_policy.yaml carries both {legacy!r} and {target!r}; "
-                    f"the ruled key {target!r} wins and the legacy section is dropped"
+                    f"tool_policy.yaml carries {legacy!r} but {target!r} is already "
+                    f"resolved (from the file or an earlier legacy key); "
+                    f"{legacy!r} is dropped"
                 )
             else:
                 merged[target] = legacy_spec
@@ -243,7 +267,7 @@ def write_policy_file(home_dir: Path, policy: Dict[str, Optional[Sequence[str]]]
                 )
 
     # The ruled-key-wins precedence must hold WITHIN one payload too
-    # (adversary find 1): {"own_time": [...], "resident": [...]} in either
+    # (adversary find 1): {"personal": [...], "own_time": [...]} in either
     # order must land the explicit ruled key's word, never the legacy
     # twin's — insertion order must not decide.
     ruled_in_payload = {str(p) for p in (policy or {}) if str(p) in PHASES}
@@ -289,16 +313,17 @@ def resolve_tool_grant(
     """The tools an entity holds in `phase`, per the home's policy file.
 
     Missing file → THE RULED DEFAULTS (12:37 matrix ruling + Q1 c684:
-    visit + tasked + own_time = the full set, sleep = read-only
+    visit + work + personal = the full set, sleep = read-only
     exploration minus the diary). File present → the file is the
     operator's word for the phases it NAMES: `tools` (exact list) wins
     over `tiers`+`add`−`remove`; unnamed phases follow the defaults.
     Unknown names are dropped WITH a note, never silently.
 
     Legacy spellings map loudly on BOTH axes (migration window): a caller
-    passing phase="resident" resolves own_time's grant with a #FALLBACK
-    note, and a policy FILE still carrying a `resident:` section is
-    honored under own_time with a note naming the file — the operator's
+    passing phase="own_time" (or "resident"/"tasked") resolves the ruled
+    key's grant with a #FALLBACK note, and a policy FILE still carrying a
+    legacy section is honored under the ruled key with a note naming the
+    file — the operator's
     narrow grant survives the rename, never a silent widen (F7)."""
     notes: List[str] = []
     phase = _normalize_phase(phase, notes, context="resolve_tool_grant arg")
@@ -320,29 +345,45 @@ def resolve_tool_grant(
     section_key: Optional[str] = None
     if isinstance(raw, dict):
         # The ruled key wins WHEN WELL-FORMED; a malformed ruled section
-        # (e.g. `own_time:` left null by a half-finished hand edit) must
+        # (e.g. `personal:` left null by a half-finished hand edit) must
         # not shadow an intact narrow legacy section — that would widen
         # the operator's last intact word to the full default (adversary
         # find 4, the F7 class again).
-        if phase in raw and isinstance(raw.get(phase), dict):
-            section_key = phase
-        else:
-            for legacy, target in LEGACY_PHASE_ALIASES.items():
-                if target == phase and isinstance(raw.get(legacy), dict):
-                    section_key = legacy
+        # Candidate keys for this phase, precedence order: the RULED key
+        # first, then its legacy spellings in map order. The first INTACT
+        # (mapping-shaped) candidate wins; every malformed candidate that
+        # appears in the file is NAMED (find 4: a null section from a
+        # half-finished hand edit must never silently shadow or vanish —
+        # the class applies to every spelling of the phase).
+        candidates = [phase] + [
+            legacy for legacy, target in LEGACY_PHASE_ALIASES.items() if target == phase
+        ]
+        for key in candidates:
+            if key not in raw:
+                continue
+            if not isinstance(raw.get(key), dict):
+                notes.append(
+                    f"#FALLBACK tool_policy.yaml names phase {key!r} but its spec is "
+                    "not a mapping; ignored"
+                )
+                continue
+            if section_key is None:
+                section_key = key
+                if key != phase:
                     notes.append(
                         f"#FALLBACK tool_policy.yaml at {Path(home_dir) / POLICY_FILENAME} "
-                        f"names legacy phase {legacy!r}; honored as {phase!r} — "
+                        f"names legacy phase {key!r}; honored as {phase!r} — "
                         "rewrite the key (any policy save normalizes it)"
                     )
-                    if phase in raw:
-                        notes.append(
-                            f"#FALLBACK tool_policy.yaml names phase {phase!r} but its spec "
-                            f"is not a mapping; the intact legacy {legacy!r} section applies"
-                        )
-                    break
-            if section_key is None and phase in raw:
-                section_key = phase  # malformed, no intact legacy twin
+            else:
+                # An INTACT losing twin is named too (adversary F1: the
+                # read path was silent where the write path warns — the
+                # operator's first signal that a shadowed section will be
+                # dropped must not be the save that drops it).
+                notes.append(
+                    f"#FALLBACK tool_policy.yaml also names {key!r}; shadowed by "
+                    f"{section_key!r} (a policy save will drop it)"
+                )
         known_keys = set(PHASES) | set(LEGACY_PHASE_ALIASES)
         unknown_keys = sorted(str(k) for k in raw if k not in known_keys)
         if unknown_keys:
@@ -350,15 +391,14 @@ def resolve_tool_grant(
                 f"#FALLBACK tool_policy.yaml names unknown phase key(s) {unknown_keys}; ignored"
             )
 
-    if raw is None or section_key is None or not isinstance(raw.get(section_key), dict):
-        # A phase the file NAMES but malforms (e.g. `visit:` left null in a
-        # hand edit) falls to defaults LOUDLY — under the ruled full-set
-        # defaults, silence here would be a silent WIDEN, not a narrow.
-        if raw is not None and section_key is not None:
-            notes.append(
-                f"#FALLBACK tool_policy.yaml names phase {section_key!r} but its spec is not a "
-                "mapping; the ruled defaults apply"
-            )
+    if raw is None or section_key is None:
+        # No intact section for this phase in any spelling → the ruled
+        # defaults apply. Loudness is already handled per candidate above
+        # (a named-but-malformed section noted "not a mapping; ignored" —
+        # under full-set defaults silence would be a silent WIDEN); the
+        # candidates loop only ever assigns section_key to an INTACT
+        # mapping, so no malformed-section re-check is needed here
+        # (adversary F3: the old third clause was unreachable dead code).
         return ToolGrant(
             tools=_default_tools(phase, enable_workspace=enable_workspace),
             source="default",

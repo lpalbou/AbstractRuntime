@@ -1236,7 +1236,7 @@ def _create_visual_agent_effect_handler(
 
         return {
             "context": ctx_ns,
-            "scratchpad": {"iteration": 0, "max_iterations": int(limits.get("max_iterations") or 25)},
+            "scratchpad": {"iteration": 0, "max_iterations": int(limits.get("max_iterations") or 20)},
             # `_runtime` is durable; we store provider/model here so the ReAct subworkflow
             # can inject them into LLM_CALL payloads (and remain resumable).
             "_runtime": runtime_ns,

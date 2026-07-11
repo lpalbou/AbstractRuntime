@@ -2,11 +2,12 @@
 
 - tool_policy.yaml is the operator's word on which tools each phase of life
   holds; a missing file gives the RULED defaults (12:37 matrix ruling + Q1
-  c684: visit + tasked + own_time = the full set, sleep = read-only
+  c684: visit + work + personal = the full set, sleep = read-only
   exploration minus the diary).
-- The phase vocabulary is the four c607 keys (visit/tasked/own_time/sleep);
-  the legacy "resident" spelling maps to own_time LOUDLY on both axes for
-  the migration window (F7/N7 — pins below) and dies before release.
+- The phase vocabulary is the four c786 human words (visit/work/personal/
+  sleep); legacy spellings (resident/own_time -> personal, tasked -> work)
+  map LOUDLY on both axes for the migration window (F7/N7 — pins in
+  test_phase_vocabulary_migration.py) and die before release.
 - workspace_mounts.json whitelists extra roots under mounts/<name>/ with an
   honest mode; ro refuses writes; containment applies per root.
 - The turn report carries the probe surface: tool_details + files touched.
@@ -104,10 +105,10 @@ def test_missing_policy_file_gives_the_ruled_defaults(tmp_path: Path) -> None:
     assert grant.source == "default"
     grant_ws = resolve_tool_grant(tmp_path, "visit", enable_workspace=True)
     assert grant_ws.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
-    own_time = resolve_tool_grant(tmp_path, "own_time")
-    assert own_time.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
-    tasked = resolve_tool_grant(tmp_path, "tasked")
-    assert tasked.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    personal = resolve_tool_grant(tmp_path, "personal")
+    assert personal.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    work = resolve_tool_grant(tmp_path, "work")
+    assert work.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
 
     sleep = resolve_tool_grant(tmp_path, "sleep")
     assert sleep.tools == SLEEP_DEFAULT_TOOL_NAMES
@@ -147,17 +148,17 @@ def test_policy_file_is_the_operators_word(tmp_path: Path) -> None:
     assert grant.source == "policy-file"
     assert grant.workspace_enabled is False
     # Unnamed phases keep their defaults.
-    assert resolve_tool_grant(tmp_path, "own_time").tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    assert resolve_tool_grant(tmp_path, "personal").tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
 
 
 def test_policy_tiers_add_remove_and_unknowns(tmp_path: Path) -> None:
     (tmp_path / "tool_policy.yaml").write_text(
         yaml.safe_dump({
-            "own_time": {"tiers": ["tier1"], "add": ["read_file", "made_up_tool"], "remove": ["web_search"]},
+            "personal": {"tiers": ["tier1"], "add": ["read_file", "made_up_tool"], "remove": ["web_search"]},
         }),
         encoding="utf-8",
     )
-    grant = resolve_tool_grant(tmp_path, "own_time")
+    grant = resolve_tool_grant(tmp_path, "personal")
     assert "web_search" not in grant.tools
     assert "read_file" in grant.tools and "diary_list" in grant.tools
     assert any("made_up_tool" in n for n in grant.notes)  # loud, never silent
@@ -178,16 +179,16 @@ def test_write_policy_file_merges_per_phase(tmp_path: Path) -> None:
     defaults); an emptied file is removed (absence = defaults, honestly)."""
     from abstractruntime.identity.tool_policy import POLICY_FILENAME, SLEEP_DEFAULT_TOOL_NAMES
 
-    # Write visit only — sleep/own_time stay ABSENT (defaults apply).
+    # Write visit only — sleep/personal stay ABSENT (defaults apply).
     write_policy_file(tmp_path, {"visit": ["diary_list"]})
     assert resolve_tool_grant(tmp_path, "visit").tools == ("diary_list",)
     assert resolve_tool_grant(tmp_path, "sleep").tools == SLEEP_DEFAULT_TOOL_NAMES
     assert resolve_tool_grant(tmp_path, "sleep").source == "default"
 
-    # A later write touching own_time keeps visit's entry intact.
-    write_policy_file(tmp_path, {"own_time": ["diary_list", "read_memory"]})
+    # A later write touching personal keeps visit's entry intact.
+    write_policy_file(tmp_path, {"personal": ["diary_list", "read_memory"]})
     assert resolve_tool_grant(tmp_path, "visit").tools == ("diary_list",)
-    assert resolve_tool_grant(tmp_path, "own_time").tools == ("diary_list", "read_memory")
+    assert resolve_tool_grant(tmp_path, "personal").tools == ("diary_list", "read_memory")
 
     # None deletes the phase entry — visit reverts to the ruled default.
     write_policy_file(tmp_path, {"visit": None})
@@ -195,7 +196,7 @@ def test_write_policy_file_merges_per_phase(tmp_path: Path) -> None:
     assert resolve_tool_grant(tmp_path, "visit").source == "default"
 
     # Removing the last entry removes the file (absence = all defaults).
-    write_policy_file(tmp_path, {"own_time": None})
+    write_policy_file(tmp_path, {"personal": None})
     assert not (tmp_path / POLICY_FILENAME).exists()
 
 

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Phase vocabulary: the four SINGLE HUMAN WORDS** (laurent's ruling,
+  commons c786 2026-07-11 20:30 — "like for us human:
+  visit/work/personal/sleep"; the room's 9-0 ballot converged on the
+  same set): `PHASES = ("visit", "work", "personal", "sleep")`;
+  `PHASE_TASKED`/`PHASE_OWN_TIME` became `PHASE_WORK`/`PHASE_PERSONAL`
+  (root exports updated). `LEGACY_PHASE_ALIASES` now carries all three
+  historical spellings — `resident`→personal, `own_time`→personal,
+  `tasked`→work — each mapping DIRECTLY to its ruled key (one hop, no
+  transitive chains); the same loud machinery applies (arg + file
+  section alias with `#FALLBACK` notes, writes normalize keys on disk,
+  narrow legacy grants survive, `canonical_phase` normalizes at every
+  mint). The file-section shim generalizes to a candidates loop (ruled
+  key first, then legacy spellings; first INTACT section wins; every
+  malformed candidate present in the file is named — the find-4 class
+  applied to every spelling). The aliases die before release. Deferred
+  in the same ruling's spirit, flagged on-channel: the prompt-overlay
+  section key `own_time`, life.py's `own_time.log`/`own_time_start`
+  bookkeeping names, and the `own-time-loop` command-inbox consumer id
+  are at-rest FILE/event contracts with their own compat surfaces — they
+  follow in a coordinated flip, not this one. Adversary pass 3 (no
+  P0/P1) also hardened the shim's observability: an intact losing twin
+  section is now NOTED on read (the write path already warned), the
+  both-legacy-spellings write warning names the real mechanism instead
+  of a possibly-absent "ruled key", and the unreachable malformed-
+  section re-check below the candidates loop was removed as dead code.
+- **`personal_grant` definition line** (semantics c794 ruling, ask 2a):
+  the tool_policy module docstring now defines the adjacency in place —
+  `personal_grant` = the operator's authorization for the personal
+  phase's LOOP (config-object section, gateway lane); distinct from the
+  `ToolGrant` this module resolves. The brake is the grant, the hands
+  are the ToolGrant.
+- **Scratchpad seed literal 25→20** (agency's a21304a co-sign residual):
+  the VisualFlow compiler's scratchpad seed carried a second-copy `or
+  25` fallback, drifted from the ruled default — now 20, though the
+  upstream `setdefault` makes it reachable only for an explicit
+  `max_iterations=0`.
+
 ### Fixed
 - **`diary_list` joins the act-only class** (memory's e-s 233 R3 ruling,
   adversary-broken claim: a private entry's GIST is part of the private

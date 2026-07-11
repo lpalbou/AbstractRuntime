@@ -94,6 +94,29 @@ def test_every_historical_phase_word_resolves_through_the_canon() -> None:
         assert resolved in PHASES, (word, resolved)
 
 
+def test_resolve_tool_grant_callers_are_entity_lane_only() -> None:
+    """CAPABILITY-LEVEL GRANTS ruling (descriptor contract rule 2, c887/
+    c891/c896): tool_policy.yaml carries BARE capability names and
+    containment binds at COMPOSITION — which holds only while the grant
+    file's resolver feeds ENTITY lanes exclusively (the workflow agent-node
+    lane's allowlists come from node pins/_runtime.allowed_tools, never
+    this file). Source-scan pin: within abstractruntime, resolve_tool_grant
+    is consumed only by identity-lane modules. A new caller outside
+    identity/ means the both-lanes-one-file question REOPENS — take it to
+    the room, don't just import."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src" / "abstractruntime"
+    offenders = []
+    for p in src.rglob("*.py"):
+        rel = p.relative_to(src).as_posix()
+        if rel.startswith("identity/") or rel == "__init__.py":
+            continue
+        if "resolve_tool_grant" in p.read_text(encoding="utf-8"):
+            offenders.append(rel)
+    assert offenders == [], f"resolve_tool_grant consumed outside the entity lane: {offenders}"
+
+
 def test_canonical_phase_is_the_stamp_normalizer() -> None:
     """Semantics c700 V5: entity-stamp-v2 must sign the CANONICAL phase
     only — an alias inside the MAC basis is a verify-time chain-break.

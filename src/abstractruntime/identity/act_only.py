@@ -76,9 +76,11 @@ from ..core.runtime import EffectOutcome
 
 ACT_ONLY_KEY = "$act_only"
 
-# The act-only tool set. Widening this set is a spec change (the attribute
-# is declared on the tool contract, core's `act_only` field); an unknown
-# tool in a ref fails loudly rather than guessing a resolver.
+# The act-only tool set — DERIVED from the descriptor registry (one source:
+# each ToolDescriptor declares `act_only`; the wire flag and the resolver
+# dispatch can never disagree). Widening the set is a privacy-lane ruling
+# expressed ON THE DESCRIPTOR, never an edit here; an unknown tool in a ref
+# still fails loudly rather than guessing a resolver.
 #
 # diary_list JOINED 2026-07-11 (memory's e-s 233 R3 ruling, adversary-
 # broken claim: a private entry's GIST is part of the private words, and
@@ -87,7 +89,13 @@ ACT_ONLY_KEY = "$act_only"
 # run store/ledger). Its ref carries tool+args (no entry_id — the listing
 # is re-run fresh at send time), the tool+args generalization memory's
 # ruling named.
-ACT_ONLY_TOOLS = ("diary_read", "diary_list")
+from .tools import TOOL_DESCRIPTORS as _TOOL_DESCRIPTORS
+
+ACT_ONLY_TOOLS = tuple(n for n, d in _TOOL_DESCRIPTORS.items() if d.act_only)
+assert ACT_ONLY_TOOLS == ("diary_list", "diary_read"), (
+    "act-only derivation drifted from the ruled set (e-s 233 R3); a widening "
+    f"must be a privacy-lane ruling: {ACT_ONLY_TOOLS}"
+)
 
 
 class ActOnlyResolutionError(RuntimeError):

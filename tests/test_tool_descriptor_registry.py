@@ -12,8 +12,6 @@ refactors that would bypass the asserts.
 
 from __future__ import annotations
 
-import pytest
-
 from abstractruntime.identity.tool_policy import ALL_TOOL_NAMES, TIERS
 from abstractruntime.identity.tools import (
     TIER1_TOOL_NAMES,
@@ -91,6 +89,67 @@ def test_context_carries_the_notice_channel() -> None:
     assert ctx.notices == []
     ctx.notices.append("#FALLBACK probe")
     assert ToolExecutionContext().notices == []  # no shared mutable default
+
+
+# ------------------------------------------ the servable emission (v6)
+
+
+def test_walled_tool_rows_carry_the_contract_shape() -> None:
+    """Descriptor contract v6, rule 1: the emission is the SOLE field
+    source for runtime rows — every row carries the ten fields minus
+    executes_via (the gateway's one authorship), owner is runtime, and
+    the classifications match the descriptors."""
+    from abstractruntime.identity.tools import walled_tool_rows
+
+    rows = {r["name"]: r for r in walled_tool_rows()}
+    assert set(rows) == set(TOOL_DESCRIPTORS)
+    for name, r in rows.items():
+        d = TOOL_DESCRIPTORS[name]
+        assert r["owner"] == "runtime"
+        assert "executes_via" not in r  # the gateway attaches containment
+        assert r["grant_lane"] == d.tier and r["grant_lane"] in ("tier1", "workspace")
+        assert r["capability_class"] in ("tier0_core", "tier1_self", "tier2_world")
+        assert r["mutating"] == d.mutating
+        assert r["remote_write_capable"] is False  # walled web lanes are GET-hardcoded
+        assert r["act_only"] == d.act_only
+        assert r["module"] == "identity.tools"
+        assert r["parameters"]["properties"] == d.properties
+    # The canonical opposite-numbering pair, served on the wire (rule 3).
+    assert rows["web_search"]["grant_lane"] == "tier1"
+    assert rows["web_search"]["capability_class"] == "tier2_world"
+    # The act-only pair rides the emission (e-s 233 R3).
+    assert rows["diary_read"]["act_only"] is True and rows["diary_list"]["act_only"] is True
+
+
+def test_emission_parameters_are_deep_copies() -> None:
+    """core c901's schema-isolation pin applied to my emission: a consumer
+    scribble on a served row must never rewrite the process-wide native
+    declaration schema."""
+    from abstractruntime.identity.tools import walled_tool_rows
+
+    row = next(r for r in walled_tool_rows() if r["name"] == "web_search")
+    row["parameters"]["properties"]["query"]["description"] = "SCRIBBLED"
+    fresh = next(r for r in walled_tool_rows() if r["name"] == "web_search")
+    assert fresh["parameters"]["properties"]["query"]["description"] != "SCRIBBLED"
+    assert TOOL_DESCRIPTORS["web_search"].properties["query"]["description"] != "SCRIBBLED"
+
+
+def test_act_only_tools_derive_from_the_descriptors() -> None:
+    """One source: the wire flag (ACT_ONLY_TOOLS) and the descriptor
+    registry can never disagree."""
+    from abstractruntime.identity.act_only import ACT_ONLY_TOOLS
+
+    assert ACT_ONLY_TOOLS == tuple(n for n, d in TOOL_DESCRIPTORS.items() if d.act_only)
+    assert set(ACT_ONLY_TOOLS) == {"diary_list", "diary_read"}
+
+
+def test_root_exports_the_inventory_surfaces() -> None:
+    import abstractruntime as rt
+
+    assert rt.TOOL_DESCRIPTORS is TOOL_DESCRIPTORS
+    assert callable(rt.walled_tool_rows)
+    assert rt.TIER1_TOOL_NAMES == TIER1_TOOL_NAMES
+    assert rt.WORKSPACE_TOOL_NAMES == WORKSPACE_TOOL_NAMES
 
 
 # ---------------------------------------------- walled-wins (agency P0-3)

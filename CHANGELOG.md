@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Declare-beside-execute tool registry + the servable emission**
+  (tool-inventory build, commons c864 ask 2 / descriptor contract v6):
+  `TOOL_DESCRIPTORS` in `identity/tools.py` is ONE frozen record per
+  walled tool — declaration (description + native-call schema), grant
+  lane, `capability_class` (boundary axis; the canonical
+  opposite-numbering pair encoded: `web_search` is grant-lane tier1 AND
+  boundary tier2_world), `mutating` (local effect),
+  `remote_write_capable` (false for every walled tool — the web lanes
+  are GET-hardcoded, unlike core's registry twins), `act_only`,
+  `body_optional`, and the EXECUTOR — so a declared name without an
+  executor, or the reverse, is structurally impossible.
+  `execute_tool_elections` dispatches through the registry;
+  `_NATIVE_SPEC_SHAPES` and the body-optional parse gates now DERIVE
+  from it (the first cut duplicated the shapes and alarmed the drift
+  with asserts — the adversary's find made them genuinely derive, so
+  the drift class is removed, not alarmed); `ACT_ONLY_TOOLS` derives
+  from the descriptors (the wire flag and dispatch can never disagree);
+  the import-time partition gates are plain raises (`python -O` cannot
+  strip them). `walled_tool_rows()` is the SERVABLE EMISSION (contract
+  rule 1: the sole field source for runtime rows — deep-copied schemas;
+  the gateway attaches `executes_via`), root-exported with
+  `TOOL_DESCRIPTORS`/`ToolDescriptor` and the name tuples.
+  WALLED-WINS is mechanism (agency c909 P0-3, runtime half): the five
+  colliding names are pinned as permanently walled descriptors, a
+  granted registry-only name gets no declaration and refuses loudly at
+  entity-lane execution, and a source pin proves the walled module
+  never imports the core tool registry. One fable5 adversary attacked
+  the registry refactor (behavior-drift trace against the old dispatch:
+  CLEAN on every reachable path; no P0/P1) — its P2s folded same-pass.
+
 ### Fixed
 - **Visual `llm_call` forwards provider/model INDEPENDENTLY** (flow's
   adversary P0, commons c884 — "workflows that run and lie"): the old

@@ -23,7 +23,7 @@ its choice — the same choice any mind has with a private thought.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # THE TURN BUDGET (maintainer ruling 2026-07-11 05:25, overriding the
@@ -383,59 +383,8 @@ class WorkspaceRoot:
 # rule: a declared spec binds to the entity-walled executor, always.
 # Property names align with _NATIVE_BODY_KEYS so the response's arguments
 # round-trip into ToolElection without guessing.
-_NATIVE_SPEC_SHAPES: Dict[str, Dict[str, Any]] = {
-    "web_search": {
-        "description": "Search the public internet. Returns titles, snippets, and URLs.",
-        "properties": {"query": {"type": "string", "description": "what to search for"}},
-        "required": ["query"],
-    },
-    "fetch_url": {
-        "description": "Read ONE web page (read-only GET; you cannot post or change anything).",
-        "properties": {"url": {"type": "string", "description": "the http(s) page to read"}},
-        "required": ["url"],
-    },
-    "diary_list": {
-        "description": "List your most recent diary entries (ids and one-line gists).",
-        "properties": {"limit": {"type": "integer", "description": "how many entries (1-10, default 5)"}},
-        "required": [],
-    },
-    "diary_read": {
-        "description": "Fetch the full words of one diary entry from your book.",
-        "properties": {"entry": {"type": "string", "description": "the entry id exactly as diary_list shows it"}},
-        "required": ["entry"],
-    },
-    "read_memory": {
-        "description": "Fetch the FULL original words behind a memory digest, with origin and connections.",
-        "properties": {"tag": {"type": "string", "description": "the 8-character #tag shown beside a memory"}},
-        "required": ["tag"],
-    },
-    "search_memory": {
-        "description": (
-            "Search your WHOLE memory - the graph of everything your life deposited AND "
-            "every entry of your book. Honest about absence."
-        ),
-        "properties": {"query": {"type": "string", "description": "what to find in your own memory"}},
-        "required": ["query"],
-    },
-    "write_file": {
-        "description": "Create or replace ONE file inside YOUR workspace (whole file, never a fragment).",
-        "properties": {
-            "path": {"type": "string", "description": "path relative to your workspace"},
-            "content": {"type": "string", "description": "the complete file content"},
-        },
-        "required": ["path", "content"],
-    },
-    "read_file": {
-        "description": "Read one file from your workspace.",
-        "properties": {"path": {"type": "string", "description": "path relative to your workspace"}},
-        "required": ["path"],
-    },
-    "list_files": {
-        "description": "List the files in your workspace (or a subdirectory of it).",
-        "properties": {"path": {"type": "string", "description": "subdirectory to list (default: the whole workspace)"}},
-        "required": [],
-    },
-}
+# (_NATIVE_SPEC_SHAPES is DERIVED from TOOL_DESCRIPTORS below — one source;
+# the name survives for readability, the duplication does not.)
 
 
 def native_tool_specs(allowed_names: Tuple[str, ...]) -> List[Dict[str, Any]]:
@@ -447,12 +396,16 @@ def native_tool_specs(allowed_names: Tuple[str, ...]) -> List[Dict[str, Any]]:
         shape = _NATIVE_SPEC_SHAPES.get(str(name))
         if not shape:
             continue  # unknown grant names simply have no declaration
+        import copy as _copy
+
         specs.append({
             "name": str(name),
             "description": shape["description"],
             "parameters": {
                 "type": "object",
-                "properties": dict(shape["properties"]),
+                # DEEP copy (adversary find 4): a consumer scribbling on a
+                # served spec must never rewrite the descriptor's schema.
+                "properties": _copy.deepcopy(shape["properties"]),
                 "required": list(shape["required"]),
             },
         })
@@ -548,7 +501,7 @@ def native_tool_elections(
             notices.append(f"#FALLBACK native tool call refused (unknown tool {name!r})")
             markers.append(f"[tool call refused: {name or 'unnamed'} is not available]")
             continue
-        if not body and name not in ("diary_list", "list_files"):
+        if not body and name not in _BODY_OPTIONAL_TOOLS:
             notices.append(f"#FALLBACK native tool call failed (no arguments for {name})")
             markers.append(f"[tool call failed: {name} needs a body]")
             continue
@@ -598,7 +551,7 @@ def parse_tool_blocks(
         if name not in allowed:
             notices.append(f"#FALLBACK tool block refused (unknown tool {name!r})")
             return f"[tool call refused: {name or 'unnamed'} is not available]"
-        if not body and name not in ("diary_list", "list_files"):
+        if not body and name not in _BODY_OPTIONAL_TOOLS:
             notices.append(f"#FALLBACK tool block failed (empty body for {name})")
             return f"[tool call failed: {name} needs a body]"
         elections.append(ToolElection(name=name, body=body, args=args))
@@ -757,6 +710,269 @@ def _run_diary_read(
     return "\n".join(parts)
 
 
+@dataclass
+class ToolExecutionContext:
+    """The injectables one tool round runs against — what `execute_tool_elections`
+    used to take as loose kwargs, named so descriptor executors share ONE
+    signature. `notices` is the loud channel (#FALLBACK lines) executors
+    append to."""
+
+    diary_store: Any = None
+    diary_read_effect: Optional[Callable[[str], Dict[str, Any]]] = None
+    web_search_fn: Optional[Callable[[str], str]] = None
+    workspace: Optional[WorkspaceRoot] = None
+    read_memory_fn: Optional[Callable[[str], str]] = None
+    search_memory_fn: Optional[Callable[[str], str]] = None
+    notices: List[str] = field(default_factory=list)
+
+
+def _exec_web_search(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    return (ctx.web_search_fn or _run_web_search)(e.body)
+
+
+def _exec_fetch_url(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    return _run_fetch_url(e.body)
+
+
+def _exec_diary_list(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    return _run_diary_list(ctx.diary_store, e.body)
+
+
+def _exec_diary_read(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    return _run_diary_read(ctx.diary_read_effect, e.body, diary_store=ctx.diary_store)
+
+
+def _exec_read_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    if ctx.read_memory_fn is None:
+        ctx.notices.append("#FALLBACK read_memory elected but no resolver wired")
+        return "(the read_memory tool is not enabled in this session)"
+    return ctx.read_memory_fn(e.body.strip().splitlines()[0].strip())
+
+
+def _exec_search_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    if ctx.search_memory_fn is None:
+        ctx.notices.append("#FALLBACK search_memory elected but no resolver wired")
+        return "(the search_memory tool is not enabled in this session)"
+    return ctx.search_memory_fn(e.body.strip())
+
+
+def _workspace_or_notice(e: ToolElection, ctx: ToolExecutionContext) -> Optional[WorkspaceRoot]:
+    if ctx.workspace is None:
+        ctx.notices.append(f"#FALLBACK workspace tool {e.name} elected but workspace disabled")
+        return None
+    return ctx.workspace
+
+
+def _exec_write_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    ws = _workspace_or_notice(e, ctx)
+    if ws is None:
+        return f"(the {e.name} tool is not enabled in this session)"
+    path = (e.args or {}).get("path", "")
+    if not path:
+        raise ValueError("write_file needs path=<relative path> on the block line")
+    return ws.write_file(path, e.body)
+
+
+def _exec_read_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    ws = _workspace_or_notice(e, ctx)
+    if ws is None:
+        return f"(the {e.name} tool is not enabled in this session)"
+    return ws.read_file(e.body.strip().splitlines()[0])
+
+
+def _exec_list_files(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    ws = _workspace_or_notice(e, ctx)
+    if ws is None:
+        return f"(the {e.name} tool is not enabled in this session)"
+    return ws.list_files(e.body.strip() or ".")
+
+
+@dataclass(frozen=True)
+class ToolDescriptor:
+    """DECLARE-BESIDE-EXECUTE (tool-inventory build, commons c864/c868): one
+    record per tool carrying the declaration (description + native-call
+    schema), the grant lane (the axis tool_policy's TIERS consumes), the
+    boundary/effect classifications the descriptor contract serves, and the
+    EXECUTOR — so a declared name without an executor, or an executor
+    without a declaration, is structurally impossible. The registry below is
+    the ONE source; TIER1_TOOL_NAMES / WORKSPACE_TOOL_NAMES / the native
+    spec shapes are DERIVED views (import-time checked), and
+    `walled_tool_rows()` is the SERVABLE emission (contract v6, rule 1:
+    runtime rows' sole field source — gateway attaches executes_via).
+
+    Field vocabulary (descriptor contract v6, decision:tool-tier-axes):
+    - `tier` is the GRANT LANE (emitted as `grant_lane`): tier1 = the
+      always-on cognition set ruled safe 24/7 (named fact: the web lanes
+      perform network EGRESS); workspace = the home-scoped read/write set.
+    - `capability_class` is the BOUNDARY axis (07-06 engraving): declared
+      per walled row — web lanes are tier2_world (the canonical
+      opposite-numbering example: grant_lane=tier1 AND
+      capability_class=tier2_world, both true); self/home surfaces are
+      tier1_self.
+    - `mutating` = LOCAL effect (core c901's sharpened definition).
+    - `remote_write_capable` = REMOTE effect capability. The walled web
+      lanes are GET-hardcoded (the verb is unreachable from the prompt), so
+      walled fetch_url is False while core's registry fetch_url is True —
+      the containment difference made visible on the wire.
+    - `act_only` = the wire-boundary privacy flag (e-s 233 R3);
+      ACT_ONLY_TOOLS derives from it — descriptive, never grantable."""
+
+    name: str
+    tier: str  # grant lane: "tier1" | "workspace" (emitted as grant_lane)
+    mutating: bool
+    description: str
+    properties: Dict[str, Any]
+    required: Tuple[str, ...]
+    executor: Callable[[ToolElection, ToolExecutionContext], str]
+    capability_class: str = "tier2_world"  # deny-safe default (contract rule)
+    remote_write_capable: bool = False
+    act_only: bool = False
+    body_optional: bool = False  # election may carry an empty body (find 6)
+
+
+# Canonical registry ORDER IS THE CANONICAL TOOL ORDER (byte-stable member
+# sets — observer's inventory spec): tier1 first, then workspace, matching
+# the tuples above exactly (checked at import, below).
+TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
+    d.name: d
+    for d in (
+        ToolDescriptor(
+            name="web_search", tier="tier1", mutating=False,
+            description="Search the public internet. Returns titles, snippets, and URLs.",
+            properties={"query": {"type": "string", "description": "what to search for"}},
+            required=("query",), executor=_exec_web_search,
+            capability_class="tier2_world",  # network egress (lane tier1 — the opposite-numbering pair)
+        ),
+        ToolDescriptor(
+            name="fetch_url", tier="tier1", mutating=False,
+            description="Read ONE web page (read-only GET; you cannot post or change anything).",
+            properties={"url": {"type": "string", "description": "the http(s) page to read"}},
+            required=("url",), executor=_exec_fetch_url,
+            capability_class="tier2_world",  # egress; GET-hardcoded => remote_write_capable stays False
+        ),
+        ToolDescriptor(
+            name="diary_list", tier="tier1", mutating=False,
+            description="List your most recent diary entries (ids and one-line gists).",
+            properties={"limit": {"type": "integer", "description": "how many entries (1-10, default 5)"}},
+            required=(), executor=_exec_diary_list,
+            capability_class="tier1_self", act_only=True, body_optional=True,
+        ),
+        ToolDescriptor(
+            name="diary_read", tier="tier1", mutating=False,
+            description="Fetch the full words of one diary entry from your book.",
+            properties={"entry": {"type": "string", "description": "the entry id exactly as diary_list shows it"}},
+            required=("entry",), executor=_exec_diary_read,
+            capability_class="tier1_self", act_only=True,
+        ),
+        ToolDescriptor(
+            name="read_memory", tier="tier1", mutating=False,
+            description="Fetch the FULL original words behind a memory digest, with origin and connections.",
+            properties={"tag": {"type": "string", "description": "the 8-character #tag shown beside a memory"}},
+            required=("tag",), executor=_exec_read_memory,
+            capability_class="tier1_self",
+        ),
+        ToolDescriptor(
+            name="search_memory", tier="tier1", mutating=False,
+            description=(
+                "Search your WHOLE memory - the graph of everything your life deposited AND "
+                "every entry of your book. Honest about absence."
+            ),
+            properties={"query": {"type": "string", "description": "what to find in your own memory"}},
+            required=("query",), executor=_exec_search_memory,
+            capability_class="tier1_self",
+        ),
+        ToolDescriptor(
+            name="write_file", tier="workspace", mutating=True,
+            description="Create or replace ONE file inside YOUR workspace (whole file, never a fragment).",
+            properties={
+                "path": {"type": "string", "description": "path relative to your workspace"},
+                "content": {"type": "string", "description": "the complete file content"},
+            },
+            required=("path", "content"), executor=_exec_write_file,
+            capability_class="tier1_self",  # home-scoped (contract F6: workspace ~ self territory)
+        ),
+        ToolDescriptor(
+            name="read_file", tier="workspace", mutating=False,
+            description="Read one file from your workspace.",
+            properties={"path": {"type": "string", "description": "path relative to your workspace"}},
+            required=("path",), executor=_exec_read_file,
+            capability_class="tier1_self",
+        ),
+        ToolDescriptor(
+            name="list_files", tier="workspace", mutating=False,
+            description="List the files in your workspace (or a subdirectory of it).",
+            properties={"path": {"type": "string", "description": "subdirectory to list (default: the whole workspace)"}},
+            required=(), executor=_exec_list_files,
+            capability_class="tier1_self", body_optional=True,
+        ),
+    )
+}
+
+# DERIVED VIEWS (adversary find 5, 2026-07-12: the first cut DUPLICATED the
+# spec shapes and alarmed the drift with asserts — now they genuinely
+# derive, so the drift class is REMOVED, not alarmed). The spec-shape dict
+# keeps its historical name for readability; the body-optional set feeds
+# both parse gates (find 6: per-tool required-ness lives on the descriptor,
+# never a third hand list).
+_NATIVE_SPEC_SHAPES: Dict[str, Dict[str, Any]] = {
+    n: {
+        "description": d.description,
+        "properties": d.properties,
+        "required": list(d.required),
+    }
+    for n, d in TOOL_DESCRIPTORS.items()
+}
+_BODY_OPTIONAL_TOOLS: Tuple[str, ...] = tuple(
+    n for n, d in TOOL_DESCRIPTORS.items() if d.body_optional
+)
+
+# IMPORT-TIME DRIFT CHECKS: the documented tuples above are load-bearing
+# cross-repo constants (agent's fixtures import them; tool_policy derives
+# ALL_TOOL_NAMES) — they stay as the readable declarations, and the registry
+# proves it matches them exactly. A new tool added to only one surface
+# refuses to import, which is the whole point. Plain raises, not asserts:
+# `python -O` must not strip the gate (adversary find 3).
+if tuple(n for n, d in TOOL_DESCRIPTORS.items() if d.tier == "tier1") != TIER1_TOOL_NAMES:
+    raise AssertionError("TOOL_DESCRIPTORS tier1 partition drifted from TIER1_TOOL_NAMES")
+if tuple(n for n, d in TOOL_DESCRIPTORS.items() if d.tier == "workspace") != WORKSPACE_TOOL_NAMES:
+    raise AssertionError("TOOL_DESCRIPTORS workspace partition drifted from WORKSPACE_TOOL_NAMES")
+
+
+def walled_tool_rows() -> List[Dict[str, Any]]:
+    """THE SERVABLE EMISSION for runtime's walled rows (descriptor contract
+    v6, rule 1: this function is the SOLE field source — a serving surface
+    takes rows VERBATIM and attaches `executes_via="entity_walled"`, its
+    one authorship; nothing here is ever re-derived from the name).
+
+    Shape per row (contract order-independent; the gateway's composition
+    applies the total order): name, owner, grant_lane, capability_class,
+    mutating, remote_write_capable, act_only, description, parameters,
+    module. `parameters` is a DEEP COPY per call (core c901's
+    schema-isolation pin: a consumer scribble must never rewrite the
+    process-wide native declaration schema)."""
+    import copy as _copy
+
+    rows: List[Dict[str, Any]] = []
+    for d in TOOL_DESCRIPTORS.values():
+        rows.append({
+            "name": d.name,
+            "owner": "runtime",
+            "grant_lane": d.tier,
+            "capability_class": d.capability_class,
+            "mutating": bool(d.mutating),
+            "remote_write_capable": bool(d.remote_write_capable),
+            "act_only": bool(d.act_only),
+            "description": d.description,
+            "parameters": {
+                "type": "object",
+                "properties": _copy.deepcopy(d.properties),
+                "required": list(d.required),
+            },
+            "module": "identity.tools",
+        })
+    return rows
+
+
 def execute_tool_elections(
     elections: List[ToolElection],
     *,
@@ -773,49 +989,27 @@ def execute_tool_elections(
     information, not an aborted turn). `web_search_fn` is injectable for
     offline tests; the default is the real abstractcore tool. Workspace tools
     run only when a `workspace` is provided (operator-enabled per session).
-    """
-    notices: List[str] = []
+    Dispatch goes through TOOL_DESCRIPTORS (declare-beside-execute): the
+    executor lives on the same record as the declaration, so this function
+    cannot know a name the declaration surfaces don't."""
+    ctx = ToolExecutionContext(
+        diary_store=diary_store,
+        diary_read_effect=diary_read_effect,
+        web_search_fn=web_search_fn,
+        workspace=workspace,
+        read_memory_fn=read_memory_fn,
+        search_memory_fn=search_memory_fn,
+    )
     sections: List[str] = []
     for e in elections:
         try:
-            if e.name == "web_search":
-                out = (web_search_fn or _run_web_search)(e.body)
-            elif e.name == "fetch_url":
-                out = _run_fetch_url(e.body)
-            elif e.name == "diary_list":
-                out = _run_diary_list(diary_store, e.body)
-            elif e.name == "diary_read":
-                out = _run_diary_read(diary_read_effect, e.body, diary_store=diary_store)
-            elif e.name == "read_memory":
-                if read_memory_fn is None:
-                    out = "(the read_memory tool is not enabled in this session)"
-                    notices.append("#FALLBACK read_memory elected but no resolver wired")
-                else:
-                    out = read_memory_fn(e.body.strip().splitlines()[0].strip())
-            elif e.name == "search_memory":
-                if search_memory_fn is None:
-                    out = "(the search_memory tool is not enabled in this session)"
-                    notices.append("#FALLBACK search_memory elected but no resolver wired")
-                else:
-                    out = search_memory_fn(e.body.strip())
-            elif e.name in WORKSPACE_TOOL_NAMES:
-                if workspace is None:
-                    out = f"(the {e.name} tool is not enabled in this session)"
-                    notices.append(f"#FALLBACK workspace tool {e.name} elected but workspace disabled")
-                elif e.name == "write_file":
-                    path = (e.args or {}).get("path", "")
-                    if not path:
-                        raise ValueError("write_file needs path=<relative path> on the block line")
-                    out = workspace.write_file(path, e.body)
-                elif e.name == "read_file":
-                    out = workspace.read_file(e.body.strip().splitlines()[0])
-                else:  # list_files
-                    out = workspace.list_files(e.body.strip() or ".")
-            else:  # unreachable: parse admits only allowed names
+            d = TOOL_DESCRIPTORS.get(e.name)
+            if d is None:  # unreachable: parse admits only allowed names
                 raise ValueError(f"unknown tool {e.name}")
+            out = d.executor(e, ctx)
         except Exception as exc:  # tool failure -> honest report, never a crash
             out = f"(the {e.name} call failed: {exc})"
-            notices.append(f"#FALLBACK tool {e.name} failed: {exc}")
+            ctx.notices.append(f"#FALLBACK tool {e.name} failed: {exc}")
         e.result = out  # the election carries what came back (probe surface)
         sections.append(f"[{e.name}]\n{out}")
     message = (
@@ -823,4 +1017,4 @@ def execute_tool_elections(
         + "\n\n".join(sections)
         + "\n\nTool lookups are done for this turn. Finish your reply to the person now."
     )
-    return message, notices
+    return message, ctx.notices

@@ -69,6 +69,13 @@ from .storage.artifacts import (
     compute_artifact_id,
 )
 from .identity.fingerprint import ActorFingerprint
+from .identity.tools import (
+    TIER1_TOOL_NAMES,
+    TOOL_DESCRIPTORS,
+    WORKSPACE_TOOL_NAMES,
+    ToolDescriptor,
+    walled_tool_rows,
+)
 from .identity.tool_policy import (
     LEGACY_PHASE_ALIASES,
     PHASES,
@@ -193,6 +200,13 @@ __all__ = [
     "read_policy_file",
     "resolve_tool_grant",
     "write_policy_file",
+    # Walled tool inventory (descriptor contract v6: the emission is the
+    # sole field source for runtime rows; gateway attaches executes_via)
+    "TIER1_TOOL_NAMES",
+    "TOOL_DESCRIPTORS",
+    "WORKSPACE_TOOL_NAMES",
+    "ToolDescriptor",
+    "walled_tool_rows",
     # Effect policies
     "EffectPolicy",
     "DefaultEffectPolicy",

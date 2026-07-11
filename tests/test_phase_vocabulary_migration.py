@@ -75,6 +75,25 @@ def test_root_exports_phase_vocabulary_and_resolver() -> None:
     assert rt.LEGACY_PHASE_ALIASES == LEGACY_PHASE_ALIASES
 
 
+def test_every_historical_phase_word_resolves_through_the_canon() -> None:
+    """CANON GOVERNANCE (agency c831, runtime-ruled): no word that ever
+    appeared in PHASES may leave the vocabulary without an alias — every
+    historical phase word resolves through canonical_phase without
+    raising, which makes gateway's unknown-verified-phase fallback
+    STRUCTURALLY UNREACHABLE for as long as stamps signed under any past
+    canon can exist. At the pre-release alias-removal edit, this test is
+    revisited DELIBERATELY together with the expects-raise flips (the
+    c830 removal checklist: "no phase string ever leaves the canon
+    without either an alias or a ruling on the fallback") — never
+    silently deleted."""
+    from abstractruntime.identity.tool_policy import canonical_phase
+
+    historical = ("visit", "tasked", "own_time", "resident", "work", "personal", "sleep")
+    for word in historical:
+        resolved = canonical_phase(word)
+        assert resolved in PHASES, (word, resolved)
+
+
 def test_canonical_phase_is_the_stamp_normalizer() -> None:
     """Semantics c700 V5: entity-stamp-v2 must sign the CANONICAL phase
     only — an alias inside the MAC basis is a verify-time chain-break.

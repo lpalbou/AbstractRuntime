@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Core-inventory facade** (gateway c924 ask; the backlog-0059 boundary
+  routes core access through runtime):
+  `integrations.abstractcore.tool_inventory_facade.core_registry_tool_rows()`
+  is the thin pass-through of core's authoritative registry enumeration
+  (`builtin_tool_inventory_as_dicts` — no field added, dropped, or
+  retyped; core's per-call schema isolation holds through the facade,
+  pinned) + `core_inventory_schema_version()` for serve-time drift pins.
+  The gateway's inventory union lights up with zero gateway change.
 - **Declare-beside-execute tool registry + the servable emission**
   (tool-inventory build, commons c864 ask 2 / descriptor contract v6):
   `TOOL_DESCRIPTORS` in `identity/tools.py` is ONE frozen record per

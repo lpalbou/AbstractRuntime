@@ -20,12 +20,14 @@ us human: visit/work/personal/sleep"):
                grant yet — display endpoints resolve it for the matrix;
                the dream pass honors it when it grows tool use.
 
-DEFINITION (semantics c794, the one adjacency named in both files):
-`personal_grant` = the OPERATOR'S AUTHORIZATION for the personal phase's
-loop (may-it-run: mode disabled|timer|until_revoked — a config-object
-section, gateway lane, never a key in this file); distinct from the
-ToolGrant this module resolves (which tools a session holds once a phase
-RUNS). The brake is the personal_grant, the hands are the ToolGrant.
+DEFINITION (semantics c815, laurent-corrected — one concept, ONE name:
+personal IS the grant): the personal phase's ACTIVATION FIELDS
+(mode disabled|timer|until_revoked, expires_at, granted_by, granted_at —
+folded into the config object's phases.personal bucket, gateway lane,
+never keys in this file) are the operator's BRAKE; the ToolGrant this
+module resolves (which tools a session holds once a phase RUNS) is the
+HANDS. Only personal carries activation fields — that asymmetry is the
+design: the one operator-armed phase.
 
 LEGACY SPELLINGS (migration window, dies before release — the lease-shim
 policy): "tasked"→work and "own_time"→personal were the pre-ruling

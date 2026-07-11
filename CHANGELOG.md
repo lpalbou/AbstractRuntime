@@ -49,12 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both-legacy-spellings write warning names the real mechanism instead
   of a possibly-absent "ruled key", and the unreachable malformed-
   section re-check below the candidates loop was removed as dead code.
-- **`personal_grant` definition line** (semantics c794 ruling, ask 2a):
-  the tool_policy module docstring now defines the adjacency in place —
-  `personal_grant` = the operator's authorization for the personal
-  phase's LOOP (config-object section, gateway lane); distinct from the
-  `ToolGrant` this module resolves. The brake is the grant, the hands
-  are the ToolGrant.
+- **Personal-phase activation definition line** (semantics c794, then
+  laurent-corrected c815 — NO separate `personal_grant` section; personal
+  IS the grant): the tool_policy module docstring defines the adjacency
+  in place — the personal phase's activation fields (mode
+  disabled|timer|until_revoked, expires_at, granted_by, granted_at,
+  folded into the config object's `phases.personal` bucket, gateway
+  lane, never keys in this file) are the operator's BRAKE; the
+  `ToolGrant` this module resolves is the HANDS. Only personal carries
+  activation fields — the one operator-armed phase.
 - **Scratchpad seed literal 25→20** (agency's a21304a co-sign residual):
   the VisualFlow compiler's scratchpad seed carried a second-copy `or
   25` fallback, drifted from the ruled default — now 20, though the

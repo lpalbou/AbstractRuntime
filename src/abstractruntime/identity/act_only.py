@@ -76,10 +76,18 @@ from ..core.runtime import EffectOutcome
 
 ACT_ONLY_KEY = "$act_only"
 
-# v1's one act-only tool. Widening this set is a spec change (the attribute
+# The act-only tool set. Widening this set is a spec change (the attribute
 # is declared on the tool contract, core's `act_only` field); an unknown
 # tool in a ref fails loudly rather than guessing a resolver.
-ACT_ONLY_TOOLS = ("diary_read",)
+#
+# diary_list JOINED 2026-07-11 (memory's e-s 233 R3 ruling, adversary-
+# broken claim: a private entry's GIST is part of the private words, and
+# _run_diary_list emits every entry's gist — private included — so one
+# granted diary_list call in a durable visit RESTED private gists in the
+# run store/ledger). Its ref carries tool+args (no entry_id — the listing
+# is re-run fresh at send time), the tool+args generalization memory's
+# ruling named.
+ACT_ONLY_TOOLS = ("diary_read", "diary_list")
 
 
 class ActOnlyResolutionError(RuntimeError):
@@ -87,14 +95,27 @@ class ActOnlyResolutionError(RuntimeError):
 
 
 def make_act_only_content(
-    *, tool: str, entry_id: str, reason: str = "", gist: str = ""
+    *,
+    tool: str,
+    entry_id: str = "",
+    reason: str = "",
+    gist: str = "",
+    args: Optional[Dict[str, Any]] = None,
 ) -> str:
     """The canonical ref JSON for a durable tool message's content.
 
-    `gist` must be the BOUNDED one-line gist the diary door authored —
-    never an excerpt (memory's freeze bound; the door is the author, no
-    caller may slice words into it)."""
-    ref: Dict[str, Any] = {"tool": str(tool), "entry_id": str(entry_id)}
+    Two authoring shapes, one envelope (the tool+args generalization,
+    e-s 233 R3): entry-addressed tools (diary_read) carry `entry_id`;
+    re-run tools (diary_list) carry `args` (JSON-safe, word-free — the
+    listing is re-executed fresh at send time, never stored). `gist` must
+    be the BOUNDED one-line gist the diary door authored — never an
+    excerpt (memory's freeze bound; the door is the author, no caller may
+    slice words into it)."""
+    ref: Dict[str, Any] = {"tool": str(tool)}
+    if entry_id:
+        ref["entry_id"] = str(entry_id)
+    if args is not None:
+        ref["args"] = dict(args)
     if reason:
         ref["reason"] = str(reason)
     if gist:
@@ -120,11 +141,16 @@ def parse_act_only_ref(content: Any) -> Optional[Dict[str, Any]]:
 
 def tombstone_content(ref: Dict[str, Any], failure: str) -> str:
     """The survivable substitution for a ref that cannot resolve — labeled,
-    deterministic, word-free. Names the entry id and failure class (the
-    same facts the old fatal error exposed) so the model AND the operator
-    see honestly that content is missing; the words stay in the book."""
-    entry_id = str(ref.get("entry_id") or "").strip() or "<no entry_id>"
+    deterministic, word-free. Names the address (entry id for read-shaped
+    refs, the word-free args for re-run-shaped refs) and failure class —
+    the same facts the old fatal error exposed — so the model AND the
+    operator see honestly that content is missing; the words stay in the
+    book."""
     tool = str(ref.get("tool") or "").strip() or "<no tool>"
+    entry_id = str(ref.get("entry_id") or "").strip()
+    if not entry_id and isinstance(ref.get("args"), dict):
+        entry_id = json.dumps(ref["args"], ensure_ascii=False, sort_keys=True)
+    entry_id = entry_id or "<no address>"
     return (
         f"[act-only content unavailable: {tool} {entry_id} - {failure}; "
         "the words remain in the book - re-elect the read if you need them]"
@@ -171,6 +197,14 @@ def dereference_act_only_messages(
             content = tombstone_content(ref, str(e))
             if warnings is not None:
                 warnings.append(f"#FALLBACK act-only ref did not resolve: {e}")
+        except Exception as e:  # noqa: BLE001 - adversary find 2 (2026-07-11):
+            # a RAISED resolver/store error (sqlite failure, resolver bug)
+            # must get the same survivability as a structured refusal —
+            # letting it escape fails the LLM effect and terminal-FAILs the
+            # visit, the exact wedge class mechanic 4 exists to prevent.
+            content = tombstone_content(ref, f"resolver error: {e}")
+            if warnings is not None:
+                warnings.append(f"#FALLBACK act-only resolver raised: {e}")
         substituted += 1
         # In-place substitution on the copy: content only; identity untouched.
         out.append({**msg, "content": content})
@@ -246,6 +280,12 @@ def capture_diary_elections(
             "projected_record_id": result.get("projected_record_id"),
         }
         if e.visibility != "private":
+            # PROXIMITY PIN (memory's e-s 233 rider): the visit lane's sheet
+            # builder trusts THIS omission — meta for a private entry must
+            # NEVER grow a gist/text key, or the sheet (which rests in run
+            # vars + pending_reflection.json and rides the reflection
+            # prompt graph-ward) silently re-opens the private-words leak.
+            # test_private_diary_meta_carries_no_words pins it.
             meta["gist"] = str(e.gist or e.text or "").splitlines()[0][:120]
         entries.append(meta)
     return marked, entries, warnings
@@ -256,6 +296,7 @@ def wrap_llm_handler_with_act_only(
     *,
     diary_read_handler: Callable[..., Any],
     diary_write_handler: Optional[Callable[..., Any]] = None,
+    diary_list_resolver: Optional[Callable[[Dict[str, Any]], str]] = None,
 ) -> Callable[..., Any]:
     """Wrap a host LLM_CALL handler with BOTH G1 directions: send-time
     dereference (reads) and result-boundary election capture (writes).
@@ -292,6 +333,22 @@ def wrap_llm_handler_with_act_only(
             return llm_handler(run, effect, default_next_node)
 
         def read_entry(ref: Dict[str, Any]) -> str:
+            # Dispatch by ref shape (e-s 233 R3 generalization): diary_read
+            # dereferences ONE entry through the run's DIARY_READ handler;
+            # diary_list RE-RUNS the listing fresh at send time through the
+            # host-wired resolver (the listing — private gists included for
+            # the entity's own eyes — exists only in the wire copy).
+            tool = str(ref.get("tool") or "")
+            if tool == "diary_list":
+                if diary_list_resolver is None:
+                    raise ActOnlyResolutionError(
+                        "diary_list ref present but no diary_list_resolver is wired "
+                        "on this runtime (host composition gap)"
+                    )
+                listing = str(diary_list_resolver(ref) or "")
+                if not listing.strip():
+                    raise ActOnlyResolutionError("diary_list resolved to no content")
+                return f"[diary_list - resolved from the book at send time]\n{listing}"
             entry_id = str(ref.get("entry_id") or "").strip()
             if not entry_id:
                 raise ActOnlyResolutionError("act-only ref carries no entry_id")
@@ -330,7 +387,11 @@ def wrap_llm_handler_with_act_only(
             and getattr(outcome, "status", None) == "completed"
             and isinstance(outcome.result, dict)
             and isinstance(outcome.result.get("content"), str)
-            and "```diary" in outcome.result["content"]
+            # CASE-INSENSITIVE gate (adversary find 3): the fence parser is
+            # IGNORECASE, so a ```Diary fence missing a lowercase substring
+            # check would skip capture and rest the raw private words in
+            # run vars + ledger while silently losing the book write.
+            and "```diary" in outcome.result["content"].lower()
         ):
             try:
                 marked, entries, capture_warnings = capture_diary_elections(

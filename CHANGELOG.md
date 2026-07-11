@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`diary_list` joins the act-only class** (memory's e-s 233 R3 ruling,
+  adversary-broken claim: a private entry's GIST is part of the private
+  words, and one granted `diary_list` call in a durable visit rested
+  every entry's gist — private included — in the run store/ledger).
+  `ACT_ONLY_TOOLS` is now `("diary_read", "diary_list")`; the ref shape
+  generalizes to tool+args (`make_act_only_content(args=...)`) — a
+  `diary_list` ref carries the word-free request body and the LISTING is
+  re-run fresh against the book at LLM send time
+  (`wrap_llm_handler_with_act_only(diary_list_resolver=...)`, wired by
+  `open_entity_runtime` automatically), so gists exist only in the wire
+  copy, never at rest. Tombstones name tool+args when no entry_id.
+  Companion sheet fix (memory's rider): the visit workflow's ANSWER-node
+  sheet builder act-frames private diary elections ("you kept a private
+  diary entry" — the `private` word named, never the gist), matching the
+  chat lane's sheet-privacy fix; a proximity pin in
+  `capture_diary_elections` guards the private-meta omission both sheets
+  trust. `resolve_entry_id` is now public (gateway's authoring half
+  imports it). NOTE: the gateway/agent halves of the pair (door-side ref
+  authoring for `diary_list` + the react observe accepting re-run-shaped
+  frames) are theirs — until they land, door-lane `diary_list` refuses
+  word-free (strictly better than the leak; the in-process chat lane is
+  unaffected, R5-verified).
+- **Act-only adversarial hardening** (one fable5 adversary, 2 P1 fixed
+  same-pass, both pinned): (1) a RAISED resolver/store error (sqlite
+  failure, resolver bug) now tombstones with `#FALLBACK` like a
+  structured refusal instead of failing the LLM effect and
+  terminal-FAILing the visit (the mechanic-4 wedge class); (2) the
+  write-direction capture gate is case-insensitive — a model emitting
+  ```` ```Diary ```` skipped the lowercase substring gate, resting raw
+  private words in run vars + ledger while silently losing the book
+  write (the fence parser was always IGNORECASE; the gate now matches).
+  Also: act-only resolved-wire headers are defanged by
+  `sanitize_tool_surface` (echo of "[… resolved from the book at send
+  time]" cannot rest a fake resolution frame in digests).
+
 ### Changed
 - **Agent `max_iterations` default is 20** (maintainer ruling 2026-07-11
   17:45, commons c726 — "the workflow decides; if the runtime carries a

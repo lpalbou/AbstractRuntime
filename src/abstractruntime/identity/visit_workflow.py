@@ -511,8 +511,18 @@ def build_visit_workflow(
             for meta in list(turn.get("diary_meta") or []):
                 projected = (meta or {}).get("projected_record_id")
                 if projected:
-                    gist = str(meta.get("gist") or "a private entry")
-                    sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {gist}"])
+                    # G1 at-rest rule, sheet edition (memory's e-s 233 rider):
+                    # the sheet rests in run vars/ledger and rides the
+                    # reflection prompt whose reply persists graph-ward — a
+                    # private entry's line is the act-frame ONLY (the "private"
+                    # word named, never the gist; capture_diary_elections
+                    # already omits private gists from meta — the proximity
+                    # pin in act_only.py guards that omission).
+                    if str(meta.get("visibility") or "") == "private":
+                        sheet.append([str(projected), "you kept a private diary entry"])
+                    else:
+                        gist = str(meta.get("gist") or "(no gist elected)")
+                        sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {gist}"])
             visit["sheet"] = sheet
             visit["last_folded_turn"] = turn["turn_id"]
         return StepPlan(

@@ -212,6 +212,164 @@ def test_wrapper_resolves_through_the_book_and_fails_closed(tmp_path: Path) -> N
         home.close()
 
 
+def test_diary_list_ref_reruns_the_listing_at_send_time(tmp_path: Path) -> None:
+    """e-s 233 R3 (adversary-broken claim, now fixed): diary_list is
+    act-only on the durable lane — its ref carries tool+args and the
+    LISTING is re-run fresh at send time. Private gists appear on the
+    WIRE only (the entity's own book, its own eyes); the durable payload
+    keeps the word-free ref."""
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.tools import _run_diary_list
+
+    home = open_home(_make_home(tmp_path, slug="listling"))
+    try:
+        _write_entry(home.handlers, PRIVATE_WORDS, visibility="private", gist="the bridges fear")
+        _write_entry(home.handlers, "A public thought about rivers.", gist="rivers thought")
+        seen: List[Dict[str, Any]] = []
+
+        def fake_llm(run: Any, effect: Effect, dnn: Any) -> EffectOutcome:
+            seen.append(effect.payload)
+            return EffectOutcome.completed({"content": "reply"})
+
+        wrapped = wrap_llm_handler_with_act_only(
+            fake_llm,
+            diary_read_handler=home.handlers[EffectType.DIARY_READ],
+            diary_list_resolver=lambda ref: _run_diary_list(
+                home.diary, str((ref.get("args") or {}).get("body") or "")
+            ),
+        )
+        original_payload = {
+            "messages": [
+                {"role": "tool", "tool_call_id": "c1",
+                 "content": make_act_only_content(tool="diary_list", args={"body": "5"})},
+            ],
+        }
+        out = wrapped(_Run(), Effect(type=EffectType.LLM_CALL, payload=original_payload), None)
+        assert out.status == "completed"
+        wire = seen[0]["messages"][0]["content"]
+        # The wire carries the fresh listing — both entries, gists included
+        # (in-flight to the entity itself is legal, R2).
+        assert "the bridges fear" in wire and "rivers thought" in wire
+        assert wire.startswith("[diary_list - resolved from the book at send time]")
+        # The durable payload keeps ONLY the ref — no gist words at rest.
+        durable = json.dumps(original_payload)
+        assert "bridges" not in durable and "rivers" not in durable
+        assert parse_act_only_ref(original_payload["messages"][0]["content"])["tool"] == "diary_list"
+
+        # No resolver wired -> loud survivable tombstone, never a leak.
+        unwired = wrap_llm_handler_with_act_only(
+            fake_llm, diary_read_handler=home.handlers[EffectType.DIARY_READ]
+        )
+        seen.clear()
+        out2 = unwired(_Run(), Effect(type=EffectType.LLM_CALL, payload={
+            "messages": [{"role": "tool", "content":
+                          make_act_only_content(tool="diary_list", args={"body": "5"})}],
+        }), None)
+        assert out2.status == "completed"
+        assert any("#FALLBACK" in w and "diary_list" in w
+                   for w in out2.result.get("act_only_warnings", []))
+        assert seen[0]["messages"][0]["content"].startswith("[act-only content unavailable:")
+    finally:
+        home.close()
+
+
+def test_raising_resolver_tombstones_never_kills_the_call(tmp_path: Path) -> None:
+    """Adversary find 2 (2026-07-11): a RAISED resolver/store error (sqlite
+    failure, resolver bug) gets the same survivability as a structured
+    refusal — tombstone + #FALLBACK, never a failed effect (which would
+    terminal-FAIL the visit, the mechanic-4 wedge class)."""
+    from abstractruntime.identity.chat import open_home
+
+    home = open_home(_make_home(tmp_path, slug="raisling"))
+    try:
+        seen: List[Dict[str, Any]] = []
+
+        def fake_llm(run: Any, effect: Effect, dnn: Any) -> EffectOutcome:
+            seen.append(effect.payload)
+            return EffectOutcome.completed({"content": "reply"})
+
+        def exploding_resolver(ref: Dict[str, Any]) -> str:
+            raise RuntimeError("sqlite disk I/O error")
+
+        wrapped = wrap_llm_handler_with_act_only(
+            fake_llm,
+            diary_read_handler=home.handlers[EffectType.DIARY_READ],
+            diary_list_resolver=exploding_resolver,
+        )
+        out = wrapped(_Run(), Effect(type=EffectType.LLM_CALL, payload={
+            "messages": [{"role": "tool", "content":
+                          make_act_only_content(tool="diary_list", args={"body": "5"})}],
+        }), None)
+        assert out.status == "completed"  # the visit survives
+        assert any("#FALLBACK" in w and "disk I/O" in w
+                   for w in out.result.get("act_only_warnings", []))
+        assert seen[0]["messages"][0]["content"].startswith("[act-only content unavailable:")
+    finally:
+        home.close()
+
+
+def test_capture_gate_is_case_insensitive() -> None:
+    """Adversary find 3 (2026-07-11): the fence parser is IGNORECASE but
+    the wrapper's capture gate was a lowercase substring check — a model
+    emitting ```Diary would skip capture and rest the raw private words in
+    run vars + ledger while silently losing the book write."""
+    calls: List[Dict[str, Any]] = []
+
+    class _Out:
+        status = "completed"
+        result = {"entry_id": "diary_ab12cd34", "projected_record_id": None, "warnings": []}
+
+    def fake_diary_write(run: Any, effect: Effect, dnn: Any) -> Any:
+        calls.append(effect.payload)
+        return _Out()
+
+    def fake_llm(run: Any, effect: Effect, dnn: Any) -> EffectOutcome:
+        return EffectOutcome.completed({
+            "content": "kept.\n```Diary kind=note visibility=private\n" + PRIVATE_WORDS + "\n```",
+        })
+
+    wrapped = wrap_llm_handler_with_act_only(
+        fake_llm,
+        diary_read_handler=lambda *a: None,
+        diary_write_handler=fake_diary_write,
+    )
+    out = wrapped(_Run(), Effect(type=EffectType.LLM_CALL, payload={
+        "messages": [{"role": "user", "content": "keep a note"}], "turn_id": "t-case",
+    }), None)
+    assert out.status == "completed"
+    assert calls, "the uppercase fence must still reach the book"
+    assert PRIVATE_WORDS not in str(out.result.get("content") or "")
+
+
+def test_private_diary_meta_carries_no_words() -> None:
+    """The proximity pin (memory's e-s 233 rider): capture metadata for a
+    PRIVATE entry must never grow gist/text keys — the visit sheet trusts
+    this omission (it rests in run vars + pending_reflection.json and
+    rides the reflection prompt graph-ward)."""
+    calls: List[Dict[str, Any]] = []
+
+    class _Out:
+        status = "completed"
+        result = {"entry_id": "diary_ab12cd34", "projected_record_id": "ex:p1", "warnings": []}
+
+    def fake_diary_write(run: Any, effect: Effect, dnn: Any) -> Any:
+        calls.append(effect.payload)
+        return _Out()
+
+    from abstractruntime.identity.act_only import capture_diary_elections
+
+    marked, entries, _ = capture_diary_elections(
+        "kept.\n```diary kind=note visibility=private\ngist: secret gist\n" + PRIVATE_WORDS + "\n```",
+        run=_Run(), turn_id="t-1", diary_write_handler=fake_diary_write,
+    )
+    assert PRIVATE_WORDS not in marked
+    assert len(entries) == 1
+    meta_str = json.dumps(entries[0])
+    assert "gist" not in entries[0] and "text" not in entries[0]
+    assert "secret gist" not in meta_str and PRIVATE_WORDS not in meta_str
+    assert entries[0]["visibility"] == "private"
+
+
 def test_ledger_keeps_the_ref_while_the_wire_carries_the_words(tmp_path: Path) -> None:
     """End-to-end through a per-entity Runtime (auto-wrapped by
     open_entity_runtime): the ledgered LLM_CALL payload and run store carry

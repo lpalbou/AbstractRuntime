@@ -161,6 +161,11 @@ def sanitize_tool_surface(text: str, cap: int = 120) -> str:
     t = t.replace("```", "'''")
     t = t.replace("[used tool:", "[used-tool:")
     t = t.replace("TOOL RESULTS", "TOOL-RESULTS")
+    # Act-only resolved-wire headers (adversary find 5, 2026-07-11): a model
+    # echoing "[diary_read … resolved from the book at send time]" into its
+    # reply would rest a fake resolution frame in digests and re-surface it
+    # via search — defang like the driver's own markers.
+    t = t.replace(" - resolved from the book at send time]", " - resolved-frame]")
     if cap and len(t) > cap:
         t = t[:cap] + "…"
     return t
@@ -682,6 +687,13 @@ def _run_diary_list(diary_store: Any, body: str) -> str:
 
 
 _HEX_TAIL_RE = re.compile(r"[0-9a-f]{8,}$", re.IGNORECASE)
+
+
+def resolve_entry_id(diary_store: Any, requested: str) -> Tuple[Optional[str], str]:
+    """PUBLIC alias of `_resolve_entry_id` (gateway's standing ask — its
+    visit-lane act-only authoring imports the resolver; a public name keeps
+    that import honest instead of underscore-reaching)."""
+    return _resolve_entry_id(diary_store, requested)
 
 
 def _resolve_entry_id(diary_store: Any, requested: str) -> Tuple[Optional[str], str]:

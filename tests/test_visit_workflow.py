@@ -177,6 +177,35 @@ def test_full_visit_lifecycle_turns_elections_reflection(tmp_path: Path) -> None
         ert.close()
 
 
+def test_private_diary_election_sheets_as_act_frame_only(tmp_path: Path) -> None:
+    """G1 sheet edition (memory's e-s 233 rider, visit lane): a PRIVATE
+    diary election's sheet line is the act-frame — the sheet rests in run
+    vars (run store + ledger) and rides the reflection prompt graph-ward,
+    so a gist there would be private words at rest."""
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLMHandler([
+        "Kept.\n```diary kind=note visibility=private\ngist: secret sheet gist\nThe private words themselves.\n```",
+    ])
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-priv")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "Keep a private note.", "speaker": "person:albou"},
+            max_steps=100,
+        )
+        sheet = list((state.vars.get("_visit") or {}).get("sheet") or [])
+        diary_lines = [desc for _rid, desc in sheet if desc.startswith("you kept")]
+        assert diary_lines == ["you kept a private diary entry"]
+        # Neither the gist nor the words rest anywhere in run vars.
+        dumped = json.dumps(state.vars)
+        assert "secret sheet gist" not in dumped
+        assert "The private words themselves" not in dumped
+    finally:
+        ert.close()
+
+
 def test_refused_reflection_election_skips_loudly_never_kills_the_close(tmp_path: Path) -> None:
     """Gateway c709 interim (the fdf01e0 rule class, agency's step-10 bug):
     a door REFUSAL of one reflection election (live case: interest FORM

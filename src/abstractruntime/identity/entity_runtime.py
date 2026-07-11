@@ -166,10 +166,23 @@ def open_entity_runtime(
     from .act_only import wrap_llm_handler_with_act_only
 
     if _ET.LLM_CALL in handlers and _ET.DIARY_READ in handlers:
+
+        def _list_fresh(ref: dict) -> str:
+            # diary_list act-only resolution (e-s 233 R3): re-run the
+            # listing against the BOOK at send time — the listing (gists,
+            # private included, for the entity's own eyes) exists only in
+            # the wire copy, never at rest. `args.body` carries the
+            # original word-free request body (a limit number).
+            from .tools import _run_diary_list
+
+            body = str(((ref.get("args") or {}) if isinstance(ref.get("args"), dict) else {}).get("body") or "")
+            return _run_diary_list(home.diary, body)
+
         handlers[_ET.LLM_CALL] = wrap_llm_handler_with_act_only(
             handlers[_ET.LLM_CALL],
             diary_read_handler=handlers[_ET.DIARY_READ],
             diary_write_handler=handlers.get(_ET.DIARY_WRITE),
+            diary_list_resolver=_list_fresh,
         )
 
     runtime = Runtime(

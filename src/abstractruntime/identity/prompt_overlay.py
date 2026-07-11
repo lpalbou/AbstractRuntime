@@ -44,7 +44,7 @@ OVERLAY_FILENAME = "system_prompt.yaml"
 # key -> which built-in text it replaces (or where it lands).
 # conversation: CONTRACT_PARAGRAPH (chat.py)
 # visit:        VISIT_OWN_TIME_PARAGRAPH (chat.py; visit-phase sessions)
-# own_time:     OWN_TIME_CONTRACT (life.py; resident sessions)
+# own_time:     OWN_TIME_CONTRACT (life.py; own-time sessions)
 # operator:     appended LAST as attributed standing instructions
 OVERLAY_KEYS = ("conversation", "visit", "own_time", "operator")
 
@@ -62,7 +62,7 @@ _HEADER_COMMENT = """# Operator prompt overlay for this entity (system_prompt.ya
 #
 #   conversation: the conversation contract (memories framing, diary offer)
 #   visit:        the visit-phase life paragraph (own time continues)
-#   own_time:     the own-time contract (resident/loop sessions)
+#   own_time:     the own-time contract (own-time/loop sessions)
 #   operator:     standing operator instructions, appended last
 #
 # The identity prelude and the tools contract are NOT here by design:

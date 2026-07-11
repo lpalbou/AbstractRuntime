@@ -5,7 +5,7 @@ REWRITTEN. Ownership rules under test:
 
 - missing file  = built-in defaults, byte-identical composition;
 - `conversation` / `visit` REPLACE their built-in paragraphs;
-- `own_time` replaces OWN_TIME_CONTRACT on resident sessions (life factory);
+- `own_time` replaces OWN_TIME_CONTRACT on own-time sessions (life factory);
 - `operator` appends LAST, attributed ("from your operator") — words in the
   head must never pretend to be the entity's own;
 - the identity prelude and the tools contract are NOT overlay-editable:
@@ -175,8 +175,8 @@ class TestComposeSystemBase:
         assert "VISIT-REWRITE" in base and VISIT_OWN_TIME_PARAGRAPH not in base
         assert base.endswith("STANDING INSTRUCTIONS FROM YOUR OPERATOR:\nOP-NOTE")
 
-    def test_resident_phase_skips_visit_paragraph(self):
-        base = compose_system_base("<prelude/>", phase="resident", overlay={"visit": "VISIT-REWRITE"})
+    def test_own_time_phase_skips_visit_paragraph(self):
+        base = compose_system_base("<prelude/>", phase="own_time", overlay={"visit": "VISIT-REWRITE"})
         assert "VISIT-REWRITE" not in base
         assert VISIT_OWN_TIME_PARAGRAPH not in base
 
@@ -184,7 +184,7 @@ class TestComposeSystemBase:
         """Operator-last must hold in EVERY phase (adversary finding: the
         old life-factory append buried the attributed block mid-head)."""
         base = compose_system_base(
-            "<prelude/>", phase="resident",
+            "<prelude/>", phase="own_time",
             overlay={"operator": "OP-NOTE"},
             own_time_text="OWN-TIME-TEXT",
         )
@@ -273,7 +273,7 @@ class TestSessionComposition:
         finally:
             ert.close()
 
-    def test_own_time_overlay_reaches_resident_sessions(self, castor_home, monkeypatch):
+    def test_own_time_overlay_reaches_own_time_sessions(self, castor_home, monkeypatch):
         """The life factory swaps OWN_TIME_CONTRACT for the overlay's text."""
         from abstractruntime.identity.life import OWN_TIME_CONTRACT, build_session_factory
 
@@ -296,7 +296,7 @@ class TestSessionComposition:
         assert OWN_TIME_CONTRACT not in session.system_base
         session.home.close()
 
-    def test_resident_operator_block_stays_last_after_own_time(self, castor_home, monkeypatch):
+    def test_own_time_operator_block_stays_last_after_own_time(self, castor_home, monkeypatch):
         """The re-compose fix: own-time contract BEFORE the operator block
         (the old append put the attributed block mid-head)."""
         from abstractruntime.identity.life import OWN_TIME_CONTRACT, build_session_factory

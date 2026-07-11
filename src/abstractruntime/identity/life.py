@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .chat import ChatSession, ChatHome
+from .tool_policy import PHASE_OWN_TIME
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
 # environment and the affordances that exist; it does not tell the entity
@@ -1267,7 +1268,7 @@ def build_session_factory(
             shelf_size=shelf_size,
             enable_tools=True,
             enable_workspace=True,
-            phase="resident",  # the 24/7 grant: tool_policy.yaml's word, not the visit's
+            phase=PHASE_OWN_TIME,  # the 24/7 grant: tool_policy.yaml's word, not the visit's
             model_info={"provider": provider, "model": model},
             out=out,
         )

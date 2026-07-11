@@ -648,12 +648,17 @@ class ChatSession:
         # observer badge). Stamped into episode attributes.
         self.model_info = {k: str(v) for k, v in (model_info or {}).items() if v}
         # PER-PHASE TOOL GRANT (maintainer's two-tier ruling, 2026-07-08;
-        # defaults re-ruled 2026-07-11): the home's tool_policy.yaml is the
-        # operator's word on which tools this phase of life holds; missing
-        # file = the ruled defaults (visit + resident: the FULL set —
-        # hands by default; sleep: read-only exploration minus the diary).
-        # `enable_workspace` no longer subtracts from defaults.
-        self.phase = str(phase or "visit").strip().lower()
+        # defaults re-ruled 2026-07-11 + Q1 c684): the home's
+        # tool_policy.yaml is the operator's word on which tools this phase
+        # of life holds; missing file = the ruled defaults (visit + tasked
+        # + own_time: the FULL set — hands by default; sleep: read-only
+        # exploration minus the diary). `enable_workspace` no longer
+        # subtracts from defaults. The stored phase is CANONICAL (a legacy
+        # "resident" arg normalizes here) so `session.phase == PHASE_*`
+        # comparisons never miss on a legacy spelling (adversary find 2).
+        from .tool_policy import canonical_phase
+
+        self.phase = canonical_phase(str(phase or "visit"))
         grant = resolve_tool_grant(
             home.home_dir, self.phase, enable_workspace=bool(enable_workspace)
         )

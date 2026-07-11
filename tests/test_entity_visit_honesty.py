@@ -127,7 +127,7 @@ def test_visit_contract_states_own_time_continues(tmp_path: Path) -> None:
 
 def test_resident_phase_does_not_carry_the_visit_paragraph(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    s = _session(home_dir, [], phase="resident")
+    s = _session(home_dir, [], phase="own_time")
     try:
         # Own time describes itself via OWN_TIME_CONTRACT (life.py); the
         # visit paragraph ("paused right now") would be false there.

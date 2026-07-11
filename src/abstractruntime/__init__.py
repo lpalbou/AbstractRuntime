@@ -69,6 +69,19 @@ from .storage.artifacts import (
     compute_artifact_id,
 )
 from .identity.fingerprint import ActorFingerprint
+from .identity.tool_policy import (
+    LEGACY_PHASE_ALIASES,
+    PHASES,
+    PHASE_OWN_TIME,
+    PHASE_SLEEP,
+    PHASE_TASKED,
+    PHASE_VISIT,
+    ToolGrant,
+    canonical_phase,
+    read_policy_file,
+    resolve_tool_grant,
+    write_policy_file,
+)
 from .scheduler import (
     WorkflowRegistry,
     Scheduler,
@@ -166,6 +179,20 @@ __all__ = [
     "compute_artifact_id",
     # Identity
     "ActorFingerprint",
+    # Entity life phases + per-phase tool grants (config-object consensus,
+    # F7/N7: the phase SET is runtime's — the door imports from the root,
+    # never a second copy; legacy aliases die before release)
+    "LEGACY_PHASE_ALIASES",
+    "PHASES",
+    "PHASE_OWN_TIME",
+    "PHASE_SLEEP",
+    "PHASE_TASKED",
+    "PHASE_VISIT",
+    "ToolGrant",
+    "canonical_phase",
+    "read_policy_file",
+    "resolve_tool_grant",
+    "write_policy_file",
     # Effect policies
     "EffectPolicy",
     "DefaultEffectPolicy",

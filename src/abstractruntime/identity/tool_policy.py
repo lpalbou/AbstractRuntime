@@ -4,21 +4,35 @@ The maintainer's two-tier ruling (a2a 0007, restated 2026-07-08): tier-1
 cognition tools (read-only — the six TIER1_TOOL_NAMES in tools.py:
 web_search, fetch_url, diary_list, diary_read, read_memory, search_memory)
 are safe for a persistent agent 24/7; the workspace tools write inside the
-home's walls. Grants are per PHASE of life:
+home's walls. Grants are per PHASE of life — the FOUR ruled keys
+(semantics c607, config-object consensus 2026-07-11):
 
-- "visit"    — a summoned conversation (chat driver, gateway chat drawer)
-- "resident" — the entity's own time (the 24/7 life loop)
-- "sleep"    — consolidation passes (no EXECUTION path consumes this grant
-               today — display endpoints resolve it for the matrix; the
-               dream pass honors it when it grows tool use)
+- "visit"    — turns driven by a verified human/operator visitor
+- "tasked"   — pursuing operator-GIVEN tasks; ticks until done, then sleeps
+- "own_time" — no given tasks: self-directed exploration (the life loop).
+               OFF BY DEFAULT at the door (enabled flag + durable grant —
+               gateway lane); the TOOL default here is the full set per
+               laurent's Q1 ruling (c684): the brake is the grant, never
+               handlessness.
+- "sleep"    — consolidation/dream window. FIRST-CLASS and operator-
+               widenable (laurent c653); no EXECUTION path consumes this
+               grant yet — display endpoints resolve it for the matrix;
+               the dream pass honors it when it grows tool use.
+
+LEGACY SPELLING (migration window, dies before release — the lease-shim
+policy): "resident" was own_time's pre-consensus name. Both resolve paths
+accept it LOUDLY (arg + file section map to own_time with a #FALLBACK
+note; writes normalize the key on disk) so no home file or caller is
+bricked mid-migration and an operator's narrow resident grant is NEVER
+silently widened to the own_time default (adversary F7, gateway-verified).
 
 The policy lives IN THE HOME (`<home>/tool_policy.yaml`) — operator config
 beside spark.yaml, never a code constant. Missing file = the defaults
-below — THE MAINTAINER'S RULED DEFAULTS (2026-07-11 12:37, set from the
-workspace matrix): visit and resident hold the FULL set (an entity has its
-hands by default; narrowing is the operator's explicit act, via the matrix
-or this file); sleep holds the read-only exploration set MINUS the diary —
-his rationale verbatim: "the entity can't act/change the environment while
+below — THE MAINTAINER'S RULED DEFAULTS (12:37 matrix ruling + Q1 c684):
+visit, tasked and own_time hold the FULL set (an entity has its hands by
+default; narrowing is the operator's explicit act, via the matrix or this
+file); sleep holds the read-only exploration set MINUS the diary — his
+rationale verbatim: "the entity can't act/change the environment while
 sleeping, but it can recall or search information; it won't be in its
 diary, but i believe it will be somewhere in the runtime ledger...
 (unconscious)". The sleeping mind explores (web, memory, its own files)
@@ -33,7 +47,7 @@ be an explicit ZERO grant, not the default):
       tiers: [tier1]              # tier names
       add: [write_file]           # extra tool names on top of the tiers
       remove: [web_search]        # denied tool names (final word)
-    resident:
+    own_time:
       tools: [diary_list, diary_read, read_memory, list_files, read_file]
     sleep:
       tools: [web_search, fetch_url, read_memory, search_memory, read_file, list_files]
@@ -41,6 +55,7 @@ be an explicit ZERO grant, not the default):
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -49,17 +64,35 @@ from .tools import TIER1_TOOL_NAMES, WORKSPACE_TOOL_NAMES
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "LEGACY_PHASE_ALIASES",
     "PHASES",
+    "PHASE_OWN_TIME",
+    "PHASE_SLEEP",
+    "PHASE_TASKED",
+    "PHASE_VISIT",
     "POLICY_FILENAME",
     "SLEEP_DEFAULT_TOOL_NAMES",
     "TIERS",
     "ToolGrant",
+    "canonical_phase",
     "read_policy_file",
     "resolve_tool_grant",
     "write_policy_file",
 ]
 
-PHASES = ("visit", "resident", "sleep")
+# The four ruled phase keys (semantics c607) — named constants so callers
+# never re-type the strings (the two-vocabularies drift that motivated F7).
+PHASE_VISIT = "visit"
+PHASE_TASKED = "tasked"
+PHASE_OWN_TIME = "own_time"
+PHASE_SLEEP = "sleep"
+PHASES = (PHASE_VISIT, PHASE_TASKED, PHASE_OWN_TIME, PHASE_SLEEP)
+
+# Migration-window aliases (old spelling -> ruled key). DIES BEFORE RELEASE:
+# once gateway's literals flip and existing home files have been written
+# once (writes normalize keys), this map empties and the old spelling
+# becomes unknown again — the removal flips the alias test to expects-raise.
+LEGACY_PHASE_ALIASES: Dict[str, str] = {"resident": PHASE_OWN_TIME}
 TIERS: Dict[str, Tuple[str, ...]] = {
     "tier1": TIER1_TOOL_NAMES,
     "workspace": WORKSPACE_TOOL_NAMES,
@@ -104,15 +137,50 @@ class ToolGrant:
 
 
 def _default_tools(phase: str, *, enable_workspace: bool) -> Tuple[str, ...]:
-    # MAINTAINER'S RULED DEFAULTS (2026-07-11 12:37): visit and resident
-    # hold the FULL set — an entity has its hands by default; narrowing is
-    # the operator's explicit act (matrix / policy file). The historical
-    # per-session `enable_workspace` gate no longer SUBTRACTS from the
-    # default visit grant (the kwarg stays accepted: the policy file and
-    # explicit grants are the authority, and callers still pass it).
-    if phase == "sleep":
+    # MAINTAINER'S RULED DEFAULTS (12:37 matrix ruling; own_time confirmed
+    # full-set by Q1, c684): visit, tasked and own_time hold the FULL set —
+    # an entity has its hands by default; narrowing is the operator's
+    # explicit act (matrix / policy file). The historical per-session
+    # `enable_workspace` gate no longer SUBTRACTS from the default visit
+    # grant (the kwarg stays accepted: the policy file and explicit grants
+    # are the authority, and callers still pass it).
+    if phase == PHASE_SLEEP:
         return SLEEP_DEFAULT_TOOL_NAMES
     return TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+
+
+def _normalize_phase(phase: str, notes: Optional[List[str]] = None, *, context: str) -> str:
+    """One gate for phase spellings: ruled keys pass, legacy aliases map
+    LOUDLY (note appended when a notes list is given), anything else raises
+    — refusing code owns the set."""
+    # Lowercase on the ARG axis so the two entry points agree (adversary
+    # find 9: ChatSession lowercases, the direct resolver did not — a
+    # "Resident" arg aliased through one door and raised through the
+    # other). FILE keys stay exact-match: YAML is case-sensitive.
+    p = str(phase or "").strip().lower()
+    if p in PHASES:
+        return p
+    if p in LEGACY_PHASE_ALIASES:
+        target = LEGACY_PHASE_ALIASES[p]
+        if notes is not None:
+            notes.append(
+                f"#FALLBACK legacy phase spelling {p!r} ({context}) maps to "
+                f"{target!r}; the alias dies before release"
+            )
+        return target
+    raise ValueError(
+        f"unknown phase {p!r} (known: {list(PHASES)}; "
+        f"legacy aliases: {sorted(LEGACY_PHASE_ALIASES)})"
+    )
+
+
+def canonical_phase(phase: str) -> str:
+    """The ruled spelling for `phase`, or a raise for unknowns — the PUBLIC
+    normalizer for consumers that persist or SIGN phase strings (semantics
+    c700 V5: entity-stamp-v2 must sign the canonical phase only; an alias
+    inside the MAC basis is a verify-time chain-break). One gate, no second
+    copy of the alias map."""
+    return _normalize_phase(phase, context="canonical_phase")
 
 
 def read_policy_file(home_dir: Path) -> Optional[Dict[str, Any]]:
@@ -142,22 +210,67 @@ def write_policy_file(home_dir: Path, policy: Dict[str, Optional[Sequence[str]]]
 
     Unknown phases and unknown tool names refuse loudly — a policy that
     silently grants nothing is how an entity loses its hands without
-    anyone deciding that."""
+    anyone deciding that. Legacy phase spellings (LEGACY_PHASE_ALIASES) are
+    accepted with a warning and NORMALIZED ON WRITE: the file always lands
+    with the ruled keys, so home files converge to the new vocabulary
+    without an operator act (N7 migration contract, c672)."""
     import yaml
 
     existing = read_policy_file(home_dir)
     merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+
+    # Warnings are collected and emitted only after the payload validates:
+    # a write that raises on an unknown tool name must not have already
+    # claimed a normalization that never landed (adversary find 8).
+    pending_warnings: List[str] = []
+
+    # Migrate legacy keys already AT REST in the file (e.g. a pre-rename
+    # `resident:` section) so any write converges the whole file. An
+    # explicit ruled key wins over its legacy twin when both are present.
+    for legacy, target in LEGACY_PHASE_ALIASES.items():
+        if legacy in merged:
+            legacy_spec = merged.pop(legacy)
+            if target in merged:
+                pending_warnings.append(
+                    f"tool_policy.yaml carries both {legacy!r} and {target!r}; "
+                    f"the ruled key {target!r} wins and the legacy section is dropped"
+                )
+            else:
+                merged[target] = legacy_spec
+                pending_warnings.append(
+                    f"#FALLBACK tool_policy.yaml key {legacy!r} normalized to "
+                    f"{target!r} on write; the alias dies before release"
+                )
+
+    # The ruled-key-wins precedence must hold WITHIN one payload too
+    # (adversary find 1): {"own_time": [...], "resident": [...]} in either
+    # order must land the explicit ruled key's word, never the legacy
+    # twin's — insertion order must not decide.
+    ruled_in_payload = {str(p) for p in (policy or {}) if str(p) in PHASES}
     for phase, tools in (policy or {}).items():
-        if phase not in PHASES:
-            raise ValueError(f"unknown phase {phase!r} (known: {list(PHASES)})")
+        canonical = _normalize_phase(phase, context="write_policy_file")
+        if canonical != phase:
+            if canonical in ruled_in_payload:
+                pending_warnings.append(
+                    f"write names both {phase!r} and {canonical!r}; the ruled key "
+                    f"{canonical!r} wins and the legacy-spelled entry is ignored"
+                )
+                continue
+            pending_warnings.append(
+                f"#FALLBACK legacy phase spelling {phase!r} written as "
+                f"{canonical!r}; the alias dies before release"
+            )
         if tools is None:
-            merged.pop(phase, None)  # revert this phase to the defaults
+            merged.pop(canonical, None)  # revert this phase to the defaults
             continue
         names = [str(t).strip() for t in (tools or []) if str(t).strip()]
         unknown = sorted(set(names) - set(ALL_TOOL_NAMES))
         if unknown:
             raise ValueError(f"unknown tool name(s) {unknown} (known: {list(ALL_TOOL_NAMES)})")
-        merged[phase] = {"tools": names}
+        merged[canonical] = {"tools": names}
+
+    for msg in pending_warnings:
+        warnings.warn(msg, stacklevel=2)
     path = Path(home_dir) / POLICY_FILENAME
     if not merged:
         path.unlink(missing_ok=True)
@@ -175,30 +288,75 @@ def resolve_tool_grant(
 ) -> ToolGrant:
     """The tools an entity holds in `phase`, per the home's policy file.
 
-    Missing file → THE RULED DEFAULTS (maintainer 2026-07-11: visit +
-    resident = the full set, sleep = read-only exploration minus the
-    diary). File present → the file is the operator's word for the phases
-    it NAMES: `tools` (exact list) wins over `tiers`+`add`−`remove`;
-    unnamed phases follow the defaults. Unknown names are dropped WITH a
-    note, never silently."""
-    if phase not in PHASES:
-        raise ValueError(f"unknown phase {phase!r} (known: {list(PHASES)})")
+    Missing file → THE RULED DEFAULTS (12:37 matrix ruling + Q1 c684:
+    visit + tasked + own_time = the full set, sleep = read-only
+    exploration minus the diary). File present → the file is the
+    operator's word for the phases it NAMES: `tools` (exact list) wins
+    over `tiers`+`add`−`remove`; unnamed phases follow the defaults.
+    Unknown names are dropped WITH a note, never silently.
+
+    Legacy spellings map loudly on BOTH axes (migration window): a caller
+    passing phase="resident" resolves own_time's grant with a #FALLBACK
+    note, and a policy FILE still carrying a `resident:` section is
+    honored under own_time with a note naming the file — the operator's
+    narrow grant survives the rename, never a silent widen (F7)."""
     notes: List[str] = []
+    phase = _normalize_phase(phase, notes, context="resolve_tool_grant arg")
     try:
         raw = read_policy_file(home_dir)
     except Exception as e:  # noqa: BLE001 - a broken file must not block a summon
         return ToolGrant(
             tools=_default_tools(phase, enable_workspace=enable_workspace),
             source="default",
-            notes=(f"#FALLBACK tool_policy.yaml unreadable ({e}); phase {phase!r} runs on defaults",),
+            notes=tuple(notes)
+            + (f"#FALLBACK tool_policy.yaml unreadable ({e}); phase {phase!r} runs on defaults",),
         )
-    if raw is None or phase not in raw or not isinstance(raw.get(phase), dict):
+
+    # FILE-SECTION SHIM: the ruled key wins; a legacy-keyed section (an
+    # operator's pre-rename word, e.g. `resident:`) is honored for its
+    # target phase with a note naming the file. Also surface any unknown
+    # keys the file carries — a typo'd section silently granting nothing
+    # is the same class of quiet loss.
+    section_key: Optional[str] = None
+    if isinstance(raw, dict):
+        # The ruled key wins WHEN WELL-FORMED; a malformed ruled section
+        # (e.g. `own_time:` left null by a half-finished hand edit) must
+        # not shadow an intact narrow legacy section — that would widen
+        # the operator's last intact word to the full default (adversary
+        # find 4, the F7 class again).
+        if phase in raw and isinstance(raw.get(phase), dict):
+            section_key = phase
+        else:
+            for legacy, target in LEGACY_PHASE_ALIASES.items():
+                if target == phase and isinstance(raw.get(legacy), dict):
+                    section_key = legacy
+                    notes.append(
+                        f"#FALLBACK tool_policy.yaml at {Path(home_dir) / POLICY_FILENAME} "
+                        f"names legacy phase {legacy!r}; honored as {phase!r} — "
+                        "rewrite the key (any policy save normalizes it)"
+                    )
+                    if phase in raw:
+                        notes.append(
+                            f"#FALLBACK tool_policy.yaml names phase {phase!r} but its spec "
+                            f"is not a mapping; the intact legacy {legacy!r} section applies"
+                        )
+                    break
+            if section_key is None and phase in raw:
+                section_key = phase  # malformed, no intact legacy twin
+        known_keys = set(PHASES) | set(LEGACY_PHASE_ALIASES)
+        unknown_keys = sorted(str(k) for k in raw if k not in known_keys)
+        if unknown_keys:
+            notes.append(
+                f"#FALLBACK tool_policy.yaml names unknown phase key(s) {unknown_keys}; ignored"
+            )
+
+    if raw is None or section_key is None or not isinstance(raw.get(section_key), dict):
         # A phase the file NAMES but malforms (e.g. `visit:` left null in a
         # hand edit) falls to defaults LOUDLY — under the ruled full-set
         # defaults, silence here would be a silent WIDEN, not a narrow.
-        if raw is not None and phase in raw:
+        if raw is not None and section_key is not None:
             notes.append(
-                f"#FALLBACK tool_policy.yaml names phase {phase!r} but its spec is not a "
+                f"#FALLBACK tool_policy.yaml names phase {section_key!r} but its spec is not a "
                 "mapping; the ruled defaults apply"
             )
         return ToolGrant(
@@ -206,7 +364,7 @@ def resolve_tool_grant(
             source="default",
             notes=tuple(notes),
         )
-    spec = raw[phase]
+    spec = raw[section_key]
     known = set(ALL_TOOL_NAMES)
 
     def _names(value: Any) -> List[str]:
@@ -217,6 +375,14 @@ def resolve_tool_grant(
     if isinstance(spec.get("tools"), (list, tuple)):
         wanted = _names(spec.get("tools"))
     else:
+        if "tools" in spec:
+            # A scalar `tools: diary_list` silently resolving to deny-all
+            # is "the entity loses its hands without anyone deciding"
+            # (adversary find 7) — fall through to tiers, but say so.
+            notes.append(
+                f"#FALLBACK tool_policy.yaml phase {section_key!r} has a non-list "
+                "`tools` value; ignored (use a YAML list)"
+            )
         wanted = []
         for tier in _names(spec.get("tiers")):
             if tier in TIERS:

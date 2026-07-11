@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Phase vocabulary flips to the four ruled keys** (config-object
+  consensus F7/N7, semantics c607, laurent Q1 c684): `PHASES` is now
+  `("visit", "tasked", "own_time", "sleep")` with named constants
+  `PHASE_VISIT`/`PHASE_TASKED`/`PHASE_OWN_TIME`/`PHASE_SLEEP`, all
+  root-exported from `abstractruntime` alongside `ToolGrant`,
+  `resolve_tool_grant`, `read_policy_file`, `write_policy_file` — the
+  gateway door imports the ONE phase set from the root instead of
+  reaching into `identity.tool_policy` (no second copy; the
+  diary_type-clamp lesson). Ruled defaults encoded: visit + tasked +
+  own_time hold the full tool set ("hands by default"; own_time's brake
+  is the door's enabled flag + durable grant, never handlessness); sleep
+  keeps read-only-exploration-minus-diary. The own-time loop caller
+  (`life.py`) flips to `PHASE_OWN_TIME` in the same change — no
+  intermediate state where the old spelling raises (N7 atomicity).
+- **Legacy "resident" spelling: loud migration window, dies before
+  release** (the lease-shim policy): `LEGACY_PHASE_ALIASES` maps
+  `resident → own_time` on BOTH axes — a caller ARG resolves own_time's
+  grant with a `#FALLBACK` note (gateway's pre-flip literals keep
+  working, no lockstep deploy), and a policy FILE still carrying a
+  `resident:` section is honored under own_time with a note naming the
+  file path, so an operator's narrow pre-rename grant SURVIVES the
+  rename (never the silent widen adversary F7 traced).
+  `write_policy_file` normalizes legacy keys on disk (any save converges
+  the file to the ruled vocabulary, with a warning); an explicit
+  `own_time:` section wins over its legacy twin; unknown phase ARGS
+  still raise; unknown FILE keys now warn in grant notes (a typo'd
+  section silently granting nothing is the same class of quiet loss).
+  Pinned by `tests/test_phase_vocabulary_migration.py`, including the
+  N8 negative (a narrow `tasked:` section must be CONSULTED —
+  `source=="policy-file"` — never a permissive fallthrough that happens
+  to equal the default). `canonical_phase` is the public normalizer for
+  consumers that persist or SIGN phase strings (semantics c700 V5: the
+  stamp must sign the canonical phase only — an alias inside the MAC
+  basis is a verify-time chain-break).
+- **Adversarial review hardening** (one fable5 adversary attacked the
+  flip before commit; 3 P1 + 4 P2 fixed, all pinned): (1) a single write
+  payload naming BOTH spellings now lands the explicit ruled key's word
+  in either insertion order (was last-wins by dict order — the file-axis
+  precedence held while the write axis violated it); (2)
+  `ChatSession.phase` stores the CANONICAL phase (a legacy "resident"
+  arg normalized the grant but left the attribute stale — a
+  `session.phase == PHASE_OWN_TIME` comparison would silently miss);
+  (3) the last off-list `phase="resident"` test call site flipped;
+  (4) a malformed ruled section (null `own_time:` from a half-finished
+  hand edit) no longer shadows an intact narrow legacy section — the
+  operator's last intact word holds instead of widening to the full
+  default; (5) a scalar `tools:` value notes its fallthrough instead of
+  silently resolving deny-all; (6) write warnings emit only after
+  payload validation (no claimed normalization that never landed);
+  (7) the arg axis lowercases in one place so both entry points agree
+  on "Resident".
+
 ### Fixed
 - **JSON run store cache is LRU-bounded** (flow's 2026-07-11 P0 incident
   review, runtime-lane follow-up): `JsonFileRunStore._run_cache` retained

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A refused reflection election no longer kills the visit close**
+  (gateway c709 interim, agency's step-10 live bug — the fdf01e0 rule
+  class): the visit workflow's staged APPLY loop (summary → interests →
+  diary → feelings) opts each staged effect into the new
+  `payload._absorb_failure` mechanism — the runtime's tick loop converts
+  a FINAL failed outcome (after effect-policy retries) into a loud
+  result (`{"ok": false, "absorbed_failure": <error>}` at the effect's
+  `result_key`) and CONTINUES to `next_node` instead of terminal-failing
+  the run; the ledger StepRecord still records the failure honestly.
+  The stager surfaces each absorbed refusal as a `#FALLBACK` notice in
+  `reflection_notices`. Live case: an interest election at close was
+  refused by the door (entity-reflection act under a workplace stamp —
+  the channel collision agency's hardened gate caught), which
+  terminal-FAILED the close and silently dropped the diary + feelings
+  stages queued behind it. A refusal is the gate doing its job; the
+  close now survives it, the refused election is skipped loudly, and
+  the remaining stages apply. Pinned by
+  `test_refused_reflection_election_skips_loudly_never_kills_the_close`.
+  (The root fix — signed close-reflection authority on stamp-v2, option
+  (a) ruled c708/c709 — is gateway's door half and stays gated on the
+  consensus signature; this interim stays correct after it lands.)
+
 ### Changed
 - **Phase vocabulary flips to the four ruled keys** (config-object
   consensus F7/N7, semantics c607, laurent Q1 c684): `PHASES` is now

@@ -558,9 +558,33 @@ def build_visit_workflow(
 
     def apply_node(run: RunState, ctx: Any) -> StepPlan:
         """Staged look-back application: summary -> interests -> diary ->
-        feelings (summary first — target=session needs its record id)."""
+        feelings (summary first — target=session needs its record id).
+
+        REFUSAL TOLERANCE (gateway c709 interim, the fdf01e0 rule class):
+        every staged effect opts into `_absorb_failure` — a door refusal of
+        ONE election (e.g. the close-reflection channel collision agency
+        found: interest FORM into self refused under the visit's workplace
+        stamp) lands as a loud #FALLBACK notice in the reflection output
+        and the REMAINING stages still apply; it never terminal-fails the
+        close. A refusal is the gate doing its job — the workflow dying on
+        it converts a policy refusal into a dead visit and silently drops
+        the diary + feelings queued behind it."""
         visit = _ns(run, "_visit")
         refl = _ns(run, "_reflect")
+
+        def _note_absorbed(stage_key: str, label: str) -> None:
+            out = refl.get(stage_key)
+            if isinstance(out, dict) and out.get("absorbed_failure") and not out.get("_noted"):
+                refl["notices"] = list(refl.get("notices") or []) + [
+                    f"#FALLBACK reflection {label} was refused and skipped: "
+                    f"{out['absorbed_failure']}"
+                ]
+                out["_noted"] = True
+
+        _note_absorbed("summary_out", "summary")
+        _note_absorbed("interest_out", "interest election")
+        _note_absorbed("diary_out", "diary election")
+        _note_absorbed("feel_out", "feeling election")
         if "marked_reply" not in refl:
             raw = clean_model_reply(str((refl.get("llm") or {}).get("content") or ""))
             marked, feelings, notices = parse_feel_blocks(raw)
@@ -602,6 +626,7 @@ def build_visit_workflow(
                         "scope": "life",
                         "owner_id": home.entity_id,
                         "turn_id": "t-reflect",
+                        "_absorb_failure": True,
                     },
                     result_key="_reflect.summary_out",
                 ),
@@ -641,6 +666,7 @@ def build_visit_workflow(
                         "scope": "self",
                         "owner_id": home.entity_id,
                         "turn_id": f"t-reflect-interest-{i}",
+                        "_absorb_failure": True,
                     },
                     result_key="_reflect.interest_out",
                 ),
@@ -670,6 +696,7 @@ def build_visit_workflow(
                         "turn_id": f"t-reflect-diary-{i}",
                         "anchor_record_ids": session_graph_ids,
                         "anchor_graph_ids": session_graph_ids,
+                        "_absorb_failure": True,
                     },
                     result_key="_reflect.diary_out",
                 ),
@@ -716,6 +743,7 @@ def build_visit_workflow(
                     "scope": "life" if target.startswith("ex:") else "self",
                     "owner_id": home.entity_id,
                     "actor": "entity-reflection",
+                    "_absorb_failure": True,
                 },
                 result_key="_reflect.feel_out",
             ),

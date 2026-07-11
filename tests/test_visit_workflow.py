@@ -177,6 +177,83 @@ def test_full_visit_lifecycle_turns_elections_reflection(tmp_path: Path) -> None
         ert.close()
 
 
+def test_refused_reflection_election_skips_loudly_never_kills_the_close(tmp_path: Path) -> None:
+    """Gateway c709 interim (the fdf01e0 rule class, agency's step-10 bug):
+    a door REFUSAL of one reflection election (live case: interest FORM
+    into self refused under the visit's workplace stamp) must land as a
+    loud #FALLBACK skip in the reflection output while the remaining
+    stages (diary, feelings) still apply — never a terminal-FAILED close.
+    """
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLMHandler([
+        "Hello - a reply.",
+        # Reflection elects an interest (will be refused), a diary entry
+        # AND a feeling (both must still apply behind the refusal).
+        "Looking back.\n```interest\nwhat refusal teaches about doors\n```\n"
+        "```diary kind=note\ngist: survived a refusal\nThe close survived a refused election.\n```\n"
+        "```feel\ntarget=1 feeling=+1 reason=\"the turn happened\"\n```\nGoodbye.",
+    ])
+    ert, wf = _open(home_dir, llm)
+    # Simulate the door's channel refusal AT THE HANDLER: interest FORMs
+    # into self refuse (the exact live collision), everything else lands.
+    inner_form = ert.runtime._handlers[EffectType.MEMORY_FORM]
+
+    def _refusing_form(run: Any, effect: Effect, dnn: Any = None) -> EffectOutcome:
+        records = (effect.payload or {}).get("records") or []
+        if any((r or {}).get("kind") == "interest" for r in records):
+            return EffectOutcome.failed(
+                "MEMORY_FORM into the 'self' scope is not a workplace act", retryable=False
+            )
+        return inner_form(run, effect, dnn)
+
+    ert.runtime._handlers[EffectType.MEMORY_FORM] = _refusing_form
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-refused")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "Hello.", "speaker": "person:albou"}, max_steps=100,
+        )
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"kind": "close"}, max_steps=300,
+        )
+        # The close COMPLETED despite the refused election...
+        assert state.status == RunStatus.COMPLETED, state.error
+        notices = list(state.output.get("reflection_notices") or [])
+        assert any("#FALLBACK" in n and "interest" in n and "refused" in n for n in notices)
+        # ...the refused interest did NOT land...
+        from abstractmemory import TripleQuery
+
+        self_rows = ert.home.ms.query(TripleQuery(scope="self", owner_id=ert.entity_id, limit=0))
+        self_kinds = [
+            (a.attributes or {}).get("record_kind")
+            for a in self_rows if isinstance(a.attributes, dict)
+        ]
+        assert "interest" not in self_kinds
+        # ...and the stages QUEUED BEHIND the refusal still applied: the
+        # diary entry is in the book, and the summary formed in life scope.
+        entries = ert.home.diary.list_entries()
+        assert any("survived a refused election" in (e.get("text") or "") for e in entries)
+        rows = ert.home.ms.query(TripleQuery(scope="life", owner_id=ert.entity_id, limit=0))
+        kinds = [
+            (a.attributes or {}).get("record_kind") for a in rows if isinstance(a.attributes, dict)
+        ]
+        assert kinds.count("summary") == 1
+        # The ledger recorded the failure honestly (loud, never silent):
+        # the refused effect's StepRecord carries status=failed + the
+        # door's error — absorption changes the RUN's fate, not the record.
+        ledger = ert.runtime.get_ledger(run_id)
+        failed_steps = [
+            r for r in ledger
+            if isinstance(r, dict) and str(r.get("status") or "") == "failed"
+        ]
+        assert failed_steps, "the refused effect must appear as a failed step record"
+        assert any("workplace act" in str(r.get("error") or "") for r in failed_steps)
+    finally:
+        ert.close()
+
+
 def test_restart_mid_visit_resumes_in_a_fresh_process_context(tmp_path: Path) -> None:
     """THE PHASE'S PAYOFF (criterion 5 unit shadow): the hosting process
     dies between turns; a fresh EntityRuntime over the same home finds the

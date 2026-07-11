@@ -1581,6 +1581,44 @@ class Runtime:
                 pass
 
             if outcome.status == "failed":
+                # OPT-IN FAILURE ABSORPTION (`payload._absorb_failure`, the
+                # fdf01e0 rule class generalized): a staged applier over
+                # elections (visit close-reflection: summary/interest/diary/
+                # feelings) must survive one refused election — a door
+                # refusal is the gate doing its job, and terminal-failing
+                # the run converts a policy refusal into a dead visit AND
+                # kills every stage queued behind it. With the flag set and
+                # a next_node to go to, the failure lands LOUDLY in the
+                # effect's result_key ({"ok": False, "absorbed_failure":
+                # <error>}) and the run continues; the ledger StepRecord and
+                # node trace above already recorded the failure honestly.
+                # Retries are unaffected: absorption converts only the
+                # FINAL failed outcome, after the effect policy's retries.
+                absorb = False
+                try:
+                    absorb = bool((effect.payload or {}).get("_absorb_failure"))
+                except Exception:
+                    absorb = False
+                if absorb and plan.next_node:
+                    if effect.result_key:
+                        _set_nested(
+                            run.vars,
+                            effect.result_key,
+                            {
+                                "ok": False,
+                                "absorbed_failure": str(outcome.error or "unknown error"),
+                            },
+                        )
+                    controlled = _abort_if_externally_controlled()
+                    if controlled is not None:
+                        return controlled
+                    _record_transition_predecessor(
+                        run, node_id=plan.node_id, next_node=plan.next_node
+                    )
+                    run.current_node = plan.next_node
+                    run.updated_at = utc_now_iso()
+                    self._run_store.save(run)
+                    continue
                 controlled = _abort_if_externally_controlled()
                 if controlled is not None:
                     return controlled

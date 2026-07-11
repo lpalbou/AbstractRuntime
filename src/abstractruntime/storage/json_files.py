@@ -255,6 +255,26 @@ class JsonFileRunStore(RunStore):
         Performance note:
         - We order by run file mtime (close to updated_at) and stop once we have `limit` matches.
         - This avoids parsing every historical run JSON file on large runtimes.
+
+        Scale verdict (2026-07-11 incident review, measured on a 3,030-run dir):
+        - FRESHNESS IS SAFE at/below `limit` concurrent matches: a newly saved
+          run has the newest mtime, is inspected first, and is therefore always
+          included. With fewer than `limit` matching runs the scan visits every
+          file, so nothing can be dropped.
+        - STARVATION HOLE above `limit`: mtime refreshes on every save, so with
+          more than `limit` concurrently RUNNING runs the actively-ticked ones
+          keep re-claiming the newest-mtime slots and a never-yet-ticked run's
+          mtime only ages — it can be starved indefinitely. The gateway polls
+          this with limit=run_scan_limit (default 200); raise the limit or add
+          a status index before hosting >200 concurrent RUNNING runs.
+        - COST: every call globs+stats the whole directory (~31 ms warm at 3k
+          files; ~2.2 s cold because scarce matches force parsing every file).
+          The gateway runner issues 3 such scans per 0.25 s poll. Linear in
+          total run files, including terminal ones — archive/prune terminal
+          runs or add an index before this directory reaches ~10k files.
+        - MEMORY: `_run_cache` retains every RunState ever loaded (mtime-keyed,
+          never evicted) — ~1.5 GB RSS after one full scan of a 3k-run dir with
+          history-bearing vars. Long-lived processes pay this permanently.
         """
         lim = max(1, int(limit or 100))
         ranked: list[tuple[int, Path]] = []

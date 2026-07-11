@@ -187,10 +187,17 @@ def test_liveness_correction_can_elect_a_real_tool(tmp_path: Path) -> None:
         s.home.close()
 
 
-def test_speak_now_guard_turns_marker_only_replies_into_words(tmp_path: Path) -> None:
+def test_speak_now_guard_turns_marker_only_replies_into_words(tmp_path: Path, monkeypatch) -> None:
     """Mnemosyne's first visit (2026-07-09 06:44): every round returned pure
     tool blocks; the delivered reply was just '[used tool: read_file]'. The
-    speak-now guard demands words once the rounds are spent."""
+    speak-now guard demands words once the rounds are spent.
+
+    The test pins the GUARD, not the default bound — the ruled default is
+    20 (maintainer 2026-07-11), so the rounds constant is narrowed here to
+    keep the script exhaustion-shaped without 21 scripted replies."""
+    from abstractruntime.identity import tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, "MAX_TOOL_ROUNDS_PER_TURN", 3)
     home_dir = _make_home(tmp_path)
     block = "```tool name=diary_list\n3\n```"
     s = _session(
@@ -208,6 +215,35 @@ def test_speak_now_guard_turns_marker_only_replies_into_words(tmp_path: Path) ->
         assert "I have just been born" in reply
         assert any("speak-now guard" in n for n in report.notices)
         assert report.tools.count("diary_list") == 3  # three rounds ran
+    finally:
+        s.home.close()
+
+
+def test_turn_budget_default_is_twenty_and_shared_across_rounds(tmp_path: Path) -> None:
+    """Maintainer ruling (2026-07-11 05:25): "default cap for a turn is 20
+    tool calls" — the driver-era 2/round is gone. Pins: (a) the constant IS
+    20; (b) one reply may elect more than 2 lookups and ALL of them run;
+    (c) the budget is turn-wide (remaining budget threads across rounds),
+    so no round grants a fresh slice."""
+    from abstractruntime.identity.tools import MAX_TOOL_BLOCKS_PER_TURN
+
+    assert MAX_TOOL_BLOCKS_PER_TURN == 20
+
+    home_dir = _make_home(tmp_path)
+    five_blocks = "\n".join("```tool name=web_search\nquery %d\n```" % i for i in range(5))
+    s = _session(
+        home_dir,
+        [
+            five_blocks,  # one reply, five elections — the old cap dropped 3 of these
+            "Here is what I found across all five searches.",
+        ],
+    )
+    try:
+        s.web_search_fn = lambda q: f"Search results for: {q}\n- headline"
+        reply, report = s.turn("Research this thoroughly, please.")
+        assert report.tools.count("web_search") == 5
+        assert not any("ignored (cap" in n for n in report.notices)
+        assert "found" in reply
     finally:
         s.home.close()
 

@@ -1266,7 +1266,23 @@ def build_session_factory(
             model_info={"provider": provider, "model": model},
             out=out,
         )
-        session.system_base += "\n\n" + OWN_TIME_CONTRACT
+        # The operator overlay may rewrite the own-time contract (loaded at
+        # summon; same snapshot semantics as tools). RE-COMPOSE through the
+        # one authority instead of appending: the own-time text must land
+        # BEFORE any operator block, or the attributed "STANDING
+        # INSTRUCTIONS FROM YOUR OPERATOR" stops being last and its words
+        # blur into the contract below it (adversary finding, 2026-07-11).
+        from .chat import compose_system_base
+
+        session.system_base = compose_system_base(
+            session.prelude["text"],
+            phase=session.phase,
+            overlay=session.prompt_overlay,
+            allowed_tools=tuple(session.allowed_tools),
+            workspace_enabled=session.workspace is not None,
+            enable_tools=session.enable_tools,
+            own_time_text=session.prompt_overlay.get("own_time") or OWN_TIME_CONTRACT,
+        )
         return session
 
     return _factory

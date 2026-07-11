@@ -1,7 +1,9 @@
 """Per-phase tool policy + workspace mounts (maintainer asks, 2026-07-08).
 
 - tool_policy.yaml is the operator's word on which tools each phase of life
-  holds; a missing file reproduces the historical defaults exactly.
+  holds; a missing file gives the RULED defaults (maintainer 2026-07-11:
+  visit + resident = the full set, sleep = read-only exploration minus the
+  diary).
 - workspace_mounts.json whitelists extra roots under mounts/<name>/ with an
   honest mode; ro refuses writes; containment applies per root.
 - The turn report carries the probe surface: tool_details + files touched.
@@ -82,14 +84,54 @@ def _make_home(tmp_path: Path) -> Path:
 # ------------------------------------------------------------- tool policy
 
 
-def test_missing_policy_file_reproduces_defaults(tmp_path: Path) -> None:
+def test_missing_policy_file_gives_the_ruled_defaults(tmp_path: Path) -> None:
+    """Maintainer ruling (2026-07-11 12:37, from the workspace matrix):
+    every NEW summoned entity defaults to the full set for visit and
+    resident (hands by default; narrowing is the operator's explicit act),
+    and sleep defaults to read-only exploration WITHOUT the diary — "the
+    entity can't act/change the environment while sleeping, but it can
+    recall or search information; it won't be in its diary" — and without
+    writes. The old per-session enable_workspace gate no longer subtracts
+    from the default visit grant."""
+    from abstractruntime.identity.tool_policy import SLEEP_DEFAULT_TOOL_NAMES
+
     grant = resolve_tool_grant(tmp_path, "visit", enable_workspace=False)
-    assert grant.tools == TIER1_TOOL_NAMES and grant.source == "default"
+    assert grant.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    assert grant.source == "default"
     grant_ws = resolve_tool_grant(tmp_path, "visit", enable_workspace=True)
     assert grant_ws.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
     resident = resolve_tool_grant(tmp_path, "resident")
     assert resident.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
-    assert resolve_tool_grant(tmp_path, "sleep").tools == ()
+
+    sleep = resolve_tool_grant(tmp_path, "sleep")
+    assert sleep.tools == SLEEP_DEFAULT_TOOL_NAMES
+    # The rationale, pinned structurally: no writes, no diary, reads yes.
+    assert "write_file" not in sleep.tools
+    assert "diary_list" not in sleep.tools and "diary_read" not in sleep.tools
+    assert {"web_search", "fetch_url", "read_memory", "search_memory", "read_file", "list_files"} == set(sleep.tools)
+
+
+def test_sleep_default_is_in_canonical_order(tmp_path: Path) -> None:
+    """The constant claims canonical ALL_TOOL_NAMES order — pin it, or a
+    reorder silently diverges the default tuple from a policy-file
+    roundtrip of the same six names (resolve dedups in canonical order)."""
+    from abstractruntime.identity.tool_policy import ALL_TOOL_NAMES, SLEEP_DEFAULT_TOOL_NAMES
+
+    assert SLEEP_DEFAULT_TOOL_NAMES == tuple(t for t in ALL_TOOL_NAMES if t in set(SLEEP_DEFAULT_TOOL_NAMES))
+    # Roundtrip parity: a file naming the same six (any order) resolves
+    # to the identical tuple as the default.
+    write_policy_file(tmp_path, {"sleep": list(reversed(SLEEP_DEFAULT_TOOL_NAMES))})
+    assert resolve_tool_grant(tmp_path, "sleep").tools == SLEEP_DEFAULT_TOOL_NAMES
+
+
+def test_named_but_malformed_phase_falls_to_defaults_loudly(tmp_path: Path) -> None:
+    """A hand-edited file with `visit:` left null used to fall to defaults
+    SILENTLY — under full-set defaults that is a silent WIDEN. Now noted."""
+    (tmp_path / "tool_policy.yaml").write_text("visit:\n", encoding="utf-8")
+    grant = resolve_tool_grant(tmp_path, "visit")
+    assert grant.source == "default"
+    assert grant.tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    assert any("#FALLBACK" in n and "visit" in n for n in grant.notes)
 
 
 def test_policy_file_is_the_operators_word(tmp_path: Path) -> None:
@@ -120,6 +162,75 @@ def test_write_policy_file_refuses_unknown_names(tmp_path: Path) -> None:
         write_policy_file(tmp_path, {"visit": ["rm_rf_slash"]})
     with pytest.raises(ValueError):
         write_policy_file(tmp_path, {"weekend": ["diary_list"]})
+
+
+def test_write_policy_file_merges_per_phase(tmp_path: Path) -> None:
+    """Adversary find (2026-07-11): whole-document replace materialized the
+    day's resolved defaults as "the operator's word" (every real home froze
+    `sleep: []` from pre-ruling matrix saves). Writes now MERGE: only named
+    phases change; None deletes a phase's entry (revert to the evolving
+    defaults); an emptied file is removed (absence = defaults, honestly)."""
+    from abstractruntime.identity.tool_policy import POLICY_FILENAME, SLEEP_DEFAULT_TOOL_NAMES
+
+    # Write visit only — sleep/resident stay ABSENT (defaults apply).
+    write_policy_file(tmp_path, {"visit": ["diary_list"]})
+    assert resolve_tool_grant(tmp_path, "visit").tools == ("diary_list",)
+    assert resolve_tool_grant(tmp_path, "sleep").tools == SLEEP_DEFAULT_TOOL_NAMES
+    assert resolve_tool_grant(tmp_path, "sleep").source == "default"
+
+    # A later write touching resident keeps visit's entry intact.
+    write_policy_file(tmp_path, {"resident": ["diary_list", "read_memory"]})
+    assert resolve_tool_grant(tmp_path, "visit").tools == ("diary_list",)
+    assert resolve_tool_grant(tmp_path, "resident").tools == ("diary_list", "read_memory")
+
+    # None deletes the phase entry — visit reverts to the ruled default.
+    write_policy_file(tmp_path, {"visit": None})
+    assert resolve_tool_grant(tmp_path, "visit").tools == TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+    assert resolve_tool_grant(tmp_path, "visit").source == "default"
+
+    # Removing the last entry removes the file (absence = all defaults).
+    write_policy_file(tmp_path, {"resident": None})
+    assert not (tmp_path / POLICY_FILENAME).exists()
+
+
+def test_explicit_empty_grant_denies_all_never_falls_open(tmp_path: Path) -> None:
+    """Adversary find (2026-07-11): the parsers' `or TIER1` default treated
+    the operator's explicit visit:[] ZERO grant as "unspecified" and fell
+    open to tier-1 (incl. diary_read of private entries) in the in-process
+    driver. None = tier-1 default; () = deny all, honest refusals."""
+    from abstractruntime.identity.tools import TIER1_TOOL_NAMES as T1
+    from abstractruntime.identity.tools import native_tool_elections, parse_tool_blocks
+
+    # Unit truth: None defaults, () denies.
+    _, elections, notices = parse_tool_blocks("```tool name=web_search\nx\n```", ())
+    assert elections == [] and any("refused" in n for n in notices)
+    _, elections_default, _ = parse_tool_blocks("```tool name=web_search\nx\n```", None)
+    assert [e.name for e in elections_default] == ["web_search"]
+    n_elections, n_markers, n_notices = native_tool_elections(
+        [{"name": "diary_read", "arguments": {"entry": "diary_ab12cd34"}}], ()
+    )
+    assert n_elections == [] and any("refused" in n for n in n_notices)
+    assert T1  # the default set itself stays non-empty (sanity)
+
+    # Session truth: a zero-grant policy file reaches the driver as deny-all.
+    home_dir = _make_home(tmp_path)
+    write_policy_file(home_dir, {"visit": []})
+    home = open_home(home_dir)
+    llm = _ScriptedLLM([
+        "```tool name=diary_read\ndiary_ab12cd34\n```",
+        "I hold no tools in this phase of my life.",
+    ])
+    try:
+        session = ChatSession(
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+        )
+        assert session.allowed_tools == ()
+        reply, r = session.turn("Read your diary for me.")
+        assert r.tools == []  # nothing ran
+        assert any("refused" in n for n in r.notices)
+        assert "no tools" in reply
+    finally:
+        home.close()
 
 
 def test_session_honors_policy_and_states_the_grant(tmp_path: Path) -> None:

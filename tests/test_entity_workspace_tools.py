@@ -162,10 +162,41 @@ def test_session_workspace_tools_elected_end_to_end(tmp_path: Path) -> None:
         home.close()
 
 
-def test_workspace_disabled_refuses_workspace_tools(tmp_path: Path) -> None:
+def test_default_session_has_workspace_hands(tmp_path: Path) -> None:
+    """Maintainer ruling (2026-07-11): the DEFAULT grant includes the
+    workspace tools — an entity has its hands without a per-session flag.
+    (The old default refused write_file unless --workspace was passed.)"""
     home_dir = _make_home(tmp_path)
     home = open_home(home_dir)
-    llm = _ScriptedLLM(["```tool name=write_file path=a.txt\nhi\n```\nDone."])
+    llm = _ScriptedLLM([
+        "```tool name=write_file path=a.txt\nhi\n```\nDone.",
+        "The file is saved.",  # continuation after the tool round's results
+    ])
+    try:
+        session = ChatSession(
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+        )
+        reply, r = session.turn("Write a file.")
+        assert r.tools == ["write_file"]
+        assert (home_dir / "workspace" / "a.txt").read_text(encoding="utf-8").strip() == "hi"
+        assert "saved" in reply
+    finally:
+        home.close()
+
+
+def test_operator_narrowed_policy_refuses_workspace_tools(tmp_path: Path) -> None:
+    """Narrowing is the OPERATOR'S explicit act (policy file / matrix) —
+    and it still refuses loudly, exactly as the wall always did."""
+    from abstractruntime.identity.tool_policy import write_policy_file
+    from abstractruntime.identity.tools import TIER1_TOOL_NAMES
+
+    home_dir = _make_home(tmp_path)
+    write_policy_file(home_dir, {"visit": list(TIER1_TOOL_NAMES)})
+    home = open_home(home_dir)
+    llm = _ScriptedLLM([
+        "```tool name=write_file path=a.txt\nhi\n```\nDone.",
+        "I cannot write files in this phase of my life.",
+    ])
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None

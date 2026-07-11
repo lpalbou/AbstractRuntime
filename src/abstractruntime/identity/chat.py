@@ -54,6 +54,7 @@ from ..core.runtime import utc_now_iso
 from .diary import DiaryStore, build_diary_effect_handlers
 from .digest import mechanical_digest_v2
 from .prelude import render_summon_prelude
+from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     build_reflection_prompt,
     parse_feel_blocks,
@@ -174,6 +175,70 @@ schedule. A commitment made in this conversation is something you can
 genuinely pursue in your own time after the visitor leaves - say so
 plainly when it is relevant, and never claim you cease to exist between
 conversations."""
+
+
+def compose_system_base(
+    prelude_text: str,
+    *,
+    phase: str,
+    overlay: Dict[str, str],
+    allowed_tools: Tuple[str, ...] = (),
+    workspace_enabled: bool = False,
+    enable_tools: bool = True,
+    own_time_text: Optional[str] = None,
+) -> str:
+    """ONE composition authority for the entity system base (head layers).
+
+    Layer ownership (maintainer, 2026-07-11 — the editable-prompt ruling):
+    the identity prelude arrives rendered (never editable prose); the
+    conversation contract and the visit paragraph may be REWRITTEN by the
+    operator overlay; the tools text always derives from the actual grant
+    (its editor is the tool policy, never a text box); operator standing
+    instructions append LAST, attributed — words in the head must never
+    pretend to be the entity's own. Own-time sessions pass `own_time_text`
+    (life.py owns OWN_TIME_CONTRACT and the overlay swap — chat cannot
+    import life): it lands after the tools block and BEFORE the operator
+    block, so operator-last holds in every phase.
+
+    Used by ChatSession, the durable visit workflow, the life factory's
+    resident re-compose, and the gateway's prompt-preview endpoint — a
+    second hand-rolled composition is the drift class the diary_type clamp
+    already taught us.
+    """
+    base = prelude_text + "\n\n" + (overlay.get("conversation") or CONTRACT_PARAGRAPH)
+    if phase == "visit":
+        base += "\n\n" + (overlay.get("visit") or VISIT_OWN_TIME_PARAGRAPH)
+    if enable_tools and allowed_tools:
+        base += "\n\n" + TOOLS_CONTRACT_PARAGRAPH
+        if workspace_enabled:
+            base += "\n\n" + WORKSPACE_CONTRACT_PARAGRAPH
+        full_grant = set(TIER1_TOOL_NAMES) | (set(WORKSPACE_TOOL_NAMES) if workspace_enabled else set())
+        if set(allowed_tools) != full_grant:
+            # A narrowed grant is stated, never discovered by refusal.
+            base += (
+                "\n\n(of the tools described above, this phase of your life grants: "
+                + ", ".join(allowed_tools)
+                + " - blocks naming any other tool are refused)"
+            )
+    if own_time_text:
+        base += "\n\n" + own_time_text
+    if overlay.get("operator"):
+        base += "\n\nSTANDING INSTRUCTIONS FROM YOUR OPERATOR:\n" + overlay["operator"]
+    return base
+
+
+def default_prompt_texts() -> Dict[str, str]:
+    """The built-in text behind each overlay key — ONE source for the
+    gateway's prompt endpoint and any future editor (a second hand-written
+    key→default map is the diary_type-clamp drift class)."""
+    from .life import OWN_TIME_CONTRACT  # function-local: life imports chat at module scope
+
+    return {
+        "conversation": CONTRACT_PARAGRAPH,
+        "visit": VISIT_OWN_TIME_PARAGRAPH,
+        "own_time": OWN_TIME_CONTRACT,
+        "operator": "",
+    }
 
 
 def strip_think_block(text: str) -> str:
@@ -583,10 +648,12 @@ class ChatSession:
         # this" is a legitimate question for him AND for the operator's
         # observer badge). Stamped into episode attributes.
         self.model_info = {k: str(v) for k, v in (model_info or {}).items() if v}
-        # PER-PHASE TOOL GRANT (maintainer's two-tier ruling, 2026-07-08):
-        # the home's tool_policy.yaml is the operator's word on which tools
-        # this phase of life holds; missing file = the historical defaults
-        # (visit: tier-1 + workspace-if-enabled; resident: both tiers).
+        # PER-PHASE TOOL GRANT (maintainer's two-tier ruling, 2026-07-08;
+        # defaults re-ruled 2026-07-11): the home's tool_policy.yaml is the
+        # operator's word on which tools this phase of life holds; missing
+        # file = the ruled defaults (visit + resident: the FULL set —
+        # hands by default; sleep: read-only exploration minus the diary).
+        # `enable_workspace` no longer subtracts from defaults.
         self.phase = str(phase or "visit").strip().lower()
         grant = resolve_tool_grant(
             home.home_dir, self.phase, enable_workspace=bool(enable_workspace)
@@ -643,23 +710,26 @@ class ChatSession:
         for w in prelude.get("warnings", []):
             self.out(w)
         self.prelude = prelude
-        self.system_base = prelude["text"] + "\n\n" + CONTRACT_PARAGRAPH
-        if self.phase == "visit":
-            # Own-time sessions get OWN_TIME_CONTRACT instead (life.py); a
-            # visit must know the life continues (agency blindness fix).
-            self.system_base += "\n\n" + VISIT_OWN_TIME_PARAGRAPH
-        if self.enable_tools and self.allowed_tools:
-            self.system_base += "\n\n" + TOOLS_CONTRACT_PARAGRAPH
-            if self.workspace is not None:
-                self.system_base += "\n\n" + WORKSPACE_CONTRACT_PARAGRAPH
-            full_grant = set(TIER1_TOOL_NAMES) | (set(WORKSPACE_TOOL_NAMES) if self.workspace else set())
-            if set(self.allowed_tools) != full_grant:
-                # A narrowed grant is stated, never discovered by refusal.
-                self.system_base += (
-                    "\n\n(of the tools described above, this phase of your life grants: "
-                    + ", ".join(self.allowed_tools)
-                    + " - blocks naming any other tool are refused)"
-                )
+        # OPERATOR PROMPT OVERLAY (maintainer, 2026-07-11): the home may
+        # rewrite the behavioral layers (<home>/system_prompt.yaml). The
+        # identity prelude and the tools contract stay machine-owned —
+        # identity evolves by the entity's own acts, and the tools text
+        # must match the actual grant. Snapshot-at-summon, like the grant.
+        self.prompt_overlay = read_prompt_overlay(home.home_dir)
+        note = overlay_note(self.prompt_overlay)
+        if note:
+            self.out(note)
+        # Own-time sessions get OWN_TIME_CONTRACT appended by the life
+        # factory (life.py); a visit must know the life continues (agency
+        # blindness fix) — compose_system_base carries that rule.
+        self.system_base = compose_system_base(
+            prelude["text"],
+            phase=self.phase,
+            overlay=self.prompt_overlay,
+            allowed_tools=tuple(self.allowed_tools),
+            workspace_enabled=self.workspace is not None,
+            enable_tools=self.enable_tools,
+        )
         # THE DECLARE HALF of the native tool channel (agent's arm-N
         # measurement, 2026-07-11: tools DECLARED in the payload = 5/5
         # structured calls, zero fabrication; undeclared = the majority arm
@@ -1262,20 +1332,25 @@ class ChatSession:
             convo = self.history + [{"role": "user", "content": user_text}]
             rounds = 0
             corrected_imitation = False
-            while rounds < MAX_TOOL_ROUNDS_PER_TURN:
+            # THE TURN BUDGET (maintainer ruling 2026-07-11: "default cap
+            # for a turn is 20 tool calls"): one bound shared across all
+            # rounds and both mechanisms — threaded as the REMAINING budget
+            # into each parser so no round ever grants a fresh slice.
+            turn_budget = MAX_TOOL_BLOCKS_PER_TURN
+            while rounds < MAX_TOOL_ROUNDS_PER_TURN and turn_budget > 0:
                 tool_marked, tool_elections, tool_notices = parse_tool_blocks(
-                    raw_reply, self.allowed_tools
+                    raw_reply, self.allowed_tools, max_elections=turn_budget
                 )
                 report.notices.extend(tool_notices)
                 # NATIVE CHANNEL FOLD: this response's structured tool_calls
                 # become elections in the SAME currency (one executor, one
-                # cap). Their markers append to the marked reply — a native
-                # call has no fence text to substitute in place.
+                # budget). Their markers append to the marked reply — a
+                # native call has no fence text to substitute in place.
                 if pending_native:
                     native_elections, native_markers, native_notices = native_tool_elections(
                         pending_native,
                         self.allowed_tools,
-                        max_elections=MAX_TOOL_BLOCKS_PER_TURN - len(tool_elections),
+                        max_elections=turn_budget - len(tool_elections),
                     )
                     pending_native = []
                     report.notices.extend(native_notices)
@@ -1325,6 +1400,7 @@ class ChatSession:
                     raw_reply = tool_marked  # refused/unknown markers stay honest
                     break
                 rounds += 1
+                turn_budget -= len(tool_elections)
                 report.tools.extend(e.name for e in tool_elections)
                 round_details: List[Dict[str, str]] = []
                 for e in tool_elections:
@@ -1359,7 +1435,7 @@ class ChatSession:
                 for detail, e in zip(round_details, tool_elections):
                     detail["result"] = e.result or ""
                 lookup_phases.append(tool_marked)
-                if rounds == MAX_TOOL_ROUNDS_PER_TURN:
+                if rounds == MAX_TOOL_ROUNDS_PER_TURN or turn_budget <= 0:
                     results_msg += (
                         "\n\n(No more lookups are possible this turn - finish your reply now; "
                         "you can continue looking things up next turn.)"
@@ -1381,21 +1457,24 @@ class ChatSession:
                         "the model returned an empty reply after its tool lookups; turn aborted"
                     )
             else:
-                # Rounds exhausted with tool blocks still in the reply: refuse
-                # honestly, never silently drop.
+                # Turn budget or rounds exhausted with tool intent still in
+                # the reply: refuse honestly, never silently drop.
+                bound = (
+                    f"turn budget: {MAX_TOOL_BLOCKS_PER_TURN} tool calls"
+                    if turn_budget <= 0
+                    else f"{MAX_TOOL_ROUNDS_PER_TURN} tool rounds per turn"
+                )
                 raw_reply, extra_elections, extra_notices = parse_tool_blocks(
                     raw_reply, self.allowed_tools
                 )
                 report.notices.extend(extra_notices)
                 if extra_elections:
                     report.notices.append(
-                        f"#FALLBACK {len(extra_elections)} tool block(s) refused "
-                        f"({MAX_TOOL_ROUNDS_PER_TURN} tool rounds per turn)"
+                        f"#FALLBACK {len(extra_elections)} tool block(s) refused ({bound})"
                     )
                 if pending_native:
                     report.notices.append(
-                        f"#FALLBACK {len(pending_native)} native tool call(s) refused "
-                        f"({MAX_TOOL_ROUNDS_PER_TURN} tool rounds per turn)"
+                        f"#FALLBACK {len(pending_native)} native tool call(s) refused ({bound})"
                     )
                     pending_native = []
 
@@ -1985,7 +2064,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--workspace", action="store_true",
-        help="enable workspace tools (write_file/read_file/list_files, contained to <home>/workspace/)",
+        help=(
+            "deprecated no-op: workspace tools are granted by default "
+            "(maintainer ruling 2026-07-11); narrow via <home>/tool_policy.yaml"
+        ),
     )
     parser.add_argument(
         "--provider", default=None,

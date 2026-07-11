@@ -26,14 +26,21 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-MAX_TOOL_BLOCKS_PER_TURN = 2
-# Three rounds allow the voluntary-exploration chain the maintainer mandated
-# (2026-07-09, "follow the trail to the actual verbatim"): search_memory to
-# find a handle, read_memory to fetch the words, then one more hop along a
-# shown edge. Two rounds cut that trail one hop short (the original constant
-# was sized to diary_list -> diary_read before search existed); unbounded
-# rounds stay a loop risk on a young model. Three is the observed need.
-MAX_TOOL_ROUNDS_PER_TURN = 3
+# THE TURN BUDGET (maintainer ruling 2026-07-11 05:25, overriding the
+# driver-era 2: "default cap for a turn is 20 tool calls"): a TRUE per-turn
+# budget shared across ALL rounds and BOTH mechanisms (fenced + native fold
+# into one count) — the old constant was applied per reply-round, so the
+# effective turn ceiling was rounds×2 while the notice claimed "2/turn"
+# (live: Ephemeral's third web_search refused mid-research). Callers thread
+# the REMAINING budget through parse_tool_blocks/native_tool_elections;
+# past-budget calls refuse with honest markers, never silently.
+MAX_TOOL_BLOCKS_PER_TURN = 20
+# Rounds bound LLM ROUND-TRIPS, not the call count (each round is one
+# continuation carrying results back; a round that elects nothing exits the
+# loop). With the turn budget as the true work bound, rounds only need to
+# let single-call chains reach it: 20 single-call rounds is legitimate
+# iterate-until-satisfied exploration, not a loop fault.
+MAX_TOOL_ROUNDS_PER_TURN = 20
 _TOOL_FENCE_RE = re.compile(r"```tool([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 # TIER-1: cognition tools, always read-only. `web_search` finds pages;
@@ -90,8 +97,8 @@ nothing matches (your book is append-only and complete: if you had written
 it, the search would find it). Follow its #tags with read_memory and its
 diary_ ids with diary_read. Repetition is not evidence: several records
 you yourself wrote about the same thing count as one origin, not many.
-Up to two lookups per reply, up to three rounds per turn. Use them when
-they would genuinely help - most turns need none.
+You have a budget of up to 20 tool calls per turn - chain lookups freely
+when a task genuinely needs them; most turns need none.
 
 These blocks are PLAIN TEXT inside your reply - you have no function-calling
 API, no tool channel, no other way to reach a tool. Writing the fenced block
@@ -485,7 +492,11 @@ def native_tool_elections(
     unwrapped. Caps are the caller's (fenced + native share one budget)."""
     import json as _json
 
-    allowed = allowed_names or TIER1_TOOL_NAMES
+    # None = unspecified (tier-1 default); an EXPLICIT empty grant DENIES
+    # ALL (adversary find, 2026-07-11: `or TIER1` treated the operator's
+    # visit:[] zero grant as "unspecified" and fell open — the door had
+    # this guard, the in-process driver did not).
+    allowed = TIER1_TOOL_NAMES if allowed_names is None else allowed_names
     cap = MAX_TOOL_BLOCKS_PER_TURN if max_elections is None else max(0, int(max_elections))
     elections: List[ToolElection] = []
     markers: List[str] = []
@@ -542,23 +553,31 @@ def native_tool_elections(
 
 
 def parse_tool_blocks(
-    reply: str, allowed_names: Optional[Tuple[str, ...]] = None
+    reply: str,
+    allowed_names: Optional[Tuple[str, ...]] = None,
+    *,
+    max_elections: Optional[int] = None,
 ) -> Tuple[str, List[ToolElection], List[str]]:
     """Extract elected ```tool blocks; return (marked_reply, elections, notices).
 
     Mirrors parse_diary_blocks: each block is replaced with a short marker so
     the conversation record shows THAT a lookup happened without carrying the
-    block scaffolding forward. `allowed_names` defaults to the tier-1 set;
-    sessions with the workspace enabled pass the union.
+    block scaffolding forward. `allowed_names=None` defaults to the tier-1
+    set; an EXPLICIT empty grant denies all (the operator's visit:[] zero
+    grant must never fall open — adversary find 2026-07-11). `max_elections`
+    is the REMAINING turn budget (callers thread it across rounds so the
+    MAX_TOOL_BLOCKS_PER_TURN default is a true per-turn bound, never a
+    per-round slice — maintainer ruling 2026-07-11).
     """
-    allowed = allowed_names or TIER1_TOOL_NAMES
+    allowed = TIER1_TOOL_NAMES if allowed_names is None else allowed_names
+    cap = MAX_TOOL_BLOCKS_PER_TURN if max_elections is None else max(0, int(max_elections))
     elections: List[ToolElection] = []
     notices: List[str] = []
 
     def _sub(match: re.Match) -> str:
         info = (match.group(1) or "").strip()
         body = (match.group(2) or "").strip()
-        if len(elections) >= MAX_TOOL_BLOCKS_PER_TURN:
+        if len(elections) >= cap:
             notices.append(f"#FALLBACK tool block ignored (cap {MAX_TOOL_BLOCKS_PER_TURN}/turn)")
             return "[tool call ignored - too many this turn]"
         name = ""

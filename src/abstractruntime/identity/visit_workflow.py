@@ -51,17 +51,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
 from .chat import (
-    CONTRACT_PARAGRAPH,
     SUMMON_POSTURE_SELF_FRACTION,
-    VISIT_OWN_TIME_PARAGRAPH,
     ChatHome,
     _memories_block,
     _serialize_under_budget,
     clean_model_reply,
+    compose_system_base,
     parse_diary_blocks,
 )
 from .digest import mechanical_digest_v2
 from .prelude import render_summon_prelude
+from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     FeelingElection,
     build_reflection_prompt,
@@ -105,7 +105,13 @@ class ReactMiddle:
     nodes: Dict[str, Any]
     entry: str = "reason"
     reset_turn: Optional[Any] = None
-    max_iterations: int = 6
+    # Reason-cycle bound per turn. 20 matches the ruled 20-tool-call turn
+    # budget (maintainer 2026-07-11: caps bound RUN-AWAY, not ambition) —
+    # the original 6 was the tightest agency bound in the stack (agent's
+    # caps audit): six cycles cannot spend a research turn's budget.
+    # BRIDGE seeds `_limits.max_iterations` with setdefault, so a door- or
+    # operator-supplied value always wins over this default.
+    max_iterations: int = 20
 
 
 def _ns(run: RunState, key: str) -> Dict[str, Any]:
@@ -186,10 +192,20 @@ def build_visit_workflow(
                         "reasons": list(prelude.get("warnings", [])),
                     },
                 )
-            visit["system_base"] = (
-                prelude["text"] + "\n\n" + CONTRACT_PARAGRAPH + "\n\n" + VISIT_OWN_TIME_PARAGRAPH
+            # Operator prompt overlay: behavioral layers only (identity and
+            # tools text stay machine-owned) — same file, same snapshot
+            # semantics as the in-process driver (<home>/system_prompt.yaml).
+            # ONE composition authority (compose_system_base); the durable
+            # arm passes no tools because its tool grant threads through
+            # the react middle, not the head text (Phase 0 lane).
+            overlay = read_prompt_overlay(home.home_dir)
+            visit["system_base"] = compose_system_base(
+                prelude["text"], phase="visit", overlay=overlay,
             )
             visit["prelude_warnings"] = list(prelude.get("warnings", []))
+            note = overlay_note(overlay)
+            if note:
+                visit["prelude_warnings"].append(note)
             visit.setdefault("participants", list(stamp_participants))
             visit.setdefault("budget", dict(budget_profile))
             visit.setdefault("history", [])

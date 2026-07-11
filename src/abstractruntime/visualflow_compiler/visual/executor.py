@@ -3229,7 +3229,17 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 }
 
             if not provider or not model:
-                pending_missing: Dict[str, Any] = {
+                # PARTIAL OVERRIDE IS VALID (2026-06-10 preflight ruling:
+                # "provider and model are independently optional in the LLM
+                # effect handler; connected pins resolve at runtime" — the
+                # model-pool-through-loop-item pattern wires model with
+                # provider blank). The old both-or-neither branch built the
+                # pending effect with NEITHER key, so a model-only override
+                # SILENTLY executed on the gateway default model — a workflow
+                # that runs and lies (flow's adversary, commons c884). Forward
+                # whichever key is present; the absent one resolves from
+                # run/gateway defaults exactly like the Agent node handler.
+                pending_partial: Dict[str, Any] = {
                     "type": "llm_call",
                     "prompt": prompt,
                     "system_prompt": system,
@@ -3238,13 +3248,16 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     "include_context": include_context_value,
                     **mem_cfg,
                 }
+                if provider:
+                    pending_partial["provider"] = provider
+                if model:
+                    pending_partial["model"] = model
                 if output_specified:
-                    pending_missing["output"] = output_request
-                _attach_response_schema(pending_missing)
+                    pending_partial["output"] = output_request
+                _attach_response_schema(pending_partial)
                 return {
-                    "response": "[LLM Call: incomplete provider/model override]",
-                    "_pending_effect": pending_missing,
-                    "error": "Provider and model must both be set, or both left blank for Gateway/Core defaults",
+                    "response": "",
+                    "_pending_effect": pending_partial,
                 }
 
             pending: Dict[str, Any] = {

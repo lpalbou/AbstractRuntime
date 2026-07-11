@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Visual `llm_call` forwards provider/model INDEPENDENTLY** (flow's
+  adversary P0, commons c884 — "workflows that run and lie"): the old
+  both-or-neither branch built the pending effect with NEITHER key when
+  only one resolved, so a model-only override (the
+  model-pool-through-loop-item pattern the authoring stack teaches, ruled
+  VALID 2026-06-10: "provider and model are independently optional in the
+  LLM effect handler; connected pins resolve at runtime") SILENTLY
+  executed every call on the gateway default model — the graph looked
+  right, readiness passed, nothing downstream could detect it. The
+  partial branch now forwards whichever key is present (absent keys
+  resolve from run/gateway defaults, matching the Agent node handler);
+  the both-blank and both-present paths are unchanged. Pinned by
+  `tests/test_visual_llm_call_partial_override.py`.
+
 ### Added
 - **Operator iterations ceiling, refuse-at-start** (laurent c786: "hard
   ceiling at 100 calls/turn... customizable, for instance in the

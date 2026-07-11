@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Agent `max_iterations` default is 20** (maintainer ruling 2026-07-11
+  17:45, commons c726 — "the workflow decides; if the runtime carries a
+  default it should be 20 too"; the previous 50 was a 2026-02-21 team
+  decision, never a maintainer ruling, and now yields): flipped in
+  `core/config.py` (`RuntimeConfig.max_iterations`), `core/vars.py`
+  (default `_limits`), `core/runtime.py` (both absent-limits fallbacks),
+  the VisualFlow compiler's `_limits` seed, and the visual Agent-node
+  adapter fallback. DEFAULTS ONLY: workflow-declared values (bundle
+  pinDefaults, explicit `_limits`, Agent-node pins, `ReactMiddle`)
+  remain authoritative per the same ruling — a workflow that says 3 gets
+  3, one that says 50 gets 50. The loop-node guard (10_000) is a
+  different concept and unchanged.
+
 ### Fixed
 - **A refused reflection election no longer kills the visit close**
   (gateway c709 interim, agency's step-10 live bug — the fdf01e0 rule

@@ -1165,7 +1165,7 @@ class Runtime:
         from .vars import DEFAULT_MAX_TOKENS
 
         current_iter = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 50) or 50)
+        max_iter = int(limits.get("max_iterations", 20) or 20)
         tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
         max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         max_input_tokens = limits.get("max_input_tokens")
@@ -1208,7 +1208,7 @@ class Runtime:
 
         # Check iterations
         current = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 50) or 50)
+        max_iter = int(limits.get("max_iterations", 20) or 20)
         warn_pct = int(limits.get("warn_iterations_pct", 80) or 80)
 
         if max_iter > 0:

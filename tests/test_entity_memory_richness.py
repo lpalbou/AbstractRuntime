@@ -476,6 +476,86 @@ def test_reflection_loss_guard_write_ahead_and_salvage(tmp_path: Path) -> None:
     home2.close()
 
 
+def test_private_diary_words_never_rest_in_the_pending_sheet(tmp_path: Path) -> None:
+    """G1 at-rest rule, sheet edition (2026-07-11, the 0007 leak-class lesson):
+    pending_reflection.json is written EVERY turn and lives in the home dir —
+    an at-rest surface that travels on copy. A private entry's gist (or raw
+    text when no gist was elected) must not appear there; the sheet line is
+    the act-frame only. Non-private entries keep their gist lines."""
+    home_dir = _make_home(tmp_path)
+    home = open_home(home_dir)
+    secret = "heliotrope-cipher-9x4"
+    llm = _ScriptedLLM([
+        "Noted.\n```diary visibility=private\n"
+        f"gist: {secret} must stay mine\nThe {secret} thought, at length.\n```\nDone.",
+        "Kept.\n```diary visibility=self\ngist: a shareable thought about rivers\nRivers connect.\n```\nOk.",
+    ])
+    session = ChatSession(home, llm, participants=["person:laurent"],
+                          session_id="sheet-privacy", context_window=20000, out=lambda s: None)
+    session.turn("Keep something private.")
+    marker = home_dir / "pending_reflection.json"
+    assert marker.exists()
+    at_rest = marker.read_text(encoding="utf-8")
+    assert secret not in at_rest, "private diary words rested in the write-ahead sheet"
+    assert "you kept a private diary entry" in at_rest, "the act-frame line must still be on the sheet"
+    # The private entry still reaches the sheet as an ADDRESSABLE act (the
+    # look-back can appraise it; the words stay in the book).
+    session.turn("Now keep a shareable one.")
+    at_rest2 = marker.read_text(encoding="utf-8")
+    assert "a shareable thought about rivers" in at_rest2, "non-private gists keep their sheet lines"
+    home.close()
+
+
+def test_prefix_marker_private_gists_are_scrubbed_at_salvage(tmp_path: Path) -> None:
+    """Adversary find (2026-07-11): markers written BEFORE the sheet-privacy
+    fix can still carry a private gist; salvage feeds sheet lines into the
+    reflection prompt, whose reply persists graph-ward as the summary record.
+    The scrub resolves each line against the store and act-frames the ones
+    whose record is a private diary projection."""
+    home_dir = _make_home(tmp_path)
+    secret = "vermilion-lattice-7q2"
+
+    # Session 1 writes one private entry (post-fix code: the DISK marker is
+    # already clean), then dies. To simulate a PRE-FIX marker, rewrite the
+    # marker file with the leaky description shape before session 2 opens.
+    home1 = open_home(home_dir)
+    llm1 = _ScriptedLLM([
+        f"Noted.\n```diary visibility=private\ngist: {secret} stays mine\nLong {secret} thought.\n```\nOk.",
+    ])
+    s1 = ChatSession(home1, llm1, participants=["person:laurent"],
+                     session_id="prefix-1", context_window=20000, out=lambda s: None)
+    s1.turn("Keep something private.")
+    marker = home_dir / "pending_reflection.json"
+    stale = json.loads(marker.read_text(encoding="utf-8"))
+    assert stale["sheet"], "the session must have sheeted the private act"
+    rid = stale["sheet"][0][0]
+    stale["sheet"][0][1] = f"you kept a diary entry (note): {secret} stays mine"  # pre-fix shape
+    marker.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+    home1.close()
+
+    # Session 2's salvage must scrub the description before it reaches the
+    # reflection prompt (and through it, the graph-bound summary record).
+    home2 = open_home(home_dir)
+    seen_prompts: List[str] = []
+
+    class _SpyLLM(_ScriptedLLM):
+        def generate(self, **kwargs):  # type: ignore[override]
+            for m in kwargs.get("messages") or []:
+                seen_prompts.append(str(m.get("content") or ""))
+            return super().generate(**kwargs)
+
+    llm2 = _SpyLLM(["Looking back: a quiet session. Done."])
+    s2 = ChatSession(home2, llm2, participants=["person:laurent"],
+                     session_id="prefix-2", context_window=20000, out=lambda s: None)
+    salvage = s2.run_pending_lookback()
+    assert salvage is not None
+    joined = "\n".join(seen_prompts)
+    assert secret not in joined, "pre-fix marker gist reached the reflection prompt"
+    assert "you kept a private diary entry" in joined, "the act-frame line must reach the prompt"
+    assert rid  # the record id survives the scrub (targeting stays index-based)
+    home2.close()
+
+
 def test_marker_imitation_is_called_out(tmp_path: Path) -> None:
     """Observed live (Laurent's first conversation): the model emitted the
     literal text '[used tool: diary_list]' while actually electing read_file

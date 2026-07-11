@@ -650,8 +650,8 @@ class ChatSession:
         # PER-PHASE TOOL GRANT (maintainer's two-tier ruling, 2026-07-08;
         # defaults re-ruled 2026-07-11 + Q1 c684): the home's
         # tool_policy.yaml is the operator's word on which tools this phase
-        # of life holds; missing file = the ruled defaults (visit + tasked
-        # + own_time: the FULL set — hands by default; sleep: read-only
+        # of life holds; missing file = the ruled defaults (visit + work
+        # + personal: the FULL set — hands by default; sleep: read-only
         # exploration minus the diary). `enable_workspace` no longer
         # subtracts from defaults. The stored phase is CANONICAL (a legacy
         # "resident" arg normalizes here) so `session.phase == PHASE_*`
@@ -1242,10 +1242,24 @@ class ChatSession:
             report.notices.extend(diary_out.get("warnings", []))
             projected = diary_out.get("projected_record_id")
             if projected:
-                gist_line = (e.gist or e.text).strip().splitlines()[0][:120]
-                self.session_sheet.append(
-                    (str(projected), f"you kept a diary entry ({e.kind}): {gist_line}")
-                )
+                # G1 at-rest rule (the 0007 leak-class lesson, sheet edition):
+                # the sheet persists to <home>/pending_reflection.json every
+                # turn (write-ahead marker), which is an AT-REST surface that
+                # travels on home copy — and sheet lines also ride the
+                # reflection PROMPT, whose reply persists graph-ward as the
+                # summary record (digest+verbatim), so a gist here can echo
+                # into memory.sqlite3. A private entry's gist — or its raw
+                # text when no gist was elected — must not rest in either;
+                # the sheet line for private entries is the act-frame only.
+                # (The reflection turn has no tool round, so the entity
+                # appraises the private entry by its index — the words stay
+                # in the book; it re-reads them in a normal turn if wanted.)
+                if e.visibility == "private":
+                    sheet_line = "you kept a private diary entry"
+                else:
+                    gist_line = (e.gist or e.text).strip().splitlines()[0][:120]
+                    sheet_line = f"you kept a diary entry ({e.kind}): {gist_line}"
+                self.session_sheet.append((str(projected), sheet_line))
                 # reflected_in edges only for non-private entries: a private
                 # projection carries no edges (containment; leak via
                 # spreading otherwise).
@@ -1385,6 +1399,24 @@ class ChatSession:
         except OSError:
             pass
 
+    def _is_private_projection(self, graph_id: str) -> bool:
+        """True when the graph record is a PRIVATE diary projection
+        (attributes.private=True — the projection writer's own signal).
+        Pure read; any failure answers False (never block a salvage)."""
+        try:
+            from abstractmemory import TripleQuery
+
+            rows = self.home.ms.query(
+                TripleQuery(subject=graph_id, predicate="dcterms:abstract",
+                            scope="diary", owner_id=self.home.entity_id, limit=1)
+            )
+            for a in rows:
+                if isinstance(a.attributes, dict) and a.attributes.get("private"):
+                    return True
+        except Exception:
+            return False
+        return False
+
     def run_pending_lookback(self) -> Optional[Dict[str, Any]]:
         """If a PREVIOUS session died unreflected, run its look-back now.
 
@@ -1406,6 +1438,18 @@ class ChatSession:
         if not sheet:
             self._clear_pending_marker()
             return None
+        # PRE-FIX MARKER SCRUB (adversary find, 2026-07-11): markers written
+        # before the sheet-privacy fix can still carry a private entry's gist
+        # in their descriptions — and salvage feeds those lines into the
+        # reflection prompt, whose reply persists graph-ward as the summary
+        # record. Resolve each line's record against the store; a private
+        # diary projection (attributes.private=True) gets the act-frame line
+        # regardless of what the old marker says. Store lookup failure keeps
+        # the line (salvage must never be blocked by a read hiccup).
+        sheet = [
+            (rid, "you kept a private diary entry" if self._is_private_projection(rid) else desc)
+            for rid, desc in sheet
+        ]
         self.out(
             f"(a previous visit ({marker.get('session_id')}) ended without its "
             "look-back - running it now, over that session's own records)"

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Operator iterations ceiling, refuse-at-start** (laurent c786: "hard
+  ceiling at 100 calls/turn... customizable, for instance in the
+  gateway/console"; seam (b) ruled with gateway c792/c805 — one
+  enforcement site for every lane): when the host serves
+  `_limits.max_iterations_ceiling` into run vars, `Runtime.start()`
+  refuses LOUD if the workflow-declared `max_iterations` exceeds it —
+  the refusal names both values and the override surface, and the run
+  never exists (never mid-run truncation). Absent ceiling = no
+  enforcement (server-declared; the runtime never invents 100). A
+  silent workflow under a ceiling below the default gets the default
+  clamped down (a default is nobody's word); an explicit narrow value
+  (including 0) at or under the ceiling stays the workflow's word.
+  The ceiling VALUE lives gateway-side (env default 100 → config-object
+  field); pinned by `tests/test_max_iterations_ceiling.py`.
+
 ### Changed
 - **Phase vocabulary: the four SINGLE HUMAN WORDS** (laurent's ruling,
   commons c786 2026-07-11 20:30 — "like for us human:

@@ -892,6 +892,38 @@ class Runtime:
         if "_limits" not in vars:
             vars["_limits"] = self._config.to_limits_dict()
 
+        # OPERATOR CEILING, refuse-at-start (laurent c786: hard ceiling on
+        # agent iterations, default 100, operator-customizable; seam (b)
+        # ruled c792/c805 — the HOST serves `_limits.max_iterations_ceiling`
+        # into run vars, the runtime is the ONE enforcement site for every
+        # lane). Composition: a workflow-declared max_iterations is
+        # authoritative UP TO the ceiling; declaring above it refuses LOUD
+        # before the run exists — never mid-run truncation. Absent ceiling
+        # = no enforcement (server-declared: the runtime never invents
+        # 100). A SILENT workflow under a ceiling below the default gets
+        # the default clamped down (a default is nobody's word; clamping
+        # it is not an override).
+        limits = vars.get("_limits")
+        if isinstance(limits, dict) and limits.get("max_iterations_ceiling") is not None:
+            try:
+                ceiling = int(limits["max_iterations_ceiling"])
+            except (TypeError, ValueError):
+                ceiling = None
+            if ceiling is not None and ceiling > 0:
+                declared = limits.get("max_iterations")
+                if declared is None:
+                    limits["max_iterations"] = min(
+                        int(self._config.max_iterations), ceiling
+                    )
+                elif int(declared) > ceiling:
+                    raise ValueError(
+                        f"workflow declares max_iterations={int(declared)} above the "
+                        f"operator ceiling {ceiling} - raise the ceiling "
+                        "(gateway console / max_iterations_ceiling) or lower the "
+                        "workflow's declared value; refusing at start, never "
+                        "truncating mid-run"
+                    )
+
         # Ensure a durable `_runtime` namespace exists and seed default provider/model metadata
         # from the Runtime config (best-effort).
         #

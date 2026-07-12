@@ -1,4 +1,12 @@
-# 029 — Runtime meta-analysis (2026-07-12): from artisanal to systemic reliability
+# 0044 — Runtime meta-analysis record (2026-07-12): from artisanal to systemic reliability
+
+> TRACK SOURCE DOCUMENT — the analysis and ranked R-plan below were split
+> into executable backlog items in this folder (planned 0045-0055) and
+> `../../proposed/runtime_systemic_reliability/` (0056-0063). Mapping:
+> R1→0046, R2→0045, R3→0047, R4→0048, R5→0049, R6→0050, R7→0051, R8→0053,
+> R9→0052, R10→0054, R11→0055, R12→0056, R13→0057, R14→0058,
+> R15→0059/0060/0061/0062/0063. This file stays as the evidence record;
+> execute from the items.
 
 Maintainer ask (Laurent, 2026-07-12 18:18): "can you do a deep meta analysis
 with 2 adversarial sub agents and see if there is anything we could do to

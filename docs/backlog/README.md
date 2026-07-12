@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 20 (8 top-level + 12 in the `runtime_systemic_reliability/` track)
+- Planned: 21 (8 top-level + 13 in the `runtime_systemic_reliability/` track)
 - Proposed: 11 (3 top-level + 8 in the `runtime_systemic_reliability/` track)
 - Completed: 33
 - Deprecated: 13
@@ -109,6 +109,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0053 | `planned/runtime_systemic_reliability/0053_bounded_run_vars_growth.md` |
 | 0054 | `planned/runtime_systemic_reliability/0054_runtime_health_counters.md` |
 | 0055 | `planned/runtime_systemic_reliability/0055_jsonl_store_honesty.md` |
+| 0064 | `planned/runtime_systemic_reliability/0064_prompt_cache_fingerprint_stability.md` |
 
 \* 026/027/028 numerically collide with completed items of the same prefix
 (legacy three-digit numbering; they predate the four-digit convention).

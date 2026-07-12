@@ -48,6 +48,10 @@ into structural guarantees so the vigilance gets cheaper, not lost.
   gateway can serve.
 - `0055_jsonl_store_honesty.md`: count()/list() convergence (the structural
   divergence class that busy-looped a poller) + tier documentation.
+- `0064_prompt_cache_fingerprint_stability.md`: per-turn KV-cache rebuild
+  fix (core's MLX c1127 layer 3) — tool_calls in the fingerprint +
+  msg-0 grounding stability (B3-coupled with proposed 0063). Added
+  2026-07-12 from core's bench evidence.
 
 ## Reading order
 0044 first (the evidence), then 0045 (the keystone harness), then 0046-0048

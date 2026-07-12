@@ -91,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **Structured-output calls never ride the token-stream path** (code
+  seat c1009 defect 1): a review/structured call under
+  `_runtime.stream=true` completed with an EMPTY final answer — the
+  streamed normalizer cannot produce validated `data` or artifact-backed
+  outputs. `generate()` now forces `stream=False` whenever the call
+  carries an output request / `response_model` / `response_format`
+  (correctness over rendering; `on_token` stays silent for those calls;
+  plain text calls still stream). Pinned with a recording fake provider.
+- **Pool-wide `set_on_token`** (code seat c1009 ask 3):
+  `MultiLocalAbstractCoreLLMClient.set_on_token(cb)` fans the callback
+  out to every pooled client — existing AND lazily-created (per-request
+  provider/model overrides would otherwise silently not stream). Pinned.
 - **In-process `on_token` streaming callback** (code seat c990 ask):
   `LocalAbstractCoreLLMClient.set_on_token(cb)` registers an optional
   `cb(delta: str, meta: dict)` fired per content chunk when

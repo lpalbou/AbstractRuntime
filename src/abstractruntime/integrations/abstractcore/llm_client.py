@@ -5773,6 +5773,21 @@ class LocalAbstractCoreLLMClient:
             else:
                 stream = bool(stream_raw) if stream_raw is not None else False
 
+            # Structured/artifact output requests never ride the token-stream path
+            # (code seat c1009 defect 1): the durable contract for those calls is a
+            # VALIDATED object — the streamed normalizer cannot produce `data` or wire
+            # artifact-backed outputs, so a review/structured call under
+            # `_runtime.stream=true` completed with an empty answer. Streaming is a
+            # per-call rendering optimization; correctness wins, on_token stays
+            # silent for these calls.
+            if stream and (
+                acore_output_request
+                or output_request is not None
+                or params.get("response_model") is not None
+                or params.get("response_format") is not None
+            ):
+                stream = False
+
             requested_base_url = params.get("base_url")
             requested_provider = params.get("_provider")
             requested_model = params.get("_model")
@@ -7062,7 +7077,24 @@ class MultiLocalAbstractCoreLLMClient:
         resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
         if callable(resolver):
             _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
+        pool_on_token = getattr(self, "_pool_on_token", None)
+        if callable(pool_on_token):
+            client.set_on_token(pool_on_token)
         return client
+
+    def set_on_token(self, callback: Optional[Any]) -> None:
+        """Pool-wide token callback (code seat c1009 ask 3): registers on every
+        pooled client — existing AND future (per-request provider/model
+        overrides create clients lazily; without the fan-out they would
+        silently not stream). Same contract as the per-client setter."""
+        self._pool_on_token = callback if callable(callback) else None
+        for client in list(getattr(self, "_clients", {}).values()):
+            client.set_on_token(self._pool_on_token)
+        for client in list(getattr(self, "_override_clients", {}).values()):
+            client.set_on_token(self._pool_on_token)
+        default_client = getattr(self, "_default_client", None)
+        if default_client is not None:
+            default_client.set_on_token(self._pool_on_token)
 
     def _get_client(
         self,

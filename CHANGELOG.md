@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **`SqliteSteerSidecar` heals across data-root purges** (gateway
+  adversary F3 ask): the schema now rides EVERY connection
+  (`CREATE TABLE IF NOT EXISTS` in `_connect`, a no-op on the hot
+  path) — a purged data root under a live instance used to recreate an
+  empty db whose appends died on "no such table" until a process
+  restart. Pinned: append → purge (db+wal+shm) → append heals in place.
 - **Overlay layer key `own_time` → `personal`** (phase-vocab migration,
   gateway/agency c1029 follow-up — the tool_policy alias treatment
   applied to `system_prompt.yaml`): `OVERLAY_KEYS` now names

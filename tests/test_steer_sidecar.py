@@ -400,6 +400,26 @@ def test_sqlite_sidecar_concurrent_writers_never_collide(tmp_path):
     assert len(set(seqs)) == 60  # strictly unique — no collision, no gap-by-death
 
 
+def test_sqlite_sidecar_survives_a_data_root_purge(tmp_path):
+    """Gateway adversary F3: a purged data root deleted the db file under a
+    LIVE sidecar instance — the next connect silently recreated an empty db
+    and appends died on "no such table" until restart. Schema now rides every
+    connection, so the store heals in place."""
+    path = tmp_path / "steer.sqlite3"
+    store = SqliteSteerSidecar(str(path))
+    store.append("r1", {"role": "system", "content": "before purge"})
+
+    path.unlink()  # the purge, under the live instance
+    for suffix in ("-wal", "-shm"):
+        p = tmp_path / f"steer.sqlite3{suffix}"
+        if p.exists():
+            p.unlink()
+
+    seq = store.append("r1", {"role": "system", "content": "after purge"})
+    assert seq == 1  # fresh db, fresh seq space — and no "no such table" death
+    assert [p["message"]["content"] for p in store.pending("r1")] == ["after purge"]
+
+
 def test_sqlite_sidecar_drives_a_run(tmp_path):
     sidecar = SqliteSteerSidecar(str(tmp_path / "steer.sqlite3"))
     runtime = _runtime(sidecar)

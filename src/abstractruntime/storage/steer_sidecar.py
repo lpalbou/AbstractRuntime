@@ -128,21 +128,8 @@ class SqliteSteerSidecar:
         directory = os.path.dirname(self._db_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        conn = self._connect()
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS steer_messages (
-                    run_id TEXT NOT NULL,
-                    seq INTEGER NOT NULL,
-                    payload TEXT NOT NULL,
-                    consumed INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (run_id, seq)
-                )
-                """
-            )
-        finally:
-            conn.close()
+        # Touch once at construction so misconfiguration fails HERE, loudly.
+        self._connect().close()
 
     def _connect(self) -> sqlite3.Connection:
         # isolation_level=None: autocommit + fully manual transactions, so the
@@ -151,6 +138,22 @@ class SqliteSteerSidecar:
         conn = sqlite3.connect(self._db_path, timeout=30.0, isolation_level=None)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        # Schema per-connection, not per-instance (gateway adversary F3): a
+        # data-root purge deletes the file under a LIVE instance; the next
+        # connect silently recreates an EMPTY db, and appends would die on
+        # "no such table" until a process restart. IF NOT EXISTS is a cheap
+        # no-op on the hot path and closes the class everywhere.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS steer_messages (
+                run_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                consumed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (run_id, seq)
+            )
+            """
+        )
         return conn
 
     def append(self, run_id: str, message: Dict[str, Any]) -> int:

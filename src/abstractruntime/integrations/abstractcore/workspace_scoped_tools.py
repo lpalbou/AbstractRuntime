@@ -19,9 +19,12 @@ Important limitations:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 from abstractruntime.utils.workspace_paths import (
     WorkspacePathError,
@@ -226,6 +229,98 @@ def _resolve_under_root_strict(*, root: Path, user_path: str) -> Path:
     return resolved
 
 
+# Bounded suffix scan for re-anchoring (µs-class; only runs on the refusal path).
+_REANCHOR_MAX_SUFFIXES = 16
+
+
+def _reanchor_absolute(*, scope: "WorkspaceScope", resolved: Path, roots: Tuple[Path, ...]) -> Optional[Path]:
+    """Re-anchor an absolute path that FAILED containment onto a workspace root.
+
+    Models frequently fabricate a plausible-but-wrong absolute PREFIX for a
+    file that genuinely lives inside the workspace (live incident 2026-07-12:
+    `/Users/x/projects/mnemosyne/...` named while the real tree was
+    `<root>/mnemosyne/...` — the relative retry succeeded, the absolute form
+    refused). Rule (adversarially reviewed):
+
+    - Path EXISTS on disk: substitution is forbidden UNLESS identity is
+      provable — a candidate under a root must be the SAME FILE (inode) as the
+      named path (covers case-insensitive-filesystem aliases; suffix depth ≥1
+      is fine because samefile proves identity).
+    - Path does NOT exist: fabricated-prefix recovery — try suffixes of the
+      named path under each root, LONGEST suffix first (most of the model's
+      stated intent), root before mounts on ties; the candidate must EXIST and
+      suffix depth must be ≥2 (a basename-only match is no evidence of shared
+      identity). Writes to new files deliberately never re-anchor (the
+      resolver is tool-agnostic; a parent-exists rule would create files the
+      model never named).
+    - Every candidate is re-resolved and containment-rechecked (kills
+      symlink-out) and ignored-path candidates are skipped silently (no
+      blacklist oracle).
+
+    Returns the re-anchored path, or None (caller refuses with the unified
+    error — one string for both branches, so refusals never become a
+    filesystem-existence oracle for outside paths).
+    """
+    parts = resolved.parts
+    if len(parts) < 2:
+        return None
+
+    try:
+        named_exists = resolved.exists()
+    except Exception:
+        named_exists = False
+
+    min_depth = 1 if named_exists else 2
+    max_suffix = len(parts) - 1  # never re-join the full anchor'd path
+    suffix_lengths = [k for k in range(max_suffix, min_depth - 1, -1)][: _REANCHOR_MAX_SUFFIXES]
+
+    for k in suffix_lengths:
+        suffix = Path(*parts[-k:])
+        for root in roots:
+            try:
+                candidate = resolve_no_strict(root / suffix)
+            except Exception:
+                continue
+            if not _is_under(candidate, root):
+                continue  # symlink-out or .. games — skip, keep scanning
+            try:
+                if not candidate.exists():
+                    continue
+            except Exception:
+                continue
+            # Ignored candidates are skipped silently (no blacklist oracle);
+            # _ensure_allowed backstops after return.
+            blocked = False
+            for ign in scope.ignored_paths:
+                if _is_under(candidate, ign) or resolve_no_strict(candidate) == resolve_no_strict(ign):
+                    blocked = True
+                    break
+            if blocked:
+                continue
+            if named_exists:
+                # Identity required: the named path is a REAL file elsewhere;
+                # only accept the candidate when it IS that file (same inode —
+                # case-alias/hardlink), never a lookalike substitution.
+                try:
+                    if not os.path.samefile(str(candidate), str(resolved)):
+                        continue
+                except Exception:
+                    continue
+            _logger.warning(
+                "workspace re-anchor: '%s' -> '%s' (fabricated/mis-cased absolute prefix)",
+                str(resolved),
+                str(candidate),
+            )
+            return candidate
+    return None
+
+
+_REANCHOR_TEACHING_SUFFIX = (
+    " — if you meant a file inside the workspace, retry with a path relative to '{root}' "
+    "(absolute paths must stay under it; the host can grant outside directories)."
+)
+
+
 def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
     """Resolve a user path according to workspace policy."""
     raw = str(user_path or "").strip()
@@ -241,10 +336,23 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
         resolved = resolve_no_strict(p)
         if scope.access_mode == "workspace_only":
             if not _is_under(resolved, scope.root):
-                raise ValueError(f"Path escapes workspace_root: '{user_path}'")
+                reanchored = _reanchor_absolute(scope=scope, resolved=resolved, roots=(scope.root,))
+                if reanchored is None:
+                    raise ValueError(
+                        f"Path escapes workspace_root: '{user_path}'"
+                        + _REANCHOR_TEACHING_SUFFIX.format(root=scope.root)
+                    )
+                resolved = reanchored
         elif scope.access_mode == "workspace_or_allowed":
             if not _is_under(resolved, scope.root) and not any(_is_under(resolved, p) for p in scope.allowed_paths):
-                raise ValueError(f"Path is outside workspace roots: '{user_path}'")
+                roots = (scope.root, *tuple(scope.allowed_paths))
+                reanchored = _reanchor_absolute(scope=scope, resolved=resolved, roots=roots)
+                if reanchored is None:
+                    raise ValueError(
+                        f"Path is outside workspace roots: '{user_path}'"
+                        + _REANCHOR_TEACHING_SUFFIX.format(root=scope.root)
+                    )
+                resolved = reanchored
         _ensure_allowed(path=resolved, scope=scope)
         return resolved
 

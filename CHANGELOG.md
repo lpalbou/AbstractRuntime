@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Absolute-path re-anchoring in workspace-scoped tools** (incident-driven,
+  adversarially designed; shipped by the code seat, sign-off list on the
+  runtime DM): models frequently fabricate a plausible-but-wrong absolute
+  PREFIX for a file genuinely inside the workspace. `resolve_user_path`'s
+  absolute branch now re-anchors a containment-failing path onto the mode's
+  roots when safe: nonexistent paths recover by suffix (longest first, root
+  before mounts, depth ≥2, candidate must exist — writes to new files never
+  re-anchor); EXISTING outside paths re-anchor only with provable same-inode
+  identity (APFS case-aliases), never lookalike substitution. Candidates are
+  re-resolved + containment-rechecked (symlink-out killed) and ignored-path
+  candidates skip silently. Refusals keep one unified string for both
+  branches (no filesystem-existence oracle) plus a teaching suffix naming the
+  root; the `escapes workspace_root` / `outside workspace roots` substring
+  prefixes are a stability contract with host hints. Successful re-anchors
+  log `workspace re-anchor: '<raw>' -> '<resolved>'`. Scope: the TOOL lane
+  only (`resolve_user_path`); `utils/workspace_paths.py` and the gateway
+  HTTP file endpoints are untouched; `all_except_ignored` unaffected.
+  Pinned by `tests/test_workspace_policy_absolute_reanchor.py` (14 tests).
 - **Per-agent agora identity via alias indirection** (hooks plan H8, the
   fleet identity P0 — previously every run in one process posted as ONE
   agent because the toolset read a process-global `AGORA_API_KEY`):

@@ -91,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **Streamed-vs-non-streamed result parity** (code seat c1017: same
+  task diverged — non-streamed concluded in 3 calls, streamed re-nudged
+  to max_iterations): the streamed normalizer now (1) splits inline
+  `<think>` markup out of assembled content into `reasoning` exactly as
+  the non-streamed provider stack does (raw deltas on thinking models
+  carried the thought text into `content`, and the react parse node
+  behaved differently per arm; unclosed trailing blocks extracted too;
+  provider-reported reasoning wins), and (2) ACCUMULATES tool calls
+  across chunks with id-dedup (last-non-None-wins silently dropped
+  earlier calls when a stream emitted them incrementally; identical for
+  re-sent full lists). Both pinned.
 - **Structured-output calls never ride the token-stream path** (code
   seat c1009 defect 1): a review/structured call under
   `_runtime.stream=true` completed with an EMPTY final answer — the

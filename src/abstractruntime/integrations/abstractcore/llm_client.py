@@ -4820,6 +4820,43 @@ def _normalize_local_response(
     }
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>\s*", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_UNCLOSED_RE = re.compile(r"<think>(.*)\Z", re.DOTALL | re.IGNORECASE)
+
+
+def _split_think_blocks(text: str) -> Tuple[str, Optional[str]]:
+    """Split `<think>...</think>` transport markup out of assembled stream text.
+
+    Streamed-vs-non-streamed parity (code seat c1017): on thinking models the
+    NON-streamed path arrives think-free (the provider stack extracts reasoning
+    into metadata), but raw stream deltas can carry the think text inline —
+    assembling them verbatim put `<think>` blocks into `content`, and the react
+    parse node behaved differently per arm (streamed runs re-nudged to
+    max_iterations on tasks the non-streamed arm concluded in 3 calls).
+
+    Returns (content_without_think, reasoning_or_None). An UNCLOSED trailing
+    block (stream ended mid-thought) is extracted too — thought text is never
+    left masquerading as the answer.
+    """
+    if "<think>" not in text.lower():
+        return text, None
+    parts: list[str] = []
+
+    def _collect(m: "re.Match[str]") -> str:
+        parts.append(m.group(1).strip())
+        return ""
+
+    out = _THINK_BLOCK_RE.sub(_collect, text)
+    tail = _THINK_OPEN_UNCLOSED_RE.search(out)
+    if tail:
+        parts.append(tail.group(1).strip())
+        out = out[: tail.start()]
+    reasoning = "\n\n".join(p for p in parts if p) or None
+    if reasoning is None:
+        return text, None
+    return out.strip(), reasoning
+
+
 def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = None) -> Dict[str, Any]:
     """Consume an AbstractCore streaming `generate(..., stream=True)` iterator into a single JSON result.
 
@@ -4852,6 +4889,7 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
 
     chunks: list[str] = []
     tool_calls: Any = None
+    tool_call_keys: set = set()
     usage: Any = None
     model: Optional[str] = None
     finish_reason: Optional[str] = None
@@ -4859,6 +4897,34 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
     trace_id: Optional[str] = None
     reasoning: Optional[str] = None
     ttft_ms: Optional[float] = None
+
+    def _fold_tool_calls(tc: Any) -> None:
+        """Accumulate streamed tool calls across chunks (c1017 parity).
+
+        The non-streamed response carries the COMPLETE tool-call list; stream
+        processors may emit calls on separate chunks (or re-send the full list
+        per chunk). Last-non-None-wins silently DROPPED earlier calls in the
+        incremental case — accumulate with id-dedup instead, which is identical
+        for re-sent full lists and lossless for incremental ones."""
+        nonlocal tool_calls
+        if tc is None:
+            return
+        if not isinstance(tc, list):
+            tool_calls = tc
+            return
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        for call in tc:
+            if isinstance(call, dict):
+                key = str(call.get("id") or call.get("call_id") or "") or json.dumps(
+                    _jsonable(call), sort_keys=True, default=str
+                )
+            else:
+                key = str(call)
+            if key in tool_call_keys:
+                continue
+            tool_call_keys.add(key)
+            tool_calls.append(call)
 
     def _maybe_capture_ttft(*, content: Any, tool_calls_value: Any, meta: Any) -> None:
         nonlocal ttft_ms
@@ -4887,8 +4953,7 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
                 _fire_token(content, model, chunk.get("finish_reason"))
 
             tc = chunk.get("tool_calls")
-            if tc is not None:
-                tool_calls = tc
+            _fold_tool_calls(tc)
 
             u = chunk.get("usage")
             if u is not None:
@@ -4923,8 +4988,7 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
             _fire_token(content, model, getattr(chunk, "finish_reason", None))
 
         tc = getattr(chunk, "tool_calls", None)
-        if tc is not None:
-            tool_calls = tc
+        _fold_tool_calls(tc)
 
         u = getattr(chunk, "usage", None)
         if u is not None:
@@ -4954,8 +5018,17 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
 
     gen_time = round((time.perf_counter() - start_perf) * 1000, 1)
 
+    # Parity with the non-streamed shape (c1017): providers strip `<think>`
+    # markup and surface it as reasoning on the non-streamed path; assembled
+    # deltas must not differ. Provider-reported reasoning (metadata) wins;
+    # the split only fills the gap when deltas carried the markup inline.
+    content = "".join(chunks)
+    content, think_reasoning = _split_think_blocks(content)
+    if reasoning is None and think_reasoning:
+        reasoning = think_reasoning
+
     return {
-        "content": "".join(chunks),
+        "content": content,
         "reasoning": reasoning,
         "data": None,
         "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,

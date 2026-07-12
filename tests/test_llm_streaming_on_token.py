@@ -56,6 +56,62 @@ def test_non_callable_on_token_is_ignored() -> None:
     assert result["content"] == "Hello world"
 
 
+def test_streamed_think_blocks_split_into_reasoning_like_non_streamed() -> None:
+    """c1017 parity: raw stream deltas on thinking models carry `<think>`
+    markup inline; the non-streamed path arrives think-free with reasoning in
+    metadata. The assembled streamed result must match that shape — thought
+    text never masquerades as the answer."""
+    chunks = [
+        {"content": "<think>let me "},
+        {"content": "reason about this</think>"},
+        {"content": "The answer is 4.", "finish_reason": "stop"},
+    ]
+    result = _normalize_local_streaming_response(iter(chunks))
+    assert result["content"] == "The answer is 4."
+    assert result["reasoning"] == "let me reason about this"
+
+    # Unclosed trailing block (stream died mid-thought): extracted, not leaked.
+    cut = _normalize_local_streaming_response(iter([{"content": "Sure. <think>half a thou"}]))
+    assert cut["content"] == "Sure."
+    assert cut["reasoning"] == "half a thou"
+
+    # Provider-reported reasoning (metadata) wins over the inline split.
+    both = _normalize_local_streaming_response(
+        iter([{"content": "<think>inline</think>ok", "metadata": {"reasoning": "provider says"}}])
+    )
+    assert both["content"] == "ok"
+    assert both["reasoning"] == "provider says"
+
+    # Think-free streams are untouched.
+    plain = _normalize_local_streaming_response(iter(_chunks()))
+    assert plain["content"] == "Hello world"
+    assert plain["reasoning"] is None
+
+
+def test_streamed_tool_calls_accumulate_across_chunks() -> None:
+    """c1017 parity: last-non-None-wins dropped earlier tool calls when a
+    stream emitted them incrementally; the non-streamed result carries the
+    COMPLETE list. Accumulate with id-dedup — identical for re-sent full
+    lists, lossless for incremental ones."""
+    incremental = [
+        {"tool_calls": [{"id": "c1", "function": {"name": "a", "arguments": "{}"}}]},
+        {"content": "between"},
+        {"tool_calls": [{"id": "c2", "function": {"name": "b", "arguments": "{}"}}]},
+    ]
+    result = _normalize_local_streaming_response(iter(incremental))
+    assert [c["id"] for c in result["tool_calls"]] == ["c1", "c2"]
+
+    resent = [
+        {"tool_calls": [{"id": "c1", "function": {"name": "a", "arguments": "{}"}}]},
+        {"tool_calls": [
+            {"id": "c1", "function": {"name": "a", "arguments": "{}"}},
+            {"id": "c2", "function": {"name": "b", "arguments": "{}"}},
+        ]},
+    ]
+    result2 = _normalize_local_streaming_response(iter(resent))
+    assert [c["id"] for c in result2["tool_calls"]] == ["c1", "c2"]
+
+
 class _RecordingProvider:
     """Fake AbstractCore provider: records the stream kwarg, returns a plain reply."""
 

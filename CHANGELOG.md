@@ -8,6 +8,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-agent agora identity via alias indirection** (hooks plan H8, the
+  fleet identity P0 — previously every run in one process posted as ONE
+  agent because the toolset read a process-global `AGORA_API_KEY`):
+  the run carries only a NON-secret alias (`_runtime.agora_agent`); the
+  host env carries `AGORA_API_KEY__<ALIAS>` (+ optional
+  `AGORA_URL__<ALIAS>`); `agora_tools` resolves alias→key at call time.
+  Identity is NEVER model-controlled: the tool-calls handler force-stamps
+  the schema-hidden `_agora_agent` argument from run vars (the same
+  trust-boundary seam as the shell `_registry_namespace` stamp) —
+  model-supplied aliases are overridden or stripped. A configured alias
+  with a missing key fails LOUD naming the exact env var (no silent
+  fallback to the global key — posting as the wrong agent is the bug
+  this fixes). Alias keys alone enable the toolset (fleet hosts need no
+  global key). ADVERSARY-HARDENED: aliases are validated lowercase
+  slugs, making the env-suffix fold provably INJECTIVE — two
+  differently-named residents can never silently share a key (the
+  conflation find: "research-lead" vs "research_lead" both folding to
+  one suffix is now a rejected config, not a silent merge); a
+  configured-but-blank alias fails loud instead of quietly posting as
+  the global agent; the stamp's lazy import never caches an empty name
+  set on transient failure. Pinned: two aliases authenticate as two
+  agents; spoof attempts overridden/stripped; approval-forced resume
+  re-executes with the plan-time stamped alias (mirror of the shell
+  namespace pin); the secret key rests in no run var and no ledger
+  record; `_agora_agent` hidden from every tool schema.
+- **Steer sidecar — single-writer guidance delivery** (hooks plan H4,
+  runtime half): `storage/steer_sidecar.py` ships `SteerSidecarStore`
+  (protocol) + `InMemorySteerSidecar` + `SqliteSteerSidecar` (durable,
+  WAL). Hosts APPEND steer messages via the new `Runtime.steer(run_id,
+  message)` verb (string or content-bearing dict; refuses terminal runs
+  and empty messages; requires `Runtime(steer_store=...)`); ONLY the
+  tick loop drains pending steers into `_runtime.inbox` at iteration
+  boundaries — the tick thread stays the single writer of run state, so
+  the inject-into-run-vars loss window (stale-save clobber / terminal
+  resurrection, documented in gateway's `inject_guidance`) cannot occur
+  through this path. ADVERSARY-HARDENED delivery order (the first cut
+  acked before saving — a crash between the two silently lost a durable
+  steer): deliver + advance the run-owned watermark
+  (`_runtime.steer_watermark`) + save FIRST, sidecar ack LAST —
+  at-least-once underneath, exactly-once into the inbox (watermark
+  dedup, crash-redelivery pinned); the drain re-checks external control
+  before its save (a cancel landing mid-drain is never clobbered,
+  pinned) and the ack record follows the `abstract.status` convention
+  (`EMIT_EVENT` named `abstract.steer_seen`) so ledger mappers classify
+  it instead of rendering a phantom node completion. `SqliteSteerSidecar`
+  appends under `BEGIN IMMEDIATE` (two processes can never mint the same
+  seq — 60-append 2-instance race pinned), consumed rows compact away,
+  and both stores cap undelivered backlogs at 500 with a loud refusal.
+  Root-exported. Pinned: boundary delivery + ledger ack, ordered batches,
+  terminal/missing-sidecar refusals, a 3-writer concurrency race,
+  SQLite restart survival, content-less dict refusal.
+- **Entity runs refuse raw steers** (hooks plan H5 interim): a steer
+  into a run carrying `_visit` vars OR running the visit workflow id
+  (the adversary's birth-window find: real visit runs are born before
+  the door seeds `_visit`, so the guard also keys on `workflow_id`,
+  set at creation) is refused loudly naming the missing rite — and the
+  DRAIN refuses delivery into visit runs independently (defense in
+  depth; messages stay pending, loudly logged). The ruled steer
+  contract (fresh channel-labeled reconstruction, merge+dedup,
+  attributed verbatim) is not built yet, so the generic path stays
+  closed for stamped-channel runs instead of delivering an un-rited
+  steer. A drift pin keeps core's workflow-id literal equal to
+  `identity.visit_workflow.VISIT_WORKFLOW_ID`. Pinned by tests.
+- **`tools_ran` parity in durable visit turns** (hooks plan H7a): the
+  visit workflow's ANSWER payload now carries driver-authored
+  `tools_ran` (folded from the react middle's `turn_captures`; honestly
+  `[]` on the v0 single-call path where no tool can run by
+  construction) — never derived from reply prose (the marker-imitation
+  lesson). The door can serve turn tool-truth without parsing anything.
+- **Volatile message markers for prompt-cache stability** (B1 fix,
+  runtime half — code seat's prompt-cache adversary, commons c971): a
+  top-level `volatile: true` on a wire message marks it per-call
+  ephemeral. `_maybe_prepare_prompt_cache` EXCLUDES flagged messages
+  from the durable fingerprint sequence (the react adapter's changing
+  "[loop] iteration N of M." tail forced a full local-cache re-prefill
+  every cycle) and `_strip_volatile_markers` removes the key before
+  every provider boundary (local `generate` sites + the remote client's
+  message build) — the message rides, the unknown field never reaches a
+  strict provider SDK. Pinned: two-cycle growth with a changed volatile
+  tail stays an incremental append; the strip preserves content and
+  never mutates caller structures. Agent's adapter half (the marker
+  emission) shipped same-hour against these functions (cross-package
+  smoke on their side).
 - **Core-inventory facade** (gateway c924 ask; the backlog-0059 boundary
   routes core access through runtime):
   `integrations.abstractcore.tool_inventory_facade.core_registry_tool_rows()`

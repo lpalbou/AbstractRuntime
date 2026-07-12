@@ -362,6 +362,11 @@ def build_visit_workflow(
             "diary_entries": list(captures.get("diary_entries") or []),
             "act_only_warnings": list(captures.get("act_only_warnings") or []),
         }
+        # tools_ran parity (hooks plan H7a): DRIVER-AUTHORED tool truth, folded
+        # from the middle's captures when the adapter reports it (never parsed
+        # from reply prose — the marker-imitation lesson). Absent = honestly
+        # empty; the ledger's TOOL_CALLS records remain the deep audit trail.
+        turn["tools_ran"] = [str(t) for t in (captures.get("tools_ran") or []) if str(t or "").strip()]
         return StepPlan(node_id=HARVEST_NODE, next_node="ELECT")
 
     def reason_node(run: RunState, ctx: Any) -> StepPlan:
@@ -529,7 +534,14 @@ def build_visit_workflow(
             node_id="ANSWER",
             effect=Effect(
                 type=EffectType.ANSWER_USER,
-                payload={"message": turn["marked_reply"], "turn_id": turn["turn_id"]},
+                payload={
+                    "message": turn["marked_reply"],
+                    "turn_id": turn["turn_id"],
+                    # H7a tools_ran parity: the door serves this list as the
+                    # turn's tool truth (driver-authored; [] on the v0
+                    # single-call path where no tool can run by construction).
+                    "tools_ran": list(turn.get("tools_ran") or []),
+                },
                 result_key="_turn.answered",
             ),
             next_node="PARK",

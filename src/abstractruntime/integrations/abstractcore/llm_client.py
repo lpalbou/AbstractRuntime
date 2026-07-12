@@ -423,6 +423,42 @@ def _is_runtime_grounding_only_user_message(message: Any) -> bool:
         return False
     return bool(_RUNTIME_METADATA_ONLY_RE.match(content))
 
+
+def _is_volatile_message(message: Any) -> bool:
+    """True for messages STRUCTURALLY marked per-call-ephemeral (`volatile: true`).
+
+    B1 fix, runtime half (code seat's prompt-cache adversary, commons c971):
+    adapters mark per-call tail messages (e.g. the react loop's
+    "[loop] iteration N of M.") with a top-level `volatile` flag instead of
+    relying on content regexes. Flagged messages are EXCLUDED from the durable
+    prompt-cache fingerprint sequence (they change every call, so hashing them
+    forces a full re-prefill each cycle) and the flag itself is STRIPPED before
+    the provider call (an unknown field reaching strict provider SDKs is a
+    guaranteed-400 risk).
+    """
+    return isinstance(message, dict) and bool(message.get("volatile"))
+
+
+def _strip_volatile_markers(messages: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    """Remove the `volatile` marker field before the provider boundary.
+
+    The MESSAGE still rides the payload (it carries real per-call information);
+    only the marker key is dropped. Copies are shallow per flagged message so
+    callers' durable structures are never mutated."""
+    if not isinstance(messages, list):
+        return messages
+    if not any(_is_volatile_message(m) for m in messages):
+        return messages
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        if _is_volatile_message(m):
+            clean = dict(m)
+            clean.pop("volatile", None)
+            out.append(clean)
+        else:
+            out.append(m)
+    return out
+
 _ZONEINFO_TAB_CANDIDATES = [
     "/usr/share/zoneinfo/zone.tab",
     "/usr/share/zoneinfo/zone1970.tab",
@@ -5507,10 +5543,13 @@ class LocalAbstractCoreLLMClient:
         # The trailing runtime-grounding envelope is per-call ephemeral (fresh timestamp
         # every call). Baking it into the durable per-session KV cache would poison the
         # prefix for the next call, so it is excluded from the cached message lane.
+        # Same rule for STRUCTURALLY volatile messages (`volatile: true`, B1): adapter
+        # tails change every cycle — fingerprinting them breaks the prefix-extension
+        # check and forces a full re-prefill per iteration on local control planes.
         msg_list: List[Dict[str, Any]] = [
             m
             for m in (messages if isinstance(messages, list) and messages else [])
-            if not _is_runtime_grounding_only_user_message(m)
+            if not _is_runtime_grounding_only_user_message(m) and not _is_volatile_message(m)
         ]
         msg_hashes: List[str] = [_prompt_cache_message_fingerprint(m) for m in msg_list]
 
@@ -5832,7 +5871,7 @@ class LocalAbstractCoreLLMClient:
                     )
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
-                    messages=messages,
+                    messages=_strip_volatile_markers(messages),
                     system_prompt=system_prompt,
                     tools=tools,
                     media=media,
@@ -5864,7 +5903,7 @@ class LocalAbstractCoreLLMClient:
                         )
                     resp = self._llm.generate(
                         prompt=str(prompt or ""),
-                        messages=messages,
+                        messages=_strip_volatile_markers(messages),
                         system_prompt=system_prompt,
                         tools=tools,
                         media=media,
@@ -11504,6 +11543,7 @@ class RemoteAbstractCoreLLMClient:
             return result
 
         # Build OpenAI-like messages for AbstractCore server.
+        messages = _strip_volatile_markers(messages)
         out_messages: List[Dict[str, Any]] = []
         if system_prompt:
             out_messages.append({"role": "system", "content": system_prompt})

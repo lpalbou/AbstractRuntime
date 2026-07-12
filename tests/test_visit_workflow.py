@@ -157,12 +157,17 @@ def test_full_visit_lifecycle_turns_elections_reflection(tmp_path: Path) -> None
 
         # The visitor-facing replies rode ANSWER_USER records in the ledger.
         ledger = ert.runtime.get_ledger(run_id)
-        answers = [
-            ((r.get("effect") or {}).get("payload") or {}).get("message")
+        answer_payloads = [
+            ((r.get("effect") or {}).get("payload") or {})
             for r in ledger
             if isinstance(r, dict) and ((r.get("effect") or {}).get("type")) == "answer_user"
         ]
+        answers = [p.get("message") for p in answer_payloads]
         assert any("Hello Laurent" in (m or "") for m in answers)
+        # tools_ran parity (hooks plan H7a): every turn answer carries the
+        # driver-authored tool truth — [] on the v0 single-call path where no
+        # tool can run by construction (never derived from reply prose).
+        assert all(p.get("tools_ran") == [] for p in answer_payloads)
 
         # D2 through the workflow: identity records untouched by presence.
         value_ids = [

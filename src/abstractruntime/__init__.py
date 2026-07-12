@@ -51,6 +51,7 @@ from .storage.commands import (
     JsonlCommandStore,
 )
 from .storage.ledger_chain import HashChainedLedgerStore, verify_ledger_chain
+from .storage.steer_sidecar import InMemorySteerSidecar, SqliteSteerSidecar, SteerSidecarStore
 from .storage.observable import ObservableLedgerStore, ObservableLedgerStoreProtocol
 from .storage.snapshots import Snapshot, SnapshotStore, InMemorySnapshotStore, JsonSnapshotStore
 from .storage.offloading import OffloadingLedgerStore, OffloadingRunStore, offload_large_values
@@ -162,6 +163,9 @@ __all__ = [
     "SqliteCommandCursorStore",
     "HashChainedLedgerStore",
     "verify_ledger_chain",
+    "SteerSidecarStore",
+    "InMemorySteerSidecar",
+    "SqliteSteerSidecar",
     "ObservableLedgerStore",
     "ObservableLedgerStoreProtocol",
     "OffloadingRunStore",

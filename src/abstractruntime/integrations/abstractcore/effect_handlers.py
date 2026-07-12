@@ -48,6 +48,30 @@ logger = get_logger(__name__)
 
 _JSON_SCHEMA_PRIMITIVE_TYPES: Set[str] = {"string", "integer", "number", "boolean", "array", "object", "null"}
 
+_AGORA_TOOL_NAMES_CACHE: Optional[frozenset] = None
+
+
+def _agora_tool_names() -> frozenset:
+    """Exact names of the runtime's agora toolset (H8 identity stamping targets).
+
+    Lazily imported so this module never pays the agora import unless tool calls
+    actually execute; sourced from the toolset's own registry so the stamp list
+    can never drift from the declared tools.
+    """
+    global _AGORA_TOOL_NAMES_CACHE
+    if _AGORA_TOOL_NAMES_CACHE is None:
+        try:
+            from .agora_tools import AGORA_TOOL_NAMES
+        except ImportError:  # pragma: no cover - abstractcore genuinely absent
+            # Do NOT cache the empty set: a transient failure must never
+            # permanently disable a trust-boundary stamp for the process
+            # lifetime (adversary finding). Without abstractcore the agora
+            # toolset cannot execute either, so an empty answer here is
+            # consistent, not a bypass.
+            return frozenset()
+        _AGORA_TOOL_NAMES_CACHE = frozenset(AGORA_TOOL_NAMES)
+    return _AGORA_TOOL_NAMES_CACHE
+
 _ABS_PATH_RE = re.compile(r"^[a-zA-Z]:[\\\\/]")
 
 
@@ -2975,6 +2999,25 @@ def make_tool_calls_handler(
             # executes with the same namespace.
             if name in ("shell_exec", "shell_write_stdin", "shell_close"):
                 arguments["_registry_namespace"] = str(getattr(run, "run_id", "") or "")
+
+            # Agora tools (hooks plan H8): the agent identity alias is a TRUST BOUNDARY
+            # argument — always derived from run vars (`_runtime.agora_agent`), overwriting
+            # anything the model supplied, so a model can never post as another agent.
+            # The alias is a NON-secret name; the key stays in host env (AGORA_API_KEY__<ALIAS>).
+            # Exact-name match against the runtime's own toolset (never a prefix guess:
+            # a custom tool that merely starts with "agora_" must not receive the stamp).
+            if name in _agora_tool_names():
+                rv = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+                raw_alias = rv.get("agora_agent") if isinstance(rv, dict) else None
+                if raw_alias is None:
+                    # No alias configured: strip anything the model supplied
+                    # (a spoof attempt must not survive) — global identity.
+                    arguments.pop("_agora_agent", None)
+                else:
+                    # Configured — stamp the RAW value, even blank/invalid:
+                    # the toolset validates and fails LOUD (a blank alias must
+                    # never silently fall back to the global identity).
+                    arguments["_agora_agent"] = str(raw_alias)
 
             if name == "open_attachment":
                 tool_calls_for_evidence.append(

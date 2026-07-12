@@ -50,10 +50,18 @@ def telegram_tools_enabled() -> bool:
 
 
 def agora_tools_enabled() -> bool:
-    """Agora (agent-to-agent hub) tools: explicit flag, or implied by a configured API key."""
+    """Agora (agent-to-agent hub) tools: explicit flag, or implied by a configured API key.
+
+    Per-agent alias keys (`AGORA_API_KEY__<ALIAS>`, hooks plan H8) imply the toolset
+    too: a fleet host may run N aliased residents with no process-global key at all.
+    """
     if _env_flag("ABSTRACT_ENABLE_AGORA_TOOLS"):
         return True
-    return bool(str(os.getenv("AGORA_API_KEY") or "").strip())
+    if str(os.getenv("AGORA_API_KEY") or "").strip():
+        return True
+    return any(
+        k.startswith("AGORA_API_KEY__") and str(v or "").strip() for k, v in os.environ.items()
+    )
 
 
 def shell_tools_enabled() -> bool:

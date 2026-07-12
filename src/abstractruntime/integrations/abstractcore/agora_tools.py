@@ -10,6 +10,17 @@ Design notes:
   (see agora README: "any agent that can speak HTTP, WebSocket, or MCP").
 - Credentials come from the host environment (`AGORA_URL`, `AGORA_API_KEY`);
   they never live in flow JSON, prompts, or ledgers.
+- PER-AGENT IDENTITY (hooks plan H8): several resident runs in ONE process can
+  post as DISTINCT agora agents via alias indirection — the run carries only a
+  non-secret alias (`_runtime.agora_agent`), the environment carries the key
+  under `AGORA_API_KEY__<ALIAS>` (and optionally `AGORA_URL__<ALIAS>`), and the
+  toolset resolves alias→key at call time. The alias reaches these tools as the
+  schema-hidden `_agora_agent` argument, force-stamped by the tool-calls effect
+  handler from run vars (the same trust-boundary seam that stamps the shell
+  registry namespace) — a model-supplied value is always overridden, so
+  identity is never model-controlled. A configured alias whose key is missing
+  raises an actionable error; it NEVER falls back to the global key (posting as
+  the wrong agent is the failure this exists to prevent).
 - Priority semantics surfaced by `agora_check_inbox` envelopes (from agora's
   protocol; do not re-rank client-side):
     * `critical`            — operator-only forced-attention tier (unforgeable)
@@ -29,6 +40,7 @@ degrade to `{"type": "string"}`, which made argument coercion stringify dicts).
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,11 +58,64 @@ _VALID_STATUSES = {"open", "reply", "fyi", "blocked", "resolved"}
 _VALID_URGENCIES = {"inbox", "next_turn", "interrupt"}
 
 
-def agora_base_url() -> str:
+# Aliases are lowercase slugs. On this domain the env-suffix fold (uppercase +
+# hyphen->underscore) is INJECTIVE: no two legal aliases share a suffix, so two
+# differently-named residents can never silently read the same key (the
+# adversary's conflation finding — "research-lead" vs "research_lead" both
+# folding to RESEARCH_LEAD is a rejected config, not a silent merge).
+_ALIAS_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _validate_alias(alias: str) -> str:
+    name = str(alias or "")
+    if name != name.strip() or not _ALIAS_RE.match(name):
+        raise ValueError(
+            f"invalid agora agent alias {name!r}: aliases are lowercase slugs "
+            "(letters/digits with single hyphens, e.g. 'resident-a') so each "
+            "alias maps to exactly one AGORA_API_KEY__<ALIAS> env var."
+        )
+    return name
+
+
+def _alias_env_suffix(alias: str) -> str:
+    """Uppercased env-var suffix for a VALIDATED agent alias (hyphen -> _).
+
+    Injective over the legal alias domain — see _ALIAS_RE."""
+    return _validate_alias(alias).upper().replace("-", "_")
+
+
+def agora_base_url(alias: str = "") -> str:
+    name = str(alias or "").strip()
+    if name:
+        per_alias = str(os.getenv(f"AGORA_URL__{_alias_env_suffix(name)}") or "").strip()
+        if per_alias:
+            return per_alias.rstrip("/")
     return str(os.getenv("AGORA_URL") or DEFAULT_AGORA_URL).strip().rstrip("/")
 
 
-def _api_key() -> str:
+def _api_key(alias: str = "") -> str:
+    raw = str(alias or "")
+    name = raw.strip()
+    if raw and not name:
+        # Present-but-blank is a CONFIGURED alias that is invalid — failing
+        # into the global identity here would silently post as the wrong
+        # agent (the adversary's whitespace finding). Loud, like missing keys.
+        raise ValueError(
+            "agora agent alias is configured but blank; set _runtime.agora_agent "
+            "to a lowercase slug (e.g. 'resident-a') or remove it entirely."
+        )
+    if name:
+        env_var = f"AGORA_API_KEY__{_alias_env_suffix(name)}"
+        key = str(os.getenv(env_var) or "").strip()
+        if not key:
+            # Deliberately NO fallback to the global AGORA_API_KEY: silently
+            # posting as a different agent is the identity bug H8 exists to fix.
+            raise RuntimeError(
+                f"agora agent alias '{name}' is configured for this run but {env_var} "
+                "is not set. Register that agent on the hub (POST /agents with the "
+                f"hub admin key) and export {env_var} in the host environment."
+            )
+        return key
     key = str(os.getenv("AGORA_API_KEY") or "").strip()
     if not key:
         raise RuntimeError(
@@ -69,15 +134,16 @@ def _request(
     payload: Optional[Dict[str, Any]] = None,
     query: Optional[Dict[str, Any]] = None,
     timeout_s: float = 20.0,
+    alias: str = "",
 ) -> Any:
-    url = agora_base_url() + path
+    url = agora_base_url(alias) + path
     if query:
         clean = {k: v for k, v in query.items() if v is not None}
         if clean:
             url += "?" + urllib.parse.urlencode(clean)
 
     data: Optional[bytes] = None
-    headers = {"Authorization": f"Bearer {_api_key()}"}
+    headers = {"Authorization": f"Bearer {_api_key(alias)}"}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -95,7 +161,7 @@ def _request(
         raise RuntimeError(f"agora hub returned HTTP {e.code} for {method} {path}: {detail}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(
-            f"cannot reach agora hub at {agora_base_url()} ({e.reason}). "
+            f"cannot reach agora hub at {agora_base_url(alias)} ({e.reason}). "
             "Is the hub running? Set AGORA_URL if it lives elsewhere."
         ) from e
 
@@ -118,9 +184,10 @@ def _clean_str(value: Any, *, field: str, allowed: Optional[set] = None, default
     name="agora_whoami",
     description="Return this agent's identity on the agora hub (id, name, about, operator flag).",
     when_to_use="To learn or confirm your own agora agent id before posting or acking.",
+    hide_args=["_agora_agent"],
 )
-def agora_whoami() -> Dict[str, Any]:
-    result = _request("GET", "/whoami")
+def agora_whoami(*, _agora_agent: str = "") -> Dict[str, Any]:
+    result = _request("GET", "/whoami", alias=_agora_agent)
     return result if isinstance(result, dict) else {"raw": result}
 
 
@@ -134,8 +201,9 @@ def agora_whoami() -> Dict[str, Any]:
         "At the start of a turn (wait_seconds=0) to triage what arrived, or to wait briefly "
         "for replies. Triage order: critical > blocked > open+escalated > to_me/reply_to_me > open > fyi."
     ),
+    hide_args=["_agora_agent"],
 )
-def agora_check_inbox(*, wait_seconds: float = 0.0) -> List[Dict[str, Any]]:
+def agora_check_inbox(*, wait_seconds: float = 0.0, _agora_agent: str = "") -> List[Dict[str, Any]]:
     try:
         wait = float(wait_seconds or 0.0)
     except Exception:
@@ -146,6 +214,7 @@ def agora_check_inbox(*, wait_seconds: float = 0.0) -> List[Dict[str, Any]]:
         "/inbox",
         query={"wait": wait} if wait > 0 else None,
         timeout_s=wait + 15.0,
+        alias=_agora_agent,
     )
     return result if isinstance(result, list) else []
 
@@ -158,8 +227,9 @@ def agora_check_inbox(*, wait_seconds: float = 0.0) -> List[Dict[str, Any]]:
     ),
     when_to_use="After you have read/handled envelopes, ack each channel's highest seq you processed.",
     examples=[{"description": "Ack two channels", "arguments": {"cursors": {"assembly": 41, "dm:runtime": 7}}}],
+    hide_args=["_agora_agent"],
 )
-def agora_ack_inbox(*, cursors: Dict[str, int]) -> Dict[str, Any]:
+def agora_ack_inbox(*, cursors: Dict[str, int], _agora_agent: str = "") -> Dict[str, Any]:
     # Tolerate a JSON-object string: models (and some schema-inference paths)
     # frequently deliver object arguments as serialized JSON.
     if isinstance(cursors, str):
@@ -177,7 +247,7 @@ def agora_ack_inbox(*, cursors: Dict[str, int]) -> Dict[str, Any]:
         clean[name] = int(seq)
     if not clean:
         raise ValueError("cursors contained no valid {channel: seq} entries")
-    result = _request("POST", "/inbox/ack", payload={"cursors": clean})
+    result = _request("POST", "/inbox/ack", payload={"cursors": clean}, alias=_agora_agent)
     return result if isinstance(result, dict) else {"acked": clean}
 
 
@@ -185,8 +255,11 @@ def agora_ack_inbox(*, cursors: Dict[str, int]) -> Dict[str, Any]:
     name="agora_read_channel",
     description="Read recent messages from an agora channel (full bodies, oldest-first within the window).",
     when_to_use="When an envelope headline needs context, or to catch up on a channel's history.",
+    hide_args=["_agora_agent"],
 )
-def agora_read_channel(*, channel: str, since: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
+def agora_read_channel(
+    *, channel: str, since: int = 0, limit: int = 20, _agora_agent: str = ""
+) -> List[Dict[str, Any]]:
     name = _clean_str(channel, field="channel")
     if not name:
         raise ValueError("channel is required")
@@ -194,6 +267,7 @@ def agora_read_channel(*, channel: str, since: int = 0, limit: int = 20) -> List
         "GET",
         f"/channels/{urllib.parse.quote(name, safe='')}/messages",
         query={"since": max(0, int(since)), "limit": max(1, min(int(limit), 200))},
+        alias=_agora_agent,
     )
     return result if isinstance(result, list) else []
 
@@ -202,8 +276,9 @@ def agora_read_channel(*, channel: str, since: int = 0, limit: int = 20) -> List
     name="agora_read_message",
     description="Read one agora message in full (body + structured data) by channel and message id.",
     when_to_use="When an inbox envelope did not inline the body (large/fyi) and you need its content.",
+    hide_args=["_agora_agent"],
 )
-def agora_read_message(*, channel: str, message_id: str) -> Dict[str, Any]:
+def agora_read_message(*, channel: str, message_id: str, _agora_agent: str = "") -> Dict[str, Any]:
     name = _clean_str(channel, field="channel")
     mid = _clean_str(message_id, field="message_id")
     if not name or not mid:
@@ -211,6 +286,7 @@ def agora_read_message(*, channel: str, message_id: str) -> Dict[str, Any]:
     result = _request(
         "GET",
         f"/channels/{urllib.parse.quote(name, safe='')}/messages/{urllib.parse.quote(mid, safe='')}",
+        alias=_agora_agent,
     )
     return result if isinstance(result, dict) else {"raw": result}
 
@@ -225,6 +301,7 @@ def agora_read_message(*, channel: str, message_id: str) -> Dict[str, Any]:
         "To answer channel traffic (status=reply + reply_to), raise questions (status=open), "
         "or share updates (status=fyi). Address specific members with to=[agent_id,...]."
     ),
+    hide_args=["_agora_agent"],
 )
 def agora_post_message(
     *,
@@ -235,6 +312,7 @@ def agora_post_message(
     urgency: str = "inbox",
     reply_to: Optional[str] = None,
     to: Optional[List[str]] = None,
+    _agora_agent: str = "",
 ) -> Dict[str, Any]:
     name = _clean_str(channel, field="channel")
     text = str(body or "").strip()
@@ -252,7 +330,12 @@ def agora_post_message(
         recipients = [str(x).strip() for x in to if str(x or "").strip()]
         if recipients:
             payload["to"] = recipients
-    result = _request("POST", f"/channels/{urllib.parse.quote(name, safe='')}/messages", payload=payload)
+    result = _request(
+        "POST",
+        f"/channels/{urllib.parse.quote(name, safe='')}/messages",
+        payload=payload,
+        alias=_agora_agent,
+    )
     return result if isinstance(result, dict) else {"raw": result}
 
 
@@ -263,6 +346,7 @@ def agora_post_message(
         "use; structurally closed to third parties)."
     ),
     when_to_use="For pairwise logistics; decisions the team should see belong in a shared channel.",
+    hide_args=["_agora_agent"],
 )
 def agora_send_dm(
     *,
@@ -272,6 +356,7 @@ def agora_send_dm(
     status: str = "fyi",
     urgency: str = "inbox",
     reply_to: Optional[str] = None,
+    _agora_agent: str = "",
 ) -> Dict[str, Any]:
     who = _clean_str(peer, field="peer")
     text = str(body or "").strip()
@@ -285,7 +370,12 @@ def agora_send_dm(
     }
     if reply_to is not None and str(reply_to).strip():
         payload["reply_to"] = str(reply_to).strip()
-    result = _request("POST", f"/dms/{urllib.parse.quote(who, safe='')}/messages", payload=payload)
+    result = _request(
+        "POST",
+        f"/dms/{urllib.parse.quote(who, safe='')}/messages",
+        payload=payload,
+        alias=_agora_agent,
+    )
     return result if isinstance(result, dict) else {"raw": result}
 
 

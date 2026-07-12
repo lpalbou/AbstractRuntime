@@ -281,6 +281,66 @@ def test_prompt_cache_prepare_excludes_trailing_envelope_and_appends_incremental
     assert all(not llm_client._is_runtime_grounding_only_user_message(m) for m in delta)
 
 
+def test_prompt_cache_prepare_excludes_volatile_marked_messages() -> None:
+    """B1 fix (code seat c971, runtime half): an adapter tail marked
+    `volatile: true` changes every cycle — with the STRUCTURAL exclusion, the
+    grown transcript still reads as a prefix extension (incremental append),
+    never a full clear+fork+re-prefill per iteration."""
+    from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCoreLLMClient
+
+    provider = _FakeCacheProvider()
+    client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
+    client._llm = provider  # type: ignore[attr-defined]
+    client._prompt_cache_state_lock = threading.Lock()  # type: ignore[attr-defined]
+    client._prompt_cache_state = {}  # type: ignore[attr-defined]
+
+    key = "sess:volatile"
+    sys = "SYSTEM"
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
+
+    transcript = _tool_loop_messages()
+    tail1 = {"role": "user", "content": "[loop] iteration 1 of 20.", "volatile": True}
+    client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
+        prompt_cache_key=key, system_prompt=sys, tools=tools, messages=transcript + [tail1]
+    )
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
+    assert all(not m.get("volatile") for m in provider.calls[-1][2])
+
+    grown = transcript + [
+        {"role": "assistant", "content": "step", "tool_calls": [
+            {"type": "function", "id": "call_2", "function": {"name": "t", "arguments": "{}"}}
+        ]},
+        {"role": "tool", "content": "[t]: ok", "tool_call_id": "call_2"},
+    ]
+    tail2 = {"role": "user", "content": "[loop] iteration 2 of 20.", "volatile": True}
+    provider.calls.clear()
+    client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
+        prompt_cache_key=key, system_prompt=sys, tools=tools, messages=grown + [tail2]
+    )
+    # Incremental append despite the changed volatile tail — only the real delta rides.
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "update"]
+    assert len(provider.calls[-1][2]) == 2
+
+
+def test_volatile_marker_is_stripped_before_the_provider() -> None:
+    """The `volatile` key is runtime-internal: the MESSAGE still reaches the
+    provider (it carries real per-call text) but the marker key never does
+    (unknown fields 400 on strict provider SDKs); durable caller structures
+    are never mutated by the strip."""
+    strip = llm_client._strip_volatile_markers
+    tail = {"role": "user", "content": "[loop] iteration 3 of 20.", "volatile": True}
+    msgs = [{"role": "user", "content": "task"}, tail]
+    out = strip(msgs)
+    assert out is not None
+    assert len(out) == 2
+    assert out[1]["content"] == "[loop] iteration 3 of 20."
+    assert "volatile" not in out[1]
+    assert tail["volatile"] is True  # caller's dict untouched
+    # No markers -> the exact same list object (zero-copy fast path).
+    plain = [{"role": "user", "content": "task"}]
+    assert strip(plain) is plain
+
+
 def _run_tool_loop_workflow_once(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
     """Drive one LLM_CALL with tool-loop shaped messages through the real Runtime so the
     ledger grounding pass (`_maybe_inject_llm_call_grounding_for_ledger`) applies."""

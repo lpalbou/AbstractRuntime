@@ -49,6 +49,11 @@ from .event_keys import build_event_wait_key
 
 logger = logging.getLogger(__name__)
 
+# The entity visit workflow's id (identity/visit_workflow.py VISIT_WORKFLOW_ID).
+# Duplicated as a literal because core must not import the identity layer
+# (identity imports core); a drift test pins the two spellings equal.
+_ENTITY_VISIT_WORKFLOW_ID = "entity-visit@1"
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -802,6 +807,7 @@ class Runtime:
         effect_policy: Optional[EffectPolicy] = None,
         config: Optional[RuntimeConfig] = None,
         chat_summarizer: Optional[Any] = None,
+        steer_store: Optional[Any] = None,
     ):
         self._run_store = run_store
         self._ledger_store = ledger_store
@@ -812,6 +818,10 @@ class Runtime:
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
+        # Steer sidecar (hooks plan H4): host threads APPEND steer messages here;
+        # only the tick loop DRAINS them into `_runtime.inbox` (single-writer),
+        # acking each delivery with a `steer_seen` ledger record.
+        self._steer_store = steer_store
         # Best-effort callbacks invoked once per run when it reaches a terminal status
         # (COMPLETED/FAILED/CANCELLED). Used by integrations to release run-scoped,
         # process-local resources (e.g. persistent shell sessions). Never affects
@@ -1006,6 +1016,197 @@ class Runtime:
         self._run_store.save(run)
         self._append_terminal_status_event(run)
         return run
+
+    def steer(self, run_id: str, message: Any) -> int:
+        """Queue a steer message for a live run (hooks plan H4).
+
+        The message is APPENDED to the steer sidecar — never written into run
+        vars from this (host) thread. The tick loop drains pending steers into
+        `_runtime.inbox` at its next iteration boundary (where the ReAct reason
+        node already looks) and acks delivery with an `abstract.steer_seen`
+        ledger record. The tick thread stays the ONLY writer of run state.
+
+        Delivery latency, honestly: a RUNNING run sees the steer at its next
+        loop boundary; a PARKED (waiting) run only at its next wake — steers do
+        not wake runs (emit_event does). Delivery is at-least-once with a
+        run-owned watermark dedup, so a crash-replayed drain never doubles a
+        message.
+
+        Accepts a plain string (wrapped as {"role": "system", "content": ...})
+        or a dict carrying a non-empty string `content`. Returns the sidecar
+        seq.
+
+        Raises: RuntimeError (no sidecar configured), KeyError (unknown run),
+        ValueError (terminal run / empty message), PermissionError (entity
+        visit run — the H5 rite is not built, so the generic path refuses).
+        """
+        if self._steer_store is None:
+            raise RuntimeError(
+                "steer() requires a steer_store — construct Runtime(steer_store=...) "
+                "(e.g. InMemorySteerSidecar or SqliteSteerSidecar)."
+            )
+        run = self.get_state(run_id)
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+            raise ValueError(f"run '{run_id}' is {run.status.value}; a terminal run cannot be steered")
+        self._refuse_entity_steer(run)
+        if isinstance(message, str):
+            text = message.strip()
+            if not text:
+                raise ValueError("steer message must be a non-empty string or a dict with string content")
+            item: Dict[str, Any] = {"role": "system", "content": text}
+        elif isinstance(message, dict) and isinstance(message.get("content"), str) and message["content"].strip():
+            # The loop consumer reads string `content`; accepting content-less
+            # dicts would ack + record a delivery the model can never see.
+            item = copy.deepcopy(message)
+        else:
+            raise ValueError("steer message must be a non-empty string or a dict with string content")
+        seq = int(self._steer_store.append(run.run_id, item))
+        # TOCTOU close (adversary P2): the run may have finished between the
+        # status check and the append. Recheck once and retire the message so
+        # it cannot sit pending forever on a terminal run.
+        try:
+            latest = self._run_store.load(run_id)
+            if latest is not None and latest.status in (
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            ):
+                self._steer_store.ack(run.run_id, seq)
+                raise ValueError(
+                    f"run '{run_id}' finished while the steer was being queued; message retired"
+                )
+        except ValueError:
+            raise
+        except Exception:  # pragma: no cover - recheck is best-effort
+            pass
+        return seq
+
+    @staticmethod
+    def _refuse_entity_steer(run: RunState) -> None:
+        """H5 interim (entity rite is an enforced seam, not etiquette): a raw
+        inbox steer into a stamped-channel (entity visit) run would bypass the
+        ruled steer rite — fresh channel-labeled reconstruction, merge+dedup,
+        attributed verbatim. Until that consumer exists, the generic path
+        REFUSES entity runs loudly instead of delivering an un-rited steer.
+
+        Two signals (adversary P1: vars alone leave a birth window — the door
+        seeds `_visit` only after start): the visit vars namespace OR the visit
+        workflow id, which is set at run creation and cannot appear later."""
+        is_visit_vars = isinstance(run.vars, dict) and isinstance(run.vars.get("_visit"), dict)
+        is_visit_workflow = str(getattr(run, "workflow_id", "") or "") == _ENTITY_VISIT_WORKFLOW_ID
+        if is_visit_vars or is_visit_workflow:
+            raise PermissionError(
+                f"run '{run.run_id}' is an entity visit run; raw steers are refused — "
+                "entity steering requires the steer rite (hooks plan H5), which is "
+                "not built yet. Speak through the visit channel instead."
+            )
+
+    def _drain_steer_messages(self, run: RunState) -> None:
+        """Move pending sidecar steers into `_runtime.inbox` (tick-thread only).
+
+        Called at tick iteration boundaries. A sidecar failure is contained to
+        a warning — steering must never be able to fail the run it is trying
+        to help.
+
+        Ordering (adversary P0: the first cut acked BEFORE saving, so a crash
+        between the two silently lost a durable steer):
+          1. filter pending by the run-owned watermark (`_runtime.steer_watermark`)
+             — the dedup that makes redelivery safe;
+          2. recheck external control (a cancel landing during the sidecar read
+             must not be clobbered by our save — the loop-top check is stale by
+             one I/O);
+          3. deliver + advance the watermark + SAVE (delivery and dedup cursor
+             land atomically in the run's own durable state);
+          4. ledger record (`abstract.steer_seen`, the observable ack);
+          5. sidecar ack LAST (pure bookkeeping: a crash before it redelivers,
+             and the watermark filters the duplicates).
+        """
+        if self._steer_store is None:
+            return
+        try:
+            items = self._steer_store.pending(run.run_id)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("steer sidecar read failed for run %s: %s", run.run_id, e)
+            return
+        if not items:
+            return
+        try:
+            if not isinstance(run.vars, dict):
+                return
+            # H5 at DELIVERY time too: refuse to deliver into a visit run even
+            # if a message slipped past the append-time guard (birth window).
+            try:
+                self._refuse_entity_steer(run)
+            except PermissionError:
+                logger.warning(
+                    "steer sidecar: %d message(s) pending on entity visit run %s are NOT "
+                    "delivered (H5: the steer rite is not built); they stay pending.",
+                    len(items),
+                    run.run_id,
+                )
+                return
+            runtime_ns = run.vars.get("_runtime")
+            if not isinstance(runtime_ns, dict):
+                runtime_ns = {}
+                run.vars["_runtime"] = runtime_ns
+            watermark = int(runtime_ns.get("steer_watermark") or 0)
+            fresh = [e for e in items if int(e.get("seq") or 0) > watermark]
+            all_seqs = [int(e.get("seq") or 0) for e in items]
+            if not fresh:
+                # Everything pending was already delivered (crash between save
+                # and sidecar-ack): retire the leftovers, delivery already true.
+                self._steer_store.ack(run.run_id, max(all_seqs))
+                return
+            # A cancel/pause may have landed while we read the sidecar; saving
+            # our snapshot over it would resurrect the run (the exact clobber
+            # this module exists to remove). Recheck on the freshest state.
+            try:
+                latest = self._run_store.load(run.run_id)
+            except Exception:
+                latest = None
+            if latest is not None and (
+                latest.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
+                or _is_paused_run_vars(latest.vars)
+            ):
+                return
+            inbox = runtime_ns.get("inbox")
+            if not isinstance(inbox, list):
+                inbox = []
+                runtime_ns["inbox"] = inbox
+            seqs: list[int] = []
+            for entry in fresh:
+                inbox.append(entry.get("message"))
+                seqs.append(int(entry.get("seq") or 0))
+            last_seq = max(seqs)
+            runtime_ns["steer_watermark"] = last_seq
+            run.updated_at = utc_now_iso()
+            self._run_store.save(run)
+            # The observable ack (H4): "seen" is a durable fact in the run's
+            # own ledger. Shaped like the abstract.status convention (an
+            # EMIT_EVENT record with a namespaced name) so ledger consumers
+            # classify it — an effect-less COMPLETED record here read as a
+            # phantom node completion in every ledger mapper (adversary P1).
+            eff = Effect(
+                type=EffectType.EMIT_EVENT,
+                payload={
+                    "name": "abstract.steer_seen",
+                    "scope": "run",
+                    "payload": {"seqs": seqs, "count": len(seqs), "node_id": run.current_node},
+                },
+            )
+            rec = StepRecord.start(
+                run=run,
+                node_id=run.current_node,
+                effect=eff,
+                idempotency_key=f"system:steer_seen:{last_seq}",
+            )
+            rec.status = StepStatus.COMPLETED
+            rec.result = {"emitted": True, "steer_seen": {"seqs": seqs, "count": len(seqs)}}
+            rec.ended_at = utc_now_iso()
+            self._ledger_store.append(rec)
+            self._steer_store.ack(run.run_id, last_seq)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("steer sidecar drain failed for run %s: %s", run.run_id, e)
 
     def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
         """Pause a run (durably) until it is explicitly resumed.
@@ -1479,6 +1680,11 @@ class Runtime:
             controlled = _abort_if_externally_controlled()
             if controlled is not None:
                 return controlled
+
+            # Steer sidecar drain (H4): deliver queued host steers into
+            # `_runtime.inbox` at this boundary — the tick thread is the only
+            # writer of run state, so the old inject-into-vars race cannot occur.
+            self._drain_steer_messages(run)
 
             handler = workflow.get_node(run.current_node)
             try:

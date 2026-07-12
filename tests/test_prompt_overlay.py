@@ -194,11 +194,50 @@ class TestComposeSystemBase:
     def test_default_prompt_texts_names_every_overlay_key(self):
         from abstractruntime.identity.chat import default_prompt_texts
         from abstractruntime.identity.life import OWN_TIME_CONTRACT
-        from abstractruntime.identity.prompt_overlay import OVERLAY_KEYS
+        from abstractruntime.identity.prompt_overlay import (
+            LEGACY_OVERLAY_KEY_ALIASES,
+            OVERLAY_KEYS,
+        )
 
         texts = default_prompt_texts()
-        assert set(texts) == set(OVERLAY_KEYS)
-        assert texts["own_time"] == OWN_TIME_CONTRACT
+        # Ruled keys all present; legacy twins DERIVED from the alias table
+        # (serving processes built pre-flip keep reading; delete when flipped).
+        assert set(texts) == set(OVERLAY_KEYS) | set(LEGACY_OVERLAY_KEY_ALIASES)
+        assert texts["personal"] == OWN_TIME_CONTRACT
+        assert texts["own_time"] == texts["personal"]
+
+
+# ------------------------------------------- phase-vocab alias migration
+
+
+class TestOverlayKeyAliases:
+    """The "own_time" layer key becomes "personal" (phase-vocab ruling) with
+    the tool_policy alias treatment: both spellings read, ruled key wins,
+    writes normalize to the ruled spelling on disk."""
+
+    def test_legacy_own_time_key_still_reads_as_personal(self, tmp_path):
+        (tmp_path / "system_prompt.yaml").write_text(
+            "own_time: LEGACY-OWN-TIME-TEXT\n", encoding="utf-8"
+        )
+        overlay = read_prompt_overlay(tmp_path)
+        assert overlay == {"personal": "LEGACY-OWN-TIME-TEXT"}
+
+    def test_ruled_key_wins_when_a_file_carries_both(self, tmp_path):
+        (tmp_path / "system_prompt.yaml").write_text(
+            "personal: RULED-TEXT\nown_time: LEGACY-TEXT\n", encoding="utf-8"
+        )
+        overlay = read_prompt_overlay(tmp_path)
+        assert overlay == {"personal": "RULED-TEXT"}
+
+    def test_write_normalizes_legacy_key_to_ruled_spelling(self, tmp_path):
+        write_prompt_overlay(tmp_path, {"own_time": "MY HOUR"})
+        raw = (tmp_path / "system_prompt.yaml").read_text(encoding="utf-8")
+        assert "personal:" in raw and "own_time:" not in raw
+        assert read_prompt_overlay(tmp_path) == {"personal": "MY HOUR"}
+
+    def test_write_with_both_spellings_keeps_the_ruled_value(self, tmp_path):
+        write_prompt_overlay(tmp_path, {"personal": "RULED", "own_time": "LEGACY"})
+        assert read_prompt_overlay(tmp_path) == {"personal": "RULED"}
 
 
 # ------------------------------------------------------------- session wiring

@@ -91,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **Overlay layer key `own_time` → `personal`** (phase-vocab migration,
+  gateway/agency c1029 follow-up — the tool_policy alias treatment
+  applied to `system_prompt.yaml`): `OVERLAY_KEYS` now names
+  `personal`; `LEGACY_OVERLAY_KEY_ALIASES` keeps `own_time` READING
+  (labeled `#FALLBACK`, ruled key wins when a file carries both) and
+  WRITING (normalized to the ruled spelling on disk). The life factory
+  reads `personal`; `default_prompt_texts()` keys by ruled spellings
+  with legacy twins DERIVED from the alias table (pre-flip serving
+  processes keep reading; delete the derived block when every consumer
+  has flipped). Pinned: legacy-only file reads, ruled-wins-both,
+  write normalization, both-spellings write.
 - **First-class `steer_store` on every runtime factory** (gateway c1023
   note: bundle hosts attached the H4 sidecar by poking a private
   attribute post-construction): `create_local_runtime`,

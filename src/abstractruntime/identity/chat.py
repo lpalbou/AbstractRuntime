@@ -231,15 +231,25 @@ def compose_system_base(
 def default_prompt_texts() -> Dict[str, str]:
     """The built-in text behind each overlay key — ONE source for the
     gateway's prompt endpoint and any future editor (a second hand-written
-    key→default map is the diary_type-clamp drift class)."""
-    from .life import OWN_TIME_CONTRACT  # function-local: life imports chat at module scope
+    key→default map is the diary_type-clamp drift class).
 
-    return {
+    Keys are the RULED overlay spellings (phase-vocab migration: "personal"
+    replaced "own_time"); legacy twins are derived from the alias table so a
+    serving process built before the flip keeps reading — delete the derived
+    block when every consumer has flipped."""
+    from .life import OWN_TIME_CONTRACT  # function-local: life imports chat at module scope
+    from .prompt_overlay import LEGACY_OVERLAY_KEY_ALIASES
+
+    out = {
         "conversation": CONTRACT_PARAGRAPH,
         "visit": VISIT_OWN_TIME_PARAGRAPH,
-        "own_time": OWN_TIME_CONTRACT,
+        "personal": OWN_TIME_CONTRACT,
         "operator": "",
     }
+    for legacy, ruled in LEGACY_OVERLAY_KEY_ALIASES.items():
+        if ruled in out:
+            out[legacy] = out[ruled]
+    return out
 
 
 def strip_think_block(text: str) -> str:

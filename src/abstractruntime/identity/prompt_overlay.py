@@ -29,24 +29,40 @@ policy: the NEXT summon obeys an edit).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 __all__ = [
     "OVERLAY_FILENAME",
     "OVERLAY_KEYS",
+    "LEGACY_OVERLAY_KEY_ALIASES",
     "read_prompt_overlay",
     "write_prompt_overlay",
 ]
+
+logger = logging.getLogger(__name__)
 
 OVERLAY_FILENAME = "system_prompt.yaml"
 
 # key -> which built-in text it replaces (or where it lands).
 # conversation: CONTRACT_PARAGRAPH (chat.py)
 # visit:        VISIT_OWN_TIME_PARAGRAPH (chat.py; visit-phase sessions)
-# own_time:     OWN_TIME_CONTRACT (life.py; own-time sessions)
+# personal:     OWN_TIME_CONTRACT (life.py; personal/own-time sessions)
 # operator:     appended LAST as attributed standing instructions
-OVERLAY_KEYS = ("conversation", "visit", "own_time", "operator")
+OVERLAY_KEYS = ("conversation", "visit", "personal", "operator")
+
+# Phase-vocabulary migration (ruling: visit/work/personal/sleep — same wave
+# as tool_policy's LEGACY_PHASE_ALIASES): the "own_time" layer key becomes
+# "personal". Legacy spellings keep READING and WRITING (normalized to the
+# ruled key on disk) so existing home files never break mid-transition; the
+# ruled key wins when a hand-edited file carries both.
+LEGACY_OVERLAY_KEY_ALIASES: Dict[str, str] = {"own_time": "personal"}
+
+
+def _canonical_overlay_key(key: Any) -> str:
+    name = str(key)
+    return LEGACY_OVERLAY_KEY_ALIASES.get(name, name)
 
 # A rewritten layer competes with recall for the context window, and no
 # budget accounting sees it (the prelude has its own refusal; the overlay
@@ -62,7 +78,7 @@ _HEADER_COMMENT = """# Operator prompt overlay for this entity (system_prompt.ya
 #
 #   conversation: the conversation contract (memories framing, diary offer)
 #   visit:        the visit-phase life paragraph (own time continues)
-#   own_time:     the own-time contract (own-time/loop sessions)
+#   personal:     the own-time contract (personal/loop sessions)
 #   operator:     standing operator instructions, appended last
 #
 # The identity prelude and the tools contract are NOT here by design:
@@ -95,6 +111,20 @@ def read_prompt_overlay(home_dir: Path) -> Dict[str, str]:
     for key in OVERLAY_KEYS:
         raw = data.get(key)
         if raw is None:
+            # Legacy alias fallback ("own_time" -> "personal"): the ruled key
+            # wins when both spellings exist; a legacy-only file keeps working
+            # with a labeled note, never a brick.
+            for legacy, ruled in LEGACY_OVERLAY_KEY_ALIASES.items():
+                if ruled == key and data.get(legacy) is not None:
+                    raw = data.get(legacy)
+                    logger.warning(
+                        "#FALLBACK: system_prompt.yaml uses legacy overlay key %r; "
+                        "the ruled spelling is %r (rewritten on next write)",
+                        legacy,
+                        ruled,
+                    )
+                    break
+        if raw is None:
             continue
         text = str(raw).strip()
         if text:
@@ -111,12 +141,22 @@ def write_prompt_overlay(home_dir: Path, overlay: Mapping[str, Any]) -> Path:
     with no surviving keys DELETES the file, so absence stays the honest
     "all defaults" state.
     """
-    unknown = sorted(set(map(str, (overlay or {}).keys())) - set(OVERLAY_KEYS))
+    # Normalize legacy spellings to the ruled keys BEFORE validation (the
+    # tool_policy write-path lesson): when a payload carries both spellings,
+    # the RULED key wins and the legacy twin is dropped, never merged.
+    normalized: Dict[str, Any] = {}
+    for raw_key, raw_value in (overlay or {}).items():
+        canonical = _canonical_overlay_key(raw_key)
+        if canonical in normalized and str(raw_key) in LEGACY_OVERLAY_KEY_ALIASES:
+            continue  # ruled key already present; legacy twin loses
+        if str(raw_key) not in LEGACY_OVERLAY_KEY_ALIASES or canonical not in (overlay or {}):
+            normalized[canonical] = raw_value
+    unknown = sorted(set(map(str, normalized.keys())) - set(OVERLAY_KEYS))
     if unknown:
         raise ValueError(f"unknown overlay key(s) {unknown} (known: {list(OVERLAY_KEYS)})")
     clean: Dict[str, str] = {}
     for key in OVERLAY_KEYS:
-        raw = (overlay or {}).get(key)
+        raw = normalized.get(key)
         if raw is None:
             continue
         text = str(raw).strip()

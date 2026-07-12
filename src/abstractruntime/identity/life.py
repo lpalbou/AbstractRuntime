@@ -1287,7 +1287,7 @@ def build_session_factory(
             allowed_tools=tuple(session.allowed_tools),
             workspace_enabled=session.workspace is not None,
             enable_tools=session.enable_tools,
-            own_time_text=session.prompt_overlay.get("own_time") or OWN_TIME_CONTRACT,
+            own_time_text=session.prompt_overlay.get("personal") or OWN_TIME_CONTRACT,
         )
         return session
 

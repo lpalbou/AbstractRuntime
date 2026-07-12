@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **In-process `on_token` streaming callback** (code seat c990 ask):
+  `LocalAbstractCoreLLMClient.set_on_token(cb)` registers an optional
+  `cb(delta: str, meta: dict)` fired per content chunk when
+  `stream=True` — BEST-EFFORT and never load-bearing (the durable
+  aggregated result is byte-identical with or without it, pinned; a
+  raising callback is disabled mid-stream with one warning, never
+  failing the call). Host-side registration only: callbacks never ride
+  effect payloads. Gateway-hosted surfaces need the durable plane
+  instead (deliberately not built here).
 - **Core-inventory facade** (gateway c924 ask; the backlog-0059 boundary
   routes core access through runtime):
   `integrations.abstractcore.tool_inventory_facade.core_registry_tool_rows()`

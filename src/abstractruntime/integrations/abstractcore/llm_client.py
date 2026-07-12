@@ -4820,15 +4820,35 @@ def _normalize_local_response(
     }
 
 
-def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
+def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = None) -> Dict[str, Any]:
     """Consume an AbstractCore streaming `generate(..., stream=True)` iterator into a single JSON result.
 
     AbstractRuntime currently persists a single effect outcome object per LLM call, so even when
     the underlying provider streams we aggregate into one final dict and surface timing fields.
+
+    `on_token` (code seat c990, in-process streaming surface): an optional
+    `on_token(delta: str, meta: dict)` callback fired per content chunk,
+    BEST-EFFORT and never load-bearing — the durable result is byte-identical
+    with or without it, and a raising callback is disabled for the rest of the
+    stream (one warning), never failing the call. Same-process hosts (the
+    abstractcode CLI) use it for live tail rendering; gateway-hosted surfaces
+    need the durable plane instead (deliberately not built here).
     """
     import time
 
     start_perf = time.perf_counter()
+
+    token_cb = on_token if callable(on_token) else None
+
+    def _fire_token(delta: str, model_name: Optional[str], fr: Any) -> None:
+        nonlocal token_cb
+        if token_cb is None or not delta:
+            return
+        try:
+            token_cb(delta, {"model": model_name, "finish_reason": fr})
+        except Exception as e:
+            logger.warning(f"on_token callback raised; disabled for this stream: {e}")
+            token_cb = None
 
     chunks: list[str] = []
     tool_calls: Any = None
@@ -4864,6 +4884,7 @@ def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
             content = chunk.get("content")
             if isinstance(content, str) and content:
                 chunks.append(content)
+                _fire_token(content, model, chunk.get("finish_reason"))
 
             tc = chunk.get("tool_calls")
             if tc is not None:
@@ -4899,6 +4920,7 @@ def _normalize_local_streaming_response(stream: Any) -> Dict[str, Any]:
         content = getattr(chunk, "content", None)
         if isinstance(content, str) and content:
             chunks.append(content)
+            _fire_token(content, model, getattr(chunk, "finish_reason", None))
 
         tc = getattr(chunk, "tool_calls", None)
         if tc is not None:
@@ -5088,6 +5110,18 @@ class LocalAbstractCoreLLMClient:
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
+        self._on_token: Optional[Any] = None
+
+    def set_on_token(self, callback: Optional[Any]) -> None:
+        """Register an in-process token callback (code seat c990's streaming ask).
+
+        `callback(delta: str, meta: dict)` fires per content chunk on
+        `stream=True` calls. BEST-EFFORT and never load-bearing: the durable
+        result is byte-identical with or without it; a raising callback is
+        disabled for the remainder of that stream with one warning. Host-side
+        registration only — callbacks never ride effect payloads (they are not
+        durable data). Pass None to unregister."""
+        self._on_token = callback if callable(callback) else None
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._provider, self._model
@@ -5879,7 +5913,7 @@ class LocalAbstractCoreLLMClient:
                     **params,
                 )
                 if stream and hasattr(resp, "__next__"):
-                    result = _normalize_local_streaming_response(resp)
+                    result = _normalize_local_streaming_response(resp, on_token=getattr(self, "_on_token", None))
                 else:
                     result = _normalize_local_response(
                         resp,
@@ -5911,7 +5945,7 @@ class LocalAbstractCoreLLMClient:
                         **params,
                     )
                     if stream and hasattr(resp, "__next__"):
-                        result = _normalize_local_streaming_response(resp)
+                        result = _normalize_local_streaming_response(resp, on_token=getattr(self, "_on_token", None))
                     else:
                         result = _normalize_local_response(
                             resp,

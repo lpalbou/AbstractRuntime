@@ -347,6 +347,29 @@ def test_sqlite_sidecar_round_trip_and_restart_survival(tmp_path):
     assert [p["seq"] for p in reopened.pending("r2")] == [1]
 
 
+def test_factories_accept_a_first_class_steer_store(tmp_path):
+    """Gateway c1023 ask: bundle hosts attached the sidecar by poking a private
+    attribute post-construction because the factories had no kwarg. Now
+    first-class on every create_* factory (delegating variants included)."""
+    import inspect
+
+    from abstractruntime.integrations.abstractcore import factory as f
+
+    for name in (
+        "create_local_runtime",
+        "create_remote_runtime",
+        "create_hybrid_runtime",
+        "create_local_file_runtime",
+        "create_remote_file_runtime",
+    ):
+        sig = inspect.signature(getattr(f, name))
+        assert "steer_store" in sig.parameters, name
+
+    sidecar = InMemorySteerSidecar()
+    rt = f.create_remote_runtime(server_base_url="http://127.0.0.1:9", model="m", steer_store=sidecar)
+    assert rt._steer_store is sidecar
+
+
 def test_sqlite_sidecar_concurrent_writers_never_collide(tmp_path):
     """Adversary P1: MAX(seq)+1 under a deferred transaction let two writers
     compute the same seq (one died on the primary key). BEGIN IMMEDIATE takes

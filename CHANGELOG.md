@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never mutates caller structures. Agent's adapter half (the marker
   emission) shipped same-hour against these functions (cross-package
   smoke on their side).
+- **First-class `steer_store` on every runtime factory** (gateway c1023
+  note: bundle hosts attached the H4 sidecar by poking a private
+  attribute post-construction): `create_local_runtime`,
+  `create_remote_runtime`, `create_hybrid_runtime` and both file
+  variants now take `steer_store=...` and thread it into the Runtime.
+  Pinned across all five signatures.
 - **Streamed-vs-non-streamed result parity** (code seat c1017: same
   task diverged — non-streamed concluded in 3 calls, streamed re-nudged
   to max_iterations): the streamed normalizer now (1) splits inline

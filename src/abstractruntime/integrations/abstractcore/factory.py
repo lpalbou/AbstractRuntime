@@ -112,6 +112,7 @@ def create_local_runtime(
     extra_effect_handlers: Optional[Dict[Any, Any]] = None,
     core_config_file: Optional[str | Path] = None,
     capability_defaults: Optional[Any] = None,
+    steer_store: Optional[Any] = None,
 ) -> Runtime:
     """Create a runtime with local LLM execution via AbstractCore.
 
@@ -224,6 +225,7 @@ def create_local_runtime(
         config=config,
         artifact_store=artifact_store,
         chat_summarizer=summarizer,
+        steer_store=steer_store,
     )
     # Best-effort: expose the tool executor for approval-style TOOL_CALLS resumes.
     try:  # pragma: no cover
@@ -251,6 +253,7 @@ def create_remote_runtime(
     context: Optional[Any] = None,
     artifact_store: Optional[ArtifactStore] = None,
     effect_policy: Optional[Any] = None,
+    steer_store: Optional[Any] = None,
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
@@ -294,6 +297,7 @@ def create_remote_runtime(
         context=context,
         artifact_store=artifact_store,
         effect_policy=effective_policy,
+        steer_store=steer_store,
     )
     try:  # pragma: no cover
         setter = getattr(rt, "set_tool_executor_for_resume", None)
@@ -319,6 +323,7 @@ def create_hybrid_runtime(
     ledger_store: Optional[LedgerStore] = None,
     context: Optional[Any] = None,
     artifact_store: Optional[ArtifactStore] = None,
+    steer_store: Optional[Any] = None,
 ) -> Runtime:
     """Remote LLM via AbstractCore server, local tool execution."""
 
@@ -368,6 +373,7 @@ def create_hybrid_runtime(
         effect_handlers=handlers,
         context=context,
         artifact_store=artifact_store,
+        steer_store=steer_store,
     )
     try:  # pragma: no cover
         setter = getattr(rt, "set_tool_executor_for_resume", None)
@@ -391,6 +397,7 @@ def create_local_file_runtime(
     context: Optional[Any] = None,
     config: Optional[RuntimeConfig] = None,
     tool_timeout_s: Optional[float] = None,
+    steer_store: Optional[Any] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
     artifact_store = FileArtifactStore(base_dir)
@@ -410,6 +417,7 @@ def create_local_file_runtime(
         config=config,
         artifact_store=artifact_store,
         tool_timeout_s=tool_timeout_s,
+        steer_store=steer_store,
     )
 
 
@@ -421,6 +429,7 @@ def create_remote_file_runtime(
     headers: Optional[Dict[str, str]] = None,
     timeout_s: Optional[float] = None,
     context: Optional[Any] = None,
+    steer_store: Optional[Any] = None,
 ) -> Runtime:
     run_store, ledger_store = _default_file_stores(base_dir=base_dir)
     artifact_store = FileArtifactStore(base_dir)
@@ -433,4 +442,5 @@ def create_remote_file_runtime(
         ledger_store=ledger_store,
         context=context,
         artifact_store=artifact_store,
+        steer_store=steer_store,
     )

@@ -1865,6 +1865,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         "loop honors it at the next tick boundary (asleep: day closes + idles; "
         "paused: hard freeze mid-day; awake: resumes with an honest cue)",
     )
+    # Personal-phase arming from the terminal (wake != grant != start: each
+    # grant flag is its OWN act that writes and EXITS — arming and starting
+    # in one command would blur two operator acts the 12:44 ruling keeps
+    # separate). The terminal operator IS the principal on this lane (shell
+    # access to the home = ownership); granted_by records the OS user.
+    # Honest limit: CLI grants land in phases.yaml (granted_by/granted_at =
+    # the audit record) but write no host marker — the gateway's arming
+    # surface is the marker-first lane; timelines show CLI grants only
+    # through the file's fields.
+    parser.add_argument(
+        "--grant-personal", action="store_true",
+        help="operator act: arm personal time until revoked, then exit "
+        "(the loop still starts as its own separate act)",
+    )
+    parser.add_argument(
+        "--grant-personal-hours", type=float, default=None, metavar="H",
+        help="operator act: arm personal time on a timer expiring H hours from now, then exit",
+    )
+    parser.add_argument(
+        "--revoke-personal", action="store_true",
+        help="operator act: disarm personal time (mode=disabled), then exit - "
+        "a running loop ends at its next day boundary",
+    )
     parser.add_argument("--state-reason", default="", help="reason recorded with --set-state")
     parser.add_argument(
         "--skip-command-fast-forward", action="store_true",
@@ -1880,6 +1903,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         payload = write_entity_state(home_dir, args.set_state, reason=args.state_reason)
         print(f"state -> {payload['state']} (at {payload['changed_at']})"
               + (f" reason: {payload['reason']}" if payload["reason"] else ""))
+        return 0
+
+    grant_flags = [bool(args.grant_personal), args.grant_personal_hours is not None,
+                   bool(args.revoke_personal)]
+    if sum(grant_flags) > 1:
+        print("choose ONE of --grant-personal / --grant-personal-hours / --revoke-personal "
+              "- each is a distinct operator act")
+        return 2
+    if any(grant_flags):
+        import getpass
+        from datetime import datetime, timedelta, timezone
+
+        principal = f"person:{getpass.getuser()}"
+        try:
+            if args.revoke_personal:
+                grant = write_personal_grant(home_dir, mode="disabled")
+            elif args.grant_personal_hours is not None:
+                if args.grant_personal_hours <= 0:
+                    print("--grant-personal-hours must be > 0")
+                    return 2
+                expiry = datetime.now(timezone.utc) + timedelta(hours=args.grant_personal_hours)
+                grant = write_personal_grant(
+                    home_dir, mode="timer", granted_by=principal,
+                    expires_at=expiry.isoformat(),
+                )
+            else:
+                grant = write_personal_grant(home_dir, mode="until_revoked", granted_by=principal)
+        except ValueError as e:
+            print(str(e))
+            return 2
+        detail = f" until {grant['expires_at']}" if grant.get("expires_at") else ""
+        by = f" (granted_by {grant['granted_by']})" if grant.get("granted_by") else ""
+        print(f"personal time -> {grant['mode']}{detail}{by}")
+        print("(this armed the phase only - starting his own time is its own act)")
         return 0
 
     stop_file = home_dir / "STOP"

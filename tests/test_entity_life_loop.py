@@ -742,6 +742,38 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
         write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
 
 
+def test_cli_grant_flags_are_distinct_operator_acts(tmp_path: Path) -> None:
+    """--grant-personal / --grant-personal-hours / --revoke-personal each
+    write-and-exit (arming never starts the loop — wake != grant != start);
+    combining them refuses; the terminal operator lands as the principal."""
+    import getpass
+
+    from abstractruntime.identity.life import main, read_personal_grant
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    assert main(["--home", str(home_dir), "--grant-personal"]) == 0
+    grant = read_personal_grant(home_dir)
+    assert grant["mode"] == "until_revoked"
+    assert grant["granted_by"] == f"person:{getpass.getuser()}"
+
+    assert main(["--home", str(home_dir), "--grant-personal-hours", "2"]) == 0
+    grant = read_personal_grant(home_dir)
+    assert grant["mode"] == "timer"
+    assert grant["expires_at"].endswith("+00:00")
+
+    assert main(["--home", str(home_dir), "--revoke-personal"]) == 0
+    assert read_personal_grant(home_dir)["mode"] == "disabled"
+
+    # One act per invocation; a combined command refuses.
+    assert main(["--home", str(home_dir), "--grant-personal", "--revoke-personal"]) == 2
+    assert main(["--home", str(home_dir), "--grant-personal-hours", "0"]) == 2
+
+    # An unarmed start still refuses (the grant flag exited without starting).
+    assert main(["--home", str(home_dir)]) == 3
+
+
 def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path) -> None:
     """The spawn door refuses SYNCHRONOUSLY: (a) personal not armed — a
     child dying in its own log is a silent refusal; (b) provider/model args

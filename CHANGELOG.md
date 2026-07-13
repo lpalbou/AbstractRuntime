@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELD-MERGE preserves foreign phase sections and unknown personal keys;
   corrupt files and newer `schema_version`s refuse loudly instead of
   clobbering.
+- **CLI personal-grant acts** (`--grant-personal` / `--grant-personal-hours H`
+  / `--revoke-personal` on `python -m abstractruntime.identity.life`): each
+  is a distinct operator act that writes through `write_personal_grant` and
+  EXITS — arming never starts the loop (wake ≠ grant ≠ start); combining
+  flags refuses. The terminal operator is the principal (`person:<os-user>`
+  in granted_by). Honest limit documented in-code: CLI grants carry their
+  audit in the file's fields but write no host marker — the gateway's
+  arming surface is the marker-first lane.
 - **Substrate divergence lane killed** (laurent 12:39, c1430 ask 2b — the
   night pid ran OVH from argv regardless of substrate.yaml): when the home
   carries a persisted mind, `main()` refuses start-time `--provider/--model`

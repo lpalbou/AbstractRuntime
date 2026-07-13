@@ -61,16 +61,24 @@ def _make_home(tmp_path: Path) -> Path:
 def _arm_personal(home_dir: Path, *, mode: str = "until_revoked", expires_at: str = "") -> None:
     """Arm the personal phase (laurent 12:44: own time IS the personal phase,
     OFF by default) — the loop refuses to open days without it, so every
-    fixture home that expects ticks arms it as its operator act."""
-    bucket: Dict[str, Any] = {
-        "mode": mode,
-        "granted_by": "person:test-operator",
-        "granted_at": "2026-07-13T00:00:00+00:00",
-    }
-    if expires_at:
-        bucket["expires_at"] = expires_at
-    (home_dir / "phases.yaml").write_text(
-        yaml.safe_dump({"personal": bucket}, sort_keys=False), encoding="utf-8"
+    fixture home that expects ticks arms it as its operator act. Uses the
+    ONE writer (write_personal_grant) except for the shapes the writer
+    refuses (timer without expiry), which pin the READ side's fail-closed
+    behavior and are hand-written."""
+    from abstractruntime.identity.life import write_personal_grant
+
+    if mode == "timer" and not expires_at:
+        (home_dir / "phases.yaml").write_text(
+            yaml.safe_dump({"personal": {
+                "mode": "timer", "granted_by": "person:test-operator",
+                "granted_at": "2026-07-13T00:00:00+00:00",
+            }}, sort_keys=False),
+            encoding="utf-8",
+        )
+        return
+    write_personal_grant(
+        home_dir, mode=mode, granted_by="person:test-operator",
+        expires_at=expires_at or None,
     )
 
 
@@ -666,6 +674,72 @@ def test_personal_grant_gates_the_loop(tmp_path: Path) -> None:
     grant = read_personal_grant(home_dir)
     assert grant["mode"] == "disabled"
     assert "#FALLBACK" in str(grant.get("note"))
+
+
+def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
+    """The format module is runtime's (tool_policy.py precedent; gateway
+    calls it after stamping + marker). Pins: UTC normalization of timer
+    expiry (WAIT_UNTIL invariant), server-clocked granted_at, disabled
+    writes a clean bucket, field-merge preserves foreign sections, refusals
+    for unknown mode / timer-without-expiry / missing principal / corrupt
+    file / newer schema."""
+    from abstractruntime.identity.life import (
+        PHASES_SCHEMA_VERSION,
+        read_personal_grant,
+        write_personal_grant,
+    )
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    # Arm until_revoked: principal required, granted_at clocked here.
+    grant = write_personal_grant(home_dir, mode="until_revoked", granted_by="person:laurent")
+    assert grant["mode"] == "until_revoked"
+    assert grant["granted_by"] == "person:laurent"
+    assert grant["granted_at"]  # server-clocked
+    assert read_personal_grant(home_dir) == grant
+
+    # Timer expiry normalizes to aware-UTC ISO (a +02:00 expiry compared
+    # beside UTC clocks mis-orders silently — the WAIT_UNTIL lesson).
+    grant = write_personal_grant(
+        home_dir, mode="timer", granted_by="person:laurent",
+        expires_at="2999-01-01T12:00:00+02:00",
+    )
+    assert grant["expires_at"] == "2999-01-01T10:00:00+00:00"
+
+    # Field-merge: a foreign phase section and unknown personal keys survive.
+    raw = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
+    raw["work"] = {"tools": ["read_file"]}
+    raw["personal"]["future_knob"] = "kept"
+    (home_dir / "phases.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    write_personal_grant(home_dir, mode="disabled")
+    after = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
+    assert after["work"] == {"tools": ["read_file"]}
+    assert after["personal"]["future_knob"] == "kept"
+    # Disabled = nothing granted: no grant fields linger.
+    assert after["personal"]["mode"] == "disabled"
+    assert "granted_by" not in after["personal"]
+    assert "expires_at" not in after["personal"]
+    assert after["schema_version"] == PHASES_SCHEMA_VERSION
+
+    # Refusals, each naming its rule.
+    with pytest.raises(ValueError, match="unknown personal mode"):
+        write_personal_grant(home_dir, mode="always", granted_by="person:x")
+    with pytest.raises(ValueError, match="timer requires expires_at"):
+        write_personal_grant(home_dir, mode="timer", granted_by="person:x")
+    with pytest.raises(ValueError, match="not an ISO-8601"):
+        write_personal_grant(home_dir, mode="timer", granted_by="person:x", expires_at="tomorrow")
+    with pytest.raises(ValueError, match="granted_by is required"):
+        write_personal_grant(home_dir, mode="until_revoked")
+    (home_dir / "phases.yaml").write_text("{not yaml", encoding="utf-8")
+    with pytest.raises(ValueError, match="unreadable"):
+        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
+    (home_dir / "phases.yaml").write_text(
+        yaml.safe_dump({"schema_version": PHASES_SCHEMA_VERSION + 1, "personal": {"mode": "disabled"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="upgrade the runtime"):
+        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
 
 
 def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path) -> None:

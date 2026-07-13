@@ -193,11 +193,24 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
 # design existed, nothing read it at loop start).
 #
 # Home-resident by the same logic as substrate.yaml: the loop starts
-# home-direct, so the config must be readable from the home. Path proposed
-# runtime-side (gateway confirms on the c1435 thread): <home>/phases.yaml.
+# home-direct, so the config must be readable from the home. FILE + SHAPE
+# (settled c1443/c1447 — semantics ruled the name, runtime owns the format
+# module per the tool_policy.py precedent, gateway consumes): the file is
+# <home>/phases.yaml, per-phase buckets at TOP LEVEL beside schema_version
+# (no inner `phases:` wrapper — the filename already says it):
+#
+#     schema_version: 1
+#     personal: {mode, expires_at, granted_by, granted_at, ...}
+#     visit/work/sleep: {tools/skills/mcp/workflow ...}   # future sections
+#
+# The FIELD-MERGE contract (gateway doc v8): an activation write touches
+# ONLY the four activation fields; a tools/skills/mcp save never touches
+# them. write_personal_grant enforces the first half mechanically.
 
 PHASES_FILENAME = "phases.yaml"
+PHASES_SCHEMA_VERSION = 1
 PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
+_PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at")
 
 
 def read_personal_grant(home_dir: Path) -> Dict[str, Any]:
@@ -228,6 +241,109 @@ def read_personal_grant(home_dir: Path) -> Dict[str, Any]:
         out["mode"] = "disabled"
         out["note"] = f"#FALLBACK unknown personal mode {mode!r}; treated as disabled"
     return out
+
+
+def write_personal_grant(
+    home_dir: Path,
+    *,
+    mode: str,
+    granted_by: str = "",
+    expires_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The ONE writer of the personal activation bucket (runtime owns the
+    format module — the tool_policy.py precedent, gateway's c1442 option (b);
+    the arming door calls this AFTER its principal stamp and marker land,
+    passing the stamped principal as granted_by).
+
+    Mechanics enforced here so no caller can drift:
+    - mode validated against PERSONAL_GRANT_MODES; timer REQUIRES expires_at
+      (a timer without an expiry is no grant), normalized to aware-UTC ISO
+      (the WAIT_UNTIL lexicographic invariant — a +02:00 expiry read beside
+      UTC clocks mis-orders silently).
+    - granted_at is clocked HERE (aware UTC), never caller-supplied.
+    - disabled writes {mode: disabled} ALONE — nothing is granted, so no
+      grant fields linger (the marker stream owns history, the file owns
+      current truth).
+    - FIELD-MERGE (gateway doc v8 contract): only the activation fields
+      change; every other key and phase section in phases.yaml rides
+      through untouched. schema_version stamps 1 when absent; a FILE from a
+      NEWER schema refuses (never clobber what a newer writer meant).
+    - A corrupt existing file refuses loudly (overwriting it would silently
+      lose other sections; the operator repairs first).
+
+    Returns the bucket as read_personal_grant will now answer it."""
+    import yaml
+
+    name = str(mode or "").strip().lower()
+    if name not in PERSONAL_GRANT_MODES:
+        raise ValueError(
+            f"unknown personal mode {mode!r}: modes are {'/'.join(PERSONAL_GRANT_MODES)}"
+        )
+
+    path = Path(home_dir) / PHASES_FILENAME
+    existing: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 - never silently clobber a broken file
+            raise ValueError(
+                f"{PHASES_FILENAME} is unreadable ({e}) - repair or remove it before arming; "
+                "overwriting it here could silently lose other phase sections"
+            ) from e
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(
+                f"{PHASES_FILENAME} is not a mapping - repair or remove it before arming"
+            )
+        existing = dict(loaded or {})
+    try:
+        found_version = int(existing.get("schema_version") or PHASES_SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        found_version = PHASES_SCHEMA_VERSION
+    if found_version > PHASES_SCHEMA_VERSION:
+        raise ValueError(
+            f"{PHASES_FILENAME} carries schema_version {found_version} but this writer "
+            f"knows {PHASES_SCHEMA_VERSION} - upgrade the runtime before writing"
+        )
+
+    from datetime import datetime, timezone
+
+    bucket: Dict[str, Any] = {"mode": name}
+    if name != "disabled":
+        if name == "timer":
+            raw_expiry = str(expires_at or "").strip()
+            if not raw_expiry:
+                raise ValueError("mode=timer requires expires_at - a timer without an expiry is no grant")
+            from ..core.runtime import normalize_utc_iso
+
+            normalized = normalize_utc_iso(raw_expiry)
+            if normalized is None:
+                raise ValueError(f"expires_at is not an ISO-8601 timestamp: {raw_expiry!r}")
+            bucket["expires_at"] = normalized
+        by = str(granted_by or "").strip()
+        if not by:
+            raise ValueError(
+                "granted_by is required to arm personal time - the arming door passes "
+                "its stamped principal (an unattributable grant is the 10:20 incident class)"
+            )
+        bucket["granted_by"] = by
+        bucket["granted_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Field-merge: replace ONLY the personal activation bucket, preserving
+    # any non-activation keys a future schema puts beside them (tools/skills
+    # per phase live in their own sections and are never touched here).
+    prior_personal = existing.get("personal")
+    merged_personal: Dict[str, Any] = dict(prior_personal) if isinstance(prior_personal, dict) else {}
+    for key in _PERSONAL_ACTIVATION_FIELDS:
+        merged_personal.pop(key, None)
+    merged_personal.update(bucket)
+
+    existing["schema_version"] = PHASES_SCHEMA_VERSION
+    existing["personal"] = merged_personal
+
+    from ..utils.atomic_files import atomic_write_text
+
+    atomic_write_text(path, yaml.safe_dump(existing, sort_keys=False))
+    return read_personal_grant(home_dir)
 
 
 def personal_grant_refusal(grant: Dict[str, Any]) -> Optional[str]:

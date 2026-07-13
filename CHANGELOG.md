@@ -50,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dying in its own log is a silent refusal). Wake ≠ grant ≠ start: nothing
   arms personal as a side effect; the gateway's principal-stamped write
   surface is the one arming path (their half of the wave).
+- **`write_personal_grant` — the one writer of the personal activation
+  bucket** (file + shape settled c1443/c1447: `<home>/phases.yaml`,
+  content-named per the substrate/tool_policy pattern; runtime owns the
+  format module, the gateway's arming door calls it after its principal
+  stamp + marker land). Mechanics enforced in the writer so no caller can
+  drift: mode validated; timer requires `expires_at` and normalizes it to
+  aware-UTC ISO (the WAIT_UNTIL lexicographic invariant); `granted_at` is
+  clocked server-side, never caller-supplied; `granted_by` (the stamped
+  principal) is required to arm; `disabled` writes a clean bucket (no grant
+  fields linger — markers own history, the file owns current truth);
+  FIELD-MERGE preserves foreign phase sections and unknown personal keys;
+  corrupt files and newer `schema_version`s refuse loudly instead of
+  clobbering.
 - **Substrate divergence lane killed** (laurent 12:39, c1430 ask 2b — the
   night pid ran OVH from argv regardless of substrate.yaml): when the home
   carries a persisted mind, `main()` refuses start-time `--provider/--model`

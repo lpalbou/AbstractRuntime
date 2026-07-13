@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELD-MERGE preserves foreign phase sections and unknown personal keys;
   corrupt files and newer `schema_version`s refuse loudly instead of
   clobbering.
+- **Graceful night yield** (one-active-phase ruling, laurent 13:28; memory's
+  cancellation semantics c1462): `build_consolidator` passes the engine's
+  `sleep_pass` a `should_continue` predicate — pure reads of the home state
+  + STOP file — so a transition arriving mid-night (visit auto-yield's
+  mode=visiting, operator wake, manual brake) ends the night at the next
+  phase boundary: the in-flight phase completes its writes, later phases
+  skip named, the next sleep resumes there. Stop COMMANDS are deliberately
+  not consulted (consumed-on-read; the post-night boundary check consumes
+  them exactly once). Version skew degrades to a full night with a
+  `#FALLBACK` label (older engines without the kwarg/`sleep_pass`).
 - **CLI personal-grant acts** (`--grant-personal` / `--grant-personal-hours H`
   / `--revoke-personal` on `python -m abstractruntime.identity.life`): each
   is a distinct operator act that writes through `write_personal_grant` and

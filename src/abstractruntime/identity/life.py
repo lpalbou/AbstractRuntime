@@ -1666,6 +1666,17 @@ def build_consolidator(
     the loop's own process: during own-time the loop is the sole writer
     (one life, one summon). A quiet night in either phase is a valid night.
 
+    GRACEFUL YIELD (one-active-phase ruling, laurent 13:28 / memory c1462):
+    the night passes the engine a `should_continue` predicate — a pure read
+    of the home's state + STOP file — so a transition arriving MID-NIGHT
+    (visit auto-yield write, operator wake, stop) ends the night at the
+    engine's next phase boundary: the in-flight phase completes its writes
+    (never torn), later phases skip with a named reason, and the next sleep
+    resumes where this one stopped (every phase idempotent). The predicate
+    must stay SIDE-EFFECT-FREE: stop COMMANDS are consumed-on-read and are
+    deliberately not consulted here — the boundary check after the night
+    consumes them, exactly once.
+
     Returns the LOOP-FACING shape (the on_sleep contract): `formed` (did a
     dream form), `dream_record_id`, `maintenance_candidates` (phase-1
     consolidation candidates awaiting waking review), and the full engine
@@ -1673,6 +1684,18 @@ def build_consolidator(
     dream half says `created`, and reading it wrong here is exactly how a
     formed dream once reported as "a quiet night" (found 2026-07-09 — a
     hand-written test double carried `formed` while the engine never did)."""
+    def _night_should_continue() -> bool:
+        # The night keeps its window while the entity still SLEEPS by its
+        # own election and nobody pulled the manual brake. Any other state
+        # (awake/paused, a visit's asleep+visiting rides mode not state...
+        # the visit door writes state=asleep too, so mode decides) ends it.
+        if (Path(home_dir) / "STOP").exists():
+            return False
+        state = read_entity_state(home_dir)
+        if str(state.get("mode") or "") == "visiting":
+            return False  # a visitor is at the door — finish the phase, yield
+        return state.get("state") == "asleep"
+
     def _consolidate() -> Optional[Dict[str, Any]]:
         from .chat import open_home
 
@@ -1703,7 +1726,19 @@ def build_consolidator(
             else:
                 # Tunables stay engine-declared defaults (max_candidates=2,
                 # scan_limit=200) — inject from the function, never copy numbers.
-                engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+                try:
+                    engine = sleep_pass(
+                        home.ms, scopes=scopes, owner_id=eid,
+                        should_continue=_night_should_continue,
+                    )
+                except TypeError:
+                    # Version skew (engine predates graceful cancellation,
+                    # memory c1462): full night, labeled — never blocked.
+                    out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
+                    engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+            if engine.get("cancelled_after"):
+                out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
+                    "the next sleep resumes there)")
             dream = engine.get("dream") or {}
             maintenance = engine.get("maintenance") or {}
             return {

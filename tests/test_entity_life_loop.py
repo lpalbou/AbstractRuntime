@@ -798,6 +798,46 @@ def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path)
         spawn_loop_process(home_dir, provider="endpoint:ovh-provider", model="gpt-oss-120b")
 
 
+def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, monkeypatch) -> None:
+    """One-active-phase ruling (c1455/c1462): the consolidator hands the
+    engine a should_continue predicate — pure reads only — that ends the
+    night at a phase boundary when a visitor arrives (mode=visiting), the
+    entity is woken, or the STOP brake is pulled; it holds while the
+    self-elected sleep stands. Version skew (engine without the kwarg)
+    degrades to a full night, labeled."""
+    import abstractmemory
+
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    home_dir = _make_home(tmp_path)
+    captured: Dict[str, Any] = {}
+
+    def fake_sleep_pass(ms, *, scopes, owner_id, should_continue=None):  # noqa: ANN001
+        captured["should_continue"] = should_continue
+        return {"maintenance": {"created_count": 0}, "dream": {"created": False}}
+
+    monkeypatch.setattr(abstractmemory, "sleep_pass", fake_sleep_pass, raising=False)
+    out_lines: List[str] = []
+    result = build_consolidator(home_dir, out=out_lines.append)()
+    assert result is not None and result["formed"] is False
+    predicate = captured["should_continue"]
+    assert callable(predicate)
+
+    # Self-elected sleep stands: the night continues.
+    write_entity_state(home_dir, "asleep", reason="rest", written_by="self")
+    assert predicate() is True
+    # A visitor at the door (the gateway's auto-yield write) ends it.
+    write_entity_state(home_dir, "asleep", reason="in conversation (auto-yield)", mode="visiting")
+    assert predicate() is False
+    # An operator wake ends it.
+    write_entity_state(home_dir, "awake", reason="woken")
+    assert predicate() is False
+    # The manual brake ends it regardless of state.
+    write_entity_state(home_dir, "asleep", reason="rest", written_by="self")
+    (home_dir / "STOP").touch()
+    assert predicate() is False
+
+
 def test_loop_spend_accumulates_across_lives(tmp_path: Path) -> None:
     """The loop-usage half of the gateway's /cognition spend fold (c1390):
     every tick and the day-close reflection count into

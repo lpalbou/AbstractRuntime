@@ -63,6 +63,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELD-MERGE preserves foreign phase sections and unknown personal keys;
   corrupt files and newer `schema_version`s refuse loudly instead of
   clobbering.
+- **Phase-machine audit fixes** (laurent 13:54 every-lane adversarial
+  verification against decision:entity-phase-state-machine v3; runtime's
+  fable5 audit verdict COMPLIANT-WITH-GAPS, gaps closed same cycle):
+  (G1) a grant revoked/expired DURING an operator sleep or visit is now
+  seen AT THE WAKE — the post-idle path routes back through the top gate
+  (which re-checks stop + grant) instead of falling through to the summon;
+  a mid-idle revocation previously bought a full unmandated personal day.
+  (G2) the disarmed exit now lands the entity in SLEEP per the ruled
+  totality ("grant expiry/revocation ends personal → sleep"): state=asleep
+  written with the ruled cause word (`personal_grant_end_cause`:
+  grant_expired for a lapsed timer, grant_revoked otherwise), written_by
+  "grant-gate" — never phase-less behind a stale awake. (G3, prose rule)
+  `VISIT_OWN_TIME_PARAGRAPH` no longer teaches the forbidden suspend model
+  ("paused … resumes"): a visit ENDS the personal stretch and a NEW one
+  begins at close. (G7) the CLI's `_wake_loop_if_yielded` restores awake
+  only over its OWN auto-yield write — an operator's mid-visit
+  asleep/paused stands.
 - **Pid-identity token + pause heartbeat** (gateway state-wave adversary 2,
   c1469 — their runtime-lane findings, closed same cycle): `loop_status`
   now stamps `pid_started_at` (the OS-recorded process start time via

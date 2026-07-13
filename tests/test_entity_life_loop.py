@@ -742,6 +742,86 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
         write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
 
 
+def test_grant_revoked_during_an_idle_is_seen_at_the_wake(tmp_path: Path) -> None:
+    """Phase-machine audit G1 (2026-07-13): idles can last hours — a grant
+    revoked DURING an operator sleep (or a visit) must be seen at the wake,
+    not after a full unmandated day. The wake routes back through the top
+    gate, which re-checks the grant; zero sessions open."""
+    from abstractruntime.identity.life import write_entity_state, write_personal_grant
+
+    home_dir = _make_home(tmp_path)
+    steps: Dict[str, int] = {"n": 0}
+    lines: List[str] = []
+
+    def never_factory():  # noqa: ANN202
+        raise AssertionError("no session may open after a mid-idle revocation")
+
+    def sleeper(_s: float) -> None:
+        steps["n"] += 1
+        if steps["n"] == 1:
+            # Mid-idle: the operator revokes personal, then wakes him.
+            write_personal_grant(home_dir, mode="disabled")
+            write_entity_state(home_dir, "awake", reason="maintenance done")
+
+    write_entity_state(home_dir, "asleep", reason="operator sleep")
+    loop = LifeLoop(
+        never_factory, tick_seconds=0, ticks_per_day=2, max_ticks=4,
+        state_home=home_dir, sleep_fn=sleeper, out=lines.append,
+    )
+    report = loop.run()
+    assert report.ticks == 0
+    assert report.days == 0
+    assert report.stopped_by == "personal_disarmed"
+
+
+def test_grant_end_lands_the_entity_in_sleep_with_the_ruled_cause(tmp_path: Path) -> None:
+    """Phase-machine audit G2 / state machine v3: grant expiry or revocation
+    ends personal INTO SLEEP (no previous to restore) — the disarmed exit
+    writes state=asleep naming the ruled cause word, never leaves the
+    entity phase-less behind a stale awake."""
+    from abstractruntime.identity.life import (
+        personal_grant_end_cause,
+        read_entity_state,
+        read_personal_grant,
+        write_entity_state,
+        write_personal_grant,
+    )
+
+    home_dir = _make_home(tmp_path)
+
+    # Revocation: mode=disabled with the file present.
+    write_entity_state(home_dir, "awake", reason="was living")
+    write_personal_grant(home_dir, mode="disabled")
+    loop = LifeLoop(
+        lambda: (_ for _ in ()).throw(AssertionError("no session")),
+        tick_seconds=0, ticks_per_day=1, max_ticks=2,
+        state_home=home_dir, out=lambda s: None,
+    )
+    report = loop.run()
+    assert report.stopped_by == "personal_disarmed"
+    state = read_entity_state(home_dir)
+    assert state["state"] == "asleep"
+    assert "grant_revoked" in str(state.get("reason"))
+    assert state.get("written_by") == "grant-gate"
+
+    # Expiry: a lapsed timer names grant_expired.
+    write_personal_grant(
+        home_dir, mode="timer", granted_by="person:test",
+        expires_at="2020-01-01T00:00:00+00:00",
+    )
+    assert personal_grant_end_cause(read_personal_grant(home_dir)) == "grant_expired"
+    write_entity_state(home_dir, "awake", reason="woken for the expiry check")
+    report2 = LifeLoop(
+        lambda: (_ for _ in ()).throw(AssertionError("no session")),
+        tick_seconds=0, ticks_per_day=1, max_ticks=2,
+        state_home=home_dir, out=lambda s: None,
+    ).run()
+    assert report2.stopped_by == "personal_disarmed"
+    state2 = read_entity_state(home_dir)
+    assert state2["state"] == "asleep"
+    assert "grant_expired" in str(state2.get("reason"))
+
+
 def test_cli_grant_flags_are_distinct_operator_acts(tmp_path: Path) -> None:
     """--grant-personal / --grant-personal-hours / --revoke-personal each
     write-and-exit (arming never starts the loop — wake != grant != start);

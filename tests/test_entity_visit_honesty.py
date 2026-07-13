@@ -120,7 +120,14 @@ def test_visit_contract_states_own_time_continues(tmp_path: Path) -> None:
     s = _session(home_dir, [])
     try:
         assert VISIT_OWN_TIME_PARAGRAPH in s.system_base
-        assert "resumes the moment this visit closes" in s.system_base
+        # PROSE RULE (phase-vocabulary v3): end + re-enter, never a
+        # background pause — the paragraph promises a NEW stretch at close
+        # and must not teach the forbidden suspend model. (Wrap-safe pin:
+        # the paragraph hard-wraps, so compare with whitespace folded.)
+        folded = " ".join(VISIT_OWN_TIME_PARAGRAPH.split())
+        assert "a new stretch begins when the visit closes" in folded
+        assert "paused" not in folded
+        assert "resumes" not in folded
     finally:
         s.home.close()
 
@@ -130,7 +137,8 @@ def test_resident_phase_does_not_carry_the_visit_paragraph(tmp_path: Path) -> No
     s = _session(home_dir, [], phase="own_time")
     try:
         # Own time describes itself via OWN_TIME_CONTRACT (life.py); the
-        # visit paragraph ("paused right now") would be false there.
+        # visit paragraph ("this visit ended the current stretch") would be
+        # false there.
         assert VISIT_OWN_TIME_PARAGRAPH not in s.system_base
     finally:
         s.home.close()

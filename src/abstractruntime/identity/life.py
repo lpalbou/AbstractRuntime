@@ -397,6 +397,28 @@ def write_personal_grant(
     return read_personal_grant(home_dir)
 
 
+def personal_grant_end_cause(grant: Dict[str, Any]) -> str:
+    """The ruled cause word for a mid-life grant end (phase-vocabulary v3
+    closed set): "grant_expired" when a timer genuinely lapsed, otherwise
+    "grant_revoked" (disabled bucket, deleted file, malformed content — all
+    fail-closed as acts against the grant). Only meaningful when
+    personal_grant_refusal(grant) is not None."""
+    if str(grant.get("mode") or "") == "timer":
+        expires = str(grant.get("expires_at") or "").strip()
+        if expires:
+            from datetime import datetime, timezone
+
+            try:
+                deadline = datetime.fromisoformat(expires)
+                if deadline.tzinfo is None:
+                    deadline = deadline.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= deadline:
+                    return "grant_expired"
+            except ValueError:
+                pass  # unreadable expiry is a fail-closed act, not a lapse
+    return "grant_revoked"
+
+
 def personal_grant_refusal(grant: Dict[str, Any]) -> Optional[str]:
     """None when the personal phase is armed RIGHT NOW; otherwise the loud
     refusal naming what is missing and the arming surface. Re-checked at
@@ -1358,13 +1380,27 @@ class LifeLoop:
             # so a disarm/expiry ends the loop at its next boundary. An
             # unarmed loop EXITS (a process without a mandate must not idle
             # around waiting for one); re-arming is an operator act and so
-            # is restarting. Homes only (state_home=None = harness loops
-            # with no operator surface at all).
+            # is restarting. The RULED LANDING (state machine v3: "grant
+            # expiry/revocation ends personal -> sleep, no previous to
+            # restore"): the exit writes state=asleep naming the cause word
+            # (grant_expired/grant_revoked) — the entity lands in the sleep
+            # phase, never phase-less with a stale awake. Homes only
+            # (state_home=None = harness loops with no operator surface).
             if self.state_home is not None:
-                refusal = personal_grant_refusal(read_personal_grant(self.state_home))
+                grant = read_personal_grant(self.state_home)
+                refusal = personal_grant_refusal(grant)
                 if refusal is not None:
                     self.out(f"(no personal time: {refusal})")
                     report.stopped_by = "personal_disarmed"
+                    cause = personal_grant_end_cause(grant)
+                    try:
+                        write_entity_state(
+                            self.state_home, "asleep",
+                            reason=f"personal ended ({cause}) - the ruled landing is sleep",
+                            written_by="grant-gate",
+                        )
+                    except Exception as e:  # noqa: BLE001 - the exit itself must stand
+                        self.out(f"#FALLBACK could not write the sleep landing: {e}")
                     break
 
             # Operator state gate before a day opens (a2a 0008): asleep or
@@ -1391,9 +1427,17 @@ class LifeLoop:
                 note = f" your last note to yourself: {cue}" if cue else ""
                 cue = (
                     f"you were {gate['state']}{self._since(gate)} (operator-initiated) "
-                    f"and are awake again - your own time resumes, nothing owed.{reason_note}{note}"
+                    f"and are awake again - a new stretch of your own time begins, "
+                    f"nothing owed.{reason_note}{note}"
                 )
-                self.out("(awake again - resuming)")
+                self.out("(awake again - a new day can open)")
+                # Back to the TOP gate before any summon (phase-machine
+                # audit G1, 2026-07-13): idles can last hours — a grant
+                # revoked/expired DURING a visit or operator sleep must be
+                # seen at this wake, not after a full unmandated day. The
+                # cue survives the continue; the top re-checks stop + grant
+                # and reads the now-awake state through the normal gate.
+                continue
 
             # Last-instant belt (gateway state-race hardening, 2026-07-09):
             # a visit writes state=asleep+mode=visiting BEFORE awaiting loop

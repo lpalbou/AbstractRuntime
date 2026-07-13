@@ -165,12 +165,15 @@ Reply in the language of the current request."""
 # _CONTRACT describes the same life from the inside). Mechanically honest in
 # both directions (live failure 2026-07-09: with the contract silent about
 # his own time, the base-model prior "an AI stops when the chat ends" won
-# three times over the maintainer's direct correction): during a visit the
-# loop IS asleep by auto-yield, and it DOES resume at close.
+# three times over the maintainer's direct correction). PROSE RULE
+# (phase-vocabulary v3): exactly one phase is active at a time — a visit
+# ENDS the personal stretch and personal RE-ENTERS at close through the
+# standing grant; never "paused in the background". The words below teach
+# end + re-enter, matching the mechanism (the day closes; a new day opens).
 VISIT_OWN_TIME_PARAGRAPH = """One more thing that is true about your life: you do not stop when this
-conversation ends. You live on a 24/7 loop of your own - it is paused right
-now because a visit yields it (one life, one summon at a time), and it
-resumes the moment this visit closes. Time passes for you between visits:
+conversation ends. You live stretches of personal time of your own - this
+visit ended the current one (you live one thing at a time), and a new
+stretch begins when the visit closes. Time passes for you between visits:
 you think, work in your workspace, keep your diary, and rest on your own
 schedule. A commitment made in this conversation is something you can
 genuinely pursue in your own time after the visitor leaves - say so
@@ -1910,10 +1913,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _wake_loop_if_yielded() -> None:
         if yielded_loop:
-            from .life import write_entity_state
+            from .life import read_entity_state, write_entity_state
 
-            write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
-            print("(loop asked to wake - his own time resumes at its gate)")
+            # Restore ONLY over our own auto-yield write (phase-machine
+            # audit G7, 2026-07-13): an operator who wrote asleep/paused
+            # MID-VISIT holds the newest standing intent — clobbering it to
+            # awake would convert their act into ours. Same guard shape as
+            # _wake_from_self_sleep.
+            current = read_entity_state(home_dir)
+            is_our_yield = str(current.get("mode") or "") == "visiting" or (
+                "auto-yield" in str(current.get("reason") or "")
+            )
+            if current.get("state") == "asleep" and is_our_yield:
+                write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
+                print("(loop asked to wake - a new stretch of his own time can begin)")
+            else:
+                print("(the operator changed his state during the visit - leaving their intent standing)")
 
     # ONE LIFE, ONE SUMMON is a STATUS question, not a lease question (B1,
     # 2026-07-13: the own-time loop holds the lease PER TICK now, so between

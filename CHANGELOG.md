@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELD-MERGE preserves foreign phase sections and unknown personal keys;
   corrupt files and newer `schema_version`s refuse loudly instead of
   clobbering.
+- **Tick-boundary grant check** (both lane audits flagged the day-open-only
+  lag independently — runtime G9 + gateway c1501(c)): a personal-grant
+  revocation/expiry landing MID-DAY now ends the day at the NEXT tick
+  boundary instead of riding to the day's end (`ticks_per_day` is
+  operator-configurable, so the old lag was unbounded in configuration
+  while consent must not wait). The day closes with its normal ceremony
+  (reflection runs — nobody is waiting); the top gate then performs the
+  ruled sleep-landing write and exit, keeping one write site.
 - **Phase-machine audit fixes** (laurent 13:54 every-lane adversarial
   verification against decision:entity-phase-state-machine v3; runtime's
   fable5 audit verdict COMPLIANT-WITH-GAPS, gaps closed same cycle):

@@ -1557,6 +1557,22 @@ class LifeLoop:
                         )
                         self.out("(pause lifted - the day continues)")
 
+                    # TICK-BOUNDARY GRANT CHECK (both lane audits flagged the
+                    # day-open-only lag independently, c1499 G9 + gateway
+                    # c1501 (c)): a revocation/expiry mid-day now ends the
+                    # day at the NEXT TICK, not the day boundary —
+                    # ticks_per_day is operator-configurable, so the old lag
+                    # was unbounded in configuration while consent is the
+                    # one thing that must not wait. The day closes with its
+                    # normal ceremony; the TOP gate then does the ruled
+                    # sleep-landing write and the exit (one mechanism, one
+                    # write site).
+                    if self.state_home is not None:
+                        mid_refusal = personal_grant_refusal(read_personal_grant(self.state_home))
+                        if mid_refusal is not None:
+                            self.out(f"(personal ended mid-day: {mid_refusal} - the day closes)")
+                            break
+
                     # TICK WINDOW (B1): the turn is a home writer, so it runs
                     # under the lease; a held lease is a YIELD at this
                     # boundary (lease-free poll, state re-checked at the top

@@ -774,6 +774,37 @@ def test_grant_revoked_during_an_idle_is_seen_at_the_wake(tmp_path: Path) -> Non
     assert report.stopped_by == "personal_disarmed"
 
 
+def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> None:
+    """Gateway audit (c) / my G9: consent must not wait for the day
+    boundary — a grant revoked between ticks closes the day at the NEXT
+    tick boundary, the top gate then writes the ruled sleep landing, and
+    no further tick runs. The reflection still runs (normal close, not a
+    fast-yield: nobody is waiting)."""
+    from abstractruntime.identity.life import read_entity_state, write_personal_grant
+
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLM(["One.\nnext: two", "Reflection.", "SURPLUS - never a tick 2"])
+    steps: Dict[str, int] = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        steps["n"] += 1
+        if steps["n"] == 1:
+            # Between-tick idle after tick 1: the operator revokes.
+            write_personal_grant(home_dir, mode="disabled")
+
+    loop = LifeLoop(
+        _factory_for(home_dir, llm), tick_seconds=5, ticks_per_day=4, max_ticks=4,
+        state_home=home_dir, sleep_fn=sleeper, out=lambda s: None,
+    )
+    report = loop.run()
+    assert report.ticks == 1  # tick 2 never ran
+    assert report.stopped_by == "personal_disarmed"
+    assert llm.replies == ["SURPLUS - never a tick 2"]  # reflection consumed, no tick 2
+    state = read_entity_state(home_dir)
+    assert state["state"] == "asleep"
+    assert "grant_revoked" in str(state.get("reason"))
+
+
 def test_grant_end_lands_the_entity_in_sleep_with_the_ruled_cause(tmp_path: Path) -> None:
     """Phase-machine audit G2 / state machine v3: grant expiry or revocation
     ends personal INTO SLEEP (no previous to restore) — the disarmed exit

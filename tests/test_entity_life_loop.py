@@ -303,10 +303,19 @@ def test_hard_stop_freezes_now_without_ceremony(tmp_path: Path) -> None:
 
     home_dir = _make_home(tmp_path)
 
-    # A stand-in loop process that would run for minutes if not frozen.
+    # A stand-in loop process that would run for minutes if not frozen. A
+    # LIVE day heartbeats its status every tick boundary (B1 pid-reuse
+    # guard), so the honest fixture carries a fresh updated_at — a frozen
+    # old timestamp now reads as a corpse by design.
+    from datetime import datetime, timezone as _tz
+
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
     (home_dir / "loop_status").write_text(
-        _json.dumps({"phase": "day", "updated_at": "2026-07-08T00:00:00+00:00", "pid": proc.pid}) + "\n",
+        _json.dumps({
+            "phase": "day",
+            "updated_at": datetime.now(_tz.utc).isoformat(),
+            "pid": proc.pid,
+        }) + "\n",
         encoding="utf-8",
     )
     assert loop_process_status(home_dir)["running"] is True
@@ -562,7 +571,10 @@ def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
     )
     report = loop.run()
     assert report.ticks == 2
-    assert phases == ["between"]  # status was between when the day opened
+    # The day PHASE begins at the summon window (B1, 2026-07-13): the doors'
+    # quiescence negotiation must see a summon-in-progress as non-quiescent,
+    # so the factory (called inside the summon) already reads "day".
+    assert phases == ["day"]
     assert read_loop_status(home_dir).get("phase") == "stopped"
 
     # await: quiescent immediately when stopped/between.
@@ -587,6 +599,41 @@ def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
         _json.dumps({"phase": "day", "pid": os.getpid()}), encoding="utf-8"
     )
     assert not await_loop_quiescent(home_dir, timeout_seconds=0.01, sleep_fn=lambda s: None)
+
+
+def test_read_loop_status_answers_running_for_the_visit_doors(tmp_path: Path) -> None:
+    """The gateway's visit doors decide the auto-yield negotiation from
+    `read_loop_status(home).get("running")` — before 2026-07-13 the reader
+    never set that key, so the yield request silently never fired (the
+    always-False missing-key drift class). Pin: running = live phase AND
+    live pid; dead pid, stopped phase, and a missing file all answer False."""
+    import json as _json
+    import os
+
+    from abstractruntime.identity.life import read_loop_status, write_loop_status
+
+    home_dir = tmp_path / "statushome"
+    home_dir.mkdir()
+    # No file yet: not running.
+    assert read_loop_status(home_dir).get("running") is False
+    # A live loop (this process's pid) in either live phase: running.
+    write_loop_status(home_dir, "day")
+    assert read_loop_status(home_dir).get("running") is True
+    write_loop_status(home_dir, "between")
+    assert read_loop_status(home_dir).get("running") is True
+    # Stopped phase: not running even with a live pid in the file.
+    write_loop_status(home_dir, "stopped")
+    assert read_loop_status(home_dir).get("running") is False
+    # A crashed loop (dead pid, live phase): not running — a visit must
+    # never wait on a corpse.
+    (home_dir / "loop_status").write_text(
+        _json.dumps({"phase": "day", "pid": 99999999}), encoding="utf-8"
+    )
+    assert read_loop_status(home_dir).get("running") is False
+    # The gateway's exact consumption shape.
+    write_loop_status(home_dir, "day")
+    assert bool(read_loop_status(home_dir).get("running")) is True
+    assert os.getpid() == read_loop_status(home_dir).get("pid")
 
 
 def test_loop_workspace_lives_inside_ticks(tmp_path: Path) -> None:

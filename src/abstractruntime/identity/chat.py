@@ -1464,9 +1464,18 @@ class ChatSession:
             f"(a previous visit ({marker.get('session_id')}) ended without its "
             "look-back - running it now, over that session's own records)"
         )
+        # Salvage idempotency (adversary find, 2026-07-13): the turn_id
+        # derives from the MARKER's session, never the salvaging session's —
+        # a crash after the APPRAISE writes but before the marker clears
+        # re-runs the salvage at the NEXT open (a third session id), and
+        # memory's at-least-once event-id dedup can only absorb the re-run
+        # when the turn_id re-derives IDENTICALLY. Feelings double-deposited
+        # on the append-only store are unrepairable; a duplicate summary
+        # record (different LLM words -> different digest) is the accepted
+        # residual — records can be superseded, valence cannot.
         result = self._reflect_over(
             sheet, session_id=str(marker.get("session_id")),
-            turn_id=f"t-reflect-salvage-{self.session_id}",
+            turn_id=f"t-reflect-salvage-{marker.get('session_id')}",
         )
         self._clear_pending_marker()
         return result
@@ -1682,6 +1691,42 @@ class ChatSession:
         )
 
 
+def salvage_pending_lookback(
+    home_dir: Path,
+    llm: Any,
+    *,
+    embedder: Any = None,
+    out: Callable[[str], None] = print,
+) -> Optional[Dict[str, Any]]:
+    """Session-free salvage of a deferred look-back, for doors that host no
+    ChatSession (the durable visit door — B1 fast-yield defers a yielded
+    day's reflection to the write-ahead marker, and the marker's contract is
+    "the NEXT open over the home runs it"; a door that opens the home IS a
+    next open). CALLER HOLDS THE WRITER LEASE — the salvage writes
+    (MEMORY_APPRAISE + summary FORM).
+
+    Cheap when there is nothing to do (one stat); otherwise opens the home,
+    runs the salvage over a minimal session, and closes. Returns the salvage
+    result dict, or None when no marker pends."""
+    marker = Path(home_dir) / "pending_reflection.json"
+    if not marker.exists():
+        return None
+    from datetime import datetime, timezone
+
+    home = open_home(Path(home_dir), embedder=embedder)
+    try:
+        session = ChatSession(
+            home,
+            llm,
+            participants=[home.entity_id],
+            session_id=f"salvage-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}",
+            out=out,
+        )
+        return session.run_pending_lookback()
+    finally:
+        home.close()
+
+
 # --------------------------------------------------------------------- CLI
 
 
@@ -1789,7 +1834,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.pause_loop:
         from .life import await_loop_quiescent, read_entity_state, read_loop_status, write_entity_state
 
-        if read_loop_status(home_dir).get("phase") == "day":
+        loop_st = read_loop_status(home_dir)
+        # `running` (not raw phase): a crashed loop's stale "day" — even one
+        # whose pid got recycled (the staleness fold catches it) — must not
+        # start a yield negotiation nobody will answer.
+        if loop_st.get("phase") == "day" and loop_st.get("running"):
             visitor = (args.participant or ["person:operator"])[0]
             write_entity_state(
                 home_dir, "asleep",
@@ -1798,6 +1847,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             print("(own-time loop asked to yield; waiting for its day to close...)")
             if not await_loop_quiescent(home_dir, timeout_seconds=900):
+                # Hand his time back before refusing (adversary find,
+                # 2026-07-13): abandoning the visiting posture would leave
+                # the loop yielded forever once it finally reaches its
+                # boundary — the gateway doors restore awake on timeout too.
+                write_entity_state(
+                    home_dir, "awake",
+                    reason="visit open aborted (loop did not yield in time)",
+                )
                 print("the loop did not reach a boundary within 15 minutes - refusing to "
                       "double-summon. Investigate the loop, then retry.")
                 return 1
@@ -1820,12 +1877,30 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
             print("(loop asked to wake - his own time resumes at its gate)")
 
+    # ONE LIFE, ONE SUMMON is a STATUS question, not a lease question (B1,
+    # 2026-07-13: the own-time loop holds the lease PER TICK now, so between
+    # ticks the lease is free while the day is still OPEN — the old day-long
+    # hold protected this path by accident). An open day on a live loop
+    # refuses here unless --pause-loop yielded it above; the lease below
+    # arbitrates INSTANTANEOUS writers, not session ownership. `running`
+    # guards the corpse case: a stale "day" (dead or recycled pid) must not
+    # brick the door.
+    from .life import loop_process_status
+
+    loop_now = loop_process_status(home_dir)
+    if loop_now.get("phase") == "day" and loop_now.get("running"):
+        print("an own-time day is open on this home (loop pid "
+              f"{loop_now.get('pid', '?')}) - one life, one summon. "
+              "Use --pause-loop to yield his own time first.")
+        _wake_loop_if_yielded()
+        return 1
+
     # VISIT-HOST LEASE (plan item 1, phase 1): this CLI is a home writer —
     # the same window class as the gateway's EntityChatHost. One writer per
     # home is now structural, not the docstring's plea: a home whose loop
     # (or another visit) holds the lease refuses loudly instead of
     # double-summoning. Acquired AFTER the pause-loop yield (the loop
-    # releases its day lease when its day closes) and released at exit.
+    # releases its writer windows at tick boundaries) and released at exit.
     from ..storage.lease import DirectoryLeaseHeld, acquire_directory_lease
 
     try:

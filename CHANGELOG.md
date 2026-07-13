@@ -8,6 +8,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-tick lease windows in the own-time loop** (B1 keystone, operator
+  ruling "i should always be able to visit"; memory ruled time-sliced
+  alternation M2-clean, commons c1322/c1324): `LifeLoop.run()` no longer
+  holds the home writer lease for a whole day. Each home-writing window
+  takes and returns it — the SUMMON window (open + pending-look-back
+  salvage), one window per tick around `session.turn()`, and a CLOSE window
+  around `session.reflect()`. Between-tick idles, boundary waits, paused
+  freezes, and failure backoffs are LEASE-FREE, so a waiting visit slots in
+  at any tick boundary (~tick_seconds bound instead of a day-long hold). A
+  held lease at a tick boundary is a wait (never a failure, never a
+  consumed tick slot); the close wait is bounded (`CLOSE_WAIT_MAX_POLLS`,
+  ~2 min) and a day that broke ON a stop defers instead of waiting (stop
+  commands are consumed-on-read — the wait's own polls would never re-see
+  one; adversary find). FAST-YIELD: when the day closes because a visitor
+  arrived (state mode=visiting or auto-yield reason — each detection
+  channel works alone), the inline reflection is DEFERRED to the
+  write-ahead `pending_reflection.json` marker and quiescence lands right
+  after the in-flight turn, keeping the visit door's 55s yield window
+  honest; the loop's own next summon salvages the deferred look-back under
+  its summon window. Pinned in `tests/test_directory_lease.py` (per-tick
+  windows, wait-not-fail + no-slot-consumption, fast-yield + salvage
+  round-trip with attribution, both detection channels).
+- **`salvage_pending_lookback(home_dir, llm)`** (identity/chat.py): the
+  DOOR half of fast-yield — a session-free salvage for doors that host no
+  ChatSession (the gateway's durable visit lane), so any "next open over
+  the home" can repay a deferred look-back. Caller holds the writer lease;
+  no marker = one-stat no-op. The gateway's open leg is the intended
+  consumer (their half of B1).
+- **`read_loop_status` now answers `running`** (composition bug, found
+  while building B1): the gateway's visit doors decide the auto-yield
+  negotiation from `read_loop_status(...).get("running")`, and this reader
+  NEVER set that key — the yield request silently never fired (always-False
+  missing-key drift class). `running` = live phase AND live pid, folded in
+  ONE place (`loop_process_status` now consumes it instead of keeping a
+  second predicate copy). Pid-reuse guard: a LIVE day heartbeats its status
+  at every tick boundary, and a "day" whose `updated_at` froze past
+  `LOOP_STATUS_STALE_SECONDS` (30 min) reads as a corpse regardless of the
+  pid probe — a recycled pid must not make the doors negotiate with a
+  corpse and 409 forever. The day PHASE now begins at the summon window
+  (doors see a summon-in-progress as non-quiescent instead of colliding
+  with the held lease).
+
+### Fixed
+- **Salvage idempotency** (adversary find on the B1 wave): the pending
+  look-back's `turn_id` now derives from the MARKER's session (was: the
+  salvaging session's), so a crash between the APPRAISE writes and the
+  marker clear re-derives IDENTICAL event ids at the next open and memory's
+  at-least-once dedup absorbs the re-run — feelings double-deposited on the
+  append-only store are unrepairable. A duplicate summary record (different
+  LLM words) remains the accepted residual: records can be superseded,
+  valence cannot.
+- **CLI visit door under per-tick leases** (identity/chat.py `main`): "one
+  life, one summon" was enforced by the day-long lease hold by ACCIDENT —
+  with per-window leases the CLI could have opened a second summon between
+  ticks. The door now refuses on loop STATUS (open day on a live loop →
+  refuse naming the pid, pointing at `--pause-loop`) before touching the
+  lease; the lease keeps arbitrating instantaneous writers. `--pause-loop`
+  gates its yield write on `running` (a corpse day must not start a
+  negotiation nobody answers) and restores `awake` when the quiescence wait
+  times out (abandoning the visiting posture left the loop yielded forever;
+  the gateway doors already restored it).
+
+### Added
 - **Absolute-path re-anchoring in workspace-scoped tools** (incident-driven,
   adversarially designed; shipped by the code seat, sign-off list on the
   runtime DM): models frequently fabricate a plausible-but-wrong absolute

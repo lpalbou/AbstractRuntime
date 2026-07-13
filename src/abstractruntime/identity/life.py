@@ -98,6 +98,16 @@ STATE_POLL_SECONDS = 5.0
 # (gate idle, nap, asleep/paused idle); "stopped" = the loop process exited.
 LOOP_PHASES = ("day", "between", "stopped")
 
+# Pid-reuse guard (B1 adversary, 2026-07-13): a loop killed mid-day leaves
+# {"phase":"day","pid":N}; after enough process churn (or a reboot) pid N can
+# belong to an UNRELATED live process, and the pid-liveness probe alone would
+# read the corpse as running forever — the visit doors would then negotiate
+# an auto-yield nobody answers and 409 on every open. A LIVE day heartbeats
+# its status at every tick boundary, so a "day" whose updated_at froze past
+# this bound is a corpse regardless of what the pid says. Generous: a tick =
+# one LLM turn (<= ~3 min timeout) + memory writes, never half an hour.
+LOOP_STATUS_STALE_SECONDS = 1800.0
+
 
 def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] = None) -> None:
     """Best-effort status write; the loop must never die over its status.
@@ -130,19 +140,45 @@ def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] =
 
 
 def read_loop_status(home_dir: Path) -> Dict[str, Any]:
-    """Missing/corrupt file reads as stopped (no loop = nothing to wait for)."""
+    """Missing/corrupt file reads as stopped (no loop = nothing to wait for).
+
+    Always answers `running` (phase says a loop is up AND its pid is alive):
+    the gateway's visit doors consume `read_loop_status(...).get("running")`
+    to decide the auto-yield negotiation, and before 2026-07-13 this reader
+    never set the key — the yield request silently never fired (always-False
+    on a missing key is the diary_type-clamp drift class). The raw file
+    stays authoritative for `phase`; `running` folds in the liveness probe
+    so every reader of either function gets the same answer."""
     import json
 
     path = Path(home_dir) / "loop_status"
     if not path.exists():
-        return {"phase": "stopped"}
+        return {"phase": "stopped", "running": False}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("phase") not in LOOP_PHASES:
-            return {"phase": "stopped"}
-        return data
+            return {"phase": "stopped", "running": False}
     except Exception:  # noqa: BLE001
-        return {"phase": "stopped"}
+        return {"phase": "stopped", "running": False}
+    running = bool(
+        data.get("phase") in ("day", "between") and _pid_alive(data.get("pid"))
+    )
+    if running and data.get("phase") == "day":
+        # Stale-day corpse detection (see LOOP_STATUS_STALE_SECONDS): the
+        # live loop heartbeats "day" at every tick boundary; a frozen
+        # updated_at past the bound means the pid probe is lying (reuse).
+        # Unparseable/missing timestamps read as fresh — old writers must
+        # not be declared dead over a format gap.
+        try:
+            from datetime import datetime, timezone
+
+            written = datetime.fromisoformat(str(data.get("updated_at")))
+            if (datetime.now(timezone.utc) - written).total_seconds() > LOOP_STATUS_STALE_SECONDS:
+                running = False
+        except Exception:  # noqa: BLE001
+            pass
+    data["running"] = running
+    return data
 
 
 # ------------------------------------------------------------ loop commands
@@ -321,26 +357,21 @@ def loop_process_status(home_dir: Path) -> Dict[str, Any]:
     """The loop's honest state: its own status file, cross-checked against
     the pid (a crashed loop reads stopped, never a phantom 'day'), plus
     whether a stop is pending (file brake or inbox command). Inbox trouble
-    never fakes an answer — it is surfaced as a labeled warning instead."""
-    import os
+    never fakes an answer — it is surfaced as a labeled warning instead.
 
+    `running` comes FOLDED from read_loop_status (one liveness predicate,
+    never a second copy — the drift class the running-key fix itself was
+    about); this wrapper only adds the phase rewrite and the stop surface."""
     status = dict(read_loop_status(home_dir))
     try:
         pid_int = int(status.get("pid") or 0)
     except (TypeError, ValueError):
         pid_int = 0
-    alive = False
-    if pid_int > 0:
-        try:
-            os.kill(pid_int, 0)
-            alive = True
-        except (OSError, ProcessLookupError):
-            alive = False
-    running = status.get("phase") in ("day", "between") and alive
-    if status.get("phase") in ("day", "between") and not alive:
+    if status.get("phase") in ("day", "between") and not (pid_int > 0 and _pid_alive(pid_int)):
         status["phase"] = "stopped"
         status["note"] = "loop_status said running but the process is gone (crash or reboot)"
-    status["running"] = bool(running)
+        status["running"] = False
+    running = bool(status.get("running"))
 
     inbox_pending = False
     if running:
@@ -697,6 +728,11 @@ class LifeReport:
 
 MAX_CONSECUTIVE_TICK_FAILURES = 3
 FAILURE_BACKOFF_SECONDS = 60.0
+# Day-close look-back wait bound (B1 adversary, 2026-07-13): a LIVE holder
+# that never releases (a hung visit) must not pin the loop in "day" phase
+# forever — after this many polls the look-back defers to the write-ahead
+# marker and the day closes. 24 polls x STATE_POLL_SECONDS = ~2 minutes.
+CLOSE_WAIT_MAX_POLLS = 24
 
 
 class LifeLoop:
@@ -899,6 +935,37 @@ class LifeLoop:
         if self.state_home is not None:
             write_loop_status(self.state_home, phase, stopped_by=stopped_by)
 
+    # ------------------------------------------------- per-window home lease
+    # B1 keystone (laurent 04:58 "i should always be able to visit", ruled
+    # M2-clean by memory c1322): the loop NEVER holds the writer lease across
+    # a whole day. Each home-writing window (summon, one tick's turn, the
+    # close reflection) takes the lease and hands it back; the between-tick
+    # idle, boundary waits, paused freezes, and failure backoffs are all
+    # LEASE-FREE, so a waiting visit slots in at any tick boundary
+    # (~tick_seconds bound instead of a day-long hold). Time-sliced
+    # alternation of writers satisfies one-writer-per-store — the invariant
+    # was never one-HOLDER-per-day; that was an implementation convenience.
+
+    def _try_home_lease(self, holder: str) -> tuple:
+        """One attempt at the home writer lease for a single window.
+
+        Returns (lease, None) on success, (None, who) when another writer
+        holds it, and (None, None) when the loop runs leaseless (no
+        state_home — ephemeral/test homes)."""
+        if self.state_home is None:
+            return None, None
+        from ..storage.lease import DirectoryLease, DirectoryLeaseHeld
+
+        lease = DirectoryLease(self.state_home, holder=holder)
+        try:
+            lease.acquire()
+        except DirectoryLeaseHeld as held:
+            who = "another writer"
+            if held.holder:
+                who = f"{held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')}"
+            return None, who
+        return lease, None
+
     def run(self) -> LifeReport:
         report = LifeReport()
         cue = self.first_cue
@@ -950,44 +1017,65 @@ class LifeLoop:
                 self.out(f"({belt['state']} written while opening the day - yielding before the summon)")
                 continue  # back to the top gate, which idles honestly
 
-            # DAY-WINDOW LEASE (plan item 1 / GW-A, phase 1): the loop is one
-            # of the four home writers — the day holds the lease from summon
-            # to close. Refusal is a YIELD, never a crash: another writer
-            # (visit host, dream, maintenance) owns the home right now; idle
-            # one poll and return to the gate, which re-reads state honestly.
-            day_lease: Optional["DirectoryLease"] = None
-            if self.state_home is not None:
-                from ..storage.lease import DirectoryLease, DirectoryLeaseHeld  # noqa: F811 - annotation name
-
-                try:
-                    day_lease = DirectoryLease(self.state_home, holder="loop")
-                    day_lease.acquire()
-                except DirectoryLeaseHeld as held:
-                    who = ""
-                    if held.holder:
-                        who = f" ({held.holder.get('holder', 'unknown')} pid {held.holder.get('pid', '?')})"
-                    self.out(f"(another writer holds the home{who} - yielding at the gate)")
-                    day_lease = None
-                    if self._interruptible_sleep(STATE_POLL_SECONDS):
-                        report.stopped_by = self.stop_cause or "stop_file"
-                        break
-                    continue
+            # SUMMON WINDOW (B1: per-window lease, never per-day): the summon
+            # writes to the home (wake-reason consumption, session open), so
+            # it runs under the lease — released the moment the session is
+            # open, BEFORE the first tick. Refusal is a YIELD, never a crash:
+            # another writer (visit host, dream, maintenance) owns the home
+            # right now; idle one poll and return to the gate, which re-reads
+            # state honestly.
+            summon_lease, held_by = self._try_home_lease("loop")
+            if held_by is not None:
+                self.out(f"(another writer holds the home ({held_by}) - yielding at the gate)")
+                if self._interruptible_sleep(STATE_POLL_SECONDS):
+                    report.stopped_by = self.stop_cause or "stop_file"
+                    break
+                continue
 
             day += 1
             report.days = day
+            # The day PHASE begins at the summon window (adversary find,
+            # 2026-07-13): the doors' quiescence negotiation watches phase,
+            # and a summon (open + possible salvage LLM call) that still
+            # read "between" would let a visit pass the negotiation and
+            # collide with the held lease instead — a user-visible 409 the
+            # state protocol exists to prevent.
+            self._status("day")
+            opened = False
             try:
                 session = self.open_session()
-            except BaseException:
-                # A failed summon must hand the home back before dying.
-                if day_lease is not None:
-                    day_lease.release()
-                raise
-            self._status("day")
+                # Salvage an unreflected predecessor (B1 fast-yield's other
+                # half): a day that yielded to a visit deferred its look-back
+                # to the write-ahead marker; the next open over the home —
+                # this one — runs it, attributed to THAT session. Inside the
+                # summon window: the look-back is a home writer (APPRAISE +
+                # summary FORM). Salvage failure never blocks a day.
+                try:
+                    salvage = session.run_pending_lookback()
+                    if salvage:
+                        self.out(f"(salvaged look-back) {salvage.get('reply', '')}")
+                except Exception as e:  # noqa: BLE001 - the net must not become a blocker
+                    self.out(f"#FALLBACK pending look-back failed ({e}); the gap stays on the record")
+                opened = True
+            finally:
+                # The summon window ends here either way — a failed summon
+                # must hand the home back before dying, and a successful one
+                # ticks under its own per-tick windows (B1). A summon that
+                # DIED must not leave a phantom "day" phase behind it.
+                if summon_lease is not None:
+                    summon_lease.release()
+                if not opened:
+                    self._status("between")
             self.out(f"(day {day} begins - session {session.session_id})")
             consecutive_failures = 0
-            day_state = "awake"
+            visit_yield = False
             try:
-                for _ in range(self.ticks_per_day):
+                tick_slots = 0
+                while tick_slots < self.ticks_per_day:
+                    # Heartbeat (pid-reuse guard): a LIVE day re-stamps its
+                    # status every boundary so readers can tell it from a
+                    # corpse whose pid got recycled (LOOP_STATUS_STALE_SECONDS).
+                    self._status("day")
                     if self.max_ticks is not None and report.ticks >= self.max_ticks:
                         report.stopped_by = "max_ticks"
                         break
@@ -997,13 +1085,20 @@ class LifeLoop:
 
                     # Tick-boundary state check (turn atomicity: never
                     # mid-turn). asleep -> the day closes with its normal
-                    # ceremony and the outer gate idles. paused -> hard
-                    # freeze WITHOUT closing ceremony: idle here, same day,
-                    # and tell him honestly when he resumes.
+                    # ceremony and the outer gate idles — except a VISIT
+                    # yield (mode=visiting / auto-yield reason, the gateway's
+                    # own detection vocabulary), where someone is WAITING:
+                    # the close defers its reflection (B1 fast-yield) so
+                    # quiescence lands ~immediately after the in-flight turn.
+                    # paused -> hard freeze WITHOUT closing ceremony: idle
+                    # here (lease-free), same day, honest resume note.
                     boundary = self._operator_state()
                     if boundary["state"] == "asleep":
-                        day_state = "asleep"
-                        self.out(f"(operator sleep{self._since(boundary)} - the day closes)")
+                        mode = str(boundary.get("mode") or "")
+                        reason = str(boundary.get("reason") or "")
+                        visit_yield = mode == "visiting" or "auto-yield" in reason
+                        note = "a visitor is at the door" if visit_yield else "operator sleep"
+                        self.out(f"({note}{self._since(boundary)} - the day closes)")
                         break
                     if boundary["state"] == "paused":
                         self.out(f"(paused by operator{self._since(boundary)} - frozen mid-day)")
@@ -1012,7 +1107,6 @@ class LifeLoop:
                             report.stopped_by = self.stop_cause or "stop_file"
                             break
                         if resumed["state"] == "asleep":
-                            day_state = "asleep"
                             self.out("(sleep requested while paused - the day closes)")
                             break
                         # Honest resume, same day (the maintainer's open
@@ -1023,15 +1117,35 @@ class LifeLoop:
                         )
                         self.out("(pause lifted - the day continues)")
 
+                    # TICK WINDOW (B1): the turn is a home writer, so it runs
+                    # under the lease; a held lease is a YIELD at this
+                    # boundary (lease-free poll, state re-checked at the top
+                    # of the loop), never a failure and never a consumed
+                    # tick slot.
+                    tick_lease, held_by = self._try_home_lease("loop")
+                    if held_by is not None:
+                        self.out(f"(another writer holds the home ({held_by}) - waiting at the tick boundary)")
+                        if self._interruptible_sleep(STATE_POLL_SECONDS):
+                            report.stopped_by = self.stop_cause or "stop_file"
+                            break
+                        continue
+                    tick_slots += 1
+
                     # A failed tick (provider outage, timeout) is a skipped
                     # heartbeat, not a death: back off and retry; the turn's
                     # atomicity means nothing half-formed exists. Persistent
                     # failure closes the day and ENDS THE LOOP
                     # (stopped_by="failures" is terminal — the operator
                     # investigates and restarts; the loop never spins
-                    # unattended against a dead provider).
+                    # unattended against a dead provider). The inner
+                    # try/finally releases the lease BEFORE failure handling
+                    # runs, so the backoff sleep is LEASE-FREE.
                     try:
-                        reply, turn_report = session.turn(cue)
+                        try:
+                            reply, turn_report = session.turn(cue)
+                        finally:
+                            if tick_lease is not None:
+                                tick_lease.release()  # the tick's writer window ends HERE
                     except (RuntimeError, Exception) as e:  # noqa: BLE001
                         report.failures += 1
                         consecutive_failures += 1
@@ -1075,19 +1189,95 @@ class LifeLoop:
                         report.stopped_by = self.stop_cause or "stop_file"
                         break
             finally:
-                # The day ALWAYS closes with the look-back (feelings move on
-                # the entity's own time too) and an honest home close. A
+                # The day closes with the look-back (feelings move on the
+                # entity's own time too) and an honest home close. A
                 # reflection failure never voids the day's formed ticks.
+                #
+                # B1 FAST-YIELD: when a VISITOR is waiting (visit_yield), the
+                # inline reflection is DEFERRED — the write-ahead
+                # pending_reflection.json marker (maintained every turn)
+                # carries the sheet, and run_pending_lookback salvages the
+                # look-back at the next open over this home, attributed to
+                # THIS session. Quiescence (loop_status != "day") lands
+                # ~immediately after the in-flight turn instead of after a
+                # reflection LLM call, which is what keeps the visit door's
+                # 55s yield window honest.
+                #
+                # Normal closes (rest/max_ticks/failures/operator-sleep)
+                # reflect inline, under their own lease window: the
+                # reflection is a home writer too (APPRAISE + summary FORM).
+                # A held lease waits honestly (lease-free poll); a stop
+                # during the wait defers to the same salvage marker.
                 try:
-                    if session.reports:
-                        session.reflect()
+                    if visit_yield:
+                        if session.reports:
+                            # 0-tick yields have no marker to defer — the
+                            # message only prints when something pends.
+                            self.out(
+                                "(yielding to the visit - the day's look-back is deferred; "
+                                "the pending marker carries it to the next open)"
+                            )
+                    elif session.reports:
+                        close_lease = None
+                        may_reflect = False  # lease acquired OR leaseless home
+                        # A day that broke ON a stop must not wait here at
+                        # all: stop COMMANDS are consumed-on-read, so the
+                        # wait's own stop polls would find nothing and spin
+                        # against a held lease after the operator's stop was
+                        # already accepted (adversary find, 2026-07-13). One
+                        # try; held -> defer to the marker immediately.
+                        stopping = report.stopped_by in ("stop_file", "stop_command") or (
+                            self.stop_cause is not None
+                        )
+                        polls = 0
+                        try:
+                            while True:
+                                close_lease, held_by = self._try_home_lease("loop")
+                                if held_by is None:
+                                    may_reflect = True
+                                    break
+                                if stopping:
+                                    self.out(
+                                        "(stopping while the home is held - the look-back is "
+                                        "deferred; the pending marker carries it to the next open)"
+                                    )
+                                    break
+                                polls += 1
+                                if polls > CLOSE_WAIT_MAX_POLLS:
+                                    self.out(
+                                        f"(the home stayed held through the close wait ({held_by}) - "
+                                        "the look-back is deferred to the next open)"
+                                    )
+                                    break
+                                self.out(
+                                    f"(another writer holds the home ({held_by}) - "
+                                    "waiting to run the day's look-back)"
+                                )
+                                if self._interruptible_sleep(STATE_POLL_SECONDS):
+                                    # A stop command is CONSUMED by the check;
+                                    # record it now or the stop would be lost.
+                                    report.stopped_by = self.stop_cause or "stop_file"
+                                    self.out(
+                                        "(stopped while waiting - the look-back is deferred; "
+                                        "the pending marker carries it to the next open)"
+                                    )
+                                    break
+                            if may_reflect:
+                                session.reflect()
+                        finally:
+                            if close_lease is not None:
+                                close_lease.release()  # the close's writer window ends HERE
                 except Exception as e:  # noqa: BLE001 - the loop must not die mid-life
                     self.out(f"#FALLBACK day-{day} reflection failed: {e}")
                 self.out(session.close_summary())
+                # Deliberately OUTSIDE the lease window: close_summary reads,
+                # and home.close() only checkpoints WAL + closes connections —
+                # SQLite's own file locking makes a checkpoint safe beside
+                # another writer; no record append or journal seq can
+                # interleave here. The lease guards SEMANTIC writes, and the
+                # last one ended with the look-back above.
                 session.home.close()
                 self._status("between")
-                if day_lease is not None:
-                    day_lease.release()  # the day's writer window ends HERE
 
             if report.stopped_by == "rest" and self.rest_minutes > 0:
                 # 24/7 mode: rest is SLEEP, not a blank nap (maintainer ruling

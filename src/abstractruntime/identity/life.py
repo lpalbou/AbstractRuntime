@@ -109,6 +109,39 @@ LOOP_PHASES = ("day", "between", "stopped")
 LOOP_STATUS_STALE_SECONDS = 1800.0
 
 
+def _pid_start_time(pid: Any) -> Optional[str]:
+    """The OS-recorded start time of `pid`, as ps prints it (lstart) — the
+    PID-IDENTITY TOKEN (gateway state-wave adversary 2, 2026-07-13): a pid
+    number can be recycled to an unrelated process, but (pid, start time)
+    identifies ONE process incarnation. Writer stamps its own; readers
+    compare the file's stamp against the CURRENT holder of that pid —
+    mismatch = recycled pid = corpse, regardless of phase. None on any
+    failure (no ps, no such pid): callers degrade to pid-alive-only plus
+    the day-staleness belt, never block on the token."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "lstart="],
+            capture_output=True, text=True, timeout=5,
+        )
+        text = (out.stdout or "").strip()
+        return text or None
+    except Exception:  # noqa: BLE001 - the token is an upgrade, never a gate
+        return None
+
+
+_OWN_START_TIME: Dict[str, Optional[str]] = {}  # lazy one-shot cache (module scope)
+
+
+def _own_start_time() -> Optional[str]:
+    import os
+
+    if "value" not in _OWN_START_TIME:
+        _OWN_START_TIME["value"] = _pid_start_time(os.getpid())
+    return _OWN_START_TIME["value"]
+
+
 def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] = None) -> None:
     """Best-effort status write; the loop must never die over its status.
 
@@ -116,7 +149,8 @@ def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] =
     observer/gateway asks 2026-07-09: three consecutive tick failures used
     to exit silently — nothing on /loop status said the loop culled itself).
     Readers get it for free: read_loop_status returns the whole dict and
-    loop_process_status copies it through to the gateway status route."""
+    loop_process_status copies it through to the gateway status route.
+    `pid_started_at` is the pid-identity token (see _pid_start_time)."""
     import json
     import os
     from datetime import datetime, timezone
@@ -128,6 +162,9 @@ def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] =
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "pid": os.getpid(),
     }
+    started = _own_start_time()
+    if started:
+        payload["pid_started_at"] = started
     if stopped_by:
         payload["stopped_by"] = str(stopped_by)
     try:
@@ -163,10 +200,24 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
     running = bool(
         data.get("phase") in ("day", "between") and _pid_alive(data.get("pid"))
     )
+    if running:
+        # PID-IDENTITY TOKEN (gateway adversary 2, closes the `between`
+        # corpse hole the day-only staleness belt left): when the file
+        # carries pid_started_at, the pid must be the SAME INCARNATION —
+        # a recycled pid's start time differs, and the corpse reads
+        # not-running in EVERY phase, forever-409s and innocent-freeze-kills
+        # both die. Files without the stamp (older writers) skip the check.
+        stamped = str(data.get("pid_started_at") or "")
+        if stamped:
+            current = _pid_start_time(data.get("pid"))
+            if current is not None and current != stamped:
+                running = False
     if running and data.get("phase") == "day":
-        # Stale-day corpse detection (see LOOP_STATUS_STALE_SECONDS): the
-        # live loop heartbeats "day" at every tick boundary; a frozen
-        # updated_at past the bound means the pid probe is lying (reuse).
+        # Stale-day belt (see LOOP_STATUS_STALE_SECONDS): kept BESIDE the
+        # token — it also catches a live-pid loop that stopped heartbeating
+        # (wedged process), which the token cannot. The live loop
+        # heartbeats "day" at every tick boundary; a frozen updated_at past
+        # the bound means something is wrong regardless of pid identity.
         # Unparseable/missing timestamps read as fresh — old writers must
         # not be declared dead over a format gap.
         try:
@@ -812,6 +863,11 @@ def spawn_loop_process(
 
 
 def _pid_alive(pid: Any) -> bool:
+    """os.kill(pid, 0) liveness probe. DELIBERATE: EPERM (a live process we
+    may not signal) lands in OSError and reads as DEAD — the safe direction
+    for every current caller (doors don't wait on it, freeze won't SIGKILL
+    it). Do not "fix" this into signaling paths without splitting the two
+    meanings (gateway adversary 2, finding 4)."""
     import os
 
     try:
@@ -1122,12 +1178,22 @@ class LifeLoop:
         changed = str(state.get("changed_at") or "").strip()
         return f" since {changed}" if changed else ""
 
-    def _idle_while(self, predicate: Callable[[Dict[str, Any]], bool]) -> Dict[str, Any]:
+    def _idle_while(
+        self, predicate: Callable[[Dict[str, Any]], bool], *, phase: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Idle at a boundary while `predicate(state)` holds; the stop file
-        always wins. Returns the state that ended the idle (or state=stop)."""
+        always wins. Returns the state that ended the idle (or state=stop).
+
+        `phase` heartbeats loop_status each poll (gateway adversary 2,
+        2026-07-13: a mid-day PAUSE idled past LOOP_STATUS_STALE_SECONDS and
+        the staleness belt declared a LIVE loop not-running — console lied,
+        and the post-wake window could double-start). The heartbeat keeps
+        updated_at honest through long freezes."""
         while True:
             if self._should_stop():
                 return {"state": "stop"}
+            if phase is not None:
+                self._status(phase)
             state = self._operator_state()
             if not predicate(state):
                 return state
@@ -1308,7 +1374,9 @@ class LifeLoop:
             gate = self._operator_state()
             if gate["state"] in ("asleep", "paused"):
                 self.out(f"({gate['state']} by operator{self._since(gate)} - idling)")
-                woke = self._idle_while(lambda s: s["state"] in ("asleep", "paused"))
+                woke = self._idle_while(
+                    lambda s: s["state"] in ("asleep", "paused"), phase="between"
+                )
                 if woke["state"] == "stop":
                     report.stopped_by = self.stop_cause or "stop_file"
                     break
@@ -1428,7 +1496,9 @@ class LifeLoop:
                         break
                     if boundary["state"] == "paused":
                         self.out(f"(paused by operator{self._since(boundary)} - frozen mid-day)")
-                        resumed = self._idle_while(lambda s: s["state"] == "paused")
+                        resumed = self._idle_while(
+                            lambda s: s["state"] == "paused", phase="day"
+                        )
                         if resumed["state"] == "stop":
                             report.stopped_by = self.stop_cause or "stop_file"
                             break

@@ -798,6 +798,94 @@ def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path)
         spawn_loop_process(home_dir, provider="endpoint:ovh-provider", model="gpt-oss-120b")
 
 
+def test_pid_identity_token_kills_the_recycled_pid_corpse(tmp_path: Path) -> None:
+    """Gateway adversary 2 (c1469): a corpse status file whose pid got
+    recycled to an unrelated live process must read running=False in EVERY
+    phase — (pid, start time) identifies one incarnation. Files without the
+    stamp (older writers) keep the pid-alive-only behavior."""
+    import json as _json
+    import os
+
+    from abstractruntime.identity.life import read_loop_status, write_loop_status
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    # Live writer: stamps its own start time; reads back running.
+    write_loop_status(home_dir, "between")
+    status = read_loop_status(home_dir)
+    assert status["running"] is True
+    own_stamp = status.get("pid_started_at")
+
+    # Corpse simulation: same LIVE pid (this process), WRONG start stamp —
+    # the exact recycled-pid shape (pid alive, different incarnation).
+    if own_stamp:  # ps available on this platform
+        (home_dir / "loop_status").write_text(
+            _json.dumps({
+                "phase": "between", "pid": os.getpid(),
+                "updated_at": "2026-07-13T00:00:00+00:00",
+                "pid_started_at": "Mon Jan  1 00:00:00 2001",
+            }), encoding="utf-8",
+        )
+        assert read_loop_status(home_dir)["running"] is False
+        # Same for a stale "day" — the token fires before the staleness belt.
+        (home_dir / "loop_status").write_text(
+            _json.dumps({
+                "phase": "day", "pid": os.getpid(),
+                "updated_at": "2026-07-13T00:00:00+00:00",
+                "pid_started_at": "Mon Jan  1 00:00:00 2001",
+            }), encoding="utf-8",
+        )
+        assert read_loop_status(home_dir)["running"] is False
+
+    # Unstamped file (older writer): pid-alive-only semantics preserved.
+    (home_dir / "loop_status").write_text(
+        _json.dumps({"phase": "between", "pid": os.getpid(),
+                     "updated_at": "2026-07-13T00:00:00+00:00"}), encoding="utf-8",
+    )
+    assert read_loop_status(home_dir)["running"] is True
+
+
+def test_paused_idle_heartbeats_the_day_phase(tmp_path: Path) -> None:
+    """Gateway adversary 2 (c1469 finding 1): a mid-day PAUSE must keep the
+    loop_status heartbeat fresh — a long freeze used to trip the staleness
+    belt and report a LIVE paused loop as not-running (console lie + a
+    post-wake double-start window)."""
+    import json as _json
+
+    from abstractruntime.identity.life import read_loop_status, write_entity_state
+
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLM(["One.\nnext: two", "Two.", "Reflection."])
+    heartbeats: List[str] = []
+    steps: Dict[str, int] = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        steps["n"] += 1
+        if steps["n"] == 1:
+            # Between-tick idle after tick 1: the operator pauses.
+            write_entity_state(home_dir, "paused", reason="maintenance")
+        elif steps["n"] < 4:
+            # Inside the paused freeze: capture the heartbeat's fresh stamp.
+            heartbeats.append(str(read_loop_status(home_dir).get("updated_at")))
+        else:
+            write_entity_state(home_dir, "awake", reason="maintenance done")
+
+    loop = LifeLoop(
+        _factory_for(home_dir, llm), tick_seconds=5, ticks_per_day=2, max_ticks=2,
+        state_home=home_dir, sleep_fn=sleeper, out=lambda s: None,
+    )
+    report = loop.run()
+    assert report.ticks == 2  # the day resumed after the pause lifted
+    # The freeze re-stamped the day phase at least once per poll: the
+    # captured stamps differ from each other or from the pre-pause write
+    # (each heartbeat rewrites updated_at).
+    assert heartbeats, "the paused idle never polled - test wiring broke"
+    raw = _json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    assert raw["phase"] == "stopped"  # loop ended cleanly after max_ticks
+    assert len(set(heartbeats)) >= 1 and all(h and h != "None" for h in heartbeats)
+
+
 def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, monkeypatch) -> None:
     """One-active-phase ruling (c1455/c1462): the consolidator hands the
     engine a should_continue predicate — pure reads only — that ends the

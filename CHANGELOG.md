@@ -63,6 +63,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELD-MERGE preserves foreign phase sections and unknown personal keys;
   corrupt files and newer `schema_version`s refuse loudly instead of
   clobbering.
+- **Pid-identity token + pause heartbeat** (gateway state-wave adversary 2,
+  c1469 — their runtime-lane findings, closed same cycle): `loop_status`
+  now stamps `pid_started_at` (the OS-recorded process start time via
+  `ps lstart`) and `read_loop_status` requires the CURRENT holder of that
+  pid to match — a recycled pid's corpse reads not-running in EVERY phase
+  (the `between` corpse could 409 starts forever and aim a freeze-SIGKILL
+  at an innocent process). Unstamped files (older writers) keep
+  pid-alive-only semantics; token probe failure degrades the same way. The
+  day-staleness belt STAYS beside the token (it catches a live-but-wedged
+  loop that stopped heartbeating, which pid identity cannot). `_idle_while`
+  gains a `phase` heartbeat: a mid-day PAUSE re-stamps `updated_at` every
+  poll, so a long freeze no longer trips the staleness belt into reporting
+  a live paused loop as not-running (console lie + a post-wake double-start
+  window). `_pid_alive`'s EPERM-reads-as-dead direction is now documented
+  as deliberate (safe for every current caller; never reuse it in
+  signaling paths without splitting the meanings).
 - **Graceful night yield** (one-active-phase ruling, laurent 13:28; memory's
   cancellation semantics c1462): `build_consolidator` passes the engine's
   `sleep_pass` a `should_continue` predicate — pure reads of the home state

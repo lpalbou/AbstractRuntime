@@ -181,6 +181,43 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
     return data
 
 
+# ------------------------------------------------------------- loop spend
+# The own-time loop runs home-direct (ChatSession, no run ledger), so its
+# LLM/tool usage is invisible to the gateway's per-home spend fold — the
+# honest #FALLBACK on /cognition (gateway c1390). This file is the loop
+# lane's half: cumulative lifetime counters, written by the ONE loop process
+# after every tick and at day close. Field names match the gateway's spend
+# fold (llm_calls / tool_calls / tokens_total) so consumers never re-plumb.
+
+LOOP_SPEND_FILENAME = "loop_spend.json"
+
+
+def read_loop_spend(home_dir: Path) -> Dict[str, Any]:
+    """Cumulative loop spend for this home (missing/corrupt reads as zeros —
+    a spend surface must never brick a status page)."""
+    import json
+
+    zeros = {"llm_calls": 0, "tool_calls": 0, "tokens_total": 0, "ticks": 0}
+    path = Path(home_dir) / LOOP_SPEND_FILENAME
+    if not path.exists():
+        return dict(zeros, source="loop-home-direct")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return dict(zeros, source="loop-home-direct")
+        out: Dict[str, Any] = dict(zeros, source="loop-home-direct")
+        for key in zeros:
+            try:
+                out[key] = int(data.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+        if data.get("updated_at"):
+            out["updated_at"] = data["updated_at"]
+        return out
+    except Exception:  # noqa: BLE001
+        return dict(zeros, source="loop-home-direct")
+
+
 # ------------------------------------------------------------ loop commands
 # The gateway's control plane for a RUNNING loop (maintainer ruling,
 # 2026-07-08: "we were working on a command on the gateway, it shouldn't
@@ -788,6 +825,9 @@ class LifeLoop:
         # Why consumed (file brake vs gateway command) — surfaced in the
         # LifeReport so operators can audit which channel ended a life.
         self.stop_cause: Optional[str] = None
+        # Lifetime spend base (read from <home>/loop_spend.json at each day
+        # open; the day's writes persist base + live session counters).
+        self._spend_base: Optional[Dict[str, Any]] = None
 
     def _consume_stop_command(self) -> Optional[Dict[str, Any]]:
         """Poll the home's command inbox; consume and return the first
@@ -935,6 +975,35 @@ class LifeLoop:
         if self.state_home is not None:
             write_loop_status(self.state_home, phase, stopped_by=stopped_by)
 
+    def _write_loop_spend(self, session: ChatSession, day_ticks: int) -> None:
+        """Persist cumulative loop spend = the lifetime base (loaded at day
+        open) + this session's live counters. Best-effort loop bookkeeping
+        (like loop_status): single writer, no lease, never breaks a day."""
+        if self.state_home is None:
+            return
+        try:
+            import json as _json
+            from datetime import datetime, timezone
+
+            from ..utils.atomic_files import atomic_write_text
+
+            base = self._spend_base or read_loop_spend(self.state_home)
+            live = getattr(session, "spend", None) or {}
+            payload = {
+                "llm_calls": int(base.get("llm_calls", 0)) + int(live.get("llm_calls", 0)),
+                "tool_calls": int(base.get("tool_calls", 0)) + int(live.get("tool_calls", 0)),
+                "tokens_total": int(base.get("tokens_total", 0)) + int(live.get("tokens_total", 0)),
+                "ticks": int(base.get("ticks", 0)) + int(day_ticks),
+                "source": "loop-home-direct",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            atomic_write_text(
+                Path(self.state_home) / LOOP_SPEND_FILENAME,
+                _json.dumps(payload) + "\n",
+            )
+        except Exception:  # noqa: BLE001 - spend accounting must never kill a life
+            pass
+
     # ------------------------------------------------- per-window home lease
     # B1 keystone (laurent 04:58 "i should always be able to visit", ruled
     # M2-clean by memory c1322): the loop NEVER holds the writer lease across
@@ -1069,6 +1138,10 @@ class LifeLoop:
             self.out(f"(day {day} begins - session {session.session_id})")
             consecutive_failures = 0
             visit_yield = False
+            # Spend accounting (gateway c1390): lifetime base loads at day
+            # open; per-tick writes persist base + the session's live spend.
+            self._spend_base = read_loop_spend(self.state_home) if self.state_home else None
+            day_ticks = 0
             try:
                 tick_slots = 0
                 while tick_slots < self.ticks_per_day:
@@ -1174,6 +1247,8 @@ class LifeLoop:
                         rest=rest_reason,
                     )
                     report.records.append(tick)
+                    day_ticks += 1
+                    self._write_loop_spend(session, day_ticks)
                     tools_note = f" tools={'+'.join(tick.tools)}" if tick.tools else ""
                     diary_note = f" diary={tick.diary}" if tick.diary else ""
                     self.out(f"[tick {tick.tick}] {tick.reply_head}{tools_note}{diary_note}")
@@ -1269,6 +1344,10 @@ class LifeLoop:
                                 close_lease.release()  # the close's writer window ends HERE
                 except Exception as e:  # noqa: BLE001 - the loop must not die mid-life
                     self.out(f"#FALLBACK day-{day} reflection failed: {e}")
+                # Final spend write for the day: captures the reflection's
+                # LLM call (and the salvage's, when one ran this summon).
+                self._write_loop_spend(session, day_ticks)
+                self._spend_base = None  # next day reloads the file as base
                 self.out(session.close_summary())
                 # Deliberately OUTSIDE the lease window: close_summary reads,
                 # and home.close() only checkpoints WAL + closes connections —

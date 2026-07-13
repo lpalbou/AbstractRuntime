@@ -687,6 +687,12 @@ class ChatSession:
         self.session_sheet: List[Tuple[Optional[str], str]] = []
         self.reflection_diary_entries = 0
         self.feelings_applied = 0
+        # Session spend (gateway c1390: the own-time loop runs home-direct,
+        # so its LLM usage is invisible to the per-home run ledger — this
+        # counter is the loop lane's half). Every LLM call flows through
+        # _generate; tool elections count at their execution sites. Field
+        # names match the gateway's spend fold so consumers never re-plumb.
+        self.spend: Dict[str, int] = {"llm_calls": 0, "tool_calls": 0, "tokens_total": 0}
         # The session's episode chain tail (`continues` edges) and the tag
         # map for read_memory (tag -> graph record id, rebuilt per turn).
         self._last_episode_id: Optional[str] = None
@@ -828,7 +834,7 @@ class ChatSession:
         last_error: Optional[Exception] = None
         for attempt in range(1 + self._HARMONY_RETRIES):
             try:
-                return self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+                resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
             except Exception as e:  # noqa: BLE001 - only the known race retries
                 if self._HARMONY_HEADER_400 not in str(e):
                     raise
@@ -838,9 +844,39 @@ class ChatSession:
                         "#FALLBACK the model emitted a malformed native tool header "
                         f"(harmony race, attempt {attempt + 1}); regenerating"
                     )
+                continue
+            self._count_spend(resp)
+            return resp
         raise RuntimeError(
             f"the model kept emitting malformed tool headers ({self._HARMONY_RETRIES + 1} attempts): {last_error}"
         )
+
+    def _count_spend(self, resp: Any) -> None:
+        """Fold one successful LLM response into the session spend counter.
+        Usage shapes are provider-tolerant (total_tokens, or prompt/completion,
+        or input/output pairs — the flow-ledger folding precedent); a response
+        without usage still counts the call."""
+        self.spend["llm_calls"] += 1
+        usage = getattr(resp, "usage", None)
+        if usage is not None and not isinstance(usage, dict):
+            usage = {
+                k: getattr(usage, k, None)
+                for k in ("total_tokens", "prompt_tokens", "completion_tokens",
+                          "input_tokens", "output_tokens")
+            }
+        if not isinstance(usage, dict):
+            return
+        total = usage.get("total_tokens")
+        if not isinstance(total, (int, float)):
+            ins = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+            outs = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+            total = (ins if isinstance(ins, (int, float)) else 0) + (
+                outs if isinstance(outs, (int, float)) else 0
+            )
+        try:
+            self.spend["tokens_total"] += int(total or 0)
+        except (TypeError, ValueError):
+            pass  # a malformed usage dict never breaks a turn
 
     # ---------------------------------------------------------------- effects
     def _effect(self, etype: EffectType, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1020,6 +1056,7 @@ class ChatSession:
                 rounds += 1
                 turn_budget -= len(tool_elections)
                 report.tools.extend(e.name for e in tool_elections)
+                self.spend["tool_calls"] += len(tool_elections)
                 round_details: List[Dict[str, str]] = []
                 for e in tool_elections:
                     arg = " ".join((e.body or "").split())[:120]
@@ -1184,6 +1221,7 @@ class ChatSession:
                 if fix_elections:
                     # He chose path (1): run the lookups, one bounded round.
                     report.tools.extend(e.name for e in fix_elections)
+                    self.spend["tool_calls"] += len(fix_elections)
                     fix_details: List[Dict[str, str]] = []
                     for e in fix_elections:
                         detail = {"name": e.name, "arg": " ".join((e.body or "").split())[:120]}

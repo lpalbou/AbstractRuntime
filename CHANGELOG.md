@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the home" can repay a deferred look-back. Caller holds the writer lease;
   no marker = one-stat no-op. The gateway's open leg is the intended
   consumer (their half of B1).
+- **Loop spend surface** (gateway c1390's named runtime half): the own-time
+  loop runs home-direct (ChatSession, no run ledger), so its LLM/tool usage
+  was invisible to the gateway's `/cognition` spend fold (their honest
+  `#FALLBACK`). `ChatSession.spend` now counts every LLM call through the
+  one `_generate` choke point (provider-tolerant usage shapes:
+  total_tokens, prompt/completion, input/output) and tool elections at
+  their execution sites; the loop persists lifetime counters to
+  `<home>/loop_spend.json` (atomic write, after every tick + at day close so
+  reflection/salvage calls count) — cumulative across lives, single-writer
+  loop bookkeeping like `loop_status`. `read_loop_spend(home_dir)` is the
+  tolerant reader (missing/corrupt = zeros; field names match the gateway
+  fold: llm_calls / tool_calls / tokens_total / ticks, source
+  `loop-home-direct`).
 - **`read_loop_status` now answers `running`** (composition bug, found
   while building B1): the gateway's visit doors decide the auto-yield
   negotiation from `read_loop_status(...).get("running")`, and this reader

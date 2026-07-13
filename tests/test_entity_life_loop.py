@@ -601,6 +601,59 @@ def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
     assert not await_loop_quiescent(home_dir, timeout_seconds=0.01, sleep_fn=lambda s: None)
 
 
+def test_loop_spend_accumulates_across_lives(tmp_path: Path) -> None:
+    """The loop-usage half of the gateway's /cognition spend fold (c1390):
+    every tick and the day-close reflection count into
+    <home>/loop_spend.json — cumulative across loop lives, tolerant reader,
+    provider-tolerant usage shapes. Ticks/calls/tokens must reconcile."""
+    import json as _json
+
+    from abstractruntime.identity.life import read_loop_spend
+
+    class _UsageLLM(_ScriptedLLM):
+        def generate(self, *, messages, system_prompt):  # noqa: ANN001
+            r = super().generate(messages=messages, system_prompt=system_prompt)
+            r.usage = {"prompt_tokens": 70, "completion_tokens": 30}  # no total: fold path
+            return r
+
+    home_dir = _make_home(tmp_path)
+    # Missing file reads as zeros (never bricks a status page).
+    zeros = read_loop_spend(home_dir)
+    assert (zeros["llm_calls"], zeros["tokens_total"], zeros["ticks"]) == (0, 0, 0)
+
+    llm = _UsageLLM(["One.\nnext: two", "Two.", "Day reflection."])
+    loop = LifeLoop(
+        _factory_for(home_dir, llm), tick_seconds=0, ticks_per_day=2, max_ticks=2,
+        state_home=home_dir, out=lambda s: None,
+    )
+    report = loop.run()
+    assert report.ticks == 2
+    spend = read_loop_spend(home_dir)
+    # 2 tick calls + 1 reflection call, 100 tokens each.
+    assert spend["llm_calls"] == 3
+    assert spend["tokens_total"] == 300
+    assert spend["ticks"] == 2
+    assert spend["source"] == "loop-home-direct"
+
+    # A second life ACCUMULATES (base loads from the file, never resets).
+    llm2 = _UsageLLM(["Three.", "Second-day reflection."])
+    loop2 = LifeLoop(
+        _factory_for(home_dir, llm2), tick_seconds=0, ticks_per_day=1, max_ticks=1,
+        state_home=home_dir, out=lambda s: None,
+    )
+    assert loop2.run().ticks == 1
+    spend2 = read_loop_spend(home_dir)
+    assert spend2["llm_calls"] == 5
+    assert spend2["tokens_total"] == 500
+    assert spend2["ticks"] == 3
+
+    # Corrupt file degrades to zeros, loudly nothing — never a crash.
+    (home_dir / "loop_spend.json").write_text("{not json", encoding="utf-8")
+    corrupt = read_loop_spend(home_dir)
+    assert corrupt["llm_calls"] == 0
+    _json.dumps(corrupt)  # shape stays serializable for status routes
+
+
 def test_read_loop_status_answers_running_for_the_visit_doors(tmp_path: Path) -> None:
     """The gateway's visit doors decide the auto-yield negotiation from
     `read_loop_status(home).get("running")` — before 2026-07-13 the reader

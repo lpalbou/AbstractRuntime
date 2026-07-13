@@ -177,6 +177,16 @@ def _make_home(tmp_path: Path) -> Path:
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
+    # Personal phase armed (laurent 12:44: own time is OFF by default) —
+    # these fixtures run loops, so the operator act is part of the fixture.
+    (home_dir / "phases.yaml").write_text(
+        yaml.safe_dump({"personal": {
+            "mode": "until_revoked",
+            "granted_by": "person:test-operator",
+            "granted_at": "2026-07-13T00:00:00+00:00",
+        }}, sort_keys=False),
+        encoding="utf-8",
+    )
     return home_dir
 
 

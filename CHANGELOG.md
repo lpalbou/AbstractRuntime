@@ -36,6 +36,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the home" can repay a deferred look-back. Caller holds the writer lease;
   no marker = one-stat no-op. The gateway's open leg is the intended
   consumer (their half of B1).
+- **Personal-grant gate at loop start** (laurent 12:44 "own time IS the
+  personal phase", the 10:20 consent violation's fix; ruled fields from
+  decision:personal-grant-section): the loop refuses to open days unless the
+  operator armed `phases.personal` — `read_personal_grant(home_dir)` reads
+  `<home>/phases.yaml`'s personal bucket ({mode: disabled|timer|
+  until_revoked, expires_at, granted_by, granted_at}; missing/malformed/
+  unknown = disabled, fail-closed) and `personal_grant_refusal(grant)`
+  names what is missing. Gated at THREE doors: `LifeLoop.run()` re-checks
+  at EVERY day-open (revocation/expiry ends the loop at its next boundary,
+  `stopped_by="personal_disarmed"`), `main()` refuses before the substrate
+  resolve (exit 3), and `spawn_loop_process` refuses synchronously (a child
+  dying in its own log is a silent refusal). Wake ≠ grant ≠ start: nothing
+  arms personal as a side effect; the gateway's principal-stamped write
+  surface is the one arming path (their half of the wave).
+- **Substrate divergence lane killed** (laurent 12:39, c1430 ask 2b — the
+  night pid ran OVH from argv regardless of substrate.yaml): when the home
+  carries a persisted mind, `main()` refuses start-time `--provider/--model`
+  flags that differ from it, and `spawn_loop_process` refuses divergent
+  spawn args — the mind changes via the sanctioned substrate surface (a
+  durable, marker-first event), never via start arguments. Flags remain
+  valid when no substrate is persisted (then they ARE the operator's
+  explicit choice, per the 04:26 chain).
 - **Loop spend surface** (gateway c1390's named runtime half): the own-time
   loop runs home-direct (ChatSession, no run ledger), so its LLM/tool usage
   was invisible to the gateway's `/cognition` spend fold (their honest

@@ -54,7 +54,24 @@ def _make_home(tmp_path: Path) -> Path:
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
+    _arm_personal(home_dir)
     return home_dir
+
+
+def _arm_personal(home_dir: Path, *, mode: str = "until_revoked", expires_at: str = "") -> None:
+    """Arm the personal phase (laurent 12:44: own time IS the personal phase,
+    OFF by default) — the loop refuses to open days without it, so every
+    fixture home that expects ticks arms it as its operator act."""
+    bucket: Dict[str, Any] = {
+        "mode": mode,
+        "granted_by": "person:test-operator",
+        "granted_at": "2026-07-13T00:00:00+00:00",
+    }
+    if expires_at:
+        bucket["expires_at"] = expires_at
+    (home_dir / "phases.yaml").write_text(
+        yaml.safe_dump({"personal": bucket}, sort_keys=False), encoding="utf-8"
+    )
 
 
 class _ScriptedLLM:
@@ -599,6 +616,80 @@ def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
         _json.dumps({"phase": "day", "pid": os.getpid()}), encoding="utf-8"
     )
     assert not await_loop_quiescent(home_dir, timeout_seconds=0.01, sleep_fn=lambda s: None)
+
+
+def test_personal_grant_gates_the_loop(tmp_path: Path) -> None:
+    """PERSONAL IS THE GRANT (laurent 12:44; the 10:20 consent violation):
+    no day opens unless phases.personal is armed — missing file, disabled
+    mode, and expired timers all refuse; a live timer and until_revoked run.
+    The refusal is an EXIT (a process without a mandate never idles)."""
+    from abstractruntime.identity.life import personal_grant_refusal, read_personal_grant
+
+    home_dir = _make_home(tmp_path)
+
+    # The fixture armed until_revoked: the loop runs (proven by every other
+    # test in this file); the resolver agrees.
+    assert personal_grant_refusal(read_personal_grant(home_dir)) is None
+
+    # Disarmed (file removed = OFF by default): the loop refuses to open a
+    # day and exits with the named cause; zero ticks, factory never called.
+    (home_dir / "phases.yaml").unlink()
+    lines: List[str] = []
+
+    def never_factory():  # noqa: ANN202
+        raise AssertionError("no session may open without the personal grant")
+
+    loop = LifeLoop(
+        never_factory, tick_seconds=0, ticks_per_day=2, max_ticks=2,
+        state_home=home_dir, out=lines.append,
+    )
+    report = loop.run()
+    assert report.ticks == 0
+    assert report.days == 0
+    assert report.stopped_by == "personal_disarmed"
+    assert any("personal time is not armed" in ln for ln in lines)
+
+    # An expired timer refuses naming the expiry; a live one is a grant.
+    _arm_personal(home_dir, mode="timer", expires_at="2020-01-01T00:00:00+00:00")
+    refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    assert refusal is not None and "expired" in refusal
+    _arm_personal(home_dir, mode="timer", expires_at="2999-01-01T00:00:00+00:00")
+    assert personal_grant_refusal(read_personal_grant(home_dir)) is None
+    # A timer with no expiry is no grant (fail-closed).
+    _arm_personal(home_dir, mode="timer")
+    refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    assert refusal is not None and "no expires_at" in refusal
+    # Unknown modes read as disabled with a labeled note.
+    (home_dir / "phases.yaml").write_text(
+        yaml.safe_dump({"personal": {"mode": "always"}}), encoding="utf-8"
+    )
+    grant = read_personal_grant(home_dir)
+    assert grant["mode"] == "disabled"
+    assert "#FALLBACK" in str(grant.get("note"))
+
+
+def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path) -> None:
+    """The spawn door refuses SYNCHRONOUSLY: (a) personal not armed — a
+    child dying in its own log is a silent refusal; (b) provider/model args
+    diverging from the home's persisted mind (the divergence lane that
+    burned OVH for hours, laurent 12:39) — the mind changes via the
+    sanctioned substrate surface, never via start-time argv."""
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+
+    # (a) unarmed → refuse before any spawn.
+    (home_dir / "phases.yaml").unlink()
+    with pytest.raises(RuntimeError, match="no personal time"):
+        spawn_loop_process(home_dir, provider="lmstudio", model="ornith-1.0-35b")
+
+    # (b) armed but argv diverges from substrate.yaml → refuse naming both.
+    _arm_personal(home_dir)
+    (home_dir / "substrate.yaml").write_text(
+        yaml.safe_dump({"provider": "lmstudio", "model": "ornith-1.0-35b"}), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="substrate divergence refused"):
+        spawn_loop_process(home_dir, provider="endpoint:ovh-provider", model="gpt-oss-120b")
 
 
 def test_loop_spend_accumulates_across_lives(tmp_path: Path) -> None:

@@ -181,6 +181,102 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
     return data
 
 
+# --------------------------------------------------------- personal grant
+# PERSONAL IS THE GRANT (laurent 12:44, c1435; decision:personal-grant-section
+# c815): own time is the PERSONAL phase of the four ruled phases
+# (visit/work/personal/sleep) — the ONE operator-armed phase, OFF by default.
+# Activation fields live in the per-entity phase config's `personal` bucket:
+# {mode: disabled|timer|until_revoked, expires_at, granted_by, granted_at}.
+# The gateway's write surface arms it (principal-stamped, marker-first —
+# their half); THIS is the read half: no loop may tick without the bucket
+# armed (the 10:20 consent violation was exactly this wiring gap — the
+# design existed, nothing read it at loop start).
+#
+# Home-resident by the same logic as substrate.yaml: the loop starts
+# home-direct, so the config must be readable from the home. Path proposed
+# runtime-side (gateway confirms on the c1435 thread): <home>/phases.yaml.
+
+PHASES_FILENAME = "phases.yaml"
+PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
+
+
+def read_personal_grant(home_dir: Path) -> Dict[str, Any]:
+    """The personal phase's activation bucket, normalized. FAIL-CLOSED:
+    a missing file, missing bucket, malformed YAML, or unknown mode all read
+    as {"mode": "disabled"} (+ a labeled note where the content was wrong —
+    absence is the ruled default, never an error)."""
+    path = Path(home_dir) / PHASES_FILENAME
+    if not path.exists():
+        return {"mode": "disabled"}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 - unreadable config must not arm anything
+        return {"mode": "disabled", "note": f"#FALLBACK unreadable {PHASES_FILENAME} ({e}); treated as disabled"}
+    bucket = data.get("personal") if isinstance(data, dict) else None
+    if not isinstance(bucket, dict):
+        return {"mode": "disabled"}
+    mode = str(bucket.get("mode") or "disabled").strip().lower()
+    out: Dict[str, Any] = {
+        "mode": mode,
+        "expires_at": str(bucket.get("expires_at") or "") or None,
+        "granted_by": str(bucket.get("granted_by") or "") or None,
+        "granted_at": str(bucket.get("granted_at") or "") or None,
+    }
+    if mode not in PERSONAL_GRANT_MODES:
+        out["mode"] = "disabled"
+        out["note"] = f"#FALLBACK unknown personal mode {mode!r}; treated as disabled"
+    return out
+
+
+def personal_grant_refusal(grant: Dict[str, Any]) -> Optional[str]:
+    """None when the personal phase is armed RIGHT NOW; otherwise the loud
+    refusal naming what is missing and the arming surface. Re-checked at
+    every day-open (revocation semantics: until_revoked/timer are compared
+    fresh, so a disarm ends the loop at its next boundary)."""
+    mode = str(grant.get("mode") or "disabled")
+    arm_hint = (
+        "arm it via the gateway's per-entity phase config (the operator act "
+        f"writes {PHASES_FILENAME} with granted_by/granted_at) - wake and "
+        "grant are separate acts; nothing arms personal as a side effect"
+    )
+    if mode == "disabled":
+        note = grant.get("note")
+        return (
+            "personal time is not armed for this entity (phases.personal.mode=disabled"
+            + (f"; {note}" if note else "")
+            + f") - {arm_hint}"
+        )
+    if mode == "until_revoked":
+        return None
+    if mode == "timer":
+        expires = str(grant.get("expires_at") or "").strip()
+        if not expires:
+            return (
+                "personal time is armed as timer but carries no expires_at - "
+                f"a timer without an expiry is no grant; {arm_hint}"
+            )
+        from datetime import datetime, timezone
+
+        try:
+            deadline = datetime.fromisoformat(expires)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return (
+                f"personal time timer has an unreadable expires_at ({expires!r}) - "
+                f"fail-closed; {arm_hint}"
+            )
+        if datetime.now(timezone.utc) >= deadline:
+            return (
+                f"personal time expired at {expires} (mode=timer) - "
+                f"re-arm to grant another window; {arm_hint}"
+            )
+        return None
+    return f"personal time mode {mode!r} is not a grant - {arm_hint}"
+
+
 # ------------------------------------------------------------- loop spend
 # The own-time loop runs home-direct (ChatSession, no run ledger), so its
 # LLM/tool usage is invisible to the gateway's per-home spend fold — the
@@ -473,6 +569,32 @@ def spawn_loop_process(
             raise RuntimeError(
                 f"his own time is already running (pid {status.get('pid')}, phase {status.get('phase')})"
             )
+
+        # PERSONAL-GRANT GATE at the spawn door (laurent 12:44): a start
+        # surface must refuse SYNCHRONOUSLY when personal is not armed —
+        # spawning a child that dies in its own log is a silent refusal.
+        grant_refusal = personal_grant_refusal(read_personal_grant(home_dir))
+        if grant_refusal is not None:
+            raise RuntimeError(f"no personal time: {grant_refusal}")
+
+        # DIVERGENCE LANE KILLED (laurent 12:39, c1430 ask 2b: the night pid
+        # ran OVH from argv regardless of substrate.yaml): a spawn whose
+        # provider/model differ from the home's persisted mind REFUSES —
+        # the mind changes through the sanctioned substrate surface (a
+        # durable, marker-first event), never through start-time arguments.
+        from .substrate import read_home_substrate
+
+        stored = read_home_substrate(home_dir)
+        if stored and (
+            str(provider or "").strip().lower() != stored["provider"].strip().lower()
+            or str(model or "").strip() != stored["model"].strip()
+        ):
+            raise RuntimeError(
+                f"substrate divergence refused: this start asks {provider}/{model} but the "
+                f"home's substrate.yaml says {stored['provider']}/{stored['model']} - change "
+                "the mind via the sanctioned substrate surface first (durable event), then start."
+            )
+
         stop_file = home_dir / "STOP"
         if stop_file.exists():
             stop_file.unlink()
@@ -1047,6 +1169,21 @@ class LifeLoop:
             if self._should_stop():
                 report.stopped_by = self.stop_cause or "stop_file"
                 break
+
+            # PERSONAL-GRANT GATE (laurent 12:44 "own time is personal", the
+            # 10:20 consent violation's fix): no day opens unless the
+            # operator armed phases.personal — re-checked at EVERY day-open,
+            # so a disarm/expiry ends the loop at its next boundary. An
+            # unarmed loop EXITS (a process without a mandate must not idle
+            # around waiting for one); re-arming is an operator act and so
+            # is restarting. Homes only (state_home=None = harness loops
+            # with no operator surface at all).
+            if self.state_home is not None:
+                refusal = personal_grant_refusal(read_personal_grant(self.state_home))
+                if refusal is not None:
+                    self.out(f"(no personal time: {refusal})")
+                    report.stopped_by = "personal_disarmed"
+                    break
 
             # Operator state gate before a day opens (a2a 0008): asleep or
             # paused idles here (dreams may run gateway-side while asleep -
@@ -1634,11 +1771,42 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"stop file already present at {stop_file} - remove it to start")
         return 1
 
+    # PERSONAL-GRANT GATE at the start door (laurent 12:44: own time IS the
+    # personal phase, OFF by default, operator-armed): refuse BEFORE the
+    # substrate resolve or any state change. run() re-checks at every
+    # day-open; this gate makes the refusal immediate and the exit code
+    # scriptable for start surfaces.
+    start_refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    if start_refusal is not None:
+        print(f"no personal time: {start_refusal}")
+        return 3
+
     # Resolve the mind substrate before anything else changes state: flags >
     # <home>/substrate.yaml > operator env > loud refusal (04:26 no-fallback
     # ruling). ONE substrate per entity (06:32): the loop resolves the same
     # stored choice the visit door does.
-    from .substrate import SubstrateUnset, resolve_home_substrate
+    from .substrate import SubstrateUnset, read_home_substrate, resolve_home_substrate
+
+    # DIVERGENCE LANE KILLED for the loop start (laurent 12:39): when the
+    # home carries a persisted mind, start-time flags that DIFFER refuse —
+    # argv silently beating substrate.yaml is how the night pid burned OVH
+    # for hours. Flags remain valid when no substrate is persisted (they are
+    # then the operator's explicit choice, per the 04:26 chain).
+    stored_substrate = read_home_substrate(home_dir)
+    flag_p = (args.provider or "").strip()
+    flag_m = (args.model or "").strip()
+    if stored_substrate and (
+        (flag_p and flag_p.lower() != stored_substrate["provider"].strip().lower())
+        or (flag_m and flag_m != stored_substrate["model"].strip())
+    ):
+        print(
+            "substrate divergence refused: flags say "
+            f"{flag_p or '(unset)'}/{flag_m or '(unset)'} but this home's substrate.yaml says "
+            f"{stored_substrate['provider']}/{stored_substrate['model']} - change the mind via "
+            "the gateway's PUT /entities/{name}/substrate (a durable, marker-first event) "
+            "or drop the flags."
+        )
+        return 2
 
     try:
         provider, model = resolve_home_substrate(args.provider, args.model, home_dir=home_dir)

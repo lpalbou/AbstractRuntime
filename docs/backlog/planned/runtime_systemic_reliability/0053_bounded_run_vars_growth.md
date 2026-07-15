@@ -55,8 +55,17 @@ what's capped, what offloads"). Non-goals: no auto-compaction of
 context.messages (MEMORY_COMPACT is the workflow's explicit tool); no
 terminal-offloading change.
 
+## Quantified (2026-07-13 performance adversary)
+The node-trace byte cap is confirmed the dominant lever: at 30 trace entries
+the state is ~1.9 MB of a ~2 MB RunState — traces ARE the state. Capping
+them ~10× shrinks the per-save serialize cost that 0067's compact-JSON +
+by-reference win then halves again (the two compound). This item owns the
+state-SIZE half; 0067 owns the serialization-DISCIPLINE half of the same
+save-amplification problem.
+
 ## Dependencies and related tasks
-0047 (the other per-step cost), 0054 (gauge surface), completed
+0047 (the other per-step cost), 0054 (gauge surface), 0067 (durable-write
+discipline — the serialization half; this is the size half), completed
 offloading work, backlog 017 (limit warnings).
 
 ## Expected outcomes
@@ -68,8 +77,29 @@ Benchmark before/after; cap pins (oldest dropped + counted, never silent);
 gauge threshold pin.
 
 ## Progress checklist
-- [ ] Benchmark harness + baseline numbers
-- [ ] Node-trace byte cap via artifact offload
-- [ ] Inbox/warning caps
-- [ ] Vars-size gauge + threshold
-- [ ] Fable5 adversary folded
+- [x] Benchmark harness + baseline numbers — shipped 2026-07-14 (400-step
+  resident, 8KB results, JSON backend: final state 0.92MB -> 0.11MB (~8x),
+  per-step 4.7ms -> 4.1ms; the gap widens with uptime since save cost
+  tracks state size).
+- [x] Node-trace byte cap via artifact offload — entries >32KB compact
+  JSON offload large leaves as `$artifact` refs (source=node_trace_offload)
+  or labeled-truncate (#TRUNCATION) without a store; `trace_bounded` stamp;
+  the size check reuses the existing JSON-safety dumps (zero extra
+  serialization); result_key vars copy untouched.
+- [x] Inbox/warning caps — `_runtime.inbox` 200 drop-oldest + counted
+  `inbox_dropped` (vars + health counter); `evidence_warnings` 50
+  drop-oldest + counted.
+- [x] Vars-size gauge + threshold — refreshes after effectful ticks only
+  (parked-run sweeps pay nothing); 8MB warn threshold counts crossings +
+  logs once per run per process.
+- [x] Fable5 adversary FOLDED (2026-07-14, shared pass with 0054; no P0):
+  P1-2 top-level `error` strings escaped the subtree-only offload cap
+  (failure loops accreted ~10MB/node while stamped "offloaded") — now
+  bounded with root-replace; P2-1 trace consumers skip `$artifact` refs
+  (phantom tool calls otherwise); P2-2 inbox cap reshaped drop-oldest →
+  BACKPRESSURE (deliver to headroom, ack only delivered, excess stays
+  pending in the sidecar — steer_seen never claims destroyed words);
+  P2-3 vars-gauge gate keys on a run-object flag (global-counter compare
+  raced under two-thread execution: 30% of parked probes paid a full
+  serialization). Cleared: offload aliasing (spine copies), artifact
+  dedup on replay. Suite 1285 green.

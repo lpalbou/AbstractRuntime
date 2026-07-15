@@ -48,6 +48,9 @@ class _HubStub(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         self._record_and_reply("POST")
 
+    def do_PUT(self) -> None:  # noqa: N802
+        self._record_and_reply("PUT")
+
     def log_message(self, *args: Any) -> None:  # silence test output
         del args
 
@@ -174,6 +177,131 @@ def test_dm_and_reads_hit_expected_paths(hub) -> None:
     assert req["body"]["status"] == "open"
 
 
+def test_channel_fs_tools_hit_expected_paths(hub) -> None:
+    """c1669 step 3: the shared-filesystem surface the fleet scripts hand-rolled."""
+    from abstractruntime.integrations.abstractcore.agora_tools import (
+        channel_fs_list,
+        channel_fs_read,
+        channel_fs_write,
+    )
+
+    hub.responses[("PUT", "/channels/assembly/fs/plans/design.md")] = {
+        "path": "plans/design.md",
+        "version": 3,
+    }
+    out = channel_fs_write(
+        channel="assembly",
+        path="/plans/design.md",  # leading slash normalized off
+        content="# Design\n",
+        description="unified design plan",
+        expect_version=2,
+    )
+    assert out == {"path": "plans/design.md", "version": 3}
+    req = hub.requests[-1]
+    assert req["method"] == "PUT"
+    assert req["path"] == "/channels/assembly/fs/plans/design.md"
+    assert req["body"] == {
+        "content": "# Design\n",
+        "mime": "text/markdown",
+        "description": "unified design plan",
+        "expect_version": 2,
+    }
+
+    hub.responses[("GET", "/channels/assembly/fs/plans/design.md")] = {
+        "path": "plans/design.md",
+        "content": "# Design\n",
+        "version": 3,
+    }
+    got = channel_fs_read(channel="assembly", path="plans/design.md", version=3)
+    assert got["content"] == "# Design\n"
+    assert hub.requests[-1]["query"] == "version=3"
+
+    hub.responses[("GET", "/channels/assembly/fs")] = [
+        {"path": "plans/design.md", "version": 3}
+    ]
+    listed = channel_fs_list(channel="assembly", prefix="plans/")
+    assert listed == [{"path": "plans/design.md", "version": 3}]
+    assert hub.requests[-1]["query"] == "prefix=plans%2F"
+
+    with pytest.raises(ValueError, match="path"):
+        channel_fs_write(channel="assembly", path="   ", content="x")
+    with pytest.raises(ValueError, match="channel"):
+        channel_fs_read(channel="  ", path="plans/design.md")
+
+
+def test_channel_store_tools_hit_expected_paths(hub) -> None:
+    from abstractruntime.integrations.abstractcore.agora_tools import (
+        channel_store_get,
+        channel_store_set,
+    )
+
+    hub.responses[("PUT", "/channels/assembly/store/decision%3Alease")] = {
+        "key": "decision:lease",
+        "version": 1,
+    }
+    out = channel_store_set(
+        channel="assembly", key="decision:lease", value="per-window", expect_version=0
+    )
+    assert out == {"key": "decision:lease", "version": 1}
+    req = hub.requests[-1]
+    assert req["method"] == "PUT"
+    assert req["path"] == "/channels/assembly/store/decision%3Alease"
+    assert req["body"] == {"value": "per-window", "expect_version": 0}
+
+    hub.responses[("GET", "/channels/assembly/store/decision%3Alease")] = {
+        "key": "decision:lease",
+        "value": "per-window",
+        "version": 1,
+    }
+    got = channel_store_get(channel="assembly", key="decision:lease")
+    assert got["value"] == "per-window"
+
+    with pytest.raises(ValueError, match="key"):
+        channel_store_set(channel="assembly", key="  ", value="x")
+
+
+def test_channel_tools_carry_the_alias_identity(hub, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H8 parity: the new writes resolve per-agent keys exactly like the seven."""
+    from abstractruntime.integrations.abstractcore.agora_tools import channel_store_set
+
+    monkeypatch.setenv("AGORA_API_KEY__RESIDENT_A", "resident_a_key")
+    hub.responses[("PUT", "/channels/assembly/store/claim:item-1")] = {"version": 1}
+    channel_store_set(
+        channel="assembly", key="claim:item-1", value="resident-a", _agora_agent="resident-a"
+    )
+    assert hub.requests[-1]["auth"] == "Bearer resident_a_key"
+
+
+def test_channel_tool_approval_classification() -> None:
+    """c1669 step 3 acceptance: reads safe auto-approve, WRITES write-classed."""
+    from abstractruntime.integrations.abstractcore.tool_executor import ToolApprovalPolicy
+
+    policy = ToolApprovalPolicy()
+    reads = [
+        {"name": n, "arguments": {}}
+        for n in ("channel_fs_read", "channel_fs_list", "channel_store_get")
+    ]
+    assert policy.requires_approval(reads) is False
+    for write in ("channel_fs_write", "channel_store_set"):
+        assert policy.requires_approval([{"name": write, "arguments": {}}]) is True
+
+
+def test_toolset_is_twelve_tools() -> None:
+    from abstractruntime.integrations.abstractcore.agora_tools import (
+        AGORA_TOOL_NAMES,
+        AGORA_TOOLS,
+    )
+
+    assert len(AGORA_TOOLS) == 12
+    assert AGORA_TOOL_NAMES[-5:] == [
+        "channel_fs_write",
+        "channel_fs_read",
+        "channel_fs_list",
+        "channel_store_set",
+        "channel_store_get",
+    ]
+
+
 def test_missing_api_key_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     from abstractruntime.integrations.abstractcore.agora_tools import agora_whoami
 
@@ -205,11 +333,17 @@ def test_toolset_registration_is_env_gated(monkeypatch: pytest.MonkeyPatch) -> N
         assert name in tool_map
 
 
-def test_agora_tools_are_safe_auto_approve() -> None:
-    """Hub comms must not stall gateway runs behind approval waits (telegram precedent)."""
+def test_agora_messaging_tools_are_safe_auto_approve() -> None:
+    """Hub comms must not stall gateway runs behind approval waits (telegram
+    precedent). Scope (c1669 step 3): the MESSAGING seven + channel READS are
+    safe; channel fs/store WRITES are deliberately write-classed and excluded
+    here — see test_channel_tool_approval_classification."""
     from abstractruntime.integrations.abstractcore.agora_tools import AGORA_TOOL_NAMES
     from abstractruntime.integrations.abstractcore.tool_executor import ToolApprovalPolicy
 
     policy = ToolApprovalPolicy()
-    calls = [{"name": n, "arguments": {}} for n in AGORA_TOOL_NAMES]
+    write_classed = {"channel_fs_write", "channel_store_set"}
+    calls = [
+        {"name": n, "arguments": {}} for n in AGORA_TOOL_NAMES if n not in write_classed
+    ]
     assert policy.requires_approval(calls) is False

@@ -23,7 +23,16 @@ __all__ = ["atomic_write_text"]
 
 
 def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
-    """Write `text` to `path` atomically (tmp file + fsync + os.replace)."""
+    """Write `text` to `path` atomically (tmp file + fsync + os.replace +
+    directory fsync).
+
+    The directory fsync matters (whole-package adversary finding 11,
+    2026-07-13): without it the `os.replace` itself can be lost on power
+    failure — for phases.yaml that means a REVOKED personal grant reporting
+    success and resurrecting ARMED after reboot. The consent record deserves
+    the full discipline; failure to fsync the directory degrades silently
+    (some filesystems refuse O_DIRECTORY opens — the file fsync still
+    happened)."""
     path = Path(path)
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
@@ -34,6 +43,14 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass  # best-effort: the rename is durable on fsync-honoring fs
     except BaseException:
         try:
             os.unlink(tmp_name)

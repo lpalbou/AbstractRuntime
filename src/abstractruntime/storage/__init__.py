@@ -10,6 +10,13 @@ from .lease import (
     read_directory_lease,
 )
 from .ledger_chain import HashChainedLedgerStore, verify_ledger_chain
+from .ledger_slim import (
+    build_started_payload_index,
+    is_slim_marker,
+    resolve_result_metadata_markers,
+    resolve_slim_tree,
+    resolve_slim_value,
+)
 from .observable import ObservableLedgerStore, ObservableLedgerStoreProtocol
 from .offloading import OffloadingLedgerStore, OffloadingRunStore, offload_large_values
 from .snapshots import Snapshot, SnapshotStore, InMemorySnapshotStore, JsonSnapshotStore
@@ -30,6 +37,11 @@ __all__ = [
     "read_directory_lease",
     "HashChainedLedgerStore",
     "verify_ledger_chain",
+    "build_started_payload_index",
+    "is_slim_marker",
+    "resolve_result_metadata_markers",
+    "resolve_slim_tree",
+    "resolve_slim_value",
     "ObservableLedgerStore",
     "ObservableLedgerStoreProtocol",
     "OffloadingRunStore",

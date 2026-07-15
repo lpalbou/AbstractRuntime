@@ -1,8 +1,10 @@
 # Runtime systemic reliability backlog track
 
 ## Status
-Mixed: planned (this track, items 0045-0055) + proposed
-(`../../proposed/runtime_systemic_reliability/`, items 0056-0061).
+Mixed: planned (this track, items 0044-0055 + 0064 + 0067-0068) + proposed
+(`../../proposed/runtime_systemic_reliability/`, items 0056-0063). Sibling
+track: `../runtime_portability/` (0065-0066) — the any-OS half of the
+2026-07-13 survey.
 
 ## Purpose
 Convert the runtime's reliability from ARTISANAL (per-feature rigor: the
@@ -52,12 +54,26 @@ into structural guarantees so the vigilance gets cheaper, not lost.
   fix (core's MLX c1127 layer 3) — tool_calls in the fingerprint +
   msg-0 grounding stability (B3-coupled with proposed 0063). Added
   2026-07-12 from core's bench evidence.
+- `0067_durable_write_discipline.md`: kill the per-step serialization
+  amplification (compact JSON, no-asdict-deep-copy, ledger record slimming,
+  wire the existing OffloadingLedgerStore). MUST ship WITH 0047 — the index
+  kills count-scaling, this kills the O(turns²) ledger byte-growth. Added
+  2026-07-13 from the performance adversary (benched: ~540 KB/effect,
+  ~10.5 ms/save at 2 MB).
+- `0068_hot_path_store_reads.md`: SQLite control-probe fast path + column-
+  persisted lifecycle index fields + progress-event count() route — read
+  EXISTING truth cheaper instead of re-parsing the full state document per
+  step/row. Added 2026-07-13 (performance adversary; ~5–7 ms/step waste on
+  the production backend).
 
 ## Reading order
 0044 first (the evidence), then 0045 (the keystone harness), then 0046-0048
 (kernel correctness), then 0049 (structure), then 0050-0055 (fleet
 readiness) in any order — 0050 and 0051 pair well since both reuse the
-sidecar pattern.
+sidecar pattern. The 2026-07-13 performance items pair too: 0047 + 0067
+ship together (count-scaling + byte-scaling of the same cliff); 0068 is
+independent and cheap. NOTE the sibling `runtime_portability/` track
+(0065/0066) is the "any-OS" half of the same 2026-07-13 survey; 0065 is P0.
 
 ## Governing ADRs
 None — this repo records durable policy in `docs/architecture.md` and the

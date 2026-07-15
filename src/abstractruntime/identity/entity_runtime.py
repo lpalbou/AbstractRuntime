@@ -185,9 +185,17 @@ def open_entity_runtime(
             diary_list_resolver=_list_fresh,
         )
 
+    # Durable-write discipline (0067-M): oversized effect/result leaves in
+    # the visit ledger offload into the HOME's artifact store (refs on disk,
+    # rehydrated on read) — ledger rows stay bounded while the bytes remain
+    # part of the life, inside the home directory like every other artifact.
+    # The raw SqliteLedgerStore stays on the EntityRuntime handle (type-stable
+    # for direct consumers); the Runtime writes through the offloading wrap.
+    from ..storage.offloading import OffloadingLedgerStore
+
     runtime = Runtime(
         run_store=run_store,
-        ledger_store=ledger_store,
+        ledger_store=OffloadingLedgerStore(ledger_store, artifact_store=home.artifacts),
         effect_handlers=handlers,
         artifact_store=home.artifacts,
     )

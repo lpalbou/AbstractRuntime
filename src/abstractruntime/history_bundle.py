@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .core.models import RunState
 from .storage.artifacts import ArtifactMetadata, ArtifactStore
+from .storage.ledger_slim import build_started_payload_index, is_slim_marker, resolve_slim_value
 from .storage.offloading import DEFAULT_MAX_INLINE_BYTES, offload_large_values
 
 RUN_HISTORY_BUNDLE_VERSION_V1 = 1
@@ -247,9 +248,20 @@ def _extract_repl_stats_from_ledger(records: Iterable[Dict[str, Any]]) -> Dict[s
     min_ms: Optional[int] = None
     max_ms: Optional[int] = None
 
-    for rec in records or []:
-        if not isinstance(rec, dict):
-            continue
+    records_list = [rec for rec in (records or []) if isinstance(rec, dict)]
+    # Terminal records may carry `$slim` markers instead of oversized payload
+    # fields (0067-M); the STARTED records in the same list hold the bytes.
+    started_index: Optional[Dict[str, Dict[str, Any]]] = None
+
+    def _resolved(value: Any) -> Any:
+        nonlocal started_index
+        if not is_slim_marker(value):
+            return value
+        if started_index is None:
+            started_index = build_started_payload_index(records_list)
+        return resolve_slim_value(value, started_index)
+
+    for rec in records_list:
         st = _enum_str(rec.get("status")).strip()
 
         ms_start = _parse_iso_ms(rec.get("started_at"))
@@ -271,7 +283,7 @@ def _extract_repl_stats_from_ledger(records: Iterable[Dict[str, Any]]) -> Dict[s
 
         if eff_type == "tool_calls" and st == "completed":
             payload = eff.get("payload") if isinstance(eff, dict) and isinstance(eff.get("payload"), dict) else None
-            calls = payload.get("tool_calls") if isinstance(payload, dict) else None
+            calls = _resolved(payload.get("tool_calls")) if isinstance(payload, dict) else None
             if isinstance(calls, list):
                 tool_calls += len([c for c in calls if isinstance(c, dict) or c is not None])
 
@@ -304,10 +316,20 @@ def _extract_flow_end_output_from_ledger(records: List[Dict[str, Any]]) -> Tuple
             return str(v)
         return ""
 
-    for rec in reversed(records or []):
-        if not isinstance(rec, dict):
-            continue
+    records_list = [rec for rec in (records or []) if isinstance(rec, dict)]
+    started_index: Optional[Dict[str, Dict[str, Any]]] = None
 
+    def _resolved(value: Any) -> Any:
+        # `$slim` markers on terminal records (0067-M) resolve against the
+        # STARTED records already present in the same list.
+        nonlocal started_index
+        if not is_slim_marker(value):
+            return value
+        if started_index is None:
+            started_index = build_started_payload_index(records_list)
+        return resolve_slim_value(value, started_index)
+
+    for rec in reversed(records_list):
         status = _enum_str(rec.get("status")).strip()
         eff = rec.get("effect") if isinstance(rec.get("effect"), dict) else None
         eff_type = str((eff or {}).get("type") or "").strip()
@@ -318,7 +340,7 @@ def _extract_flow_end_output_from_ledger(records: List[Dict[str, Any]]) -> Tuple
             msg = res.get("message")
             if msg is None and isinstance(eff, dict):
                 payload = eff.get("payload") if isinstance(eff.get("payload"), dict) else {}
-                msg = payload.get("message") or payload.get("text") or payload.get("content")
+                msg = _resolved(payload.get("message")) or _resolved(payload.get("text")) or _resolved(payload.get("content"))
             text = _pick_textish(msg)
             if text:
                 return (text, None)

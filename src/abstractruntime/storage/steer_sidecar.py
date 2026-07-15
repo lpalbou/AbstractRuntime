@@ -125,13 +125,14 @@ class SqliteSteerSidecar:
     def __init__(self, db_path: str) -> None:
         self._db_path = str(db_path)
         self._lock = threading.Lock()
+        self._local = threading.local()
         directory = os.path.dirname(self._db_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
         # Touch once at construction so misconfiguration fails HERE, loudly.
-        self._connect().close()
+        self._open_connection().close()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _open_connection(self) -> sqlite3.Connection:
         # isolation_level=None: autocommit + fully manual transactions, so the
         # explicit BEGIN IMMEDIATE in append() never fights the driver's
         # implicit transaction management.
@@ -142,7 +143,7 @@ class SqliteSteerSidecar:
         # data-root purge deletes the file under a LIVE instance; the next
         # connect silently recreates an EMPTY db, and appends would die on
         # "no such table" until a process restart. IF NOT EXISTS is a cheap
-        # no-op on the hot path and closes the class everywhere.
+        # no-op and closes the class everywhere.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS steer_messages (
@@ -155,6 +156,65 @@ class SqliteSteerSidecar:
             """
         )
         return conn
+
+    def _file_identity(self) -> Optional[tuple]:
+        """(st_dev, st_ino) of the database path, or None when it is gone."""
+        try:
+            st = os.stat(self._db_path)
+        except OSError:
+            return None
+        return (st.st_dev, st.st_ino)
+
+    def _connect(self) -> sqlite3.Connection:
+        """Per-thread cached connection (backlog 0068).
+
+        `pending()` runs at every tick-loop iteration; a fresh
+        connect+PRAGMAs+schema per call cost ~0.39ms/step of pure setup. The
+        cache is thread-local (sqlite3 connections are not thread-safe with
+        check_same_thread) and PURGE-AWARE by FILE IDENTITY, not existence:
+        after a data-root purge the FIRST thread to touch heals itself and
+        recreates the file — an existence check then passes for every OTHER
+        thread while its cached connection still points at the unlinked
+        inode, so its appends "succeed" into the orphaned file and are
+        silently lost (2026-07-14 adversary P1-2; a steer is an operator's
+        word). Each thread records the (st_dev, st_ino) its connection
+        opened against and reopens on any mismatch — deleted file AND
+        recreated-by-another-thread both heal. sqlite errors drop the
+        cached connection so the next call reconnects.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            ident = getattr(self._local, "conn_identity", None)
+            # A None identity is never trusted (the file vanished in the
+            # open-to-stat window): reopen rather than reuse-by-accident.
+            if ident is not None and self._file_identity() == ident:
+                return conn
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+        conn = self._open_connection()
+        self._local.conn = conn
+        self._local.conn_identity = self._file_identity()
+        return conn
+
+    def _drop_thread_connection(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+
+    def _rollback_or_drop(self, conn: sqlite3.Connection) -> None:
+        """After a failed write: roll back, or drop the cached connection so
+        a wedged open transaction can never poison later calls."""
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            self._drop_thread_connection()
 
     def append(self, run_id: str, message: Dict[str, Any]) -> int:
         rid = str(run_id)
@@ -175,7 +235,6 @@ class SqliteSteerSidecar:
                 ).fetchone()
                 pending_count = int(row[1])
                 if pending_count >= MAX_PENDING_STEERS_PER_RUN:
-                    conn.execute("ROLLBACK")
                     raise RuntimeError(
                         f"run '{rid}' already has {pending_count} undelivered steers "
                         f"(cap {MAX_PENDING_STEERS_PER_RUN}); refusing the append — "
@@ -189,13 +248,8 @@ class SqliteSteerSidecar:
                 conn.execute("COMMIT")
                 return seq
             except Exception:
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
+                self._rollback_or_drop(conn)
                 raise
-            finally:
-                conn.close()
 
     def pending(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id)
@@ -205,8 +259,9 @@ class SqliteSteerSidecar:
                 "SELECT seq, payload FROM steer_messages WHERE run_id = ? AND consumed = 0 ORDER BY seq",
                 (rid,),
             ).fetchall()
-        finally:
-            conn.close()
+        except Exception:
+            self._drop_thread_connection()
+            raise
         out: List[Dict[str, Any]] = []
         for seq, payload in rows:
             try:
@@ -236,13 +291,8 @@ class SqliteSteerSidecar:
                 )
                 conn.execute("COMMIT")
             except Exception:
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
+                self._rollback_or_drop(conn)
                 raise
-            finally:
-                conn.close()
 
     def watermark(self, run_id: str) -> int:
         rid = str(run_id)
@@ -252,6 +302,7 @@ class SqliteSteerSidecar:
                 "SELECT COALESCE(MAX(seq), 0) FROM steer_messages WHERE run_id = ? AND consumed = 1",
                 (rid,),
             ).fetchone()
-        finally:
-            conn.close()
+        except Exception:
+            self._drop_thread_connection()
+            raise
         return int(row[0])

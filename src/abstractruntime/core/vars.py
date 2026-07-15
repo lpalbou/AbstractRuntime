@@ -59,6 +59,25 @@ def get_temp(vars: Dict[str, Any]) -> Dict[str, Any]:
     return get_namespace(vars, TEMP)
 
 
+def is_paused_vars(vars: Any) -> bool:
+    """True when `vars._runtime.control.paused` is exactly True.
+
+    THE one source for the pause-flag shape (backlog 0068): the runtime's
+    external-control probe and the SQLite store's persisted `paused` column
+    must always read the same truth — a second copy of this path lookup is
+    how column and vars drift apart.
+    """
+    if not isinstance(vars, dict):
+        return False
+    runtime_ns = vars.get(RUNTIME)
+    if not isinstance(runtime_ns, dict):
+        return False
+    control = runtime_ns.get("control")
+    if not isinstance(control, dict):
+        return False
+    return bool(control.get("paused") is True)
+
+
 def clear_temp(vars: Dict[str, Any]) -> None:
     get_temp(vars).clear()
 

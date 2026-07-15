@@ -752,6 +752,83 @@ def test_llm_call_normalizes_expected_prompt_cache_binding_alias() -> None:
     assert "expected_prompt_cache_binding" not in params
 
 
+def test_llm_call_routes_string_binding_to_prompt_cache_key() -> None:
+    """Bloc-seam adversary A-3 (2026-07-13; agent seat c1670 convention —
+    one meaning per name): a bare STRING binding is cache-key intent and
+    routes to prompt_cache_key; it must NOT be coerced into a
+    {"binding_id": ...} dict (the shape core refuses as
+    prompt_cache_binding_bare_string — the 2026-07-11 live-visit collision).
+    Dict bindings keep strict durable-bloc verification semantics."""
+    from abstractruntime.core.models import Effect, EffectType, RunState
+    from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
+
+    class _CapturingLLM:
+        def __init__(self) -> None:
+            self.calls: List[Dict[str, Any]] = []
+
+        def default_prompt_cache_identity(self) -> Tuple[str, str]:
+            return "stub-provider", "default-model"
+
+        def generate(self, *, prompt, messages, system_prompt, media, tools, params):
+            self.calls.append({"params": dict(params or {})})
+            return {"content": "ok"}
+
+    llm = _CapturingLLM()
+    handler = make_llm_call_handler(llm=llm)
+    run = RunState.new(
+        workflow_id="wf-cache",
+        entry_node="node-a",
+        session_id="sess-cache",
+        vars={"_runtime": {"prompt_cache": True}},
+    )
+    run.current_node = "node-a"
+
+    effect = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "prompt": "hello",
+            "params": {"prompt_cache_binding": "session:my-visit"},
+        },
+        result_key="llm",
+    )
+    outcome = handler(run, effect, None)
+    assert outcome.status == "completed"
+    params = llm.calls[-1]["params"]
+    assert params["prompt_cache_key"] == "session:my-visit"
+    assert "prompt_cache_binding" not in params
+
+    # A conflicting explicit key still refuses loudly.
+    effect_conflict = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "prompt": "hello",
+            "params": {
+                "prompt_cache_binding": "session:my-visit",
+                "prompt_cache_key": "other-key",
+            },
+        },
+        result_key="llm",
+    )
+    with pytest.raises(ValueError, match="string prompt_cache_binding"):
+        handler(run, effect_conflict, None)
+
+
+def test_remote_params_route_string_binding_to_prompt_cache_key() -> None:
+    """The remote client's params normalization mirrors the handler seam."""
+    from abstractruntime.integrations.abstractcore.llm_client import (
+        _normalize_prompt_cache_binding_params,
+    )
+
+    out = _normalize_prompt_cache_binding_params({"prompt_cache_binding": "session:x"})
+    assert out["prompt_cache_key"] == "session:x"
+    assert "prompt_cache_binding" not in out
+
+    binding = {"binding_id": "bind-1", "key": "bloc:orbit"}
+    out2 = _normalize_prompt_cache_binding_params({"prompt_cache_binding": binding})
+    assert out2["prompt_cache_binding"] == binding
+    assert out2["prompt_cache_key"] == "bloc:orbit"
+
+
 def test_local_bloc_host_methods_use_runtime_owned_root_and_structured_payloads(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from types import SimpleNamespace
 

@@ -101,6 +101,41 @@ def _session(home_dir: Path, llm: _ScriptedLLM, **over: Any) -> ChatSession:
     return ChatSession(home, llm, **kwargs)
 
 
+def test_failed_salvage_never_blocks_the_opening_session(tmp_path: Path) -> None:
+    """Production-drive find (2026-07-13, live LMStudio 'Model unloaded'
+    mid-salvage): the pending look-back repairs a PAST session — a transient
+    provider failure inside it must not kill the session that is opening.
+    The marker SURVIVES the failure (the debt stays for the next open)."""
+    import json as _json
+
+    home_dir = tmp_path / "entities" / ENTITY_SLUG
+    _create_home(home_dir)
+
+    class _DeadLLM:
+        def generate(self, *, messages, system_prompt, **kwargs):  # noqa: ANN001
+            raise RuntimeError("LMStudio API error (400): Model unloaded.")
+
+    marker = home_dir / "pending_reflection.json"
+    marker.write_text(
+        _json.dumps({
+            "session_id": "chat-dead-previous",
+            "sheet": [["ex:memory-1", "an exchange worth keeping"]],
+            "updated_at": "2026-07-13T00:00:00+00:00",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    out_lines: list = []
+    session = _session(home_dir, _DeadLLM(), out=out_lines.append)
+    try:
+        result = session.run_pending_lookback()  # must NOT raise
+        assert result is None
+        assert marker.exists(), "a failed salvage must keep the debt for the next open"
+        assert any("#FALLBACK" in ln and "salvage" in ln for ln in out_lines)
+    finally:
+        session.home.close()
+
+
 class TestSessionStart:
     def test_prelude_carries_identity_and_posture_budget(self, castor_home):
         llm = _ScriptedLLM([])

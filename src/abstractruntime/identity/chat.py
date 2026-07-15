@@ -1432,14 +1432,20 @@ class ChatSession:
         return self.home.home_dir / "pending_reflection.json"
 
     def _write_pending_marker(self) -> None:
+        # ATOMIC (whole-package adversary finding 5, 2026-07-13): this
+        # write-ahead net exists for SIGKILL/power-loss, and a plain
+        # write_text tears at exactly that crash — the next open then reads
+        # an unparseable marker and drops the WHOLE session's look-back.
         try:
-            self._pending_path().write_text(
+            from ..utils.atomic_files import atomic_write_text
+
+            atomic_write_text(
+                self._pending_path(),
                 json.dumps({
                     "session_id": self.session_id,
                     "sheet": [[rid, desc] for rid, desc in self.session_sheet],
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }) + "\n",
-                encoding="utf-8",
             )
         except OSError:
             pass  # the marker is a net, never a blocker
@@ -1479,13 +1485,23 @@ class ChatSession:
             return None
         try:
             marker = json.loads(path.read_text(encoding="utf-8"))
+            # Shape validation INSIDE the clearing try (adversary finding 7:
+            # a json-valid but wrong-shaped sheet item raised BEFORE the
+            # clear — every future open re-failed and the marker wedged
+            # forever; a 2-char string item unpacked silently into garbage
+            # record ids). Anything not a [rid, desc] pair is unreadable.
+            raw_sheet = marker.get("sheet") or []
+            if not isinstance(raw_sheet, list) or not all(
+                isinstance(item, (list, tuple)) and len(item) == 2 for item in raw_sheet
+            ):
+                raise ValueError("pending-reflection sheet is not a list of [rid, desc] pairs")
+            sheet = [(str(r), str(d)) for r, d in raw_sheet if r]
         except Exception:
             self.out("#FALLBACK unreadable pending-reflection marker; clearing it (gap stays on the record)")
             self._clear_pending_marker()
             return None
         if str(marker.get("session_id")) == self.session_id:
             return None  # our own live marker, not a stale one
-        sheet = [(str(r), str(d)) for r, d in (marker.get("sheet") or []) if r]
         if not sheet:
             self._clear_pending_marker()
             return None
@@ -1514,10 +1530,25 @@ class ChatSession:
         # on the append-only store are unrepairable; a duplicate summary
         # record (different LLM words -> different digest) is the accepted
         # residual — records can be superseded, valence cannot.
-        result = self._reflect_over(
-            sheet, session_id=str(marker.get("session_id")),
-            turn_id=f"t-reflect-salvage-{marker.get('session_id')}",
-        )
+        #
+        # FAILURE ISOLATION (production drive find, 2026-07-13: a transient
+        # provider failure inside the salvage killed the ENTIRE session
+        # open): the salvage repairs a PAST session — its failure must
+        # never block the session that is opening. Every production caller
+        # already wrapped this call defensively; the function now owns the
+        # contract so no caller can forget it. The marker deliberately
+        # SURVIVES a failed salvage (the debt stays for the next open).
+        try:
+            result = self._reflect_over(
+                sheet, session_id=str(marker.get("session_id")),
+                turn_id=f"t-reflect-salvage-{marker.get('session_id')}",
+            )
+        except Exception as e:  # noqa: BLE001 - a repair must not block a life
+            self.out(
+                f"#FALLBACK the salvage look-back failed ({e}); the marker stays "
+                "- the next open retries the repair"
+            )
+            return None
         self._clear_pending_marker()
         return result
 
@@ -1534,7 +1565,15 @@ class ChatSession:
         if not self.session_sheet:
             return None
         result = self._reflect_over(
-            list(self.session_sheet), session_id=self.session_id, turn_id="t-reflect"
+            # SESSION-SCOPED turn_id (whole-package adversary P1, 2026-07-13,
+            # live-verified silent loss: APPRAISE event-ids derive from
+            # (scope|owner|target|turn_id|reason) with NO session component —
+            # the constant "t-reflect" made two sessions' identical genuine
+            # feelings collide and the second was swallowed by the at-least-
+            # once dedup while feelings_applied reported success. The salvage
+            # path already derives t-reflect-salvage-<session>; this mirrors.
+            list(self.session_sheet), session_id=self.session_id,
+            turn_id=f"t-reflect-{self.session_id}",
         )
         if result is not None:
             self.reflection_diary_entries = result["diary_entries"]
@@ -1793,7 +1832,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="who is present (repeatable), e.g. person:albou; default person:operator",
     )
     parser.add_argument("--session-id", default=None)
-    parser.add_argument("--context-window", type=int, default=None, help="declared window; <20000 refuses")
+    parser.add_argument(
+        "--context-window", type=int, default=40960,
+        help="declared context window. Default ~40k (maintainer 2026-07-13: "
+        "'optimize the context of an entity so it can run fast... up to 40k "
+        "tokens roughly - NOT a hardcap'); explicit values win in either "
+        "direction; <20000 refuses loudly (the entity floor)",
+    )
     parser.add_argument(
         "--shelf-size", type=int, default=36,
         help="recall shelf seats (default 36 — maintainer 2026-07-09: 'it needs to "
@@ -1970,24 +2015,26 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Any failure from here on must still hand his own time back (a crashed
     # visit leaving him asleep forever is the worst outcome of the yield).
+    # ONE guard class for the WHOLE open window (whole-package adversary
+    # finding 4, 2026-07-13: create_llm sat unguarded between the yield and
+    # the session guard, and the session guard caught SystemExit ONLY — a
+    # provider typo or a below-floor context window ValueError left the
+    # entity yielded-asleep forever with the lease leaked to process exit).
+    home = None
+    session = None
     try:
         home = open_home(home_dir, embedder=embedder)
-    except BaseException:
-        visit_lease.release()
-        _wake_loop_if_yielded()
-        raise
-    print(f"Summoning {home.name} ({home.entity_id})")
+        print(f"Summoning {home.name} ({home.entity_id})")
 
-    from abstractcore import create_llm  # lazy: keeps the kernel import-light
+        from abstractcore import create_llm  # lazy: keeps the kernel import-light
 
-    llm_kwargs: Dict[str, Any] = {"model": model}
-    if args.max_output_tokens is not None:
-        llm_kwargs["max_output_tokens"] = args.max_output_tokens
-    if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
-        llm_kwargs["base_url"] = args.base_url  # cloud providers resolve their own endpoint
-    llm = create_llm(provider, **llm_kwargs)
+        llm_kwargs: Dict[str, Any] = {"model": model}
+        if args.max_output_tokens is not None:
+            llm_kwargs["max_output_tokens"] = args.max_output_tokens
+        if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
+            llm_kwargs["base_url"] = args.base_url  # cloud providers resolve their own endpoint
+        llm = create_llm(provider, **llm_kwargs)
 
-    try:
         session = ChatSession(
             home,
             llm,
@@ -2000,8 +2047,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             enable_workspace=bool(args.workspace),
             model_info={"provider": provider, "model": model},
         )
-    except SystemExit:
-        home.close()
+    except BaseException:
+        if home is not None:
+            home.close()
         visit_lease.release()
         _wake_loop_if_yielded()
         raise

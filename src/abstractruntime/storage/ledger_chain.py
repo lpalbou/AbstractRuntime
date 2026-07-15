@@ -17,15 +17,25 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from .base import LedgerStore
+from .serialize import dataclass_json_default, steprecord_to_dict
 from ..core.models import StepRecord
 
 
 def _canonical_json(data: Dict[str, Any]) -> str:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    # The default hook converts dataclasses nested inside effect/result
+    # payloads exactly as the pre-0067 `asdict(record)` did, so append-time
+    # hash input (live objects) and verify-time hash input (parsed JSON)
+    # canonicalize to the same bytes. Inert for already-JSON-native data.
+    return json.dumps(
+        data,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=dataclass_json_default,
+    )
 
 
 def _sha256_hex(text: str) -> str:
@@ -101,12 +111,21 @@ class HashChainedLedgerStore(LedgerStore):
                 return
             prev = self._persisted_head(record.run_id)
             record.prev_hash = prev
-            record_dict = asdict(record)
+            record_dict = steprecord_to_dict(record)
             record.record_hash = compute_record_hash(record=record_dict, prev_hash=prev)
             self._inner.append(record)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
+
+    def find_completed_result(
+        self, run_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Delegate to the inner store's (possibly indexed) lookup."""
+        fn = getattr(self._inner, "find_completed_result", None)
+        if callable(fn):
+            return fn(run_id, idempotency_key)
+        return super().find_completed_result(run_id, idempotency_key)
 
     def delete(self, run_id: str) -> int:
         fn = getattr(self._inner, "delete", None)

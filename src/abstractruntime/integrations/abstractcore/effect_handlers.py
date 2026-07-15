@@ -870,9 +870,23 @@ def _normalize_prompt_cache_binding_request(params: Dict[str, Any]) -> Optional[
     if binding is None:
         return None
     if isinstance(binding, str):
-        binding = {"binding_id": binding.strip()}
+        # ONE-MEANING-PER-NAME (agent seat c1670 convention; bloc-seam
+        # adversary A-3, 2026-07-13): a bare STRING means cache-key intent
+        # and routes to prompt_cache_key; the DICT shape is reserved for
+        # durable-bloc strict verification. Coercing strings into
+        # {"binding_id": ...} manufactured exactly the shape core refuses
+        # (prompt_cache_binding_bare_string) one hop before its refusal —
+        # the 2026-07-11 live-visit collision class.
+        key_s = binding.strip()
+        params.pop("prompt_cache_binding", None)
+        if key_s:
+            existing = params.get("prompt_cache_key")
+            if existing is not None and str(existing).strip() and str(existing).strip() != key_s:
+                raise ValueError("prompt_cache_key and a string prompt_cache_binding must match.")
+            params["prompt_cache_key"] = key_s
+        return None
     if not isinstance(binding, dict):
-        raise ValueError("prompt_cache_binding must be an object or binding_id string.")
+        raise ValueError("prompt_cache_binding must be an object (or a string cache key).")
     params["prompt_cache_binding"] = dict(binding)
     return dict(binding)
 
@@ -2152,6 +2166,23 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     # check precedes the status-code rule because these arrive as 400.
     if _HARMONY_ARTIFACT_RE.search(str(exc or "")):
         return True
+
+    # Structured prompt-cache failures (2026-07-13 bloc-seam adversary A-2):
+    # binding verification errors (missing/mismatch/invalid/bare-string) and
+    # capability refusals are DETERMINISTIC — the same params meet the same
+    # refusal on every attempt; retrying burns the whole retry budget before
+    # surfacing an identical message. Generic operation failures (I/O during
+    # load/save) may be transient and keep the retryable default.
+    try:
+        from abstractcore.providers.base import PromptCacheError  # type: ignore
+
+        if isinstance(exc, PromptCacheError):
+            code = str(getattr(exc, "code", "") or "")
+            if code.startswith("prompt_cache_binding_") or code == "prompt_cache_unsupported":
+                return False
+            return True
+    except ImportError:
+        pass
 
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):

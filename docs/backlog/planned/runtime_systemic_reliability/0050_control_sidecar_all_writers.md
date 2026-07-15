@@ -37,6 +37,23 @@ FIVE non-tick-thread RunState writers:
    (history_bundle.py:433) and `active_context.rehydrate_into_context`
    (memory/active_context.py:299).
 
+AMENDMENT (2026-07-14, 0067 durability audit — independent line-verified
+re-enumeration): the inventory above is CONFIRMED complete for the aliasing
+stores; `steer()` is the one compliant model citizen. Two sharpenings:
+(a) the tear class only exists on ALIASING stores (JsonFileRunStore cache,
+InMemoryRunStore) — `SqliteRunStore.load` returns a fresh object per call,
+so on SQLite these writers produce lost-update clobbers, never
+mid-serialization tears; (b) loudness delta recorded in
+`storage/serialize.py`: the old `asdict` path sometimes raised
+(net-growth dict resize mid-copy -> RuntimeError) where the post-0067 C
+encoder tears SILENTLY — balanced insert+delete tore silently under both,
+so this raises the value of the sidecar migration rather than changing its
+shape. Live evidence the class bites: the 0047 issuance-counter tear
+(pause mid-effect serialized the advanced counter without the result —
+fixed 2026-07-14 by binding the advance to the step's own saves, pinned in
+test_effect_issuance_idempotency.py) was exactly writer #1 (pause_run)
+racing the tick thread through the alias.
+
 ## Problem
 The "tick thread is the only writer" rule (steer docstring) is violated by
 design in five places; each is a lost-update or data race under concurrency.

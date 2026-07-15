@@ -250,6 +250,10 @@ def test_completed_model_residency_effect_replays_ledger_result_without_recallin
     run.current_node = "call"
     run.output = None
     run.vars.pop("residency", None)
+    # Roll the effect-issuance counter back too (c1568): a real crash
+    # restores the whole RunState; this partial restart sim must match the
+    # ledger's completed-record issuance for reuse to fire (0 = pre-effect).
+    run.vars.get("_runtime", {}).pop("effect_seq", None)
     stores[0].save(run)
 
     state2 = runtime.tick(

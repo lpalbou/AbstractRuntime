@@ -997,6 +997,36 @@ def test_paused_idle_heartbeats_the_day_phase(tmp_path: Path) -> None:
     assert len(set(heartbeats)) >= 1 and all(h and h != "None" for h in heartbeats)
 
 
+def test_paused_blocks_the_sleep_window_and_never_gets_clobbered(tmp_path: Path) -> None:
+    """Kill-switch hardening (laurent 16:12, c1530: paused IS the primary
+    kill switch — 'if a dream can run under paused today, that is now a
+    bug'): a paused entity opens NO sleep window, the consolidation hook
+    never runs, and — the no-entity-unset property — the self-sleep write
+    never clobbers the operator's freeze."""
+    from abstractruntime.identity.life import LifeLoop, read_entity_state, write_entity_state
+
+    home_dir = _make_home(tmp_path)
+    write_entity_state(home_dir, "paused", reason="operator freeze", written_by="operator")
+
+    ran: Dict[str, int] = {"nights": 0}
+
+    def on_sleep():  # noqa: ANN202
+        ran["nights"] += 1
+        return {"formed": True}
+
+    loop = LifeLoop(
+        lambda: (_ for _ in ()).throw(AssertionError("no session in this test")),
+        tick_seconds=0, ticks_per_day=1, max_ticks=1,
+        state_home=home_dir, on_sleep=on_sleep, out=lambda s: None,
+    )
+    result = loop._sleep_window("a rest that must not open")
+    assert result is None
+    assert ran["nights"] == 0, "no memory process may run under the kill switch"
+    state = read_entity_state(home_dir)
+    assert state["state"] == "paused", "the freeze must never be clobbered by a sleep write"
+    assert state.get("written_by") == "operator"
+
+
 def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, monkeypatch) -> None:
     """One-active-phase ruling (c1455/c1462): the consolidator hands the
     engine a should_continue predicate — pure reads only — that ends the

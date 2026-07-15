@@ -1019,9 +1019,21 @@ def _create_visual_agent_effect_handler(
         return None
 
     def _extract_tool_activity_from_steps(steps: Any) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
-        """Best-effort tool call/result extraction from flattened scratchpad steps."""
+        """Best-effort tool call/result extraction from flattened scratchpad steps.
+
+        Trace-bounded entries (0053) may carry `$artifact` refs where the
+        tool_calls/results subtrees were offloaded — a ref is NOT a call
+        (counting it produced a phantom "1 tool call" with name None);
+        skip refs and let the ledger STARTED record stay the byte truth.
+        """
         if not isinstance(steps, list):
             return [], []
+
+        def _dicts_excluding_refs(value: Any) -> list[Dict[str, Any]]:
+            if isinstance(value, dict) and "$artifact" in value:
+                return []
+            return [d for d in _as_dict_list(value) if not (isinstance(d, dict) and "$artifact" in d)]
+
         tool_calls: list[Dict[str, Any]] = []
         tool_results: list[Dict[str, Any]] = []
         for entry_any in steps:
@@ -1033,12 +1045,12 @@ def _create_visual_agent_effect_handler(
                 continue
             payload = effect.get("payload")
             payload_d = payload if isinstance(payload, dict) else {}
-            tool_calls.extend(_as_dict_list(payload_d.get("tool_calls")))
+            tool_calls.extend(_dicts_excluding_refs(payload_d.get("tool_calls")))
 
             result = entry.get("result")
             if not isinstance(result, dict):
                 continue
-            tool_results.extend(_as_dict_list(result.get("results")))
+            tool_results.extend(_dicts_excluding_refs(result.get("results")))
         return tool_calls, tool_results
 
     def _build_sub_vars(
@@ -2700,6 +2712,14 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 steps.append((ts_s, entry))
         steps.sort(key=lambda x: x[0])
 
+        def _dicts_excluding_refs(value: Any) -> List[Dict[str, Any]]:
+            # Trace-bounded entries (0053) may hold `$artifact` refs where
+            # subtrees were offloaded — a ref is not a tool call (phantom
+            # count of 1 otherwise); the ledger keeps the byte truth.
+            if isinstance(value, dict) and "$artifact" in value:
+                return []
+            return [d for d in _as_dict_list(value) if not (isinstance(d, dict) and "$artifact" in d)]
+
         tool_calls: List[Dict[str, Any]] = []
         tool_results: List[Dict[str, Any]] = []
         for _ts, entry in steps:
@@ -2710,13 +2730,12 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 continue
             payload = effect.get("payload")
             payload_d = payload if isinstance(payload, dict) else {}
-            tool_calls.extend(_as_dict_list(payload_d.get("tool_calls")))
+            tool_calls.extend(_dicts_excluding_refs(payload_d.get("tool_calls")))
 
             result = entry.get("result")
             if not isinstance(result, dict):
                 continue
-            results = result.get("results")
-            tool_results.extend(_as_dict_list(results))
+            tool_results.extend(_dicts_excluding_refs(result.get("results")))
 
         return tool_calls, tool_results
 

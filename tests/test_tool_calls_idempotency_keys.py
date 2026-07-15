@@ -159,12 +159,17 @@ def test_tool_calls_restart_reuses_prior_result_even_if_call_id_changes(tmp_path
     assert isinstance(results, list) and isinstance(results[0], dict)
     assert results[0].get("runtime_call_id") == calls[0].get("runtime_call_id")
 
-    # Simulate restart: reset run state and change provider call id.
+    # Simulate restart: reset run state and change provider call id. A real
+    # crash rolls RunState back to the last save; this partial simulation
+    # must also roll back the effect-issuance counter (c1568) so the
+    # recomputed key matches the ledger's completed record and reuse fires
+    # (0 = the pre-effect value for this single-effect node).
     run = run_store.load(run_id)
     run.status = RunStatus.RUNNING
     run.current_node = "TOOLS"
     run.output = None
     run.vars.pop("tool_results", None)
+    run.vars.get("_runtime", {}).pop("effect_seq", None)
     run_store.save(run)
 
     wf2 = _workflow("provider_call_2")

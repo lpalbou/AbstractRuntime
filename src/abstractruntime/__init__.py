@@ -20,6 +20,7 @@ from .core.models import (
     WaitReason,
     WaitState,
 )
+from .core.health import RuntimeHealth
 from .core.runtime import Runtime
 from .core.spec import WorkflowSpec
 from .core.policy import (
@@ -133,6 +134,7 @@ __all__ = [
     # Spec + runtime
     "WorkflowSpec",
     "Runtime",
+    "RuntimeHealth",
     # Scheduler
     "WorkflowRegistry",
     "Scheduler",

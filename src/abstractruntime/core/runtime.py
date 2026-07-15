@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import uuid
 
 from .config import RuntimeConfig
 from .models import (
@@ -45,6 +46,16 @@ from .models import (
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
 from ..storage.base import LedgerStore, RunStore, QueryableRunStore
+from ..storage.ledger_slim import (
+    build_started_payload_index,
+    capture_started_payload_digests,
+    resolve_result_metadata_markers,
+    result_metadata_has_markers,
+    slim_result_metadata,
+    slim_terminal_effect,
+)
+from ..storage.serialize import dumps_compact
+from .health import RuntimeHealth
 from .event_keys import build_event_wait_key
 
 logger = logging.getLogger(__name__)
@@ -394,6 +405,61 @@ def _step_record_effect_payload(effect: Optional[Effect]) -> Optional[Dict[str, 
     }
 
 
+def _slim_terminal_record(rec: StepRecord, *, started_digests: Optional[Dict[str, str]] = None) -> None:
+    """Drop duplicate bytes from a terminal re-append (backlog 0067-M).
+
+    The STARTED record (same `step_id`, appended before execution) already
+    holds the full effect payload; the terminal COMPLETED/WAITING/FAILED
+    append used to persist it a second time, and an LLM result carries
+    observability copies of the request a third and fourth time — the
+    O(turns^2) ledger-growth term. Oversized payload fields and provably
+    reconstructable result copies are replaced with verified `$slim`
+    markers; `_find_prior_completed_result` rehydrates them on crash-replay
+    so a reused result stays byte-identical to the live path.
+
+    `started_digests` (captured immediately before the STARTED append) is
+    the verification anchor: a field only slims when its bytes still match
+    what STARTED persisted — an in-place mutation during execution keeps
+    the mutated bytes verbatim instead of minting an unresolvable marker
+    (2026-07-14 adversary P1-1). No digests = no slimming.
+
+    Mutates only the StepRecord's own `effect`/`result` slots with spine
+    copies — the live `Effect.payload` and the result object flowing into
+    `run.vars[result_key]` are never touched.
+    """
+    try:
+        eff = rec.effect if isinstance(rec.effect, dict) else None
+        payload = eff.get("payload") if isinstance(eff, dict) else None
+        if (
+            rec.status == StepStatus.COMPLETED
+            and isinstance(payload, dict)
+            and isinstance(rec.result, dict)
+        ):
+            slimmed_result = slim_result_metadata(
+                rec.result,
+                effect_payload=payload,
+                step_id=rec.step_id,
+                started_digests=started_digests,
+            )
+            if slimmed_result is not rec.result:
+                rec.result = slimmed_result
+        slimmed_effect = slim_terminal_effect(eff, step_id=rec.step_id, started_digests=started_digests)
+        if slimmed_effect is not eff:
+            rec.effect = slimmed_effect
+    except Exception:  # pragma: no cover - byte optimization must never fail an append
+        logger.warning("#FALLBACK: terminal-record slimming failed; appending full record", exc_info=True)
+
+
+# Bounded run-vars growth (backlog 0053): caps for the unbounded accretion
+# surfaces. Drop-oldest with counters — never silent, never unbounded.
+INBOX_MAX_MESSAGES = 200
+EVIDENCE_WARNINGS_MAX = 50
+# Node-trace entries above this compact-JSON size have their large leaves
+# offloaded to the artifact store (or labeled-truncated without one):
+# measured at 30 entries the traces WERE ~95% of a 2MB RunState.
+NODE_TRACE_ENTRY_INLINE_CAP = 32 * 1024
+NODE_TRACE_LEAF_CAP = 4 * 1024
+
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -610,15 +676,9 @@ def _ensure_control_namespace(vars: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_paused_run_vars(vars: Any) -> bool:
-    if not isinstance(vars, dict):
-        return False
-    runtime_ns = vars.get("_runtime")
-    if not isinstance(runtime_ns, dict):
-        return False
-    control = runtime_ns.get("control")
-    if not isinstance(control, dict):
-        return False
-    return bool(control.get("paused") is True)
+    from .vars import is_paused_vars  # one source (0068): the SQLite paused column reads the same helper
+
+    return is_paused_vars(vars)
 
 
 def _is_pause_wait(waiting: Any, *, run_id: str) -> bool:
@@ -660,6 +720,71 @@ def _record_transition_predecessor(run: RunState, *, node_id: str, next_node: Op
         pass
 
 
+def _truncate_large_strings(value: Any, *, cap: int, _depth: int = 0) -> Any:
+    """Labeled truncation for oversized trace strings (no artifact store)."""
+    if _depth > 8:
+        return value
+    if isinstance(value, str) and len(value) > cap:
+        return value[:cap] + f" #TRUNCATION: trace string exceeded {cap} chars"
+    if isinstance(value, dict):
+        return {k: _truncate_large_strings(v, cap=cap, _depth=_depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_truncate_large_strings(v, cap=cap, _depth=_depth + 1) for v in value]
+    return value
+
+
+def _bound_trace_entry(entry: Dict[str, Any], *, run: RunState, artifact_store: Any) -> Dict[str, Any]:
+    """Shrink an oversized node-trace entry (backlog 0053).
+
+    With an artifact store: large leaves become `$artifact` refs via
+    `offload_large_values` (payload/result subtrees preserved as refs, the
+    documented durable currency). Without one: strings are truncated WITH
+    the #TRUNCATION label. Never raises — an unboundable entry is kept as
+    built rather than lost.
+    """
+    try:
+        if artifact_store is not None:
+            from ..storage.offloading import offload_large_values
+
+            out = dict(entry)
+            for key in ("effect", "result", "wait"):
+                if key not in out or out[key] is None:
+                    continue
+                out[key] = offload_large_values(
+                    out[key],
+                    artifact_store=artifact_store,
+                    run_id=str(run.run_id),
+                    max_inline_bytes=NODE_TRACE_LEAF_CAP,
+                    base_tags={"source": "node_trace_offload"},
+                    root_path=f"node_trace.{key}",
+                    allow_root_replace=False,
+                )
+            # Top-level `error` is a STRING, not a subtree — without
+            # root-replace it escaped the cap entirely (adversary P1-2: a
+            # 100KB provider error stamped "offloaded" at 102KB; failed
+            # steps are exactly the entries that LOOP, so a failure loop
+            # accreted ~10MB/node while claiming to be bounded).
+            if isinstance(out.get("error"), str):
+                out["error"] = offload_large_values(
+                    out["error"],
+                    artifact_store=artifact_store,
+                    run_id=str(run.run_id),
+                    max_inline_bytes=NODE_TRACE_LEAF_CAP,
+                    base_tags={"source": "node_trace_offload"},
+                    root_path="node_trace.error",
+                    allow_root_replace=True,
+                )
+            out["trace_bounded"] = "offloaded"
+            return out
+        bounded = _truncate_large_strings(entry, cap=NODE_TRACE_LEAF_CAP)
+        if isinstance(bounded, dict):
+            bounded["trace_bounded"] = "truncated"
+            return bounded
+        return entry
+    except Exception:  # pragma: no cover - bounding must never lose the trace
+        return entry
+
+
 def _record_node_trace(
     *,
     run: RunState,
@@ -670,6 +795,7 @@ def _record_node_trace(
     reused_prior_result: bool,
     duration_ms: Optional[float] = None,
     max_entries_per_node: int = 100,
+    artifact_store: Any = None,
 ) -> None:
     """Record a JSON-safe per-node execution trace in run.vars["_runtime"].
 
@@ -734,7 +860,7 @@ def _record_node_trace(
 
     # Ensure the trace remains JSON-safe even if a handler violates the contract.
     try:
-        json.dumps(entry)
+        entry_json = json.dumps(entry)
     except TypeError:
         entry = {
             "ts": entry.get("ts"),
@@ -745,6 +871,17 @@ def _record_node_trace(
             "effect": {"type": effect.type.value, "result_key": effect.result_key},
             "error": "non_json_safe_trace_entry",
         }
+    else:
+        # Bounded trace bytes (backlog 0053, THE dominant state-growth
+        # lever: at 30 entries the traces measured ~95% of a 2MB RunState,
+        # serialized on EVERY save). Oversized entries have their large
+        # leaves offloaded to the artifact store (refs inline — the same
+        # currency the ledger offloader uses); without a store, long
+        # strings are labeled-truncated. The entry's shape and small fields
+        # survive either way. Reuses the JSON-safety dumps above: the size
+        # check costs zero extra serialization.
+        if len(entry_json) > NODE_TRACE_ENTRY_INLINE_CAP:
+            entry = _bound_trace_entry(entry, run=run, artifact_store=artifact_store)
 
     steps.append(entry)
     if max_entries_per_node > 0 and len(steps) > max_entries_per_node:
@@ -828,10 +965,137 @@ class Runtime:
         # durability/execution: hook failures are swallowed.
         self._terminal_hooks: list[Callable[[RunState], None]] = []
 
+        # RuntimeHealth (backlog 0054): always-on counters at the existing
+        # warning/decision sites — "is the runtime healthy" as data instead
+        # of log folklore. Read via `health()`; hosts serve the snapshot.
+        self._health = RuntimeHealth()
+        # 0053 vars-size watch: run_ids already warned this process (the
+        # warning is once-per-run, the counter keeps counting crossings).
+        self._vars_warned_runs: set[str] = set()
+
         self._handlers: Dict[EffectType, EffectHandler] = {}
         self._register_builtin_handlers()
         if effect_handlers:
             self._handlers.update(effect_handlers)
+
+    def health(self) -> Dict[str, Any]:
+        """JSON-safe RuntimeHealth snapshot (backlog 0054): monotonic
+        counters, coarse tick-duration buckets, vars-size gauges, and a
+        last-errors ring. Process-lifetime, thread-safe, cheap."""
+        return self._health.snapshot()
+
+    @staticmethod
+    def _wait_age_s(updated_raw: str, *, now: datetime) -> float:
+        try:
+            updated = datetime.fromisoformat(str(updated_raw or "").replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            return max(0.0, (now - updated).total_seconds())
+        except Exception:
+            return -1.0  # unknown age: surfaced first, never hidden
+
+    def list_stalled_waits(self, *, older_than_s: float = 300.0, limit: int = 100) -> list[Dict[str, Any]]:
+        """Pure read: WAITING runs whose wait has aged past the threshold
+        (backlog 0054, the stalled-waits index). The runtime's #1 silent-
+        stall class is a run parked on WAIT_EVENT / tool approval /
+        subworkflow that nobody resumes — this is the query an operator
+        board renders. Age measures from the run's last transition
+        (`updated_at`); rows sort oldest-first, with UNKNOWN-age rows
+        (unparseable timestamps, age_s=-1) FIRST — suspicious rows deserve
+        eyes, and sorting them last truncated them exactly when the board
+        was full.
+
+        Adversary-hardened (2026-07-14 P1-1/P2-4): candidates come from
+        `list_run_index(oldest_first=True)` — a NEWEST-first window
+        silently hid the OLDEST waits (the definition of stalled) once
+        waiting runs exceeded the window, returning [] on the exact fleet
+        board this exists for; and the index path reads columns instead of
+        full-parsing every waiting document (the 0068 waste class). Only
+        the ≤limit aged winners load their full state (wait_key/paused live
+        in the document). Stores without the ordered index keep the
+        full-scan fallback, documented best-effort. Requires a queryable
+        run store; others return [] (an observability convenience, never a
+        dependency)."""
+        now = datetime.now(timezone.utc)
+        lim = max(1, int(limit))
+        out: list[Dict[str, Any]] = []
+
+        index_fn = getattr(self._run_store, "list_run_index", None)
+        rows: Optional[list] = None
+        if callable(index_fn):
+            try:
+                rows = index_fn(status=RunStatus.WAITING, limit=max(lim * 5, 500), oldest_first=True)
+            except TypeError:
+                rows = None  # store predates oldest_first: ordered window unavailable
+            except Exception:
+                rows = None
+
+        if rows is not None:
+            for row in rows:
+                if len(out) >= lim:
+                    break
+                if not isinstance(row, dict):
+                    continue
+                age_s = self._wait_age_s(str(row.get("updated_at") or ""), now=now)
+                if 0.0 <= age_s < float(older_than_s):
+                    # Ordered oldest-first: the first fresh row ends the walk.
+                    break
+                run_id = str(row.get("run_id") or "")
+                if not run_id:
+                    continue
+                # Only the aged winners pay a document load (wait_key/paused).
+                try:
+                    run = self._run_store.load(run_id)
+                except Exception:
+                    run = None
+                waiting = getattr(run, "waiting", None) if run is not None else None
+                out.append(
+                    {
+                        "run_id": run_id,
+                        "workflow_id": str(row.get("workflow_id") or ""),
+                        "session_id": row.get("session_id"),
+                        "wait_reason": row.get("wait_reason"),
+                        "wait_key": getattr(waiting, "wait_key", None),
+                        "until": row.get("wait_until"),
+                        "age_s": round(age_s, 1),
+                        "paused": _is_paused_run_vars(getattr(run, "vars", None)) if run is not None else False,
+                    }
+                )
+        else:
+            list_runs = getattr(self._run_store, "list_runs", None)
+            if not callable(list_runs):
+                return []
+            try:
+                candidates = list_runs(status=RunStatus.WAITING, limit=lim * 5)
+            except Exception:
+                return []
+            for run in candidates or []:
+                try:
+                    waiting = getattr(run, "waiting", None)
+                    if waiting is None:
+                        continue
+                    age_s = self._wait_age_s(str(getattr(run, "updated_at", "") or ""), now=now)
+                    if 0.0 <= age_s < float(older_than_s):
+                        continue
+                    reason = getattr(waiting, "reason", None)
+                    out.append(
+                        {
+                            "run_id": str(getattr(run, "run_id", "") or ""),
+                            "workflow_id": str(getattr(run, "workflow_id", "") or ""),
+                            "session_id": getattr(run, "session_id", None),
+                            "wait_reason": getattr(reason, "value", str(reason) if reason else None),
+                            "wait_key": getattr(waiting, "wait_key", None),
+                            "until": getattr(waiting, "until", None),
+                            "age_s": round(age_s, 1),
+                            "paused": _is_paused_run_vars(getattr(run, "vars", None)),
+                        }
+                    )
+                except Exception:
+                    continue
+
+        # Unknown age (-1) sorts FIRST (treated as infinitely old), then oldest.
+        out.sort(key=lambda r: (float("inf") if float(r.get("age_s") or 0.0) < 0 else float(r.get("age_s") or 0.0)), reverse=True)
+        return out[:lim]
 
     # ---------------------------------------------------------------------
     # Public API
@@ -968,6 +1232,17 @@ class Runtime:
                     ts = tool_support.strip()
                     runtime_ns.setdefault("tool_support", ts)
                     runtime_ns.setdefault("supports_native_tools", ts == "native")
+                    # Capability-bit PROVENANCE (abstractagent wave-F P1,
+                    # commons c1801): the bits above describe the CONFIG
+                    # model, but per-run routing (`_runtime.model`) can point
+                    # at a DIFFERENT model — a native-default runtime routing
+                    # to a prompted model made CodeAct complete silently with
+                    # code-as-prose. Stamping WHICH model the bits were
+                    # derived for lets consumers detect staleness and fail
+                    # toward the safe posture (fence ON).
+                    cap_model = getattr(self._config, "model", None)
+                    if isinstance(cap_model, str) and cap_model.strip():
+                        runtime_ns.setdefault("tool_support_model", cap_model.strip())
         except Exception:
             pass
 
@@ -1173,6 +1448,39 @@ class Runtime:
             if not isinstance(inbox, list):
                 inbox = []
                 runtime_ns["inbox"] = inbox
+            # Bounded inbox via BACKPRESSURE, never destruction (backlog
+            # 0053, reshaped by the 2026-07-14 adversary P2-2: the first
+            # cut drop-oldested at delivery — destroying operator words
+            # UNREAD while the `steer_seen` record claimed all of them as
+            # seen, and engaging before the sidecar's refuse-at-500 could
+            # ever backpressure the sender). Now: deliver only up to the
+            # inbox headroom and ack ONLY what was delivered — the excess
+            # stays PENDING in the sidecar (watermark redelivery is already
+            # crash-safe), and a workflow that never drains its inbox
+            # eventually surfaces as the sidecar's loud append refusal.
+            headroom = INBOX_MAX_MESSAGES - len(inbox)
+            if headroom <= 0:
+                self._health.increment("inbox_backpressure_total")
+                logger.warning(
+                    "run %s _runtime.inbox is full (%d messages); %d steer(s) stay "
+                    "pending in the sidecar (the workflow is not draining its inbox)",
+                    run.run_id,
+                    len(inbox),
+                    len(fresh),
+                )
+                return
+            deferred = len(fresh) - headroom
+            if deferred > 0:
+                fresh = fresh[:headroom]
+                self._health.increment("inbox_backpressure_total")
+                logger.warning(
+                    "run %s _runtime.inbox headroom %d < %d pending steer(s); %d stay "
+                    "pending in the sidecar for the next boundary",
+                    run.run_id,
+                    headroom,
+                    headroom + deferred,
+                    deferred,
+                )
             seqs: list[int] = []
             for entry in fresh:
                 inbox.append(entry.get("message"))
@@ -1205,7 +1513,10 @@ class Runtime:
             rec.ended_at = utc_now_iso()
             self._ledger_store.append(rec)
             self._steer_store.ack(run.run_id, last_seq)
+            self._health.increment("steer_drains_total")
+            self._health.increment("steer_messages_delivered_total", len(seqs))
         except Exception as e:  # pragma: no cover - defensive
+            self._health.record_error("steer_drain", str(e))
             logger.warning("steer sidecar drain failed for run %s: %s", run.run_id, e)
 
     def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
@@ -1575,11 +1886,16 @@ class Runtime:
                 type=EffectType.EMIT_EVENT,
                 payload={"name": "abstract.progress", "scope": "run", "payload": payload},
             )
+            # Key suffix is a pure uniquifier (never probed — this record is
+            # appended already-completed). The old ledger-count suffix parsed
+            # the ENTIRE ledger per progress tick (backlog 0068: generated-
+            # media runs pay one full parse per callback); a uuid costs
+            # nothing on every backend and no consumer reads the key shape.
             rec = StepRecord.start(
                 run=run,
                 node_id=node_id,
                 effect=eff,
-                idempotency_key=f"system:progress:{step_id}:{len(self._ledger_store.list(run.run_id))}",
+                idempotency_key=f"system:progress:{step_id}:{uuid.uuid4().hex[:12]}",
             )
             rec.finish_success({"emitted": True, "name": "abstract.progress", "payload": payload})
             self._ledger_store.append(rec)
@@ -1624,6 +1940,63 @@ class Runtime:
         return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
     def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
+        """Timed wrapper (backlog 0054/0053): every tick lands in the health
+        histogram, and ticks that executed at least one effect step refresh
+        the vars-size gauge (gated on step activity so a scheduler sweeping
+        parked runs never pays a serialization per probe)."""
+        import time as _time
+
+        t0 = _time.perf_counter()
+        try:
+            state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps)
+        except BaseException as e:
+            # The ring exists to answer "what broke last" — a raising tick is
+            # the dominant breakage class and must reach it (adversary P3).
+            self._health.record_error("tick", f"{type(e).__name__}: {e}")
+            raise
+        finally:
+            self._health.observe_tick((_time.perf_counter() - t0) * 1000.0)
+        try:
+            # Gate on the RUN OBJECT's own flag, not the runtime-global step
+            # counter (adversary P2-3: with a second thread executing effects
+            # on this Runtime — the entity-lane shape — a global before/after
+            # compare made 30% of parked-run probes serialize a parked run's
+            # full vars, and turned the gauge into last-writer-wins noise).
+            if state is not None and getattr(state, "_effect_executed_this_tick", False):
+                try:
+                    delattr(state, "_effect_executed_this_tick")
+                except Exception:
+                    pass
+                self._observe_vars_size(state)
+        except Exception:  # pragma: no cover - observability never fails the tick
+            pass
+        return state
+
+    # 0053 vars-size watch: warn once per run per process when serialized
+    # vars cross the threshold — the 1.5GB-RSS incident class made visible
+    # BEFORE it hurts. The gauge always updates; only the log is once-only.
+    VARS_BYTES_WARN_THRESHOLD = 8 * 1024 * 1024
+
+    def _observe_vars_size(self, run: RunState) -> None:
+        try:
+            size = len(dumps_compact(run.vars).encode("utf-8"))
+        except Exception:
+            return
+        self._health.set_gauge("vars_bytes_last", float(size))
+        if size >= self.VARS_BYTES_WARN_THRESHOLD:
+            self._health.increment("vars_bytes_threshold_crossings_total")
+            if run.run_id not in self._vars_warned_runs:
+                self._vars_warned_runs.add(run.run_id)
+                logger.warning(
+                    "run %s vars serialized to %.1f MB (threshold %.0f MB) — "
+                    "state growth will slow every save; check node traces / "
+                    "inbox / context.messages growth",
+                    run.run_id,
+                    size / 1e6,
+                    self.VARS_BYTES_WARN_THRESHOLD / 1e6,
+                )
+
+    def _tick_impl(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
         run = self.get_state(run_id)
         # Terminal runs never progress.
         if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
@@ -1663,6 +2036,25 @@ class Runtime:
         # committing any updates. If an external pause/cancel is observed, we stop without
         # overwriting it.
         def _abort_if_externally_controlled() -> Optional[RunState]:
+            # Fast path (backlog 0068): this probe runs at loop top AND before
+            # every save, and needs exactly two fields — on the SQLite backend
+            # the full-document load cost ~2.4ms per probe at multi-MB states.
+            # `probe_control` reads the column twin written in the same
+            # transaction as run_json (same truth, same freshness); when the
+            # probe answers "not controlled" the full load is skipped
+            # entirely. Controlled answers still full-load: the caller
+            # returns the RunState. Stores without the method (or pre-0068
+            # rows answering None) keep the historical load.
+            probe = getattr(self._run_store, "probe_control", None)
+            if callable(probe):
+                try:
+                    probed = probe(run_id)
+                except Exception:
+                    probed = None
+                if probed is not None:
+                    status_str, paused = probed
+                    if status_str != RunStatus.CANCELLED.value and not paused:
+                        return None
             try:
                 latest = self.get_state(run_id)
             except Exception:
@@ -1739,6 +2131,38 @@ class Runtime:
             effect = _ensure_tool_calls_have_runtime_ids(effect=effect, idempotency_key=idempotency_key)
             prior_result = self._find_prior_completed_result(run.run_id, idempotency_key)
             reused_prior_result = prior_result is not None
+            if reused_prior_result:
+                # Crash-replay collapse (at-most-once doing its job) — was
+                # visible only inside node traces before 0054.
+                self._health.increment("replay_reuses_total")
+
+            # ISSUANCE COUNTER advance (agent seat P0, 2026-07-13; TIMING
+            # hardened by the replay adversary P1, 2026-07-14): the key
+            # above hashed the CURRENT `_runtime.effect_seq`; the NEXT
+            # issuance must see it advanced so a byte-identical payload
+            # re-issued at the same node EXECUTES instead of replaying this
+            # step's stale result. The advance is applied IMMEDIATELY BEFORE
+            # each save that lands THIS step (completed/waiting/failed/
+            # absorbed), never at probe time: file-backed run stores alias
+            # loaded RunStates, so a concurrent control-plane save (pause,
+            # limits update) between probe and step-save used to serialize
+            # the advanced counter WITHOUT the step's result — after a
+            # restart the replay recomputed a DIFFERENT key, missed the
+            # completed record, and re-executed the effect. With the
+            # advance bound to the step's own saves, any out-of-band save
+            # carries the UN-advanced counter and crash-replay recomputes
+            # THIS key and reuses THIS result — exact at-most-once holds.
+            def _advance_effect_seq() -> None:
+                try:
+                    rt_ns = run.vars.setdefault("_runtime", {})
+                    if isinstance(rt_ns, dict):
+                        try:
+                            current_seq = int(rt_ns.get("effect_seq", 0))
+                        except (TypeError, ValueError):
+                            current_seq = 0
+                        rt_ns["effect_seq"] = current_seq + 1
+                except Exception:
+                    pass  # a malformed vars tree must not kill the tick; keys stay stable
 
             # Measure effect execution duration (wall-clock). This is used for
             # host-side UX (badges, throughput estimates) and is stored in the
@@ -1793,6 +2217,7 @@ class Runtime:
                 idempotency_key=idempotency_key,
                 reused_prior_result=reused_prior_result,
                 duration_ms=duration_ms,
+                artifact_store=self._artifact_store,
             )
 
             # Best-effort token observability: surface last-known input token usage in `_limits`.
@@ -1838,6 +2263,7 @@ class Runtime:
                 except Exception:
                     absorb = False
                 if absorb and plan.next_node:
+                    self._health.increment("absorbed_failures_total")
                     if effect.result_key:
                         _set_nested(
                             run.vars,
@@ -1855,6 +2281,7 @@ class Runtime:
                     )
                     run.current_node = plan.next_node
                     run.updated_at = utc_now_iso()
+                    _advance_effect_seq()
                     self._run_store.save(run)
                     continue
                 controlled = _abort_if_externally_controlled()
@@ -1863,6 +2290,7 @@ class Runtime:
                 run.status = RunStatus.FAILED
                 run.error = outcome.error or "unknown error"
                 run.updated_at = utc_now_iso()
+                _advance_effect_seq()
                 self._run_store.save(run)
                 self._append_terminal_status_event(run)
                 return run
@@ -1876,6 +2304,7 @@ class Runtime:
                 run.status = RunStatus.WAITING
                 run.waiting = outcome.wait
                 run.updated_at = utc_now_iso()
+                _advance_effect_seq()
                 self._run_store.save(run)
                 return run
 
@@ -1896,6 +2325,7 @@ class Runtime:
                 run.status = RunStatus.COMPLETED
                 run.output = {"success": True, "result": outcome.result}
                 run.updated_at = utc_now_iso()
+                _advance_effect_seq()
                 self._run_store.save(run)
                 self._append_terminal_status_event(run)
                 return run
@@ -1905,6 +2335,7 @@ class Runtime:
             _record_transition_predecessor(run, node_id=plan.node_id, next_node=plan.next_node)
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
+            _advance_effect_seq()
             self._run_store.save(run)
 
         return run
@@ -1951,6 +2382,13 @@ class Runtime:
                 warnings = []
                 runtime_ns["evidence_warnings"] = warnings
             warnings.append({"ts": utc_now_iso(), "node_id": str(node_id or ""), "error": str(e)})
+            # Bounded (0053): drop-oldest + counter, never unbounded growth.
+            if len(warnings) > EVIDENCE_WARNINGS_MAX:
+                overflow = len(warnings) - EVIDENCE_WARNINGS_MAX
+                del warnings[:overflow]
+                runtime_ns["evidence_warnings_dropped"] = (
+                    int(runtime_ns.get("evidence_warnings_dropped") or 0) + overflow
+                )
 
     def resume(
         self,
@@ -1966,6 +2404,7 @@ class Runtime:
             raise ValueError("Run is paused")
         if run.status != RunStatus.WAITING or run.waiting is None:
             raise ValueError("Run is not waiting")
+        self._health.increment("resumes_total")
 
         # Validate wait_key if provided
         if wait_key is not None and run.waiting.wait_key is not None and wait_key != run.waiting.wait_key:
@@ -2482,16 +2921,50 @@ class Runtime:
         self, run_id: str, idempotency_key: str
     ) -> Optional[Dict[str, Any]]:
         """Find a prior completed result for an idempotency key.
-        
-        Scans the ledger for a completed step with the same idempotency key.
-        Returns the result if found, None otherwise.
+
+        Routed through the ledger store's `find_completed_result` (backlog
+        0047): SQLite serves a point query on the idempotency index, JSONL a
+        write-through cache + bounded backward tail read — this probe runs
+        before EVERY effect step, and the previous full-ledger parse was the
+        measured scale cliff (O(ledger) per step, quadratic per run).
+
+        Correctness unchanged: keys are issuance-scoped (`_runtime.
+        effect_seq`), so a prior COMPLETED record for the current issuance
+        can only live at the ledger tail (crash-replay = effect completed,
+        the save after it did not land). Duck-typed host stores without the
+        method keep the historical inline scan.
         """
-        records = self._ledger_store.list(run_id)
-        for record in records:
-            if record.get("idempotency_key") == idempotency_key:
-                if record.get("status") == StepStatus.COMPLETED.value:
-                    return record.get("result")
-        return None
+        finder = getattr(self._ledger_store, "find_completed_result", None)
+        if callable(finder):
+            result = finder(run_id, idempotency_key)
+        else:
+            result = None
+            records = self._ledger_store.list(run_id)  # #FALLBACK: store predates 0047
+            for record in records:
+                if record.get("idempotency_key") == idempotency_key:
+                    if record.get("status") == StepStatus.COMPLETED.value:
+                        result = record.get("result")
+                        break
+        # Rehydrate `$slim` markers (0067-M): terminal records drop bytes the
+        # STARTED record already holds, so a crash-replayed result must be
+        # rebuilt before it flows into vars — otherwise the replayed run
+        # diverges from the live path. TARGETED to the two metadata paths
+        # the runtime itself dedups (adversary P2-2: a tool result echoing a
+        # slimmed record carries marker-shaped DATA, and a whole-tree
+        # resolve would corrupt the echo — replayed vars must stay
+        # byte-identical, markers-as-data included). Hit-path only
+        # (crash-replay), so the full list() here is rare by construction.
+        if result is not None and result_metadata_has_markers(result):
+            try:
+                index = build_started_payload_index(self._ledger_store.list(run_id))
+                result = resolve_result_metadata_markers(result, index)
+            except Exception:  # pragma: no cover - resolution must not block replay
+                logger.warning(
+                    "#FALLBACK: slim-marker rehydration failed for run %s; reusing slimmed result",
+                    run_id,
+                    exc_info=True,
+                )
+        return result
 
     def _execute_effect_with_retry(
         self,
@@ -2511,8 +2984,17 @@ class Runtime:
 
         max_attempts = self._effect_policy.max_attempts(effect)
         last_error: Optional[str] = None
+        self._health.increment("effect_steps_total")
+        try:
+            # Run-object flag for the tick wrapper's vars-size gauge gate
+            # (thread-correct where a global counter compare is not).
+            setattr(run, "_effect_executed_this_tick", True)
+        except Exception:  # pragma: no cover
+            pass
 
         for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                self._health.increment("effect_retries_total")
             # Record attempt start
             rec = StepRecord.start(
                 run=run,
@@ -2529,6 +3011,13 @@ class Runtime:
             )
             if effect_for_attempt is not effect:
                 rec.effect = _step_record_effect_payload(effect_for_attempt)
+            # Byte anchor for terminal slimming (0067-M): digested at the
+            # exact moment STARTED persists, so a marker is only ever minted
+            # for bytes the STARTED record provably holds.
+            try:
+                started_digests = capture_started_payload_digests(rec.effect)
+            except Exception:  # pragma: no cover - capture must never block execution
+                started_digests = None
             self._ledger_store.append(rec)
             effect_for_execution = self._effect_with_runtime_progress_callback(
                 effect_for_attempt,
@@ -2547,22 +3036,28 @@ class Runtime:
 
             if outcome.status == "completed":
                 rec.finish_success(outcome.result)
+                _slim_terminal_record(rec, started_digests=started_digests)
                 self._ledger_store.append(rec)
                 return outcome
 
             if outcome.status == "waiting":
                 rec.finish_waiting(outcome.wait)
+                _slim_terminal_record(rec, started_digests=started_digests)
                 self._ledger_store.append(rec)
+                self._health.increment("waits_entered_total")
                 return outcome
 
             # Failed - record and maybe retry
             last_error = outcome.error or "unknown error"
             rec.finish_failure(last_error)
+            _slim_terminal_record(rec, started_digests=started_digests)
             self._ledger_store.append(rec)
 
             # Deterministic client errors (invalid request/auth/model-not-found) fail the same
             # way every time; retrying them only adds latency and cost before the same failure.
             if getattr(outcome, "retryable", True) is False:
+                self._health.increment("effect_failures_total")
+                self._health.record_error("effect", str(last_error or "unknown error"))
                 return EffectOutcome.failed(last_error, retryable=False)
 
             if attempt < max_attempts:
@@ -2574,6 +3069,8 @@ class Runtime:
                     time.sleep(backoff)
 
         # All attempts exhausted
+        self._health.increment("effect_failures_total")
+        self._health.record_error("effect", str(last_error or "unknown error"))
         return EffectOutcome.failed(
             f"Effect failed after {max_attempts} attempts: {last_error}"
         )

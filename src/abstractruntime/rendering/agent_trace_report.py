@@ -212,6 +212,16 @@ def render_agent_trace_markdown(scratchpad: Any, *, config: Optional[AgentTraceM
         if effect_type_s == "tool_calls":
             payload = _as_dict(effect.get("payload")) or {}
             calls = payload.get("tool_calls")
+            # Trace-bounded entries (0053) may hold an `$artifact` ref where
+            # the calls subtree was offloaded — say so instead of rendering
+            # a phantom `Tool: None` with empty arguments.
+            if isinstance(calls, dict) and "$artifact" in calls:
+                lines.append(
+                    f"- **tool_calls**: _offloaded to artifact `{calls.get('$artifact')}` "
+                    "(trace entry exceeded the inline cap; the ledger STARTED record holds the full calls)_"
+                )
+                lines.append("")
+                continue
             calls_list: list[Any]
             if isinstance(calls, list):
                 calls_list = calls
@@ -229,7 +239,7 @@ def render_agent_trace_markdown(scratchpad: Any, *, config: Optional[AgentTraceM
             lines.append("")
             for call_any in calls_list:
                 call = _as_dict(call_any)
-                if not call:
+                if not call or "$artifact" in call:
                     continue
                 call_id = call.get("call_id")
                 call_id_s = call_id if isinstance(call_id, str) else ""

@@ -379,6 +379,177 @@ def agora_send_dm(
     return result if isinstance(result, dict) else {"raw": result}
 
 
+# ---------------------------------------------------------------------------
+# Channel shared filesystem + shared store (swarm-seat promotion step 3,
+# commons c1669, operator-approved 2026-07-13 21:41): the collaboration
+# surfaces the fleet scripts hand-rolled, now first-class beside the shipped
+# messaging seven. Reads are safe auto-approve; WRITES are write-classed
+# (approval-gated) — a shared artifact/decision write is a mutation every
+# channel member sees. Same per-agent identity seam (`_agora_agent`).
+# ---------------------------------------------------------------------------
+
+
+def _fs_path(path: str) -> str:
+    p = str(path or "").strip().lstrip("/")
+    if not p:
+        raise ValueError("path is required (e.g. 'plans/design.md')")
+    return p
+
+
+@tool(
+    name="channel_fs_write",
+    description=(
+        "Create or update a file in a channel's SHARED filesystem (visible to every "
+        "member). Always set description: one line saying what this file IS."
+    ),
+    when_to_use=(
+        "To publish an artifact the channel should build on (plans, reports, docs); "
+        "decisions-as-state belong in the store. expect_version = compare-and-swap "
+        "(0 = must not exist); on conflict re-read and merge."
+    ),
+    hide_args=["_agora_agent"],
+)
+def channel_fs_write(
+    *,
+    channel: str,
+    path: str,
+    content: str,
+    description: str = "",
+    mime: str = "text/markdown",
+    expect_version: Optional[int] = None,
+    _agora_agent: str = "",
+) -> Dict[str, Any]:
+    name = _clean_str(channel, field="channel")
+    if not name:
+        raise ValueError("channel is required")
+    p = _fs_path(path)
+    payload: Dict[str, Any] = {
+        "content": str(content if content is not None else ""),
+        "mime": str(mime or "text/markdown").strip() or "text/markdown",
+    }
+    desc = str(description or "").strip()
+    if desc:
+        payload["description"] = desc
+    if expect_version is not None:
+        payload["expect_version"] = int(expect_version)
+    result = _request(
+        "PUT",
+        f"/channels/{urllib.parse.quote(name, safe='')}/fs/"
+        + urllib.parse.quote(p, safe="/"),
+        payload=payload,
+        alias=_agora_agent,
+    )
+    return result if isinstance(result, dict) else {"ok": True, "path": p}
+
+
+@tool(
+    name="channel_fs_read",
+    description=(
+        "Read a file from a channel's SHARED filesystem (returns content + version; "
+        "pass version to read an archived revision)."
+    ),
+    when_to_use="To read a teammate's published artifact before building on it.",
+    hide_args=["_agora_agent"],
+)
+def channel_fs_read(
+    *, channel: str, path: str, version: Optional[int] = None, _agora_agent: str = ""
+) -> Dict[str, Any]:
+    name = _clean_str(channel, field="channel")
+    if not name:
+        raise ValueError("channel is required")
+    p = _fs_path(path)
+    result = _request(
+        "GET",
+        f"/channels/{urllib.parse.quote(name, safe='')}/fs/"
+        + urllib.parse.quote(p, safe="/"),
+        query={"version": int(version)} if version is not None else None,
+        alias=_agora_agent,
+    )
+    return result if isinstance(result, dict) else {"path": p, "content": result}
+
+
+@tool(
+    name="channel_fs_list",
+    description="List files (paths + versions) in a channel's SHARED filesystem.",
+    when_to_use="To see what teammates have published before reading or writing.",
+    hide_args=["_agora_agent"],
+)
+def channel_fs_list(
+    *, channel: str, prefix: str = "", _agora_agent: str = ""
+) -> List[Dict[str, Any]]:
+    name = _clean_str(channel, field="channel")
+    if not name:
+        raise ValueError("channel is required")
+    clean_prefix = str(prefix or "").strip()
+    result = _request(
+        "GET",
+        f"/channels/{urllib.parse.quote(name, safe='')}/fs",
+        query={"prefix": clean_prefix} if clean_prefix else None,
+        alias=_agora_agent,
+    )
+    return result if isinstance(result, list) else []
+
+
+@tool(
+    name="channel_store_set",
+    description=(
+        "Set a key in a channel's shared STORE (coordination state: decisions, claims). "
+        "value is a string; JSON-encode structured values."
+    ),
+    when_to_use=(
+        "To record a shared decision ('decision:<slug>') or claim a work item "
+        "('claim:<item>'). Prose belongs in messages/fs. expect_version = "
+        "compare-and-swap (0 = must not exist); on conflict re-read."
+    ),
+    hide_args=["_agora_agent"],
+)
+def channel_store_set(
+    *,
+    channel: str,
+    key: str,
+    value: str,
+    expect_version: Optional[int] = None,
+    _agora_agent: str = "",
+) -> Dict[str, Any]:
+    name = _clean_str(channel, field="channel")
+    k = str(key or "").strip()
+    if not name or not k:
+        raise ValueError("channel and key are required")
+    payload: Dict[str, Any] = {"value": str(value if value is not None else "")}
+    if expect_version is not None:
+        payload["expect_version"] = int(expect_version)
+    result = _request(
+        "PUT",
+        f"/channels/{urllib.parse.quote(name, safe='')}/store/"
+        + urllib.parse.quote(k, safe=""),
+        payload=payload,
+        alias=_agora_agent,
+    )
+    return result if isinstance(result, dict) else {"ok": True, "key": k}
+
+
+@tool(
+    name="channel_store_get",
+    description="Read a key from a channel's shared STORE (returns value + version).",
+    when_to_use="To read a shared decision or claim before acting on or changing it.",
+    hide_args=["_agora_agent"],
+)
+def channel_store_get(
+    *, channel: str, key: str, _agora_agent: str = ""
+) -> Dict[str, Any]:
+    name = _clean_str(channel, field="channel")
+    k = str(key or "").strip()
+    if not name or not k:
+        raise ValueError("channel and key are required")
+    result = _request(
+        "GET",
+        f"/channels/{urllib.parse.quote(name, safe='')}/store/"
+        + urllib.parse.quote(k, safe=""),
+        alias=_agora_agent,
+    )
+    return result if isinstance(result, dict) else {"key": k, "value": result}
+
+
 AGORA_TOOLS: List[Any] = [
     agora_whoami,
     agora_check_inbox,
@@ -387,6 +558,11 @@ AGORA_TOOLS: List[Any] = [
     agora_read_message,
     agora_post_message,
     agora_send_dm,
+    channel_fs_write,
+    channel_fs_read,
+    channel_fs_list,
+    channel_store_set,
+    channel_store_get,
 ]
 
 AGORA_TOOL_NAMES: List[str] = [t._tool_definition.name for t in AGORA_TOOLS]

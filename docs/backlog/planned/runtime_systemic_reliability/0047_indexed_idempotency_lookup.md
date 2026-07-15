@@ -68,6 +68,19 @@ Both backends + resume call sites + migration + benchmark evidence.
 ## Dependencies and related tasks
 - 0045 (harness re-runs its shapes over the indexed path), 0053 (growth
   audit cites the same cliff), completed 013 (retries/idempotency design).
+- **0067 (durable-write discipline) — MUST SHIP TOGETHER.** 2026-07-13
+  performance-adversary quantification sharpened this item: the scan cost is
+  BYTE-dominated, not count-dominated (10k SMALL records parse in ~15 ms, but
+  120 LLM records take ~44 ms; extrapolates to ~740 ms/step after ~1,000
+  fat effects at a 32 MB ledger). So this item's proposed bounded reverse-tail
+  window still pays fat-record parse INSIDE the window — 0067's record
+  slimming (COMPLETED refs STARTED's bytes; strip the duplicated
+  `_provider_request.messages`) is a REQUIRED companion, not optional. The
+  index kills count-scaling; 0067 kills byte-scaling; either alone leaves
+  half the cliff standing.
+- Corollary caught in the same pass (fold here or into 0068): the SAME
+  `_append_progress_event` full-ledger `len(list())` per progress callback
+  (core/runtime.py:1582) should route to `count()`.
 
 ## Expected outcomes
 Step cost flat vs ledger size on both backends; full suite green with zero

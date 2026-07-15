@@ -622,6 +622,14 @@ def build_visit_workflow(
 
         sheet = list(visit.get("sheet") or [])
         stage = str(refl.get("stage") or "summary")
+        # RUN-SCOPED reflection ids (the chat-lane adversary's live-verified
+        # P1, same class here: APPRAISE/DIARY event-ids derive from turn_id
+        # with NO run component, so constant ids collided ACROSS VISITS and
+        # a second visit's identical genuine feeling/entry was silently
+        # swallowed by the at-least-once dedup). run_id is stable within a
+        # run — crash-replay still re-derives identically — and unique
+        # across runs, which is exactly the dedup boundary wanted.
+        rid_scope = str(run.run_id)
 
         if stage == "summary":
             refl["stage"] = "interest"
@@ -647,7 +655,7 @@ def build_visit_workflow(
                         }],
                         "scope": "life",
                         "owner_id": home.entity_id,
-                        "turn_id": "t-reflect",
+                        "turn_id": f"t-reflect-{rid_scope}",
                         "_absorb_failure": True,
                     },
                     result_key="_reflect.summary_out",
@@ -687,7 +695,7 @@ def build_visit_workflow(
                         }],
                         "scope": "self",
                         "owner_id": home.entity_id,
-                        "turn_id": f"t-reflect-interest-{i}",
+                        "turn_id": f"t-reflect-interest-{rid_scope}-{i}",
                         "_absorb_failure": True,
                     },
                     result_key="_reflect.interest_out",
@@ -715,7 +723,7 @@ def build_visit_workflow(
                         "kind": e.get("kind"),
                         "visibility": e.get("visibility"),
                         "resolves": e.get("resolves"),
-                        "turn_id": f"t-reflect-diary-{i}",
+                        "turn_id": f"t-reflect-diary-{rid_scope}-{i}",
                         "anchor_record_ids": session_graph_ids,
                         "anchor_graph_ids": session_graph_ids,
                         "_absorb_failure": True,
@@ -761,7 +769,7 @@ def build_visit_workflow(
                     "reason": f.get("reason"),
                     "scar": bool(f.get("scar")),
                     "bond": bool(f.get("bond")),
-                    "turn_id": f"t-reflect-feel-{i}",
+                    "turn_id": f"t-reflect-feel-{rid_scope}-{i}",
                     "scope": "life" if target.startswith("ex:") else "self",
                     "owner_id": home.entity_id,
                     "actor": "entity-reflection",

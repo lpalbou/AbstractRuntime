@@ -73,6 +73,7 @@ class InMemoryRunStore(RunStore):
         session_id: Optional[str] = None,
         root_only: bool = False,
         limit: int = 100,
+        oldest_first: bool = False,
     ) -> List[Dict[str, Any]]:
         lim = max(1, int(limit or 100))
         out: List[Dict[str, Any]] = []
@@ -104,7 +105,7 @@ class InMemoryRunStore(RunStore):
                 }
             )
 
-        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         return out[:lim]
 
     def list_due_wait_until(

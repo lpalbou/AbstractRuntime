@@ -118,12 +118,21 @@ def _pid_start_time(pid: Any) -> Optional[str]:
     mismatch = recycled pid = corpse, regardless of phase. None on any
     failure (no ps, no such pid): callers degrade to pid-alive-only plus
     the day-staleness belt, never block on the token."""
+    import os
     import subprocess
 
     try:
         out = subprocess.run(
             ["ps", "-p", str(int(pid)), "-o", "lstart="],
             capture_output=True, text=True, timeout=5,
+            # PINNED ENV (whole-package adversary P1, reproduced live: a
+            # writer under LC_ALL=C and a reader under fr_FR.UTF-8 render
+            # DIFFERENT lstart strings for the same process — the token
+            # then reads a live loop as a corpse, and the one-summon /
+            # spawn checks pass over an open day: a second loop over one
+            # home). Writer and reader must render identically regardless
+            # of who launched them (launchd vs terminal vs gateway).
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
         )
         text = (out.stdout or "").strip()
         return text or None
@@ -610,7 +619,25 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
 
     killed = False
     escalated = False
+    # SIGNAL ONLY OUR OWN INCARNATION (whole-package adversary P0-class,
+    # 2026-07-13: a clean-stop file whose pid the OS recycled drew a
+    # SIGKILL at an innocent process — the token that detects exactly this
+    # was computed one line above and ignored). The predicate is IDENTITY,
+    # not the folded `running` (which also folds the staleness belt — a
+    # WEDGED same-incarnation loop reads not-running yet is exactly what an
+    # emergency freeze must still kill): kill when the pid is alive AND its
+    # start-time token matches the file's stamp; unstamped files (older
+    # writers) keep the legacy phase-gated behavior, so a clean "stopped"
+    # file never draws a signal either way.
+    stamped_token = str(status.get("pid_started_at") or "")
     if pid > 0 and _pid_alive(pid):
+        if stamped_token:
+            same_incarnation = _pid_start_time(pid) == stamped_token
+        else:
+            same_incarnation = status.get("phase") in ("day", "between")
+    else:
+        same_incarnation = False
+    if same_incarnation:
         try:
             os.kill(pid, signal.SIGTERM)
         except (OSError, ProcessLookupError):
@@ -718,10 +745,16 @@ def spawn_loop_process(
     tick_seconds: float = 20.0,
     ticks_per_day: int = 8,
     rest_minutes: float = 30.0,
-    # 36 seats (maintainer, 2026-07-09): at 65536 the 12% token budget (7864)
-    # still seats 36 rich digests (7200) — seats fill, tokens hold.
+    # 36 seats (maintainer, 2026-07-09): the 12% token budget still seats 36
+    # rich digests — seats fill, tokens hold.
     shelf_size: int = 36,
-    context_window: int = 65536,
+    # ~40k DEFAULT (maintainer ruling 2026-07-13 15:20: "we want to optimize
+    # the context of an entity so it can run fast, which means up to 40k
+    # tokens roughly. this is NOT a hardcap, more like an optimization when
+    # possible"). The default is the OPTIMIZATION; an explicit operator
+    # value always wins in either direction (floor 20k refuses loudly —
+    # never a silent cap, per the no-silent-fallback ADR discipline).
+    context_window: int = 40960,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -1026,7 +1059,13 @@ def write_entity_state(
     if mode:
         payload["mode"] = str(mode).strip().lower()
     path = Path(home_dir) / "state"
-    path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+    # ATOMIC (gateway whole-package audit P2-6, 2026-07-13, security-adjacent:
+    # the reader fails OPEN — read_entity_state treats an unreadable file as
+    # awake — so a torn write could transiently show a PAUSED entity as awake
+    # to every gate that polls this file). Same helper the grant writer uses.
+    from ..utils.atomic_files import atomic_write_text
+
+    atomic_write_text(path, json.dumps(payload, indent=1) + "\n")
     try:
         with (Path(home_dir) / "state_history.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload) + "\n")
@@ -1228,8 +1267,19 @@ class LifeLoop:
 
         The consolidation pass is a HOME WRITER (plan item 1): it runs under
         the lease (holder="dream"). A held home skips the pass honestly —
-        the night is quiet, the pass is idempotent and runs next sleep."""
+        the night is quiet, the pass is idempotent and runs next sleep.
+
+        KILL-SWITCH GUARD (laurent 16:12, c1530: paused IS the kill switch
+        — "if a dream can run under paused today, that is now a bug"): a
+        paused entity opens NO sleep window — and critically, the self-sleep
+        state write below must never CLOBBER an operator's freeze (the
+        no-entity-unset property; this write is entity-reachable through
+        the rest election)."""
         if self.state_home is not None:
+            current = read_entity_state(self.state_home)
+            if current.get("state") == "paused":
+                self.out("(paused by operator - no sleep window opens under a freeze)")
+                return None
             try:
                 write_entity_state(
                     self.state_home, "asleep",
@@ -2007,12 +2057,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--embedding-base-url", default="http://127.0.0.1:1234/v1",
         help="embeddings endpoint (stays local even when the mind runs remote)",
     )
-    parser.add_argument("--context-window", type=int, default=65536)
+    parser.add_argument(
+        "--context-window", type=int, default=40960,
+        help="declared context window. Default ~40k (maintainer 2026-07-13: "
+        "'optimize the context of an entity so it can run fast... up to 40k "
+        "tokens roughly - NOT a hardcap'); any explicit value wins in either "
+        "direction (the 20k entity floor refuses loudly below it)",
+    )
     parser.add_argument(
         "--shelf-size", type=int, default=36,
         help="recall shelf seats (maintainer 2026-07-09: widened to 36 — 'it "
-        "needs to retrieve more memories to function'; at 65536 the token "
-        "budget still seats 36 rich digests)",
+        "needs to retrieve more memories to function'; the token budget "
+        "still seats 36 rich digests at the default window)",
     )
     parser.add_argument("--tick-seconds", type=float, default=20.0)
     parser.add_argument("--ticks-per-day", type=int, default=8)
@@ -2078,6 +2134,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if any(grant_flags):
         import getpass
+        import math
         from datetime import datetime, timedelta, timezone
 
         principal = f"person:{getpass.getuser()}"
@@ -2085,17 +2142,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.revoke_personal:
                 grant = write_personal_grant(home_dir, mode="disabled")
             elif args.grant_personal_hours is not None:
-                if args.grant_personal_hours <= 0:
-                    print("--grant-personal-hours must be > 0")
+                hours = float(args.grant_personal_hours)
+                # Finite and positive (adversary finding 10: inf/nan pass a
+                # bare <= 0 check and OverflowError out of timedelta with a
+                # raw traceback — on the consent-arming CLI, of all places).
+                if not math.isfinite(hours) or hours <= 0:
+                    print("--grant-personal-hours must be a finite number > 0")
                     return 2
-                expiry = datetime.now(timezone.utc) + timedelta(hours=args.grant_personal_hours)
+                expiry = datetime.now(timezone.utc) + timedelta(hours=hours)
                 grant = write_personal_grant(
                     home_dir, mode="timer", granted_by=principal,
                     expires_at=expiry.isoformat(),
                 )
             else:
                 grant = write_personal_grant(home_dir, mode="until_revoked", granted_by=principal)
-        except ValueError as e:
+        except (ValueError, OverflowError) as e:
             print(str(e))
             return 2
         detail = f" until {grant['expires_at']}" if grant.get("expires_at") else ""
@@ -2118,6 +2179,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     if start_refusal is not None:
         print(f"no personal time: {start_refusal}")
         return 3
+
+    # CONTEXT FLOOR at the start door (production drive find, 2026-07-13:
+    # the 20k floor ruling is enforced deep in the summon path, so a small
+    # --context-window crashed the CLI with a raw traceback AFTER the day
+    # phase opened — correct refusal, operator-hostile surface). Check what
+    # we can see up front; version skew (no floor constant) skips the
+    # pre-check and the summon-path enforcement still stands.
+    try:
+        from abstractmemory import ENTITY_CONTEXT_FLOOR
+    except ImportError:
+        ENTITY_CONTEXT_FLOOR = None
+    if ENTITY_CONTEXT_FLOOR is not None and int(args.context_window) < int(ENTITY_CONTEXT_FLOOR):
+        print(
+            f"context window {args.context_window} is below the entity floor "
+            f"({ENTITY_CONTEXT_FLOOR}): the maintainer ruled summoned-entity sessions "
+            "never run below 20k - raise --context-window."
+        )
+        return 2
 
     # Resolve the mind substrate before anything else changes state: flags >
     # <home>/substrate.yaml > operator env > loud refusal (04:26 no-fallback

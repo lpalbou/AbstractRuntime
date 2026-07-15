@@ -14,11 +14,16 @@ import os
 from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .artifacts import ArtifactStore, artifact_ref, is_artifact_ref
+from .artifacts import ArtifactStore, artifact_ref, get_artifact_id, is_artifact_ref
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, RunStatus, StepRecord
 
 DEFAULT_MAX_INLINE_BYTES = 256 * 1024
+
+# Tags stamped by the ledger offloader; read-side rehydration resolves ONLY
+# refs carrying these sources. Handler-authored refs (media handoff items,
+# deliberate artifact currency) are the caller's contract and stay refs.
+_LEDGER_OFFLOAD_SOURCES = frozenset({"ledger_effect_offload", "ledger_result_offload"})
 
 
 def _default_max_inline_bytes() -> int:
@@ -341,6 +346,22 @@ class OffloadingRunStore(RunStore):
     def load(self, run_id: str) -> Optional[RunState]:
         return self._inner.load(run_id)
 
+    def probe_control(self, run_id: str):
+        """Pass through the cheap `(status, paused)` control probe (0068).
+
+        This wrapper forwards methods EXPLICITLY (no `__getattr__`), so
+        without this passthrough the gateway's production wiring —
+        OffloadingRunStore(SqliteRunStore) — silently hid the fast path and
+        every control check kept the full-document load (2026-07-14
+        adversary P1-4: ~22 extra multi-MB parses per 10-step tick).
+        Offloading is irrelevant to a two-column read. Inner stores without
+        the probe answer None, which keeps the runtime's full-load fallback.
+        """
+        fn = getattr(self._inner, "probe_control", None)
+        if not callable(fn):
+            return None
+        return fn(run_id)
+
     def delete(self, run_id: str) -> bool:
         fn = getattr(self._inner, "delete", None)
         if not callable(fn):
@@ -355,11 +376,16 @@ class OffloadingRunStore(RunStore):
             raise NotImplementedError("Inner RunStore does not support list_runs")
         return fn(status=status, wait_reason=wait_reason, workflow_id=workflow_id, limit=limit)
 
-    def list_run_index(self, *, status=None, workflow_id=None, session_id=None, root_only: bool = False, limit: int = 100):  # type: ignore[override]
+    def list_run_index(self, *, status=None, workflow_id=None, session_id=None, root_only: bool = False, limit: int = 100, oldest_first: bool = False):  # type: ignore[override]
         fn = getattr(self._inner, "list_run_index", None)
         if not callable(fn):
             raise NotImplementedError("Inner RunStore does not support list_run_index")
-        return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit)
+        try:
+            return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit, oldest_first=oldest_first)
+        except TypeError:
+            if oldest_first:
+                raise  # inner store predates the kwarg: honest refusal beats a silently wrong order
+            return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit)
 
     def list_due_wait_until(self, *, now_iso: str, limit: int = 100):  # type: ignore[override]
         fn = getattr(self._inner, "list_due_wait_until", None)
@@ -396,8 +422,92 @@ class OffloadingLedgerStore(LedgerStore):
         persisted = _offload_step_record(record, artifact_store=self._artifact_store, max_inline_bytes=self._max_inline_bytes)
         self._inner.append(persisted)
 
+    def _rehydrate_tree(self, value: Any, *, _depth: int = 0) -> Any:
+        """Resolve refs THIS offloader created back into their values.
+
+        Read-side half of the wiring contract (backlog 0067-M): consumers of
+        `list()` / `find_completed_result()` see rehydrated records, so the
+        offloading stays a durable-bytes discipline instead of a read-shape
+        change. Only refs whose artifact tags carry the ledger-offload
+        `source` are resolved — handler-authored refs (media handoff,
+        deliberate artifact currency) pass through untouched, and any
+        resolution failure keeps the ref in place (never a silent hole).
+        """
+        if _depth > 16:
+            return value
+        if is_artifact_ref(value):
+            try:
+                meta = self._artifact_store.get_metadata(get_artifact_id(value))
+                tags = dict(getattr(meta, "tags", None) or {}) if meta is not None else {}
+                if str(tags.get("source") or "") not in _LEDGER_OFFLOAD_SOURCES:
+                    return value
+                artifact = self._artifact_store.load(get_artifact_id(value))
+                if artifact is None:
+                    return value
+                kind = str(tags.get("kind") or "")
+                if kind == "json":
+                    # Offloading walks leaves first, so a stored subtree can
+                    # itself contain deeper offload refs — resolve those too.
+                    return self._rehydrate_tree(artifact.as_json(), _depth=_depth + 1)
+                if kind == "text":
+                    return artifact.as_text()
+                # kind == "bytes": raw bytes are not JSON-representable inline;
+                # the ref stays the honest durable currency.
+                return value
+            except Exception:
+                return value
+        if isinstance(value, dict):
+            out: Optional[Dict[str, Any]] = None
+            for k, v in value.items():
+                nv = self._rehydrate_tree(v, _depth=_depth + 1)
+                if nv is not v:
+                    if out is None:
+                        out = dict(value)
+                    out[k] = nv
+            return out if out is not None else value
+        if isinstance(value, list):
+            out_list: Optional[List[Any]] = None
+            for i, v in enumerate(value):
+                nv = self._rehydrate_tree(v, _depth=_depth + 1)
+                if nv is not v:
+                    if out_list is None:
+                        out_list = list(value)
+                    out_list[i] = nv
+            return out_list if out_list is not None else value
+        return value
+
     def list(self, run_id: str) -> List[Dict[str, Any]]:
+        """Plain delegation — refs stay refs on the read surface.
+
+        DELIBERATE (2026-07-14 adversary P1-2/P2-1): rehydrating list()
+        re-loaded every offloaded artifact on EVERY read — measured 113x
+        time / 593x bytes per read on offload-heavy ledgers, on exactly the
+        surfaces hosts poll (history endpoints, SSE catch-up, run
+        summaries); it also made chain verification over a rehydrating
+        read report false tamper alarms (hashes cover post-offload bytes).
+        Consumers already speak `$artifact` (the pre-wiring gateway shape).
+        Rehydration lives ONLY on `find_completed_result` — the crash-replay
+        path where byte-identity with the live handler result is a
+        correctness requirement, not a convenience.
+        """
         return self._inner.list(run_id)
+
+    def find_completed_result(
+        self, run_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Delegate to the inner store's (possibly indexed) lookup (0047),
+        then rehydrate offloaded values so a crash-replayed result is
+        byte-identical to what the live handler returned (misses — the
+        common per-step case — pay nothing)."""
+        fn = getattr(self._inner, "find_completed_result", None)
+        if callable(fn):
+            result = fn(run_id, idempotency_key)
+        else:
+            result = super().find_completed_result(run_id, idempotency_key)
+        if result is None:
+            return None
+        rehydrated = self._rehydrate_tree(result)
+        return rehydrated if isinstance(rehydrated, dict) else result
 
     def delete(self, run_id: str) -> int:
         fn = getattr(self._inner, "delete", None)

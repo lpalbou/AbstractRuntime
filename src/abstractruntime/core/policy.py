@@ -63,6 +63,22 @@ def _normalize_tool_call_for_idempotency(value: Any) -> Any:
     return out
 
 
+def _effect_seq(run: RunState) -> int:
+    """The run's per-effect issuance counter (see idempotency_key below).
+
+    Lives in `_runtime.effect_seq`, advanced by the tick loop AFTER key
+    computation and persisted with the step's own save — so a crash-replay
+    (vars rolled back to the last save) recomputes the SAME key and reuses
+    the completed result, while a GENUINE later issuance (counter advanced
+    by the intervening save) gets a fresh key. Missing/malformed reads as 0
+    (pre-upgrade runs and hand-built states)."""
+    try:
+        rt = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        return int(rt.get("effect_seq", 0)) if isinstance(rt, dict) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_effect_payload_for_idempotency(effect: Effect) -> Dict[str, Any]:
     if not isinstance(effect.payload, dict):
         return {}
@@ -169,15 +185,26 @@ class DefaultEffectPolicy:
     def idempotency_key(
         self, *, run: RunState, node_id: str, effect: Effect
     ) -> str:
-        """Compute idempotency key from run_id, node_id, and effect.
-        
+        """Compute idempotency key from run_id, node_id, effect, and the
+        run's effect-issuance counter.
+
         The key is a hash of:
         - run_id: Unique to this run
         - node_id: Current node
         - effect type and payload: What we're doing
-        
-        This ensures the same effect at the same point in the same run
-        gets the same key, enabling deduplication on restart.
+        - effect_seq: WHICH issuance this is (agent seat P0, 2026-07-13:
+          without it, a byte-identical TOOL_CALLS batch re-issued at the
+          same node — re-reading a file after editing it, re-running the
+          test suite after a fix, any loop with repeated payloads — matched
+          the FIRST completed record in the whole-run ledger scan and
+          silently REPLAYED the stale result instead of executing; the
+          agent then concluded its edit didn't apply and looped).
+
+        The counter advances in the SAME save that lands a step (tick
+        loop), so a crash-replay recomputes the SAME key and reuses the
+        completed result (exact at-most-once), while a genuine later
+        issuance gets a fresh key. Same key across attempts of one
+        issuance (retries share it, unchanged).
         """
         normalized_payload = _normalize_effect_payload_for_idempotency(effect)
         key_data = {
@@ -185,6 +212,7 @@ class DefaultEffectPolicy:
             "node_id": node_id,
             "effect_type": effect.type.value,
             "effect_payload": normalized_payload,
+            "effect_seq": _effect_seq(run),
         }
         key_json = json.dumps(key_data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(key_json.encode()).hexdigest()[:32]
@@ -220,11 +248,13 @@ class NoRetryPolicy(DefaultEffectPolicy):
 
 
 def compute_idempotency_key(
-    *, run_id: str, node_id: str, effect: Effect
+    *, run_id: str, node_id: str, effect: Effect, effect_seq: int = 0
 ) -> str:
     """Standalone function to compute idempotency key.
-    
-    Useful when you need to compute a key without a full policy.
+
+    Useful when you need to compute a key without a full policy. Callers
+    with a live RunState should pass its `_runtime.effect_seq` as
+    `effect_seq` to match the policy's keys (see DefaultEffectPolicy).
     """
     normalized_payload = _normalize_effect_payload_for_idempotency(effect)
     key_data = {
@@ -232,6 +262,7 @@ def compute_idempotency_key(
         "node_id": node_id,
         "effect_type": effect.type.value,
         "effect_payload": normalized_payload,
+        "effect_seq": int(effect_seq or 0),
     }
     key_json = json.dumps(key_data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(key_json.encode()).hexdigest()[:32]

@@ -13,12 +13,12 @@ import logging
 import json
 import threading
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .base import LedgerStore, RunStore
-from ..core.models import RunState, StepRecord, RunStatus, WaitState, WaitReason
+from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
+from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
+from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,9 @@ class JsonFileRunStore(RunStore):
     load would tax every tick in proportion to vars size (history bundles,
     event inboxes), and a frozen view cannot distinguish the owner from
     bystanders — the single-writer rule is the only contract that keeps the
-    hot path allocation-free AND makes `json.dump(asdict(run))` in `save()`
-    safe (no concurrent mutation mid-serialization can exist under it).
+    hot path allocation-free AND makes the by-reference serialization in
+    `save()` safe (no concurrent mutation mid-serialization can exist under
+    it; see storage/serialize.py, backlog 0067).
     Cross-PROCESS readers are already safe: the cache is validated by file
     mtime and re-reads on any external write.
     """
@@ -145,7 +146,12 @@ class JsonFileRunStore(RunStore):
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
         try:
             with tmp.open("w", encoding="utf-8") as f:
-                json.dump(asdict(run), f, ensure_ascii=False, indent=2)
+                # Compact + by-reference serialization (backlog 0067): this is
+                # the most frequent durable write in the system (~5 per agent
+                # cycle); `indent=2` cost +72% CPU and ~35% bytes, and
+                # `asdict` deep-copied the whole vars tree for nothing under
+                # the single-writer contract documented on this class.
+                f.write(dumps_compact(runstate_to_dict(run)))
             tmp.replace(p)
         finally:
             # Best-effort cleanup if replace() failed.
@@ -332,6 +338,7 @@ class JsonFileRunStore(RunStore):
         session_id: Optional[str] = None,
         root_only: bool = False,
         limit: int = 100,
+        oldest_first: bool = False,
     ) -> List[Dict[str, Any]]:
         """List lightweight run index rows without depending on full RunState consumers."""
         lim = max(1, int(limit or 100))
@@ -343,7 +350,9 @@ class JsonFileRunStore(RunStore):
             except Exception:
                 continue
             ranked.append((mtime_ns, p))
-        ranked.sort(key=lambda x: x[0], reverse=True)
+        # mtime ranking approximates updated_at; oldest_first inverts so a
+        # stall query's window keeps the OLDEST waits (0054 adversary P1-1).
+        ranked.sort(key=lambda x: x[0], reverse=not oldest_first)
 
         out: List[Dict[str, Any]] = []
         sid = str(session_id or "").strip() if session_id is not None else None
@@ -380,7 +389,7 @@ class JsonFileRunStore(RunStore):
             if len(out) >= lim:
                 break
 
-        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         return out[:lim]
 
     def list_due_wait_until(
@@ -441,16 +450,194 @@ class JsonlLedgerStore(LedgerStore):
     def __init__(self, base_dir: str | Path):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
+        # Write-through idempotency cache (backlog 0047): the tick loop asks
+        # "is there a prior COMPLETED result for this key?" before EVERY
+        # effect step; a full-file scan per step is O(ledger) and was the
+        # measured scale cliff. COMPLETED records are cached here at append
+        # time so the crash-replay lookup (same process) is O(1); cold
+        # processes fall back to a bounded backward tail read (see
+        # find_completed_result).
+        from collections import OrderedDict
+
+        self._idem_cache_lock = threading.Lock()
+        self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
+        self._idem_cache_max = 512
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"ledger_{run_id}.jsonl"
 
     def append(self, record: StepRecord) -> None:
         p = self._path(record.run_id)
+        record_dict = steprecord_to_dict(record)
+        line = dumps_compact(record_dict)
         with p.open("a", encoding="utf-8") as f:
             # Write as a single append operation to reduce the chance of
             # concurrent writers producing concatenated JSON objects on one line.
-            f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+            f.write(line + "\n")
+        self._idem_cache_note(record_dict, line)
+
+    # Records above this size are not cached; the bounded tail read serves
+    # them. 512 entries x 64KB caps worst-case cache memory at ~32MB.
+    _IDEM_CACHE_MAX_RECORD_BYTES = 65536
+
+    def _idem_cache_note(self, record_dict: Dict[str, Any], record_json: str) -> None:
+        """Cache a COMPLETED record's serialized LINE under (run_id, key).
+
+        The already-built line string is cached (parsed on hit), never the
+        live result object: workflow reducers write results into vars and
+        may mutate them in place afterwards, while the legacy lookup parsed
+        disk bytes — a by-reference cache would silently diverge from disk
+        truth (and skip the tuple->list coercion a JSON round-trip applies).
+        Reusing the append's own serialization costs ZERO extra encoding
+        (2026-07-13 perf adversary N2: re-serializing the result here cost
+        +98% per completed append on result-dominated records); hits are
+        rare (crash-replay), so parse-on-hit is the right trade.
+        """
+        try:
+            if record_dict.get("status") != StepStatus.COMPLETED.value:
+                return
+            key = record_dict.get("idempotency_key")
+            run_id = record_dict.get("run_id")
+            if not (isinstance(key, str) and key and isinstance(run_id, str) and run_id):
+                return
+            if len(record_json) > self._IDEM_CACHE_MAX_RECORD_BYTES:
+                return
+            with self._idem_cache_lock:
+                cache_key = (run_id, key)
+                # Oldest-completed-wins parity with the legacy full scan:
+                # never overwrite an existing entry for the same key.
+                if cache_key not in self._idem_cache:
+                    self._idem_cache[cache_key] = record_json
+                    while len(self._idem_cache) > self._idem_cache_max:
+                        self._idem_cache.popitem(last=False)
+        except Exception:  # noqa: BLE001 - cache maintenance must never fail an append
+            pass
+
+    # Byte ceiling for the backward tail read (2026-07-13 perf adversary N3:
+    # a line cap alone let 256 five-MB record lines force a ~1.3GB read and
+    # buffer per cold probe on media-shaped ledgers). Beyond the ceiling the
+    # probe answers an honest miss — the same documented at-least-once
+    # semantics as the line window. Block size is an attribute so the cap
+    # is testable at small scale (a 64KB first read swallows small files
+    # before the cap can bite).
+    _TAIL_MAX_BYTES = 32 * 1024 * 1024
+    _TAIL_BLOCK_BYTES = 65536
+
+    def _tail_lines(self, p: Path, max_lines: int) -> List[str]:
+        """Read up to the last `max_lines` lines by seeking backwards.
+
+        Reads O(tail bytes) bounded by `_TAIL_MAX_BYTES`, never the whole
+        file — the point of the tail window is that fat early records
+        (large LLM payloads) cost nothing. A byte-cap stop may leave the
+        oldest collected line truncated mid-record; the caller's parse loop
+        skips unparseable lines, which keeps that honest.
+        """
+        block = int(self._TAIL_BLOCK_BYTES)
+        chunks: List[bytes] = []
+        newlines = 0
+        total = 0
+        with p.open("rb") as f:
+            f.seek(0, 2)
+            pos = f.tell()
+            while pos > 0 and newlines <= max_lines and total < self._TAIL_MAX_BYTES:
+                read_size = min(block, pos)
+                pos -= read_size
+                f.seek(pos)
+                data = f.read(read_size)
+                chunks.append(data)
+                newlines += data.count(b"\n")
+                total += len(data)
+        buf = b"".join(reversed(chunks))
+        text = buf.decode("utf-8", errors="replace")
+        # Split on the writer's ACTUAL line discipline — "\n" only. NEVER
+        # str.splitlines() here (replay adversary P0, 2026-07-14): JSON
+        # leaves U+2028/U+2029/U+0085 RAW under ensure_ascii=False, and
+        # splitlines() splits on all three — a completed record carrying
+        # U+2028 in scraped/LLM text fragmented into unparseable pieces, the
+        # cold crash-replay probe missed it, and the effect RE-EXECUTED.
+        # (Raw "\r" cannot occur inside a line: JSON escapes all controls
+        # below U+0020.)
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()  # trailing newline artifact, not an empty line
+        if pos > 0 and total >= self._TAIL_MAX_BYTES and lines:
+            # Byte-cap stop mid-file: the oldest collected line is a
+            # truncated fragment of a record — drop it rather than hand a
+            # fragment to the parser (it could coincidentally parse).
+            lines = lines[1:]
+        return lines[-max_lines:] if len(lines) > max_lines else lines
+
+    def find_completed_result(
+        self, run_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Bounded idempotency lookup (backlog 0047).
+
+        Semantics: exact for issuance-scoped keys (`_runtime.effect_seq` is
+        hashed into every key since 2026-07-13), because a prior COMPLETED
+        record for the CURRENT issuance can only exist within the current
+        step's own records — which are at the ledger tail by construction
+        (crash-replay is "effect completed, save didn't land"). The lookup
+        is write-through-cache first, then a backward tail read of
+        IDEMPOTENCY_TAIL_WINDOW lines. Deliberately NO full-file fallback:
+        the common case is a MISS (fresh key per issuance), and a full scan
+        on miss would reinstate the O(ledger)-per-step cliff this replaces.
+        Beyond the window the runtime re-executes — the documented
+        at-least-once default for effects without a completed record.
+        """
+        key = str(idempotency_key or "")
+        rid = str(run_id or "")
+        if not key or not rid:
+            return None
+        p = self._path(rid)
+        if not p.exists():
+            # Disk truth wins over any cached answer (replay adversary P2-b:
+            # a SECOND store instance over the same directory kept serving a
+            # run's results from its write-through cache after another
+            # instance deleted the ledger). No file = no records.
+            with self._idem_cache_lock:
+                for cache_key in [k for k in self._idem_cache if k[0] == rid]:
+                    del self._idem_cache[cache_key]
+            return None
+        with self._idem_cache_lock:
+            cached = self._idem_cache.get((rid, key))
+        if cached is not None:
+            try:
+                rec = json.loads(cached)
+                if isinstance(rec, dict):
+                    return rec.get("result")
+            except json.JSONDecodeError:  # pragma: no cover - we serialized it
+                pass
+        try:
+            lines = self._tail_lines(p, IDEMPOTENCY_TAIL_WINDOW)
+        except OSError:
+            return None
+        # The quoted-key prefilter is a fast REJECT for lines that cannot
+        # contain the key — but it is only sound when the key serializes to
+        # itself. Keys containing characters JSON escapes ('"', '\\',
+        # controls) appear ESCAPED on disk and would false-negative a
+        # genuine hit (replay adversary P2-a; host-pluggable EffectPolicy
+        # keys are arbitrary strings). Such keys skip straight to parsing.
+        prefilter_safe = '"' not in key and "\\" not in key and key.isprintable()
+        # Oldest-first within the window: parity with the legacy full scan
+        # (first completed match wins) for pre-issuance-key ledgers.
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if prefilter_safe and f'"{key}"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("idempotency_key") != key:
+                continue
+            if rec.get("status") != StepStatus.COMPLETED.value:
+                continue
+            return rec.get("result")
+        return None
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         p = self._path(run_id)
@@ -522,4 +709,9 @@ class JsonlLedgerStore(LedgerStore):
         count = len(self.list(rid))
         if p.exists():
             p.unlink()
+        with self._idem_cache_lock:
+            # Drop the run's cached results: a recreated ledger under the
+            # same run_id must never see the deleted run's completions.
+            for cache_key in [k for k in self._idem_cache if k[0] == rid]:
+                del self._idem_cache[cache_key]
         return count

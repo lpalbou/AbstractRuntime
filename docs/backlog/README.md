@@ -12,7 +12,8 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 21 (8 top-level + 13 in the `runtime_systemic_reliability/` track)
+- Planned: 25 (8 top-level + 15 in the `runtime_systemic_reliability/` track
+  + 2 in the `runtime_portability/` track)
 - Proposed: 11 (3 top-level + 8 in the `runtime_systemic_reliability/` track)
 - Completed: 33
 - Deprecated: 13
@@ -26,6 +27,14 @@ If you are new to the project, start with `../README.md` and `../architecture.md
   artisanal per-feature rigor into systemic guarantees before the 24/7
   resident fleet and before 1.0. Source record: `planned/runtime_systemic_reliability/0044_meta_analysis_record.md`.
   Keystone item (do first): `0045_crash_replay_harness_and_ordering_invariant.md`.
+  New (2026-07-13, performance adversary): `0067_durable_write_discipline.md`
+  (P1, ships WITH 0047), `0068_hot_path_store_reads.md` (P1).
+- `planned/runtime_portability/` — the 2026-07-13 maintainer-requested
+  "portable, any-OS" survey (two adversaries: portability + performance).
+  The entity substrate's process/lease/kill-switch primitives are POSIX-only
+  and DESTRUCTIVE on Windows (a status read kills the loop). Items:
+  `0065_portable_process_and_lock_layer.md` (P0, do first),
+  `0066_portable_io_and_media_reader.md` (P1). See the track README.
 
 ## Next recommended work
 
@@ -40,6 +49,14 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 4. `planned/runtime_systemic_reliability/0048_durable_io_unification.md` +
    `0049_llm_client_mechanical_split.md`
    Round out the P0 band (fsync discipline; the 11.8k-line module).
+4a. `planned/runtime_portability/0065_portable_process_and_lock_layer.md`
+   NEW P0 (2026-07-13): on Windows a `read_loop_status` GET terminates the
+   entity loop (`os.kill(pid,0)` = TerminateProcess) and the lease is
+   advisory-only. Blocks any Windows deployment of the keystone feature.
+   Portable stdlib fix + a Windows CI smoke lane.
+4b. `planned/runtime_systemic_reliability/0067_durable_write_discipline.md`
+   NEW P1 — ships WITH 0047 (index kills count-scaling, 0067 kills the
+   O(turns²) ledger byte-growth; either alone leaves half the scale cliff).
 5. `planned/018_workspace_access_policy_for_media_and_tools.md`
    Keep workspace and tool policy explicit while Gateway extracts its local
    workspace helpers.
@@ -110,6 +127,10 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0054 | `planned/runtime_systemic_reliability/0054_runtime_health_counters.md` |
 | 0055 | `planned/runtime_systemic_reliability/0055_jsonl_store_honesty.md` |
 | 0064 | `planned/runtime_systemic_reliability/0064_prompt_cache_fingerprint_stability.md` |
+| 0065 | `planned/runtime_portability/0065_portable_process_and_lock_layer.md` (P0) |
+| 0066 | `planned/runtime_portability/0066_portable_io_and_media_reader.md` |
+| 0067 | `planned/runtime_systemic_reliability/0067_durable_write_discipline.md` |
+| 0068 | `planned/runtime_systemic_reliability/0068_hot_path_store_reads.md` |
 
 \* 026/027/028 numerically collide with completed items of the same prefix
 (legacy three-digit numbering; they predate the four-digit convention).

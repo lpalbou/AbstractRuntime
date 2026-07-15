@@ -28,6 +28,33 @@ def test_classifier_types_and_message_fallback():
     assert _llm_error_is_retryable(RuntimeError("connection reset by peer")) is True
 
 
+def test_prompt_cache_binding_failures_are_not_retried():
+    """Bloc-seam adversary A-2 (2026-07-13): binding verification failures
+    (missing/mismatch/invalid) and capability refusals are deterministic —
+    the same params meet the same refusal every attempt. Generic operation
+    failures (I/O during load/save) may be transient and stay retryable."""
+    from abstractcore.providers.base import PromptCacheError, PromptCacheUnsupportedError
+
+    for code in (
+        "prompt_cache_binding_missing",
+        "prompt_cache_binding_mismatch",
+        "prompt_cache_binding_invalid",
+        "prompt_cache_binding_invalid_key",
+        "prompt_cache_binding_bare_string",
+    ):
+        exc = PromptCacheError("refused", operation="generate", code=code)
+        assert _llm_error_is_retryable(exc) is False, code
+
+    assert _llm_error_is_retryable(PromptCacheUnsupportedError(operation="load")) is False
+    # Operation failures keep the retryable default (may be transient I/O).
+    assert (
+        _llm_error_is_retryable(
+            PromptCacheError("disk hiccup", operation="save", code="prompt_cache_operation_failed")
+        )
+        is True
+    )
+
+
 def test_non_retryable_outcome_stops_the_retry_loop():
     attempts: List[int] = []
 

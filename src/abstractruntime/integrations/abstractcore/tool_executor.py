@@ -795,6 +795,10 @@ _DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
     "agora_read_message",
     "agora_post_message",
     "agora_send_dm",
+    # Agora channel shared-fs/store READS (c1669 step 3): hub-scoped, read-only.
+    "channel_fs_read",
+    "channel_fs_list",
+    "channel_store_get",
 }
 
 
@@ -811,6 +815,10 @@ _DEFAULT_REQUIRE_APPROVAL: Set[str] = {
     # Comms with higher exfil/spam risk (explicit allow needed; unknown tools also require approval)
     "send_email",
     "send_whatsapp_message",
+    # Agora channel shared-fs/store WRITES (c1669 step 3): a shared artifact or
+    # decision write is a mutation every channel member sees — write-classed.
+    "channel_fs_write",
+    "channel_store_set",
 }
 
 

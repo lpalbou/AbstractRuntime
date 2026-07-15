@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from ..core.models import RunState, RunStatus, StepRecord, WaitReason
+from ..core.models import RunState, RunStatus, StepRecord, StepStatus, WaitReason
 
 
 class RunStore(ABC):
@@ -109,9 +109,13 @@ class QueryableRunIndexStore(Protocol):
         session_id: Optional[str] = None,
         root_only: bool = False,
         limit: int = 100,
+        oldest_first: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List lightweight run index rows (most recent first)."""
+        """List lightweight run index rows (most recent first by default;
+        `oldest_first=True` inverts the order — required for stall queries,
+        where a newest-first window silently hides the oldest waits)."""
         ...
+
 
 
 @runtime_checkable
@@ -126,6 +130,16 @@ class DeletableRunStore(Protocol):
         ...
 
 
+# Bounded lookup window for idempotency dedup on stores without an index
+# (backlog 0047). A prior COMPLETED record for the CURRENT effect issuance
+# can only exist within the current step's own records — near the ledger
+# tail by construction (crash-replay = "effect completed, the save after it
+# did not land"). Issuance-scoped keys (`_runtime.effect_seq`) make hits
+# outside the tail impossible going forward; the window is generous padding
+# for progress events and legacy mid-flight runs.
+IDEMPOTENCY_TAIL_WINDOW = 256
+
+
 class LedgerStore(ABC):
     """Append-only journal store."""
 
@@ -134,6 +148,31 @@ class LedgerStore(ABC):
 
     @abstractmethod
     def list(self, run_id: str) -> List[Dict[str, Any]]: ...
+
+    def find_completed_result(
+        self, run_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Prior COMPLETED result for an idempotency key, or None.
+
+        Default: bounded scan over the tail of `list()` (correct for any
+        conforming store; oldest-first within the window for parity with
+        the historical full scan). Backends override with indexed lookups
+        (SQLite point query) or bounded tail reads (JSONL) so the per-step
+        dedup probe stops scaling with ledger length (backlog 0047).
+        """
+        key = str(idempotency_key or "")
+        if not key:
+            return None
+        records = self.list(run_id)
+        window = records[-IDEMPOTENCY_TAIL_WINDOW:]
+        for record in window:
+            if not isinstance(record, dict):
+                continue
+            if record.get("idempotency_key") != key:
+                continue
+            if record.get("status") == StepStatus.COMPLETED.value:
+                return record.get("result")
+        return None
 
 
 @runtime_checkable

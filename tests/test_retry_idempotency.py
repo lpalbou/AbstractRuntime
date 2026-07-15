@@ -301,11 +301,18 @@ class TestIdempotency:
         assert handler.call_count == 1
 
         # Simulate restart: create new runtime with same stores
-        # but reset the run to before the effect was executed
+        # but reset the run to before the effect was executed. A REAL crash
+        # rolls the whole RunState back to the last save; this simulation
+        # mutates a subset, so it must also roll back the effect-issuance
+        # counter (c1568) — otherwise the recomputed key carries a later
+        # issuance number than the ledger's completed record and reuse (the
+        # property under test) correctly wouldn't fire. `del`→absent→0 is
+        # the pre-effect value for this single-effect workflow.
         run = run_store.load(run_id)
         run.status = RunStatus.RUNNING
         run.current_node = "start"
         run.output = None
+        run.vars.get("_runtime", {}).pop("effect_seq", None)
         run_store.save(run)
 
         # Create new runtime (simulating process restart)

@@ -74,6 +74,15 @@ class ObservableLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
 
+    def find_completed_result(
+        self, run_id: str, idempotency_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Delegate to the inner store's (possibly indexed) lookup (0047)."""
+        fn = getattr(self._inner, "find_completed_result", None)
+        if callable(fn):
+            return fn(run_id, idempotency_key)
+        return super().find_completed_result(run_id, idempotency_key)
+
     def delete(self, run_id: str) -> int:
         fn = getattr(self._inner, "delete", None)
         if not callable(fn):

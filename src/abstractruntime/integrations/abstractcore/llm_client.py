@@ -2830,11 +2830,21 @@ def _normalize_prompt_cache_binding_params(params: Optional[Dict[str, Any]]) -> 
     if binding is None:
         return out
     if isinstance(binding, str):
-        binding = {"binding_id": binding}
-    elif not isinstance(binding, dict):
-        raise ValueError("prompt_cache_binding must be an object or binding_id string.")
-    else:
-        binding = dict(binding)
+        # ONE-MEANING-PER-NAME (agent seat c1670; bloc-seam adversary A-3):
+        # a bare string is cache-key intent — route to prompt_cache_key and
+        # drop the binding param; dict shapes stay strict durable-bloc
+        # verification. Mirrors effect_handlers' request normalization.
+        key_s = binding.strip()
+        out.pop("prompt_cache_binding", None)
+        if key_s:
+            existing = out.get("prompt_cache_key")
+            if existing is not None and str(existing).strip() and str(existing).strip() != key_s:
+                raise ValueError("prompt_cache_key and a string prompt_cache_binding must match.")
+            out["prompt_cache_key"] = key_s
+        return out
+    if not isinstance(binding, dict):
+        raise ValueError("prompt_cache_binding must be an object (or a string cache key).")
+    binding = dict(binding)
     out["prompt_cache_binding"] = binding
     binding_key = binding.get("key")
     if isinstance(binding_key, str) and binding_key.strip():

@@ -40,17 +40,40 @@ def _default_file_stores(*, base_dir: str | Path) -> tuple[RunStore, LedgerStore
     base.mkdir(parents=True, exist_ok=True)
     return JsonFileRunStore(base), JsonlLedgerStore(base)
 
-def _ensure_observable_ledger(ledger_store: LedgerStore) -> LedgerStore:
-    """Wrap a LedgerStore so Runtime.subscribe_ledger() is available (in-process).
+def _compose_durable_ledger(ledger_store: LedgerStore, artifact_store: ArtifactStore) -> LedgerStore:
+    """ONE composition site for the factory ledger stack (backlog 0067-M).
 
-    Why:
-    - Real-time UI/UX often needs "step started" signals *before* a blocking effect
-      (LLM/tool HTTP) returns.
-    - The runtime kernel stays transport-agnostic; this is an optional decorator.
+    Target shape for durable stores: Observable(Offloading(raw)) —
+    Observable OUTERMOST so `Runtime.subscribe_ledger` is served here and
+    live subscribers receive the record BEFORE offloading touches it;
+    Offloading beneath so durable bytes stay bounded. In-memory ledgers or
+    memory-only artifact stores gain nothing from refs and skip offloading.
+
+    WHY explicit composition instead of chained helpers (2026-07-14
+    adversary P0): `OffloadingLedgerStore` satisfies the runtime-checkable
+    ObservableLedgerStoreProtocol by METHOD PRESENCE (its `subscribe`
+    delegates and raises when the inner store can't), so a presence check
+    after offload-wrapping concluded "already observable" and never added
+    the real Observable — `subscribe_ledger` then raised RuntimeError on
+    every durable deployment, silently killing host live-ledger features.
+    A caller-supplied OffloadingLedgerStore is therefore wrapped, never
+    trusted for observability; a caller-supplied genuine observable store
+    is respected as-is (host owns its composition).
     """
+    from ...storage.artifacts import InMemoryArtifactStore as _MemArtifacts
+    from ...storage.in_memory import InMemoryLedgerStore as _MemLedger
+    from ...storage.offloading import OffloadingLedgerStore as _Offloading
+
+    if isinstance(ledger_store, _Offloading):
+        return ObservableLedgerStore(ledger_store)
     if isinstance(ledger_store, ObservableLedgerStoreProtocol):
         return ledger_store
-    return ObservableLedgerStore(ledger_store)
+    if (
+        isinstance(ledger_store, _MemLedger)
+        or isinstance(artifact_store, _MemArtifacts)
+    ):
+        return ObservableLedgerStore(ledger_store)
+    return ObservableLedgerStore(_Offloading(ledger_store, artifact_store=artifact_store))
 
 
 def register_shell_session_teardown(runtime: Runtime) -> None:
@@ -135,10 +158,10 @@ def create_local_runtime(
     """
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
-    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
+    ledger_store = _compose_durable_ledger(ledger_store, artifact_store)
 
     # Runtime authority: choose default timeouts for orchestrated workflows.
     #
@@ -257,10 +280,10 @@ def create_remote_runtime(
 ) -> Runtime:
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
-    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
+    ledger_store = _compose_durable_ledger(ledger_store, artifact_store)
 
     resolved_timeout_s = float(timeout_s) if timeout_s is not None else float(DEFAULT_LLM_TIMEOUT_S)
     if timeout_s is None:
@@ -329,10 +352,10 @@ def create_hybrid_runtime(
 
     if run_store is None or ledger_store is None:
         run_store, ledger_store = _default_in_memory_stores()
-    ledger_store = _ensure_observable_ledger(ledger_store)
 
     if artifact_store is None:
         artifact_store = InMemoryArtifactStore()
+    ledger_store = _compose_durable_ledger(ledger_store, artifact_store)
 
     default_llm_timeout_s = float(DEFAULT_LLM_TIMEOUT_S)
     default_tool_timeout_s = float(DEFAULT_TOOL_TIMEOUT_S)

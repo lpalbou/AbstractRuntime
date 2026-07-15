@@ -8,6 +8,364 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **RuntimeHealth — counters, not folklore** (backlog 0054, operator-signed
+  plan 2026-07-13; the observability wave's runtime half): the runtime's
+  self-knowledge was `logger.warning` at ~25 sites plus per-feature stats
+  objects nothing aggregates — the H7c starvation was diagnosed by sampling
+  a live pid. New `core/health.py`: one always-on `RuntimeHealth` per
+  Runtime — thread-safe monotonic counters incremented at the EXISTING
+  warning/decision sites (effect steps/retries/failures, waits entered,
+  resumes, crash-replay reuses, absorbed failures, steer drains + delivered
+  messages, inbox drops, vars-threshold crossings), coarse tick-duration
+  buckets (every `tick()` is timed through a thin wrapper), vars-size
+  gauges, and a 16-entry last-errors ring — read via `runtime.health()`
+  as one JSON-safe snapshot (no metrics framework; hosts serve it however
+  they like; process-lifetime is honest). Companion read
+  `runtime.list_stalled_waits(older_than_s=...)`: the #1 silent-stall
+  class (a run parked on WAIT_EVENT / tool approval / subworkflow that
+  nobody resumes) as a pure query over WAITING runs — reason, wait_key,
+  age, paused flag, oldest first; non-queryable stores answer [] honestly.
+  `RuntimeHealth` exports at the root. Pinned in
+  `tests/test_runtime_health_and_bounded_vars.py`.
+- **Bounded run-vars growth for 24/7 residents** (backlog 0053): everything
+  that accretes in `run.vars` is serialized on EVERY save, and node traces
+  were measured at ~95% of a 2MB resident RunState. Three cap classes +
+  a gauge, none silent: (1) node-trace entries above 32KB compact JSON
+  (the size check reuses the existing JSON-safety dumps — zero extra
+  serialization) have their large leaves OFFLOADED to the artifact store
+  as `$artifact` refs (`source=node_trace_offload`), or labeled-truncated
+  (`#TRUNCATION`) when no store is wired; entries carry `trace_bounded:
+  offloaded|truncated`, small entries are byte-identical to before, and
+  the run-vars copy of the RESULT (result_key) is never touched. (2)
+  `_runtime.inbox` caps at 200 messages, drop-oldest with a counted
+  `inbox_dropped` in the run's own vars + health counter — a workflow
+  that never drains its inbox can no longer grow state forever. (3)
+  `evidence_warnings` caps at 50 (drop-oldest + counted). (4) a vars-size
+  gauge refreshes after every tick that executed at least one effect step
+  (gated on step activity so a scheduler sweeping parked runs pays
+  nothing) and crossings of the 8MB warn threshold count + log once per
+  run per process. Resident   benchmark (400 steps, 8KB results, JSON
+  backend): final state 0.92MB → 0.11MB (~8x smaller) with per-step time
+  4.7ms → 4.1ms — the cap pays for itself immediately and the gap widens
+  with uptime since save cost tracks state size.
+  ADVERSARY FOLD (fable5, 2026-07-14, no P0; 2 P1 + 4 P2 fixed
+  same-session): (P1-1) `list_stalled_waits` candidates now come from
+  `list_run_index(oldest_first=True)` — a NEWEST-first window silently hid
+  the OLDEST waits (the definition of stalled) once waiting runs exceeded
+  the window, returning [] on the exact fleet board this exists for
+  (their demo: 5 two-hour stalls invisible behind 15 fresh waits); the
+  `oldest_first` kwarg landed on the store protocol + all three in-repo
+  `list_run_index` implementations, only the ≤limit aged winners load
+  their document (the P2-4 full-parse cost fix riding the same query),
+  and unknown-age rows sort FIRST (they truncated exactly when the board
+  was full). (P1-2) top-level `error` strings now bound on the offload
+  path — a 100KB provider error escaped the subtree-only cap while
+  stamped "offloaded", and failed steps are exactly the entries that loop
+  (~10MB/node accretion while claiming to be bounded). (P2-1) trace
+  consumers (compiler tool-activity extraction ×2, agent trace report)
+  skip `$artifact` refs instead of extracting phantom tool calls (count 1,
+  name None) and the report names the offload. (P2-2) the inbox cap is
+  now BACKPRESSURE, never destruction: the drain delivers only up to
+  headroom and acks ONLY delivered seqs — the first cut drop-oldested
+  operator words UNREAD while `steer_seen` claimed them, engaging before
+  the sidecar's refuse-at-500 could ever reach the sender; excess steers
+  stay pending (watermark redelivery), and a never-draining workflow
+  surfaces as the sidecar's loud append refusal. (P2-3) the vars-gauge
+  gate keys on a run-object flag instead of the runtime-global step
+  counter — with a second thread executing effects (the entity-lane
+  shape) the global compare made 30% of parked-run probes serialize a
+  parked run's full vars and turned the gauge into last-writer-wins;
+  the flag also removes the wrapper's two snapshot copies per tick.
+  (P3) effect failures and raising ticks now reach the last-errors ring
+  (it had ONE producer — the ring exists to answer "what broke last");
+  the vacuous caplog pin now asserts warn-once for real. Cleared by the
+  adversary, on the record: offload aliasing (spine copies — live
+  payloads/ledger/result_key byte-intact), tick-wrapper exception
+  propagation, 4-thread counter exactness, content-addressed artifact
+  dedup on replay re-bounding.
+- **Indexed idempotency lookup** (backlog 0047, operator-signed plan
+  2026-07-13; the measured scale cliff: the per-step dedup probe full-parsed
+  the entire run ledger — ~44ms/step at 32MB, quadratic per run):
+  `LedgerStore.find_completed_result(run_id, idempotency_key)` with three
+  implementations — SQLite gains `idempotency_key`/`step_status` columns +
+  the COVERING partial index `idx_ledger_idem(run_id, idempotency_key,
+  seq)` (point query, oldest-completed-wins for exact parity with the
+  historical scan; the perf adversary's N1 found the first 2-column shape
+  was never chosen by the planner — the ORDER BY pulled it onto the seq
+  index and the probe stayed O(per-run rows), 69ms/miss at 50k records; the
+  covering shape measures 0.005ms at 10k, flat, plan-shape pinned by test
+  and a mismatched existing index is rebuilt at open); pre-0047 databases
+  are ALTER-migrated and column-backfilled at open (json1 UPDATE with a
+  Python-side fallback; a near-empty partial index
+  `idx_ledger_unbackfilled` keeps the every-boot probe O(1)); a
+  version-skew guard degrades to a bounded scan when NULL-column rows exist
+  for the run (old writer + new reader on one file, never a silent miss).
+  JSONL gains a write-through cache of COMPLETED records (the append's OWN
+  serialized line is reused — zero extra encoding, perf adversary N2;
+  parse-on-hit returns DISK truth, never live objects reducers might mutate
+  later; 64KB/entry cap, 512 LRU, dropped on delete()) + a backward tail
+  read (`_tail_lines`, 64KB blocks from EOF — O(tail bytes) bounded by a
+  32MB byte ceiling so media-shaped ledgers with multi-MB record lines
+  cannot force gigabyte reads per cold probe, perf adversary N3; beyond the
+  ceiling the probe answers an honest miss). Replay-adversary folds
+  (2026-07-14): the tail read splits on the writer's ACTUAL line
+  discipline (`"\n"`), never `str.splitlines()` — JSON leaves
+  U+2028/U+2029/U+0085 raw under `ensure_ascii=False` and splitlines
+  fragmented a completed record carrying U+2028, so the COLD crash-replay
+  probe missed it and the effect re-executed (their P0, demonstrated
+  live); the quoted-key prefilter is skipped for keys containing
+  JSON-escaped characters (host-pluggable policies mint arbitrary keys —
+  P2-a); a deleted ledger clears/overrides every instance's cache answer
+  (disk truth wins — P2-b); torn legacy rows are stamped
+  `step_status='unparseable'` during backfill so one unparseable row can
+  never silently re-degrade a run's every probe to the full scan (P2-c);
+  and the skew-guard docstring states the honest bound (the degrade is the
+  bounded window scan, not a no-miss guarantee — materially defused by
+  issuance-scoped keys, which pre-0047 records can never match). UPGRADE
+  BOUNDARY (their P2-g): because keys now hash the issuance counter, a run
+  mid-flight ACROSS the upgrade re-executes its one in-flight step
+  (bounded at-least-once, once per run); pre-upgrade records are never
+  matched by post-upgrade probes. Correctness envelope: keys are
+  issuance-scoped
+  (`_runtime.effect_seq`), so a genuine hit can only live at the ledger
+  tail (crash-replay = effect completed, the save after it did not land);
+  beyond `IDEMPOTENCY_TAIL_WINDOW` (256) the runtime re-executes — the
+  documented at-least-once default, now a pinned DECISION. Decorators
+  (hash-chained, observable, offloading) delegate to their inner store;
+  duck-typed host stores keep the historical inline scan (`#FALLBACK`).
+  `Runtime._find_prior_completed_result` routes through the store method.
+  Pinned in `tests/test_indexed_idempotency_lookup.py` (point query,
+  migration/backfill, skew degrade, cache disk-parity, window bound,
+  decorator delegation, runtime seam both ways).
+- **Agora channel shared-fs/store tools** (swarm-seat promotion step 3,
+  commons c1669, operator-approved 21:41): the toolset grows 7→12 —
+  `channel_fs_write` (PUT with description/mime/`expect_version` CAS),
+  `channel_fs_read` (version-aware), `channel_fs_list` (prefix),
+  `channel_store_set` (string value + CAS), `channel_store_get` — the
+  shared-artifact collaboration surface both fleet scripts hand-rolled, now
+  first-class with the same key-gated registration and the same H8
+  per-agent identity stamping (the schema-hidden `_agora_agent` arg; the
+  effect handler's stamp set derives from `AGORA_TOOL_NAMES`, so the five
+  inherit it structurally). Approval classes per the plan: channel READS
+  are safe auto-approve; channel WRITES are write-classed (a shared
+  artifact/decision write is a mutation every channel member sees).
+  Contract-tested against a stub hub server in
+  `tests/test_agora_tools_http.py` (paths, CAS payloads, alias key
+  resolution on a channel write, approval classification, 12-tool pin).
+
+### Fixed
+- **Issuance-counter advance now binds to the step's own saves** (replay
+  adversary P1, 2026-07-14, demonstrated live): file-backed run stores
+  ALIAS loaded RunStates, so a control-plane save (pause_run, limits
+  update) landing between the idempotency probe and the step's own save
+  used to serialize an already-advanced `_runtime.effect_seq` WITHOUT the
+  step's result — after a process restart, the resumed replay recomputed a
+  DIFFERENT key, missed the completed record, and re-executed the effect
+  (double tool execution/LLM spend on the pause-mid-effect path). The
+  advance now happens immediately before each save that lands the step
+  (completed/waiting/failed/absorbed), so out-of-band saves carry the
+  un-advanced counter and crash-replay reuses the completed result.
+  Pinned: `test_pause_mid_effect_then_restart_still_reuses_the_completed_result`.
+- **Prompt-cache binding failures no longer burn the retry budget**
+  (bloc-seam adversary A-2, 2026-07-13): `_llm_error_is_retryable` now
+  classifies structured `PromptCacheError`s — binding verification codes
+  (`prompt_cache_binding_missing`/`_mismatch`/`_invalid`/`_invalid_key`/
+  `_bare_string`) and `prompt_cache_unsupported` are DETERMINISTIC (same
+  params, same refusal, every attempt) and fail immediately; generic
+  operation failures (I/O during load/save) keep the retryable default.
+  Previously they matched no branch and defaulted to retryable.
+- **Bare-string `prompt_cache_binding` routes to `prompt_cache_key`**
+  (bloc-seam adversary A-3; one-meaning-per-name, the agent seat's c1670
+  convention): a string binding is cache-key intent — both the LLM_CALL
+  handler seam and the remote client's params normalization now route it to
+  `prompt_cache_key` and drop the binding param, instead of coercing it
+  into a `{"binding_id": ...}` dict (exactly the shape core refuses as
+  `prompt_cache_binding_bare_string` — the 2026-07-11 live-visit collision
+  class, previously re-manufactured one hop before core's refusal). Dict
+  bindings keep strict durable-bloc verification semantics unchanged.
+  Conflicting explicit keys refuse loudly. Pinned in
+  `tests/test_prompt_cache_modules.py` + `tests/test_llm_retry_classification.py`.
+
+### Changed
+- **Hot-path store reads are column reads** (backlog 0068, operator-signed
+  plan 2026-07-13; the SQLite full-document tax): the external-control probe
+  (`_abort_if_externally_controlled`, loop top + before every save) needed
+  two fields and paid a whole-document parse per probe on the production
+  backend. `runs` gains `paused` + `run_lifecycle_json` twin columns —
+  written in the SAME upsert as run_json (one truth, two read speeds; the
+  pause-flag shape now has ONE source, `core.vars.is_paused_vars`, shared by
+  the runtime and the store), ALTER-migrated with a duplicate-column-
+  tolerant race guard and backfilled at open (Python loop applying the same
+  sanitization as the write path; torn rows match the readers' `{}`
+  fallback). New `SqliteRunStore.probe_control(run_id)` answers
+  `(status, paused)` in one column read and answers None on pre-migration
+  rows — the runtime's probe consults it via duck-typing (stores without it
+  keep the historical full load) and only full-loads when the probe says
+  CONTROLLED (the caller returns the RunState). `list_run_index` reads the
+  lifecycle column and deliberately drops `run_json` from the page query —
+  fetching the multi-MB document column dominated the cost even before
+  json.loads (measured ~1.1s/100-row page either way with run_json riding
+  the SELECT); pre-migration NULL rows fetch their document individually.
+  A bare `idx_runs_updated` index serves unfiltered ORDER BY pages at the
+  100k-run design target. `_append_progress_event` no longer parses the
+  entire ledger per callback — the key suffix was a pure uniquifier and is
+  now a uuid (no consumer reads the key shape). `SqliteSteerSidecar` reuses
+  a per-thread connection (fresh connect+PRAGMAs+schema cost ~0.39ms per
+  tick-loop iteration) while KEEPING the F3 purge-healing property: a
+  stat() per call detects a deleted database file and reopens (a cached
+  connection would keep writing the unlinked inode — silently losing steers
+  until restart); failed writes roll back or drop the thread connection so
+  a wedged transaction can never poison later calls. Measured at ~1.9MB
+  states: control probe 1.59ms → 0.004ms (~360x), 100-row index page
+  171.7ms → 26.5ms (~6x; the remaining cost is SQLite row-overflow
+  traversal — the twin columns sit after run_json in the physical row, a
+  known ceiling not worth a table rebuild).   Pinned in
+  `tests/test_hot_path_store_reads.py` (column truth vs document truth,
+  pre-migration None, legacy ALTER+backfill incl. torn rows, runtime
+  fast-path consultation + pause still honored, poisoned-run_json column
+  read, per-thread reuse, purge healing, progress-key no-list).
+  ADVERSARY FOLD (fable5, 2026-07-14, four P1 fixes landed same-session):
+  (P1-1) every backfill UPDATE is guarded `AND paused IS NULL` — runs
+  rows are MUTABLE (unlike the ledger rows the backfill was modeled on),
+  and a stale snapshot UPDATE racing a concurrent save() from another
+  process stamped paused=0 over a freshly-paused row, after which the
+  probe said "not controlled" and the tick's next save DESTROYED the
+  pause (their live demo: 2 → 7 node executions, final doc unpaused);
+  with the guard a concurrent save always wins. (P1-2) the steer
+  sidecar's purge healing now checks FILE IDENTITY (st_dev, st_ino), not
+  existence — after a purge the first thread to touch recreates the file,
+  and an existence check then passed for every OTHER thread while its
+  cached connection wrote the unlinked inode (appends "succeeded" into
+  the orphaned file: silent steer loss, demonstrated with the production
+  two-thread shape). (P1-3) the backfill streams in cursor-paged batches
+  (class-attr batch size, commit per batch, O(1) LIMIT-1 probe served by
+  a new near-empty partial index `idx_runs_unbackfilled`) — the fetchall
+  materialized every unbackfilled document (~200GB at the 100k-run design
+  target at 2MB states) and the single end-of-open commit turned an OOM
+  kill into an open-crash-loop; a crash now resumes where it stopped.
+  (P1-4) `OffloadingRunStore` gained an explicit `probe_control`
+  passthrough — the wrapper forwards methods explicitly, so the gateway's
+  production wiring (OffloadingRunStore(SqliteRunStore)) silently hid the
+  fast path and kept ~22 full multi-MB parses per 10-step tick, on the
+  exact deployment whose measurements justified the item; the unit test's
+  `__getattr__` double had the opposite forwarding semantics (the
+  fixture-double-hides-the-seam class). (P2-1, comment honesty)
+  `run_lifecycle_json` sits after run_json in the physical row, so the
+  index page still walks each row's overflow chain (~30ms/100 rows at
+  2MB) — the eliminated cost is the 100x json.loads, not all I/O; noted
+  in code, side-table migration judged not worth it. Cleared by the
+  adversary, on the record: WAL freshness cross-thread/cross-process, the
+  controlled-window width (unchanged), the writer census (every save
+  funnels through SqliteRunStore.save), N+1 fallback bounded, uuid
+  progress keys, enum-value comparisons. New pins: stale-backfill guard,
+  batched backfill restart, two-thread purge healing, wrapper probe
+  passthrough.
+- **Terminal ledger records are slim** (backlog 0067-M, operator-signed plan
+  2026-07-13; the O(turns²) ledger-growth term): the terminal
+  COMPLETED/WAITING/FAILED append used to re-persist the full effect payload
+  the STARTED record (same `step_id`, appended before execution) already
+  holds, and an LLM result carried the request two MORE times through its
+  observability metadata. New `storage/ledger_slim.py`: on the terminal
+  append, oversized payload fields (>4KB compact JSON) become verified
+  `$slim` markers naming the STARTED record (sha256 + byte count; sub-4KB
+  fields — tool args, flags — stay inline for ledger consumers); the
+  result's `_runtime_observability.llm_generate_kwargs` fields and
+  `_provider_request.payload.messages` dedup ONLY when byte-identical to
+  the STARTED payload or its documented local reconstruction
+  (system+messages+prompt layout) — decorated wire bytes (grounding
+  envelopes, volatile-stripped remote bodies) NEVER match and stay
+  verbatim, so the "durable bytes equal sent bytes" capture (B3,
+  `/llm --verbatim`) is preserved by construction. Crash-replay reuse
+  rehydrates markers before the result flows into vars
+  (`_find_prior_completed_result` resolves against the STARTED record and
+  verifies the sha — a mismatch keeps the marker, never a silently-wrong
+  payload), and the run-vars copy of a live result is never touched (spine
+  copies only). `history_bundle` readers (tool-call stats, answer_user
+  fallback) resolve markers from the records they already hold; resolvers
+  export at `abstractruntime.storage` for host-side ledger consumers.
+  Measured on the perf adversary's 120-message/185KB shape: ledger bytes
+  per LLM effect 735,723 → 186,554 (74.6% saved; terminal record 551,971 →
+  2,802), removing the per-turn conversation duplication entirely — ledger
+  growth is linear again. Pinned in `tests/test_ledger_record_slimming.py`
+  (marker+verify, tamper refusal, B3 verbatim preservation, crash-replay
+  byte-identity, history resolution, vars-copy isolation).
+  ADVERSARY FOLD (fable5, 2026-07-14, four fixes landed same-session):
+  (P0) the factory composition chained a method-presence Protocol check
+  after the offload wrap — `OffloadingLedgerStore.subscribe` satisfies
+  `ObservableLedgerStoreProtocol` by presence while raising at call time,
+  so `Runtime.subscribe_ledger` died with RuntimeError on EVERY durable
+  deployment (abstractcode's cache meter + live ledger feed swallowed it
+  silently); replaced by ONE explicit composition site
+  (`_compose_durable_ledger` → Observable(Offloading(raw)); caller-
+  supplied Offloading stores are wrapped, never trusted for
+  observability) and the test now pins BEHAVIOR (subscribe delivers, with
+  the pre-offload record) instead of the helper's return type. (P1)
+  slimming is now anchored to STARTED-time digests
+  (`capture_started_payload_digests` immediately before the STARTED
+  append): non-LLM records hold payloads BY REFERENCE, and a handler
+  mutating an oversized field in place between the appends would have
+  minted a permanently-unresolvable marker with the execution-time bytes
+  existing NOWHERE — a diverged field now keeps its verbatim mutated
+  bytes (slimming drops duplicates, never information); the metadata
+  dedup verifies the same freshness (layout parts included). (P1)
+  `OffloadingLedgerStore.list()` reverted to plain delegation — refs stay
+  refs on the read surface (rehydrating every read measured 113x time /
+  593x bytes on offload-heavy ledgers across the gateway's history/SSE/
+  summary surfaces, and made chain verification over the rehydrating
+  read report FALSE tamper alarms since hashes cover post-offload
+  bytes); rehydration lives only on `find_completed_result`, the
+  crash-replay path where byte-identity is a correctness requirement.
+  (P2) crash-replay rehydration is TARGETED to the two runtime-written
+  metadata paths (`resolve_result_metadata_markers`) instead of a
+  whole-tree scan — a tool result echoing a slimmed record as DATA
+  (runtime-explore class) would have been "resolved" into divergence;
+  echoed markers now survive replay byte-identically. New pins: durable
+  factory subscribe end-to-end, mutated-payload verbatim preservation,
+  echoed-marker replay identity, refs-on-read + rehydrate-on-replay.
+  CPU note (their P2-3, accepted trade): the slim pass costs ~1.7-2x one
+  record serialization at terminal appends, buying ~99% fewer terminal
+  bytes — CPU-for-disk, correct for disk-backed ledgers.
+- **`OffloadingLedgerStore` is wired into the durable factories** (backlog
+  0067-M step 5): `create_local_runtime`/`create_remote_runtime`/
+  `create_hybrid_runtime` wrap DURABLE ledger stores (never in-memory
+  shapes, never memory-only artifact stores) and `open_entity_runtime`
+  writes through offloading into the HOME's artifact store (ledger rows
+  stay bounded while the bytes remain part of the life, inside the home
+  directory). Read-side contract delivered with the wiring: `list()` and
+  `find_completed_result()` REHYDRATE refs the offloader itself created
+  (tag-checked `source=ledger_*_offload`; handler-authored artifact refs —
+  media handoff currency — pass through untouched; nested offloads resolve
+  recursively), so consumers see full records and a crash-replayed
+  offloaded result is byte-identical to the live handler result. The
+  observable wrapper is applied OUTSIDE offloading, so live SSE subscribers
+  receive the record before offloading touches it.
+- **Durable-write discipline** (backlog 0067, operator-signed plan
+  2026-07-13): the run/ledger hot path no longer deep-copies state to
+  serialize it. New `storage/serialize.py` — `runstate_to_dict` /
+  `steprecord_to_dict` build field-enumerated SHALLOW dicts (`vars`/
+  `output`/`result` pass BY REFERENCE under the documented single-writer
+  ownership contract; `waiting` is the only nested dataclass and converts
+  eagerly; field enumeration keeps the dicts drift-proof as models evolve)
+  and `dumps_compact` writes compact JSON (no indent, no separator spaces)
+  with a `default=` hook that lazily asdict-converts dataclasses nested
+  inside payloads — exactly what `dataclasses.asdict` produced, without the
+  recursive deep copy on every write. Applied to `JsonFileRunStore.save`
+  (also drops `indent=2` — the single most frequent durable write in the
+  system), `SqliteRunStore.save`, `JsonlLedgerStore.append`,
+  `SqliteLedgerStore.append`/`append_chained`, and the hash-chain wrapper's
+  non-chained path; `ledger_chain._canonical_json` carries the same hook so
+  append-time hash input (live objects) and verify-time input (parsed JSON)
+  canonicalize to the same bytes. Measured (independent perf adversary A/B
+  against verbatim replicas of the old writers): JSON-file save x3.4 at
+  ~200KB states, x1.65 at ~2MB, converging to ~1.0x on very string-heavy
+  states (the win is structure-density-dependent); end-to-end over a real
+  Runtime, x2.81 total on the JSON-file backend and x1.34 on SQLite over
+  250 growing-state steps; bytes at rest -7.4% on the realistic e2e state.
+  VALUE parity pinned (round-trip equality against `asdict` output,
+  unicode, tuples, nested dataclasses, chain verify over both backends) in
+  `tests/test_durable_write_discipline.py`. The in-memory stores keep
+  `asdict` deliberately — their copy IS the isolation contract that
+  simulates disk truth for tests.
 - **Per-tick lease windows in the own-time loop** (B1 keystone, operator
   ruling "i should always be able to visit"; memory ruled time-sliced
   alternation M2-clean, commons c1322/c1324): `LifeLoop.run()` no longer
@@ -158,6 +516,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the held lease).
 
 ### Fixed
+- **Effect issuance idempotency — stale tool-result replay** (agent seat
+  P0, commons c1568, 2026-07-13): the idempotency key was
+  (run_id, node_id, effect_type, normalized_payload) and
+  `_find_prior_completed_result` scanned the WHOLE run ledger first-match —
+  so a byte-identical effect batch RE-ISSUED at the same node (re-reading a
+  file after editing it, re-running the test suite after a fix, any loop
+  with repeated payloads) silently REPLAYED the first stale result instead
+  of executing, and the agent concluded its change didn't apply and looped.
+  The key now also hashes the run's `_runtime.effect_seq` issuance counter,
+  which the tick loop advances in the same save that lands each step: a
+  genuine later issuance gets a fresh key (executes), while a crash-replay
+  (vars rolled back to the last save) recomputes the SAME key and reuses
+  the completed result (exact at-most-once preserved). `call_id` stays
+  stripped from the hash (provider ids are non-semantic — correct); the
+  counter is the missing WHICH-issuance dimension. `compute_idempotency_key`
+  gains an `effect_seq` parameter (default 0). Pinned:
+  `tests/test_effect_issuance_idempotency.py` (identical batch executes
+  twice, crash-replay reuses, retries-within-one-issuance share one key).
 - **Salvage idempotency** (adversary find on the B1 wave): the pending
   look-back's `turn_id` now derives from the MARKER's session (was: the
   salvaging session's), so a crash between the APPRAISE writes and the

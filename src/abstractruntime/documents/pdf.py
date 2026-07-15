@@ -21,6 +21,150 @@ _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 _BARE_URL_RE = re.compile(r"https?://[^\s<>()]+")
 
+# Typographic punctuation the LLM emits that the PDF base fonts render as tofu
+# boxes (or that break line-wrapping). Mapped to clean ASCII equivalents so the
+# text is correct regardless of which font is available. Non-punctuation
+# symbols (Greek letters, math operators, subscripts) are NOT mapped here —
+# those depend on a Unicode font (registered below); mapping them to ASCII
+# would destroy meaning.
+_PDF_PUNCT_MAP = {
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "\u2014",
+    "\u2015": "--", "\u2212": "-",  # figure/en dash, minus -> hyphen; em dash kept for the font
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+    "\u2032": "'", "\u2033": '"',
+    "\u2026": "...",
+    "\u2022": "-", "\u2023": "-", "\u2043": "-", "\u2219": "-",
+    "\u00a0": " ", "\u2007": " ", "\u2008": " ", "\u2009": " ", "\u200a": " ",
+    "\u202f": " ", "\u205f": " ", "\u3000": " ",
+    "\u200b": "", "\u200c": "", "\u200d": "", "\ufeff": "",
+    "\u2016": "||",
+}
+_PDF_PUNCT_TABLE = {ord(k): v for k, v in _PDF_PUNCT_MAP.items()}
+
+# Cache the resolved Unicode font family (or "" if none / Helvetica fallback).
+_UNICODE_FONT_FAMILY: str | None = None
+# Mono font used for inline code / code blocks ("Courier" fallback).
+_MONO_FONT_NAME: str = "Courier"
+
+
+def _normalize_pdf_text(text: str) -> str:
+    """Replace typographic punctuation/whitespace with ASCII so it never renders
+    as a tofu box. Symbols needing a real Unicode font are left for the font."""
+    if not text:
+        return text
+    return text.translate(_PDF_PUNCT_TABLE)
+
+
+def _candidate_unicode_fonts() -> list[tuple[str, str, str, str]]:
+    """(regular, bold, italic, bolditalic) TTF path tuples to try, in order.
+    An env override wins; then DejaVu (matplotlib), then common system fonts."""
+    import os
+
+    out: list[tuple[str, str, str, str]] = []
+    env = os.environ.get("ABSTRACTRUNTIME_PDF_FONT", "").strip()
+    if env and Path(env).is_file():
+        out.append((env, env, env, env))
+    # DejaVuSans ships with matplotlib and covers Latin+Greek+math+punctuation.
+    try:
+        import matplotlib  # type: ignore[import-not-found]
+
+        mdir = Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf"
+        dv = mdir / "DejaVuSans.ttf"
+        if dv.is_file():
+            out.append(
+                (
+                    str(dv),
+                    str(mdir / "DejaVuSans-Bold.ttf"),
+                    str(mdir / "DejaVuSans-Oblique.ttf"),
+                    str(mdir / "DejaVuSans-BoldOblique.ttf"),
+                )
+            )
+    except Exception:
+        pass
+    # Common system locations (Linux DejaVu, macOS Arial Unicode).
+    for base in (
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/dejavu",
+        "/usr/local/share/fonts",
+    ):
+        dv = Path(base) / "DejaVuSans.ttf"
+        if dv.is_file():
+            out.append(
+                (
+                    str(dv),
+                    str(Path(base) / "DejaVuSans-Bold.ttf"),
+                    str(Path(base) / "DejaVuSans-Oblique.ttf"),
+                    str(Path(base) / "DejaVuSans-BoldOblique.ttf"),
+                )
+            )
+    mac_arial = Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf")
+    if mac_arial.is_file():
+        out.append((str(mac_arial), str(mac_arial), str(mac_arial), str(mac_arial)))
+    return out
+
+
+def _mono_font_candidates() -> list[str]:
+    out: list[str] = []
+    try:
+        import matplotlib  # type: ignore[import-not-found]
+
+        m = Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf" / "DejaVuSansMono.ttf"
+        if m.is_file():
+            out.append(str(m))
+    except Exception:
+        pass
+    for p in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/System/Library/Fonts/Menlo.ttc",
+    ):
+        if Path(p).is_file():
+            out.append(p)
+    return out
+
+
+def _register_unicode_font() -> str:
+    """Register a Unicode TTF family (regular/bold/italic + a mono) with
+    ReportLab and return the body family name. Returns "" when none is
+    available (callers keep Helvetica + punctuation normalization)."""
+    global _UNICODE_FONT_FAMILY, _MONO_FONT_NAME
+    if _UNICODE_FONT_FAMILY is not None:
+        return _UNICODE_FONT_FAMILY
+    _UNICODE_FONT_FAMILY = ""
+    try:
+        from reportlab.pdfbase import pdfmetrics  # type: ignore[import-not-found]
+        from reportlab.pdfbase.ttfonts import TTFont  # type: ignore[import-not-found]
+    except Exception:
+        return _UNICODE_FONT_FAMILY
+    for regular, bold, italic, bolditalic in _candidate_unicode_fonts():
+        try:
+            family = "AFUnicode"
+            pdfmetrics.registerFont(TTFont(f"{family}", regular))
+            pdfmetrics.registerFont(TTFont(f"{family}-Bold", bold))
+            pdfmetrics.registerFont(TTFont(f"{family}-Italic", italic))
+            pdfmetrics.registerFont(TTFont(f"{family}-BoldItalic", bolditalic))
+            pdfmetrics.registerFontFamily(
+                family,
+                normal=family,
+                bold=f"{family}-Bold",
+                italic=f"{family}-Italic",
+                boldItalic=f"{family}-BoldItalic",
+            )
+            _UNICODE_FONT_FAMILY = family
+            break
+        except Exception:
+            continue
+    # A Unicode-capable mono for inline code / code blocks (best effort).
+    if _UNICODE_FONT_FAMILY:
+        for mono in _mono_font_candidates():
+            try:
+                pdfmetrics.registerFont(TTFont("AFMono", mono))
+                _MONO_FONT_NAME = "AFMono"
+                break
+            except Exception:
+                continue
+    return _UNICODE_FONT_FAMILY
+
 
 @dataclass(frozen=True)
 class PdfReadResult:
@@ -219,7 +363,7 @@ def _trim_url_punctuation(url: str) -> tuple[str, str]:
 
 def _inline_text_markup(text: str) -> str:
     escaped = escape(text)
-    escaped = re.sub(r"`([^`]+)`", r"<font name='Courier'>\1</font>", escaped)
+    escaped = re.sub(r"`([^`]+)`", rf"<font name='{_MONO_FONT_NAME}'>\1</font>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", escaped)
     return escaped
@@ -369,6 +513,21 @@ def _append_paragraph(story: list[Any], paragraph_lines: list[str], styles: dict
     paragraph_lines.clear()
 
 
+def _apply_font_family(styles: dict[str, Any], family: str) -> None:
+    """Point every text style at the registered Unicode family (mono styles at
+    the Unicode mono) so glyphs like Greek/math/em-dash render instead of tofu.
+    ReportLab resolves <b>/<i> via the registered font family."""
+    if not family:
+        return
+    for name, style in styles.items():
+        if name in ("Code",):
+            style.fontName = _MONO_FONT_NAME
+        elif name == "TableHeader":
+            style.fontName = f"{family}-Bold"
+        else:
+            style.fontName = family
+
+
 def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
     stylesheet = rl["getSampleStyleSheet"]()
     styles = {
@@ -426,6 +585,8 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
             spaceAfter=0.12 * rl["inch"],
         ),
     }
+
+    _apply_font_family(styles, _register_unicode_font())
 
     story: list[Any] = []
     if title:
@@ -521,7 +682,9 @@ def render_pdf_bytes(content: Any, *, title: str | None = None) -> tuple[bytes, 
     """Render text or Markdown-ish content to a PDF byte string with ReportLab."""
 
     rl = _require_reportlab()
-    text = _stringify_content(content)
+    text = _normalize_pdf_text(_stringify_content(content))
+    if title:
+        title = _normalize_pdf_text(str(title))
     buffer = BytesIO()
     doc = rl["SimpleDocTemplate"](
         buffer,

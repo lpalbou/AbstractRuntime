@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **PDF export rendered scientific + typographic glyphs as tofu boxes**
+  (`documents/pdf.py`): the ReportLab base-14 fonts (Helvetica) have no glyph
+  for characters LLMs routinely emit — non-breaking hyphen (U+2011), narrow
+  no-break space (U+202F), en/em dashes, Greek letters (Δ τ δ ε), math
+  operators (≤ ≥ ≈ ×), subscripts — so generated reports (e.g. co-scientist)
+  showed ■ boxes. Fix, two layers: (1) typographic punctuation/whitespace is
+  normalized to ASCII equivalents (`_normalize_pdf_text`) so it can never box
+  regardless of font; (2) a Unicode TTF font (DejaVuSans via matplotlib, or a
+  system font, or `ABSTRACTRUNTIME_PDF_FONT`) is registered and applied to all
+  text + a Unicode mono for code, so Greek/math/subscripts render as
+  themselves. Degrades to Helvetica + normalization when no TTF is available.
+  Regression-tested (`tests/test_pdf_unicode_rendering.py`): round-tripped PDFs
+  contain zero replacement/box chars and preserve the scientific glyphs.
+
 ### Added
 - **RuntimeHealth — counters, not folklore** (backlog 0054, operator-signed
   plan 2026-07-13; the observability wave's runtime half): the runtime's

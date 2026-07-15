@@ -3577,6 +3577,20 @@ class Runtime:
                     sub_vars[k] = v
                     continue
                 sub_vars[k] = v
+            # Skills teaching crosses the subflow hop too (0087 adversary
+            # P1-2, 2026-07-15: the block held exactly ONE composition level
+            # — wrapping an Agent node in a subflow, the ordinary
+            # modularization gesture, silently stripped it while provider/
+            # model at least degrade with a #FALLBACK). Same setdefault
+            # semantics as the workspace keys: an explicit child block wins.
+            parent_rt = parent_vars.get("_runtime")
+            skills_block = (parent_rt or {}).get("skills_block") if isinstance(parent_rt, dict) else None
+            if isinstance(skills_block, str) and skills_block.strip():
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault("skills_block", skills_block)
         except Exception:
             pass
         is_async = bool(effect.payload.get("async", False))

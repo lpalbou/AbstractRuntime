@@ -108,6 +108,46 @@ LOOP_PHASES = ("day", "between", "stopped")
 # one LLM turn (<= ~3 min timeout) + memory writes, never half an hour.
 LOOP_STATUS_STALE_SECONDS = 1800.0
 
+# SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
+# c2465): a sleep lasts at most ~1h, then the entity wakes. An explicit
+# `wake_at` on the state write overrides the default. The bound covers REAL
+# sleeps (operator/self/grant); it deliberately excludes `paused` (the kill
+# switch — nothing auto-clears an operator freeze) and visit yields
+# (mode=visiting is bookkeeping over an OPEN conversation — the gateway's
+# stranded-visit reaper owns that lane). Loop-alive entities enforce it at
+# the asleep idle gate; loop-less homes need the gateway sweeper.
+SLEEP_BOUND_SECONDS = 3600.0
+
+
+def sleep_bound_deadline(state: Dict[str, Any]) -> Optional[Any]:
+    """The UTC datetime at which a bounded sleep is due to end, or None when
+    the bound does not apply (not asleep / visit yield / unparseable clock).
+    Module-level so the gateway sweeper can reuse the exact predicate."""
+    from datetime import datetime, timedelta, timezone
+
+    def _aware(raw: str) -> Optional[datetime]:
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        # Naive timestamps (hand-edited state files) read as UTC — a naive/
+        # aware comparison would otherwise raise inside the idle gate.
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    if str(state.get("state") or "") != "asleep":
+        return None
+    if str(state.get("mode") or "") == "visiting":
+        return None
+    if "auto-yield" in str(state.get("reason") or ""):
+        return None
+    wake_at = _aware(str(state.get("wake_at") or "").strip())
+    if wake_at is not None:
+        return wake_at
+    changed = _aware(str(state.get("changed_at") or "").strip())
+    if changed is None:
+        return None
+    return changed + timedelta(seconds=SLEEP_BOUND_SECONDS)
+
 
 def _pid_start_time(pid: Any) -> Optional[str]:
     """The OS-recorded start time of `pid`, as ps prints it (lstart) — the
@@ -991,7 +1031,7 @@ def life_sleep_stats(home_dir: Path) -> Dict[str, Any]:
     import json
 
     path = Path(home_dir) / "state_history.jsonl"
-    sleeps = wakes = self_elected = operator = transitions = 0
+    sleeps = wakes = self_elected = operator = visit_yields = transitions = 0
     if path.exists():
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -1006,8 +1046,15 @@ def life_sleep_stats(home_dir: Path) -> Dict[str, Any]:
                 state = str(rec.get("state") or "").strip().lower()
                 if state == "asleep":
                     sleeps += 1
-                    if str(rec.get("written_by")) == "self":
+                    who = str(rec.get("written_by"))
+                    # Visit-door yields are MACHINE bookkeeping (entity c2465
+                    # ask 2): before the structural stamp they counted as
+                    # operator sleeps and inflated that bucket. Legacy yields
+                    # (written_by=operator, mode=visiting) fold in too.
+                    if who == "self":
                         self_elected += 1
+                    elif who == "visit-door" or str(rec.get("mode") or "") == "visiting":
+                        visit_yields += 1
                     else:
                         operator += 1
                 elif state == "awake":
@@ -1018,6 +1065,7 @@ def life_sleep_stats(home_dir: Path) -> Dict[str, Any]:
         "sleeps": sleeps,
         "self_elected": self_elected,
         "operator": operator,
+        "visit_yields": visit_yields,
         "wakes": wakes,
         "transitions": transitions,
         "sleep_share": (sleeps / transitions) if transitions else 0.0,
@@ -1025,7 +1073,13 @@ def life_sleep_stats(home_dir: Path) -> Dict[str, Any]:
 
 
 def write_entity_state(
-    home_dir: Path, state: str, *, reason: str = "", mode: str = "", written_by: str = "operator"
+    home_dir: Path,
+    state: str,
+    *,
+    reason: str = "",
+    mode: str = "",
+    written_by: str = "operator",
+    wake_at: str = "",
 ) -> Dict[str, Any]:
     """Write the operator (or SELF) state (the CLI/gateway surface calls this).
 
@@ -1058,6 +1112,14 @@ def write_entity_state(
     # sleeping, he is in conversation.
     if mode:
         payload["mode"] = str(mode).strip().lower()
+    # Optional explicit wake deadline (decision:sleep-is-bounded): UTC-
+    # normalized at the write boundary, same rule as WAIT_UNTIL deadlines.
+    if wake_at:
+        from ..core.runtime import normalize_utc_iso
+
+        normalized_wake = normalize_utc_iso(str(wake_at))
+        if normalized_wake:
+            payload["wake_at"] = normalized_wake
     path = Path(home_dir) / "state"
     # ATOMIC (gateway whole-package audit P2-6, 2026-07-13, security-adjacent:
     # the reader fails OPEN — read_entity_state treats an unreadable file as
@@ -1289,6 +1351,7 @@ class LifeLoop:
                 self.out(f"#FALLBACK could not mark self-sleep state: {e}")
         self.out("(sleeping - consolidating the day)")
         if self.on_sleep is None:
+            self._clear_dreaming_badge(reason)
             return None
         dream_lease: Optional["DirectoryLease"] = None
         if self.state_home is not None:
@@ -1302,6 +1365,7 @@ class LifeLoop:
                     "#FALLBACK another writer holds the home; sleeping without a "
                     "dream this night (the pass is idempotent - next sleep runs it)"
                 )
+                self._clear_dreaming_badge(reason)
                 return None
         try:
             result = self.on_sleep()
@@ -1316,6 +1380,66 @@ class LifeLoop:
         finally:
             if dream_lease is not None:
                 dream_lease.release()
+            # mode=dreaming clears the moment the pass ends (entity c2465
+            # ask 3, answered YES): the badge claimed present-tense
+            # consolidation for the whole nap while the pass finishes in
+            # seconds — the rest of the nap is honest "resting".
+            self._clear_dreaming_badge(reason)
+
+    def _clear_dreaming_badge(self, reason: str) -> None:
+        """Rewrite mode dreaming -> resting once the consolidation pass has
+        ended (or never ran), guarded to OUR OWN self-sleep only — an
+        operator state written during the pass stands untouched."""
+        if self.state_home is None:
+            return
+        try:
+            current = read_entity_state(self.state_home)
+            if (
+                current.get("state") == "asleep"
+                and str(current.get("written_by")) == "self"
+                and str(current.get("mode") or "") == "dreaming"
+            ):
+                # Carry the ORIGINAL sleep deadline through the rewrite —
+                # a fresh changed_at must not restart the bound clock.
+                deadline = sleep_bound_deadline(current)
+                write_entity_state(
+                    self.state_home, "asleep",
+                    reason=f"self-elected sleep: {reason}", mode="resting", written_by="self",
+                    wake_at=deadline.isoformat() if deadline is not None else "",
+                )
+        except Exception as e:  # noqa: BLE001 - a badge fix must never break the nap
+            self.out(f"#FALLBACK could not clear the dreaming badge: {e}")
+
+    def _bounded_asleep_or_paused(self, s: Dict[str, Any]) -> bool:
+        """Idle predicate for the asleep/paused gate, WITH the sleep bound
+        (decision:sleep-is-bounded, entity c2465 ask 2): a real sleep older
+        than its deadline wakes the entity instead of idling forever.
+        `paused` never auto-clears (kill switch); visit yields are excluded
+        inside sleep_bound_deadline (the gateway reaper's lane). The wake
+        write is the predicate's one deliberate side effect — documented
+        here because _idle_while's contract is otherwise pure reads."""
+        from datetime import datetime, timezone
+
+        if s["state"] == "paused":
+            return True
+        if s["state"] != "asleep":
+            return False
+        deadline = sleep_bound_deadline(s)
+        if deadline is not None and datetime.now(timezone.utc) >= deadline:
+            if self.state_home is not None:
+                try:
+                    write_entity_state(
+                        self.state_home, "awake",
+                        reason=f"sleep bound reached (~{SLEEP_BOUND_SECONDS / 3600:g}h) - "
+                        "a sleep is bounded; own time resumes",
+                        written_by="sleep-bound",
+                    )
+                    self.out("(sleep bound reached - waking)")
+                    return False
+                except Exception as e:  # noqa: BLE001 - a failed wake write keeps idling honestly
+                    self.out(f"#FALLBACK sleep-bound wake write failed: {e}")
+            return True
+        return True
 
     def _wake_from_self_sleep(self) -> None:
         """Return to awake after a self-elected sleep — but only if the state
@@ -1460,9 +1584,7 @@ class LifeLoop:
             gate = self._operator_state()
             if gate["state"] in ("asleep", "paused"):
                 self.out(f"({gate['state']} by operator{self._since(gate)} - idling)")
-                woke = self._idle_while(
-                    lambda s: s["state"] in ("asleep", "paused"), phase="between"
-                )
+                woke = self._idle_while(self._bounded_asleep_or_paused, phase="between")
                 if woke["state"] == "stop":
                     report.stopped_by = self.stop_cause or "stop_file"
                     break

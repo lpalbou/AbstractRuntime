@@ -538,6 +538,30 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _resolve_report_branding(payload: Dict[str, Any]) -> Any:
+        """Branding for report writers: ON by default with run provenance.
+
+        The framework identity (AbstractFramework/AbstractFlow · date ·
+        workflow@version · abstractframework.ai) rides every generated
+        pdf/docx discreetly (operator directive 2026-07-15). A `branding`
+        input of False/"false"/"none"/"off" disables it; a dict merges over
+        the defaults. The workflow label derives from the run's workflow id
+        (`bundle@version:flow` → `bundle@version`; plain ids stay as-is).
+        """
+        raw = payload.get("branding")
+        if isinstance(raw, str) and raw.strip().lower() in {"false", "none", "off", "0"}:
+            return None
+        if raw is False:
+            return None
+        wid = str(payload.get("_runtime_workflow_id") or "").strip()
+        workflow_label = wid.split(":", 1)[0] if wid else ""
+        defaults: Dict[str, Any] = {"workflow": workflow_label}
+        if isinstance(raw, dict):
+            merged = dict(defaults)
+            merged.update({k: v for k, v in raw.items() if v is not None})
+            return merged
+        return defaults
+
     def _create_write_pdf_handler(_data: Dict[str, Any]):
         def handler(input_data: Any) -> Dict[str, Any]:
             payload = input_data if isinstance(input_data, dict) else {}
@@ -554,7 +578,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             title = payload.get("title")
             pdf_title = title.strip() if isinstance(title, str) and title.strip() else None
-            pdf_bytes, metadata = render_pdf_bytes(payload.get("content"), title=pdf_title)
+            pdf_bytes, metadata = render_pdf_bytes(
+                payload.get("content"), title=pdf_title, branding=_resolve_report_branding(payload)
+            )
 
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(pdf_bytes)
@@ -582,7 +608,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             title = payload.get("title")
             docx_title = title.strip() if isinstance(title, str) and title.strip() else None
-            docx_bytes, metadata = render_docx_bytes(payload.get("content"), title=docx_title)
+            docx_bytes, metadata = render_docx_bytes(
+                payload.get("content"), title=docx_title, branding=_resolve_report_branding(payload)
+            )
 
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(docx_bytes)

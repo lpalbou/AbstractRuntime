@@ -1212,6 +1212,26 @@ def _create_visual_agent_effect_handler(
             if isinstance(stt_lang, str) and stt_lang.strip():
                 runtime_ns.setdefault("stt_language", stt_lang.strip())
 
+            # Skills passthrough (card 0087, gateway seam c2286): the root
+            # run's trust-gated `skills_block` reaches Agent-node subruns.
+            # Agent NODES are host-structured workflow composition — they
+            # already inherit provider/model/thinking by precedent — not
+            # model-elected delegation, so the agent package's keep-slots-
+            # out-of-delegate-children rule does not apply here. The block
+            # rides VERBATIM (byte-stable per run: the prompt-cache
+            # contract; never stripped or rebuilt), and `read_skill` joins
+            # an EXPLICIT child allowlist so the block's both-halves
+            # contract (index in prompt + executor reachable) stays intact.
+            # An empty allowlist means registry defaults (which carry
+            # read_skill when the host registered it) — appending there
+            # would RESTRICT the child to one tool, so it stays untouched.
+            skills_block = parent_runtime.get("skills_block")
+            if isinstance(skills_block, str) and skills_block.strip():
+                runtime_ns.setdefault("skills_block", skills_block)
+                child_tools = runtime_ns.get("allowed_tools")
+                if isinstance(child_tools, list) and child_tools and "read_skill" not in child_tools:
+                    child_tools.append("read_skill")
+
         thinking_value = _normalize_thinking(thinking)
         if thinking_value is None and isinstance(parent_runtime, dict):
             thinking_value = _normalize_thinking(parent_runtime.get("thinking"))
@@ -2372,6 +2392,13 @@ def _create_visual_function_handler(
             for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
                 if key in run.vars:
                     ambient[key] = run.vars.get(key)
+            # Report writers also receive the run's workflow identity so the
+            # rendered documents can carry honest provenance (which workflow
+            # and version produced this report) without any flow wiring.
+            if visual_node_type in {"write_pdf", "write_docx"}:
+                wid = getattr(run, "workflow_id", None)
+                if isinstance(wid, str) and wid.strip():
+                    ambient["_runtime_workflow_id"] = wid.strip()
             if ambient:
                 if isinstance(input_data, dict):
                     merged_input = dict(input_data)

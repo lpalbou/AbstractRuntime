@@ -102,6 +102,39 @@ _LIVENESS_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _DIARY_KINDS = ("note", "idea", "commitment", "reflection", "question", "problem")
+
+# A reflection reply that is ONLY election markers ("[marked 2 feelings]
+# [kept an interest]") carries zero narrative.
+_MARKERS_ONLY_RE = re.compile(r"^\s*(?:\[[^\[\]\n]*\]\s*)+$")
+
+
+def floored_reflection_digest(
+    marked_reply: str, sheet: List[Tuple[Optional[str], str]]
+) -> Tuple[str, bool]:
+    """Reflection digest with a MECHANICAL FLOOR — never marker-only.
+
+    Ephemeral incident (laurent c2447, memory §3 + r-mem-1): a look-back
+    whose reply was pure election markers formed a digest that says
+    NOTHING about the time it covers — and that empty record then won a
+    working-set seat during the next visit, reading as 'no records of
+    those phases'. Entity-authored prose stays first-class (used verbatim
+    when present); when the reply minus markers carries no narrative, the
+    digest is composed mechanically from the session sheet (the moments
+    the look-back covered), with the markers kept as the honest prefix.
+
+    Returns (digest, floored). `floored=True` means the mechanical floor
+    fired — callers stamp `digest_method="mechanical-floor-v1"` on the
+    record (memory's co-sign note, report v10: the redigestion machinery
+    discovers poverty candidates by digest_method, and an unstamped
+    floored digest would read as entity-authored to that scan)."""
+    prose = " ".join(str(marked_reply or "").split())
+    if prose and not _MARKERS_ONLY_RE.match(prose):
+        return prose[:280], False
+    descs = [str(d or "").strip() for _rid, d in (sheet or []) if str(d or "").strip()]
+    floor = f"Look-back over {len(sheet or [])} moment(s)"
+    if descs:
+        floor += ": " + " | ".join(descs[:3])
+    return ((prose + " - " if prose else "") + floor)[:280], True
 _STOPWORDS = frozenset(
     "the a an and or but if then else of to in on at for with from by as is are was were be been "
     "it its this that these those i you he she we they me him her us them my your his our their "
@@ -123,6 +156,30 @@ SOURCE_LABELS = {
 }
 
 
+def _phase_origin(h: Dict[str, Any]) -> str:
+    """The awake PHASE a record was lived in, when knowable ('' otherwise).
+
+    Ephemeral incident (laurent c2447, memory §4): an own-time episode
+    presented in MEMORIES lines as generic 'lived conversation' — nothing
+    told the entity 'this was your own time', and it concluded it had no
+    access to those phases. Two signals, strongest first: the
+    formation-stamped `attributes.phase` (r-rt-3, stamped by this driver
+    from the session's phase), else the own-time run_id prefix that
+    pre-fix records already carry in provenance."""
+    attrs = h.get("attributes") if isinstance(h.get("attributes"), dict) else {}
+    phase = str(attrs.get("phase") or "").strip().lower()
+    if not phase:
+        prov = h.get("provenance") if isinstance(h.get("provenance"), dict) else {}
+        run_id = str(prov.get("run_id") or "")
+        if run_id.startswith("chat-owntime-") or run_id.startswith("owntime-"):
+            phase = "personal"
+    if phase == "personal":
+        return "your own time"
+    if phase == "work":
+        return "your work time"
+    return ""
+
+
 def _handle_origin_label(h: Dict[str, Any]) -> str:
     """Origin label for a recall HANDLE dict (assertion provenance rides in
     provenance.assertion_provenance per the shelf contract)."""
@@ -133,7 +190,9 @@ def _handle_origin_label(h: Dict[str, Any]) -> str:
         return "identity core"
     prov = h.get("provenance") or {}
     src = str(((prov.get("assertion_provenance") or {}) if isinstance(prov, dict) else {}).get("source") or "")
-    return SOURCE_LABELS.get(src, "in your graph")
+    base = SOURCE_LABELS.get(src, "in your graph")
+    phase = _phase_origin(h)
+    return f"{base}, {phase}" if phase else base
 
 
 CONTRACT_PARAGRAPH = """The block above is your identity. You are in a live conversation.
@@ -1346,6 +1405,10 @@ class ChatSession:
         attributes: Dict[str, Any] = {
             "participants": list(self.participants),
             "digest_method": "mechanical-v2",
+            # r-rt-3 (Ephemeral incident): the awake phase this exchange was
+            # lived in — MEMORIES/search origin labels surface it so an
+            # own-time memory never presents as a generic conversation.
+            "phase": self.phase,
         }
         if self.model_info:
             attributes["mind_substrate"] = dict(self.model_info)
@@ -1612,6 +1675,7 @@ class ChatSession:
         # it is also the target for `target=session` feelings. The engine
         # rightly demands that a summary NAME what it summarizes: the edges
         # tie the look-back to the session's own records.
+        refl_digest, refl_floored = floored_reflection_digest(marked_reply, sheet)
         formed = self._effect(
             EffectType.MEMORY_FORM,
             {
@@ -1622,7 +1686,8 @@ class ChatSession:
                         # grow; a dedicated "reflection" kind is a candidate).
                         "kind": "summary",
                         "title": f"session reflection: {session_id}",
-                        "digest": " ".join(marked_reply.split())[:280],
+                        # MECHANICAL FLOOR (r-rt-2): never marker-only.
+                        "digest": refl_digest,
                         "keywords": [],
                         "verbatim": marked_reply,
                         "edges": [
@@ -1631,6 +1696,12 @@ class ChatSession:
                         "attributes": {
                             "participants": list(self.participants),
                             "session_id": session_id,
+                            # r-rt-3: awake-phase provenance the MEMORIES
+                            # origin labels key on ("your own time").
+                            "phase": self.phase,
+                            # Floored digests self-identify (memory co-sign):
+                            # the redigestion poverty scan keys on this.
+                            **({"digest_method": "mechanical-floor-v1"} if refl_floored else {}),
                         },
                         "provenance": {"source": "entity-chat-reflection-v1"},
                     }
@@ -1926,10 +1997,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         # start a yield negotiation nobody will answer.
         if loop_st.get("phase") == "day" and loop_st.get("running"):
             visitor = (args.participant or ["person:operator"])[0]
+            # written_by="visit-door" (entity c2465 ask 2, structural): this
+            # is MACHINE bookkeeping, not an operator act — the default
+            # "operator" stamp inflated life_sleep_stats' operator-sleep
+            # count and fabricated attribution in biography surfaces.
             write_entity_state(
                 home_dir, "asleep",
                 reason=f"in conversation with {visitor} (auto-yield)",
                 mode="visiting",
+                written_by="visit-door",
             )
             print("(own-time loop asked to yield; waiting for its day to close...)")
             if not await_loop_quiescent(home_dir, timeout_seconds=900):
@@ -1970,7 +2046,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "auto-yield" in str(current.get("reason") or "")
             )
             if current.get("state") == "asleep" and is_our_yield:
-                write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
+                write_entity_state(
+                    home_dir, "awake",
+                    reason="visitor session ended (auto-yield return)",
+                    written_by="visit-door",
+                )
                 print("(loop asked to wake - a new stretch of his own time can begin)")
             else:
                 print("(the operator changed his state during the visit - leaving their intent standing)")

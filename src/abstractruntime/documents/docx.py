@@ -111,11 +111,50 @@ def _table(rows: list[list[str]]) -> str:
     )
 
 
-def _document_body(markdown_text: str, title: str | None) -> str:
+def _meta_paragraph(text: str) -> str:
+    """Small, gray, centered identity line (the discreet branding row)."""
+    return (
+        "<w:p>"
+        '<w:pPr><w:jc w:val="center"/><w:spacing w:after="80"/></w:pPr>'
+        '<w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="16"/></w:rPr>'
+        f'<w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
+        "</w:p>"
+    )
+
+
+def _rule_paragraph() -> str:
+    """Thin horizontal rule under the title block."""
+    return (
+        "<w:p><w:pPr>"
+        '<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="BFBFBF"/></w:pBdr>'
+        '<w:spacing w:after="200"/>'
+        "</w:pPr></w:p>"
+    )
+
+
+def _document_body(markdown_text: str, title: str | None, branding: dict[str, str] | None = None) -> str:
     lines = markdown_text.splitlines()
+    # Title/H1 dedup: the Title paragraph already carries it; a leading
+    # markdown H1 with the SAME text would print it twice.
+    if title:
+        for idx, probe in enumerate(lines):
+            if not probe.strip():
+                continue
+            m = re.match(r"^#\s+(.+?)\s*$", probe.strip())
+            if m and m.group(1).strip().lower() == title.strip().lower():
+                lines = lines[:idx] + lines[idx + 1 :]
+            break
     parts: list[str] = []
     if title:
         parts.append(_paragraph(title, style="Title"))
+    if branding:
+        bits = []
+        if branding.get("workflow"):
+            bits.append(branding["workflow"])
+        bits.append(branding["date"])
+        bits.append(f"{branding['framework']} / {branding['app']}")
+        parts.append(_meta_paragraph(" · ".join(bits) + f" — {branding['url']}"))
+        parts.append(_rule_paragraph())
 
     paragraph_lines: list[str] = []
     code_lines: list[str] = []
@@ -196,14 +235,19 @@ def _document_body(markdown_text: str, title: str | None) -> str:
     return "".join(parts)
 
 
-def _content_types_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _content_types_xml(*, with_footer: bool = False) -> str:
+    footer_override = (
+        '\n  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
+        if with_footer
+        else ""
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>{footer_override}
 </Types>
 """
 
@@ -217,11 +261,40 @@ def _rels_xml() -> str:
 """
 
 
-def _document_rels_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _document_rels_xml(*, with_footer: bool = False) -> str:
+    footer_rel = (
+        '\n  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
+        if with_footer
+        else ""
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>{footer_rel}
 </Relationships>
+"""
+
+
+def _footer_xml(branding: dict[str, str]) -> str:
+    """Running page footer: framework identity left, page number right."""
+    left_bits = [f"{branding['framework']} · {branding['url']}"]
+    if branding.get("workflow"):
+        left_bits.append(branding["workflow"])
+    left = escape(" · ".join(left_bits))
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="BFBFBF"/></w:pBdr>
+      <w:tabs><w:tab w:val="right" w:pos="10166"/></w:tabs>
+      <w:spacing w:before="60"/>
+    </w:pPr>
+    <w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="14"/></w:rPr><w:t xml:space="preserve">{left}</w:t></w:r>
+    <w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="14"/></w:rPr><w:tab/><w:t xml:space="preserve">Page </w:t></w:r>
+    <w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="14"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="14"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+    <w:r><w:rPr><w:color w:val="737373"/><w:sz w:val="14"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>
+  </w:p>
+</w:ftr>
 """
 
 
@@ -242,21 +315,36 @@ def _styles_xml() -> str:
 """
 
 
-def _core_props_xml(title: str | None) -> str:
+def _core_props_xml(title: str | None, branding: dict[str, str] | None = None) -> str:
     doc_title = escape(title or "AbstractRuntime DOCX")
+    extra = ""
+    if branding:
+        creator = escape(f"{branding['app']} — {branding['framework']} · {branding['url']}")
+        extra = f"\n  <dc:creator>{creator}</dc:creator>"
+        if branding.get("workflow"):
+            extra += f"\n  <dc:subject>{escape(branding['workflow'])}</dc:subject>"
+        extra += (
+            f'\n  <dcterms:created xsi:type="dcterms:W3CDTF">{escape(branding["date"])}</dcterms:created>'
+        )
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <dc:title>{doc_title}</dc:title>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>{doc_title}</dc:title>{extra}
 </cp:coreProperties>
 """
 
 
-def _document_xml(body: str) -> str:
+def _document_xml(body: str, *, with_footer: bool = False) -> str:
+    footer_ref = '\n      <w:footerReference w:type="default" r:id="rId2"/>' if with_footer else ""
+    xmlns_r = (
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        if with_footer
+        else ""
+    )
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"{xmlns_r}>
   <w:body>
     {body}
-    <w:sectPr>
+    <w:sectPr>{footer_ref}
       <w:pgSz w:w="12240" w:h="15840"/>
       <w:pgMar w:top="1037" w:right="1037" w:bottom="1037" w:left="1037" w:header="720" w:footer="720" w:gutter="0"/>
     </w:sectPr>
@@ -265,19 +353,47 @@ def _document_xml(body: str) -> str:
 """
 
 
-def render_docx_bytes(content: Any, *, title: str | None = None) -> tuple[bytes, dict[str, Any]]:
-    """Render text or Markdown-ish content to a DOCX byte string."""
+def _normalize_branding(branding: Any) -> dict[str, str] | None:
+    """Same contract as the PDF side: opt-in identity block with defaults."""
+    if not branding:
+        return None
+    raw = branding if isinstance(branding, dict) else {}
+    from datetime import datetime, timezone
+
+    return {
+        "framework": str(raw.get("framework") or "AbstractFramework"),
+        "app": str(raw.get("app") or "AbstractFlow"),
+        "url": str(raw.get("url") or "abstractframework.ai"),
+        "date": str(raw.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        "workflow": str(raw.get("workflow") or "").strip(),
+    }
+
+
+def render_docx_bytes(
+    content: Any, *, title: str | None = None, branding: Any = None
+) -> tuple[bytes, dict[str, Any]]:
+    """Render text or Markdown-ish content to a DOCX byte string.
+
+    When `branding` is provided, the document carries the framework identity
+    discreetly: a small meta line + rule under the title, a running page
+    footer (framework · url · workflow | page number), and honest core
+    properties (creator/subject/created date).
+    """
 
     text = _stringify_content(content)
-    body = _document_body(text, title)
+    brand = _normalize_branding(branding)
+    body = _document_body(text, title, brand)
+    with_footer = brand is not None
     buffer = BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", _content_types_xml())
+        zf.writestr("[Content_Types].xml", _content_types_xml(with_footer=with_footer))
         zf.writestr("_rels/.rels", _rels_xml())
-        zf.writestr("docProps/core.xml", _core_props_xml(title))
-        zf.writestr("word/_rels/document.xml.rels", _document_rels_xml())
+        zf.writestr("docProps/core.xml", _core_props_xml(title, brand))
+        zf.writestr("word/_rels/document.xml.rels", _document_rels_xml(with_footer=with_footer))
         zf.writestr("word/styles.xml", _styles_xml())
-        zf.writestr("word/document.xml", _document_xml(body))
+        if with_footer and brand is not None:
+            zf.writestr("word/footer1.xml", _footer_xml(brand))
+        zf.writestr("word/document.xml", _document_xml(body, with_footer=with_footer))
 
     data = buffer.getvalue()
     return data, {

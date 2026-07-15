@@ -57,6 +57,7 @@ from .chat import (
     _serialize_under_budget,
     clean_model_reply,
     compose_system_base,
+    floored_reflection_digest,
     parse_diary_blocks,
 )
 from .digest import mechanical_digest_v2
@@ -332,6 +333,13 @@ def build_visit_workflow(
         # Entity dress: prelude head, turn identity, word-free anchors.
         runtime_ns["system_prompt"] = str(visit.get("system_base") or "")
         runtime_ns["turn_id"] = str(turn.get("turn_id") or "")
+        # r-rt-1 (Ephemeral incident, laurent c2447 / agent F1): loop tails
+        # are TASK-agent chrome — "[loop] iteration N of 20" merged into the
+        # visitor's message read to the entity as "something automated is
+        # running". BRIDGE is the one place that knows this cycle is an
+        # entity visit; the adapters' tail block gates on this flag (agent's
+        # knob — harmless until it ships, honored the moment it does).
+        runtime_ns["suppress_loop_tail"] = True
         displayed = list(turn.get("displayed") or [])
         runtime_ns["llm_payload_extras"] = {
             "anchor_record_ids": [h.get("record_id") for h in displayed],
@@ -456,6 +464,8 @@ def build_visit_workflow(
         attributes: Dict[str, Any] = {
             "participants": list(visit["participants"]),
             "digest_method": "mechanical-v2",
+            # r-rt-3: awake-phase provenance for the origin labels.
+            "phase": "visit",
         }
         if visit_id:
             attributes["visit_id"] = str(visit_id)  # item-14 correlation key
@@ -634,6 +644,14 @@ def build_visit_workflow(
         if stage == "summary":
             refl["stage"] = "interest"
             refl["i"] = 0
+            # MECHANICAL FLOOR (r-rt-2, Ephemeral incident): never a
+            # marker-only digest — the sheet narrates when the look-back
+            # reply carried no prose. Floored digests self-identify via
+            # digest_method (memory co-sign: the redigestion poverty scan
+            # keys on it).
+            refl_digest, refl_floored = floored_reflection_digest(
+                str(refl["marked_reply"]), [(r, d) for r, d in sheet]
+            )
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -642,13 +660,15 @@ def build_visit_workflow(
                         "records": [{
                             "kind": "summary",
                             "title": f"session reflection: {run.session_id}",
-                            "digest": " ".join(str(refl["marked_reply"]).split())[:280],
+                            "digest": refl_digest,
                             "keywords": [],
                             "verbatim": str(refl["marked_reply"]),
                             "edges": [["summarizes", rid] for rid, _ in sheet if rid],
                             "attributes": {
                                 "participants": list(visit["participants"]),
                                 "session_id": str(run.session_id or ""),
+                                "phase": "visit",  # r-rt-3
+                                **({"digest_method": "mechanical-floor-v1"} if refl_floored else {}),
                                 **({"visit_id": str(visit_id)} if visit_id else {}),
                             },
                             "provenance": {"source": "entity-visit-run-reflection-v0"},

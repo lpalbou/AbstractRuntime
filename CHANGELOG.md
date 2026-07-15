@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Branded report exports** (2026-07-15, operator directive via the flow
+  seat, same exceptional lane as the PDF Unicode fix): `render_pdf_bytes` /
+  `render_docx_bytes` accept an opt-in `branding` payload and render a
+  discreet framework identity — small gray meta line under the title
+  (workflow@version · report date · AbstractFramework / AbstractFlow —
+  abstractframework.ai), thin rule, running page footer (identity left,
+  page number right; PDF later pages also get a tiny running header), and
+  honest document metadata (PDF author/creator/subject; DOCX core
+  properties + a real footer part with a PAGE field). The report DATE is
+  always present (defaults to generation date). Legacy no-branding calls
+  are byte-path unchanged. The `write_pdf`/`write_docx` visual nodes brand
+  BY DEFAULT with run provenance: the compiler injects the run's
+  workflow_id into their payloads (`_runtime_workflow_id`; `bundle@version:
+  flow` → `bundle@version` label) and the handlers honor a `branding` input
+  to override fields or disable (`false`/"off"). Both renderers also dedup
+  a leading markdown H1 identical to the document title (previously printed
+  twice). Regression tests: `tests/test_report_branding.py` (15 tests);
+  end-to-end pinned through a compiled visual-flow run.
+
 ### Fixed
+- **JsonFileRunStore scan memo — the pegged-gateway incident** (2026-07-15,
+  entity's live measurement c2394: the gateway process at ~98% CPU with a
+  worker thread burning in json.loads, taxing every endpoint through the
+  GIL; journey loads served at 1/12th of their generation speed): the
+  runner polls `list_runs(status=...)` ~3x per 0.25s, and at 3,241 run
+  files the 512-entry RunState LRU (deliberately bounded since the 1.5GB
+  incident) could not cover the directory — every poll evicted and
+  RE-PARSED ~2.7k multi-MB, mostly TERMINAL files that could never match
+  the RUNNING filter. New per-store SCAN MEMO: run_id → (mtime_ns, the
+  small index fields scans filter on — status/wait/ids/timestamps/
+  lifecycle, NEVER vars, ~300B/file so it covers any directory), validated
+  by stat per use (same cross-process freshness as the RunState cache),
+  fed by save()/load(), purged on delete(); unparseable files tombstone by
+  mtime so a torn file is not re-parsed every poll. `list_runs` filters on
+  the memo and full-loads only matches; `list_run_index` rows ARE the memo
+  fields (an index page over unchanged files parses nothing);
+  `list_due_wait_until` filters due-ness on the memo. Measured (800 files
+  / 163MB / 3 RUNNING, the live shape scaled): 381.6ms → 10.8ms per scan
+  (35x) — at the runner's 12 scans/s the old shape burned 4.6s CPU per
+  wall-second (the pegged thread), now ~13% of one core. Pinned in
+  `tests/test_json_store_scan_memo.py` (warm scans parse nothing,
+  cross-process mtime freshness, torn-file tombstone, delete purge, index
+  row shape, due-scan correctness).
+- **Agent-node skills passthrough** (card 0087 runtime half, gateway seam
+  c2286): visual Agent nodes execute as subruns whose `_runtime` is built
+  fresh, so the root run's trust-gated `skills_block` (gateway-resolved
+  from `input_data.skills`) never reached basic-agent-style workflows.
+  The parent block now rides into Agent-node child vars VERBATIM
+  (setdefault — byte-stable per run, the prompt-cache contract;
+  whitespace-only blocks never ride), and `read_skill` joins an EXPLICIT
+  child allowlist when a block rides (the both-halves contract: index in
+  prompt + executor reachable). An EMPTY child allowlist ([] = registry
+  defaults) deliberately stays untouched — appending there would restrict
+  the child to one tool; registry defaults already carry read_skill when
+  the host registered it. Pinned in
+  `tests/test_visual_agent_skills_block_passthrough.py`.
 - **PDF export rendered scientific + typographic glyphs as tofu boxes**
   (`documents/pdf.py`): the ReportLab base-14 fonts (Helvetica) have no glyph
   for characters LLMs routinely emit — non-breaking hyphen (U+2011), narrow

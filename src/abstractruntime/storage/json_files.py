@@ -68,16 +68,123 @@ class JsonFileRunStore(RunStore):
         # exactly what any non-owner reader is entitled to see.
         from collections import OrderedDict
 
-        self._run_cache: "OrderedDict[str, tuple[int, RunState]]" = OrderedDict()
+        self._run_cache: "OrderedDict[str, tuple[tuple[int, int, int], RunState]]" = OrderedDict()
         self._run_cache_max = max(1, int(run_cache_max))
+        # SCAN MEMO (2026-07-15, entity's measured incident): run_id ->
+        # (identity-token, index-fields dict). The RunState LRU above cannot
+        # cover a large directory (512 entries vs 3,241 files on the live
+        # box), so every runner poll evicted and RE-PARSED ~2.7k multi-MB,
+        # mostly TERMINAL files that could never match its RUNNING filter —
+        # one worker thread pegged ~98% CPU deep in json.loads, taxing every
+        # endpoint through the GIL. The memo holds ONLY the small fields
+        # scans filter on (status/wait/ids/timestamps/lifecycle — never
+        # vars), so it covers the WHOLE directory in ~300B/file; entries are
+        # identity-validated per use (same cross-process guarantee as the
+        # RunState cache) and terminal files never change, so scans cost one
+        # stat each instead of a parse. Unparseable files memo a tombstone
+        # so a torn file is not re-parsed on every poll.
+        self._scan_memo_lock = threading.Lock()
+        self._scan_memo: Dict[str, tuple[tuple[int, int, int], Dict[str, Any]]] = {}
 
-    def _cache_put(self, rid: str, mtime_ns: int, run: RunState) -> None:
+    @staticmethod
+    def _stat_token(st: Any) -> tuple[int, int, int]:
+        """File identity token: (mtime_ns, inode, size).
+
+        mtime alone is NOT enough (scan-memo adversary P1-1, 2026-07-15): on
+        1s-granularity filesystems (HFS+, some NFS/SMB, FAT) or under
+        mtime-preserving tooling (rsync -a, tar), a rewrite can land with an
+        identical mtime and the stale filter would then exclude the file
+        BEFORE the full load that is the only thing that refreshes the memo
+        — permanent staleness at any scale, plus an incoherent shape the
+        old code could never produce (a status filter passing on a stale
+        memo while the loaded object disagrees). `save()` writes via
+        tmp.replace(), which mints a NEW INODE on every save, so the inode
+        catches every same-mtime rewrite through the store's own write path
+        at zero extra syscall cost; size catches most external in-place
+        edits."""
+        return (
+            int(getattr(st, "st_mtime_ns", 0) or 0),
+            int(getattr(st, "st_ino", 0) or 0),
+            int(getattr(st, "st_size", 0) or 0),
+        )
+
+    def _cache_put(self, rid: str, token: tuple[int, int, int], run: RunState) -> None:
         """Insert/refresh under the lock, evicting least-recently-used."""
         with self._run_cache_lock:
-            self._run_cache[rid] = (mtime_ns, run)
+            self._run_cache[rid] = (token, run)
             self._run_cache.move_to_end(rid)
             while len(self._run_cache) > self._run_cache_max:
                 self._run_cache.popitem(last=False)
+        self._scan_memo_put(rid, token, self._index_fields_of(run))
+
+    @staticmethod
+    def _index_fields_of(run: RunState) -> Dict[str, Any]:
+        """The small filter/index fields scans need — never vars."""
+        waiting = run.waiting
+        return {
+            "status": str(getattr(run.status, "value", run.status)),
+            "workflow_id": str(run.workflow_id or ""),
+            "session_id": str(run.session_id) if run.session_id else None,
+            "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
+            "actor_id": str(run.actor_id) if run.actor_id else None,
+            "created_at": str(run.created_at) if run.created_at else None,
+            "updated_at": str(run.updated_at) if run.updated_at else None,
+            "wait_reason": str(getattr(getattr(waiting, "reason", None), "value", waiting.reason)) if waiting is not None else None,
+            "wait_until": str(waiting.until) if (waiting is not None and waiting.until) else None,
+            **run_lifecycle_index_fields(run.vars),
+        }
+
+    def _scan_memo_put(self, rid: str, token: tuple[int, int, int], fields: Dict[str, Any]) -> None:
+        if not rid or token[0] <= 0:
+            return
+        with self._scan_memo_lock:
+            self._scan_memo[rid] = (token, fields)
+
+    def _scan_memo_prune(self, seen_rids: set) -> None:
+        """Drop memo entries whose files vanished (scan-memo adversary P2-4:
+        externally pruned runs — the class's own recommended maintenance —
+        held ~1.6KB/entry forever). Callers pass the ids the glob just saw;
+        the set difference is cheap on a walk we already paid for."""
+        with self._scan_memo_lock:
+            for rid in set(self._scan_memo) - seen_rids:
+                self._scan_memo.pop(rid, None)
+
+    def _scan_fields(self, p: Path) -> Optional[Dict[str, Any]]:
+        """Index fields for a run file: memo hit when the identity token
+        matches, else one parse. None = unreadable file (tombstoned by
+        token so a torn file is not re-parsed every poll)."""
+        rid = self._run_id_from_path(p)
+        try:
+            token = self._stat_token(p.stat())
+        except Exception:
+            return None
+        if rid and token[0] > 0:
+            with self._scan_memo_lock:
+                cached = self._scan_memo.get(rid)
+            if cached is not None and tuple(cached[0]) == token:
+                fields = cached[1]
+                return None if fields.get("__unparseable") else fields
+        # ANY load failure tombstones for scans (adversary P2-3: a valid-JSON
+        # file with a bogus status enum raised ValueError out of every scan
+        # API on every poll, and every run ranked below it was lost with the
+        # call). Direct load() stays loud — polls must survive, repairs must
+        # see the real error.
+        try:
+            run = self._load_from_path(p)
+        except Exception as e:  # noqa: BLE001 - poll lanes survive bad files
+            logger.warning("#FALLBACK run file %s unreadable for scans (%s); tombstoned", p.name, e)
+            run = None
+        if run is None:
+            self._scan_memo_put(rid, token, {"__unparseable": True})
+            return None
+        fields = self._index_fields_of(run)
+        # Memoize under the FILENAME-derived id (adversary P2-1): a
+        # glob-matching copy (run_<id>_backup.json) has an internal run_id
+        # that differs from its filename — _load_from_path's cache put keys
+        # on the internal id, so the copy never memoized and every warm scan
+        # re-parsed it (and its put poisoned the original's entry pre-token).
+        self._scan_memo_put(rid, token, fields)
+        return fields
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"run_{run_id}.json"
@@ -162,12 +269,11 @@ class JsonFileRunStore(RunStore):
                 pass
         self._update_children_index_on_save(run)
         try:
-            st = p.stat()
-            mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+            token = self._stat_token(p.stat())
         except Exception:
-            mtime_ns = 0
-        if mtime_ns > 0:
-            self._cache_put(str(run.run_id), mtime_ns, run)
+            token = (0, 0, 0)
+        if token[0] > 0:
+            self._cache_put(str(run.run_id), token, run)
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)
@@ -188,20 +294,21 @@ class JsonFileRunStore(RunStore):
             self._drop_from_children_index(rid)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
+            with self._scan_memo_lock:
+                self._scan_memo.pop(rid, None)
         return bool(existed)
 
     def _load_from_path(self, p: Path) -> Optional[RunState]:
         """Load a RunState from a file path."""
         rid_hint = self._run_id_from_path(p)
         try:
-            st = p.stat()
-            mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
+            token = self._stat_token(p.stat())
         except Exception:
-            mtime_ns = 0
-        if rid_hint and mtime_ns > 0:
+            token = (0, 0, 0)
+        if rid_hint and token[0] > 0:
             with self._run_cache_lock:
                 cached = self._run_cache.get(rid_hint)
-                if cached is not None and int(cached[0]) == int(mtime_ns):
+                if cached is not None and tuple(cached[0]) == token:
                     self._run_cache.move_to_end(rid_hint)  # LRU touch
                     return cached[1]
         try:
@@ -249,8 +356,8 @@ class JsonFileRunStore(RunStore):
             parent_run_id=data.get("parent_run_id"),
         )
         rid = str(getattr(run, "run_id", "") or "").strip() or rid_hint
-        if rid and mtime_ns > 0:
-            self._cache_put(rid, mtime_ns, run)
+        if rid and token[0] > 0:
+            self._cache_put(rid, token, run)
         return run
 
     def _iter_all_runs(self) -> List[RunState]:
@@ -310,19 +417,28 @@ class JsonFileRunStore(RunStore):
                 continue
             ranked.append((mtime_ns, p))
         ranked.sort(key=lambda x: x[0], reverse=True)
+        self._scan_memo_prune({self._run_id_from_path(p) for _m, p in ranked})
 
         results: List[RunState] = []
         for _mtime_ns, p in ranked:
+            # Memo-first filtering (2026-07-15 scan-memo): non-matching
+            # unchanged files cost one stat, never a parse — the runner's
+            # RUNNING polls used to re-parse every multi-MB terminal file
+            # the 512-entry RunState LRU had just evicted.
+            fields = self._scan_fields(p)
+            if fields is None:
+                continue
+            if status is not None and fields.get("status") != str(getattr(status, "value", status)):
+                continue
+            if workflow_id is not None and fields.get("workflow_id") != str(workflow_id):
+                continue
+            if wait_reason is not None:
+                want = str(getattr(wait_reason, "value", wait_reason))
+                if fields.get("wait_reason") != want:
+                    continue
             run = self._load_from_path(p)
             if run is None:
                 continue
-            if status is not None and run.status != status:
-                continue
-            if workflow_id is not None and run.workflow_id != workflow_id:
-                continue
-            if wait_reason is not None:
-                if run.waiting is None or run.waiting.reason != wait_reason:
-                    continue
             results.append(run)
             if len(results) >= lim:
                 break
@@ -353,39 +469,39 @@ class JsonFileRunStore(RunStore):
         # mtime ranking approximates updated_at; oldest_first inverts so a
         # stall query's window keeps the OLDEST waits (0054 adversary P1-1).
         ranked.sort(key=lambda x: x[0], reverse=not oldest_first)
+        self._scan_memo_prune({self._run_id_from_path(p) for _m, p in ranked})
 
         out: List[Dict[str, Any]] = []
         sid = str(session_id or "").strip() if session_id is not None else None
 
         for _mtime_ns, p in ranked:
-            run = self._load_from_path(p)
-            if run is None:
+            # Memo-first (2026-07-15 scan-memo): index rows ARE the memo
+            # fields — an index page over unchanged files parses nothing.
+            fields = self._scan_fields(p)
+            if fields is None:
                 continue
-            if status is not None and run.status != status:
+            if status is not None and fields.get("status") != str(getattr(status, "value", status)):
                 continue
-            if workflow_id is not None and run.workflow_id != workflow_id:
+            if workflow_id is not None and fields.get("workflow_id") != str(workflow_id):
                 continue
-            if sid is not None and str(run.session_id or "").strip() != sid:
+            if sid is not None and str(fields.get("session_id") or "").strip() != sid:
                 continue
-            if bool(root_only) and str(run.parent_run_id or "").strip():
+            if bool(root_only) and str(fields.get("parent_run_id") or "").strip():
                 continue
 
-            waiting = run.waiting
-            out.append(
-                {
-                    "run_id": str(run.run_id),
-                    "workflow_id": str(run.workflow_id),
-                    "status": str(getattr(run.status, "value", run.status)),
-                    "wait_reason": str(getattr(getattr(waiting, "reason", None), "value", waiting.reason)) if waiting is not None else None,
-                    "wait_until": str(getattr(waiting, "until", None)) if waiting is not None else None,
-                    "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
-                    "actor_id": str(run.actor_id) if run.actor_id else None,
-                    "session_id": str(run.session_id) if run.session_id else None,
-                    "created_at": str(run.created_at) if run.created_at else None,
-                    "updated_at": str(run.updated_at) if run.updated_at else None,
-                    **run_lifecycle_index_fields(run.vars),
-                }
-            )
+            rid = self._run_id_from_path(p)
+            # Copy dict values one level deep (adversary P2-2): rows alias
+            # the memo's nested run_lifecycle dict — a consumer mutating
+            # row["run_lifecycle"] would poison every future index call
+            # until the file's identity changes.
+            out.append({
+                "run_id": rid,
+                **{
+                    k: (dict(v) if isinstance(v, dict) else v)
+                    for k, v in fields.items()
+                    if not k.startswith("__")
+                },
+            })
             if len(out) >= lim:
                 break
 
@@ -403,19 +519,27 @@ class JsonFileRunStore(RunStore):
         the scheduler must wake a parked visit whose deadline passed)."""
         results: List[RunState] = []
 
-        for run in self._iter_all_runs():
-            if run.status != RunStatus.WAITING:
+        # Memo-first (2026-07-15 scan-memo): the scheduler's due-scan runs on
+        # a poll loop too — filter on stat-validated fields, parse only runs
+        # that are actually due.
+        paths = list(self._base.glob("run_*.json"))
+        self._scan_memo_prune({self._run_id_from_path(p) for p in paths})
+        for p in paths:
+            fields = self._scan_fields(p)
+            if fields is None:
                 continue
-            if run.waiting is None:
+            if fields.get("status") != RunStatus.WAITING.value:
                 continue
-            if run.waiting.reason not in (WaitReason.UNTIL, WaitReason.EVENT):
+            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value):
                 continue
-            if run.waiting.until is None:
+            until = fields.get("wait_until")
+            if not until:
                 continue
-
             # Check if the wait time has passed (ISO string comparison works for UTC)
-            if run.waiting.until <= now_iso:
-                results.append(run)
+            if str(until) <= now_iso:
+                run = self._load_from_path(p)
+                if run is not None and run.waiting is not None and run.waiting.until:
+                    results.append(run)
 
         # Sort by waiting.until ascending (earliest due first)
         results.sort(key=lambda r: r.waiting.until if r.waiting else "")

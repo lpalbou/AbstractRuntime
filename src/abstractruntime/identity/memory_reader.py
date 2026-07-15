@@ -130,7 +130,20 @@ class HomeMemoryReader:
         if kind in ("value", "purpose", "trait", "claim"):
             return "your identity core (planted at creation or revised by you)"
         prov = assertion.provenance if isinstance(assertion.provenance, dict) else {}
-        return self._SOURCE_LABELS.get(str(prov.get("source") or ""), "recorded in your graph")
+        base = self._SOURCE_LABELS.get(str(prov.get("source") or ""), "recorded in your graph")
+        # Awake-phase provenance (Ephemeral incident, r-rt-3): an own-time
+        # record must self-identify — same dual rule as the MEMORIES lines
+        # (formation-stamped attributes.phase, else the own-time run_id).
+        phase = str(attrs.get("phase") or "").strip().lower()
+        if not phase:
+            run_id = str(prov.get("run_id") or "")
+            if run_id.startswith("chat-owntime-") or run_id.startswith("owntime-"):
+                phase = "personal"
+        if phase == "personal":
+            return f"{base}, during your own time"
+        if phase == "work":
+            return f"{base}, during your work time"
+        return base
 
     @staticmethod
     def assertion_matches(assertion: Any, needle: str) -> bool:

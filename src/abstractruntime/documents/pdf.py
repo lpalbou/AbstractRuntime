@@ -528,7 +528,13 @@ def _apply_font_family(styles: dict[str, Any], family: str) -> None:
             style.fontName = family
 
 
-def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+def _build_pdf_story(
+    markdown_text: str,
+    title: str | None,
+    rl: dict[str, Any],
+    *,
+    branding: dict[str, str] | None = None,
+) -> tuple[list[Any], dict[str, Any]]:
     stylesheet = rl["getSampleStyleSheet"]()
     styles = {
         "Title": stylesheet["Title"],
@@ -591,7 +597,35 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
     story: list[Any] = []
     if title:
         story.append(rl["Paragraph"](_paragraph_markup(title), styles["Title"]))
-        story.append(rl["Spacer"](1, 0.18 * rl["inch"]))
+        story.append(rl["Spacer"](1, 0.06 * rl["inch"]))
+    if branding:
+        # Discreet identity line under the title: workflow@version · date ·
+        # framework — url. Small, gray, followed by a thin rule.
+        meta_style = rl["ParagraphStyle"](
+            "AFReportMeta",
+            parent=styles["BodyText"],
+            fontName=styles["BodyText"].fontName,
+            fontSize=8,
+            leading=10,
+            textColor=rl["colors"].Color(0.45, 0.45, 0.45),
+            alignment=1 if title else 0,  # centered under a title, left otherwise
+        )
+        bits = []
+        if branding.get("workflow"):
+            bits.append(branding["workflow"])
+        bits.append(branding["date"])
+        bits.append(f"{branding['framework']} / {branding['app']}")
+        meta_text = " · ".join(bits) + f' — <link href="https://{branding["url"]}">{branding["url"]}</link>'
+        story.append(rl["Paragraph"](meta_text, meta_style))
+        story.append(rl["Spacer"](1, 0.06 * rl["inch"]))
+        rule = rl["Table"]([[""]], colWidths=[6.9 * rl["inch"]], rowHeights=[1])
+        rule.setStyle(rl["TableStyle"]([
+            ("LINEBELOW", (0, 0), (-1, -1), 0.5, rl["colors"].Color(0.75, 0.75, 0.75)),
+        ]))
+        story.append(rule)
+        story.append(rl["Spacer"](1, 0.16 * rl["inch"]))
+    elif title:
+        story.append(rl["Spacer"](1, 0.12 * rl["inch"]))
 
     paragraph_lines: list[str] = []
     bullet_items: list[Any] = []
@@ -611,6 +645,16 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
             code_lines.clear()
 
     lines = markdown_text.splitlines()
+    # Title/H1 dedup: when the document already renders a title page line,
+    # a leading markdown H1 with the SAME text would print it twice.
+    if title:
+        for idx, probe in enumerate(lines):
+            if not probe.strip():
+                continue
+            m = re.match(r"^#\s+(.+?)\s*$", probe.strip())
+            if m and m.group(1).strip().lower() == title.strip().lower():
+                lines = lines[:idx] + lines[idx + 1 :]
+            break
     i = 0
     while i < len(lines):
         raw_line = lines[i]
@@ -678,13 +722,46 @@ def _build_pdf_story(markdown_text: str, title: str | None, rl: dict[str, Any]) 
     return story, styles
 
 
-def render_pdf_bytes(content: Any, *, title: str | None = None) -> tuple[bytes, dict[str, Any]]:
-    """Render text or Markdown-ish content to a PDF byte string with ReportLab."""
+def _normalize_branding(branding: Any) -> dict[str, str] | None:
+    """Normalize the branding payload for report exports.
+
+    Branding is opt-in (None keeps the legacy plain render for non-report
+    callers). A truthy value yields a dict with the framework identity
+    defaults filled; callers may override any field. The report DATE is
+    always present (operator requirement: "the date of the report is also
+    essential") — defaulting to the generation date.
+    """
+    if not branding:
+        return None
+    raw = branding if isinstance(branding, dict) else {}
+    from datetime import datetime, timezone
+
+    out = {
+        "framework": str(raw.get("framework") or "AbstractFramework"),
+        "app": str(raw.get("app") or "AbstractFlow"),
+        "url": str(raw.get("url") or "abstractframework.ai"),
+        "date": str(raw.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        "workflow": str(raw.get("workflow") or "").strip(),
+    }
+    return out
+
+
+def render_pdf_bytes(
+    content: Any, *, title: str | None = None, branding: Any = None
+) -> tuple[bytes, dict[str, Any]]:
+    """Render text or Markdown-ish content to a PDF byte string with ReportLab.
+
+    When `branding` is provided (dict or truthy), the document carries the
+    framework identity discreetly: a small meta line under the title, a thin
+    rule, a running footer (framework · url | page number) and a tiny
+    running header on later pages — plus honest PDF metadata (author/creator).
+    """
 
     rl = _require_reportlab()
     text = _normalize_pdf_text(_stringify_content(content))
     if title:
         title = _normalize_pdf_text(str(title))
+    brand = _normalize_branding(branding)
     buffer = BytesIO()
     doc = rl["SimpleDocTemplate"](
         buffer,
@@ -692,11 +769,48 @@ def render_pdf_bytes(content: Any, *, title: str | None = None) -> tuple[bytes, 
         rightMargin=0.72 * rl["inch"],
         leftMargin=0.72 * rl["inch"],
         topMargin=0.72 * rl["inch"],
-        bottomMargin=0.72 * rl["inch"],
+        bottomMargin=0.78 * rl["inch"] if brand else 0.72 * rl["inch"],
         title=title or "AbstractRuntime PDF",
+        author=f"{brand['app']} — {brand['framework']}" if brand else None,
+        creator=f"{brand['app']} ({brand['framework']}) · {brand['url']}" if brand else None,
+        subject=(brand.get("workflow") or None) if brand else None,
     )
-    story, _styles = _build_pdf_story(text, title, rl)
-    doc.build(story)
+    story, _styles = _build_pdf_story(text, title, rl, branding=brand)
+    if brand:
+        gray = rl["colors"].Color(0.45, 0.45, 0.45)
+        line_gray = rl["colors"].Color(0.75, 0.75, 0.75)
+        font = _register_unicode_font() or "Helvetica"
+        footer_left = f"{brand['framework']} · {brand['url']}"
+        if brand.get("workflow"):
+            footer_left = f"{footer_left} · {brand['workflow']}"
+        header_right = f"{brand['app']} — {brand['date']}"
+
+        def _decorate(canvas, docobj, *, with_header: bool) -> None:
+            canvas.saveState()
+            page_w = rl["letter"][0]
+            left = docobj.leftMargin
+            right = page_w - docobj.rightMargin
+            # Footer: rule + framework identity left, page number right.
+            y = 0.5 * rl["inch"]
+            canvas.setStrokeColor(line_gray)
+            canvas.setLineWidth(0.5)
+            canvas.line(left, y + 10, right, y + 10)
+            canvas.setFont(font, 7)
+            canvas.setFillColor(gray)
+            canvas.drawString(left, y, footer_left)
+            canvas.drawRightString(right, y, f"Page {canvas.getPageNumber()}")
+            if with_header:
+                # Later pages: tiny right-aligned running header.
+                canvas.drawRightString(right, rl["letter"][1] - 0.45 * rl["inch"], header_right)
+            canvas.restoreState()
+
+        doc.build(
+            story,
+            onFirstPage=lambda c, d: _decorate(c, d, with_header=False),
+            onLaterPages=lambda c, d: _decorate(c, d, with_header=True),
+        )
+    else:
+        doc.build(story)
     data = buffer.getvalue()
     return data, {
         "bytes": len(data),

@@ -116,7 +116,11 @@ def test_parse_feel_blocks_grammar_and_clamps() -> None:
     assert elections[1].magnitude == 3.0 and elections[1].scar is True
     assert any("clamped" in n for n in notices)
     assert any("missing reason" in n for n in notices)
-    assert "[marked 2 feelings]" in marked
+    # Titled markers (laurent c2468: "[marked 2 feelings] is not usable by
+    # the AI") — each kept feeling names its target, signed amplitude, and
+    # reason so the record the marker lands in stays readable.
+    assert '[felt: 1 +2 - "it fed me"]' in marked
+    assert '[felt: session -3 (scar) - "too heavy"]' in marked
 
 
 def test_parse_feel_blocks_drops_mismatched_marks() -> None:

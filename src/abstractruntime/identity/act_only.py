@@ -64,6 +64,16 @@ the payload/result diverges. The non-private gist fallback (first line of
 the entry text, ≤120 chars, when the author gave no gist) is a DECISION on
 the record — gist-grade under the operator-audience ruling — not an
 accident of truncation.
+
+CONSUMER RULE (code seat's C2, incident c2447): ledgered LLM_CALL payloads
+are the WIRE VIEW — they legitimately contain adapter-authored prompt
+chrome (loop-iteration tails, plan renders, retry nudges merged into
+message copies), and volatile markers are stripped before capture, so the
+chrome is NOT labeled in the record. Ledger payloads are OBSERVABILITY;
+conversation rebuilds must come from the durable transcript
+(context.messages / _visit.history), never from replaying ledger payloads
+into prompts — a ledger-payload history consumer would re-inject chrome
+the live lanes have since suppressed.
 """
 
 from __future__ import annotations

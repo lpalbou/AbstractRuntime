@@ -162,7 +162,21 @@ def parse_feel_blocks(reply: str) -> Tuple[str, List[FeelingElection], List[str]
                 )
             )
             kept += 1
-        return f"[marked {kept} feeling{'s' if kept != 1 else ''}]" if kept else "[no feelings marked]"
+        # TITLED markers (maintainer directive 2026-07-15 c2468: "[marked 2
+        # feelings] is not usable by the AI" — the marker must carry WHAT was
+        # felt and WHY so a later read can follow the thread; memory's
+        # co-sign spec c2471). The marker text lands in the reflection's
+        # digest/verbatim, so this is what the entity re-reads later.
+        if not kept:
+            return "[no feelings marked]"
+        block_lines = []
+        for e in elections[-kept:]:
+            signed = f"{'+' if e.sign > 0 else '-'}{e.magnitude:g}"
+            marks = " (bond)" if e.bond else (" (scar)" if e.scar else "")
+            block_lines.append(
+                f'[felt: {e.target_token} {signed}{marks} - "{e.reason[:80]}"]'
+            )
+        return " ".join(block_lines)
 
     marked = _FEEL_FENCE_RE.sub(_sub, reply)
     return marked.strip(), elections, notices
@@ -189,7 +203,11 @@ def parse_interest_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
             )
             return f"[interest refused - at most {MAX_INTERESTS_PER_SESSION} per session]"
         interests.append(body)
-        return "[kept an interest]"
+        # TITLED marker (maintainer directive 2026-07-15 c2468): the marker
+        # carries the interest's own words so the record it lands in is
+        # readable later, never a bare "[kept an interest]".
+        gist = " ".join(body.split())[:80]
+        return f'[kept interest: "{gist}"]'
 
     marked = _INTEREST_FENCE_RE.sub(_sub, reply)
     return marked.strip(), interests, notices

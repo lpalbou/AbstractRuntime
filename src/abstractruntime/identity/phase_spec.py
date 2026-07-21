@@ -45,6 +45,11 @@ _RULED_DEFAULTS: Dict[str, Any] = {
     "sleep_bound_h": 1.0,
     "unattended_wake_cadence_h": 6.0,
     "grant_unused_floor_h": 2.0,
+    # v16 window rows (M2, laurent's global-dials answer): the resident
+    # temporal horizon - one home one horizon, both hosts thread the same
+    # resolved number into AttentionConfig at home-open.
+    "window_limit": 8192,
+    "drive_window_limit": 256,
 }
 
 # HONESTY LEDGER (v12 P0-4, mirrored from the blueprint's tunables_meta):
@@ -59,6 +64,11 @@ TUNABLE_WIRED: Dict[str, bool] = {
     "sleep_bound_h": True,                      # sleep_bound_deadline(home_dir=) reads it (v14; sweeper adopts the kwarg)
     "unattended_wake_cadence_h": True,          # the day gate's need_check_s (life.py read_day_gate)
     "grant_unused_floor_h": True,               # the day gate's use floor (life.py read_day_gate)
+    # Runtime half threaded (loop home-open + cue read); the blueprint meta
+    # flips wired:true when GATEWAY's home-open sites thread too (v16 rule:
+    # both hosts, one horizon).
+    "window_limit": True,
+    "drive_window_limit": True,
 }
 
 
@@ -126,7 +136,8 @@ def load_phase_tunables(
         # disables; anything unreadable keeps the ruled default, loudly).
         "enabled": _bool(cycle_raw.get("enabled"), True, warnings, "personal_cycle.enabled"),
     }
-    for key in ("sleep_bound_h", "unattended_wake_cadence_h", "grant_unused_floor_h"):
+    for key in ("sleep_bound_h", "unattended_wake_cadence_h", "grant_unused_floor_h",
+                "window_limit", "drive_window_limit"):
         if key not in raw and raw:
             # v12: a MISSING known key on an edited blueprint is loud - a
             # typo'd dial must never read as a tuned one.

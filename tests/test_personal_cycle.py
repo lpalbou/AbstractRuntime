@@ -378,8 +378,11 @@ def test_cue_attention_kwargs_exist_on_the_engine(tmp_path) -> None:
     from abstractruntime.identity import life
 
     src = inspect.getsource(life)
-    assert "attention_config=AttentionConfig(window_limit=8192)" in src
     assert "attention=AttentionConfig(window=" not in src, "the dead-code shape is gone"
+    # v16: no hardcoded horizon anywhere - both sites read the dial.
+    assert "window_limit=8192" not in src, "the constant died with the v16 rows"
+    assert 'attention_window=int(_tun["window_limit"])' in src
+    assert 'drive_window_limit=int(_tun["drive_window_limit"])' in src
 
 
 def test_cycle_window_is_maintenance_only(tmp_path, monkeypatch) -> None:
@@ -431,3 +434,21 @@ def test_cycle_window_is_maintenance_only(tmp_path, monkeypatch) -> None:
     )
     loop.run()
     assert False in seen["flags"], "the cycle window ran maintenance-only"
+
+
+def test_window_dials_resolve_from_the_blueprint(tmp_path, monkeypatch) -> None:
+    """v16 M2: window_limit/drive_window_limit are dials - an operator edit
+    governs both home-open sites; seeds 8192/256 stand un-edited."""
+    t, _ = load_phase_tunables()
+    assert t["window_limit"] == 8192 and t["drive_window_limit"] == 256
+    p = tmp_path / "spec.json"
+    p.write_text(json.dumps({"tunables": {
+        "personal_cycle": {"personal_window_h": 2.0, "sleep_window_h": 1.0},
+        "sleep_bound_h": 1.0, "unattended_wake_cadence_h": 6.0,
+        "grant_unused_floor_h": 2.0,
+        "window_limit": 16384, "drive_window_limit": 512,
+    }}), encoding="utf-8")
+    monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
+    t, warns = load_phase_tunables()
+    assert t["window_limit"] == 16384 and t["drive_window_limit"] == 512
+    assert not any("NOT YET WIRED" in w for w in warns), "runtime half is wired"

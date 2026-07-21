@@ -287,6 +287,17 @@ class _PromptCacheSessionState:
 
 
 def _prompt_cache_message_fingerprint(message: Any) -> str:
+    """ROLE + CONTENT + (canonical) TOOL_CALLS fingerprint (0064 fix 1).
+
+    tool_calls were EXCLUDED before, so two assistant messages with the same
+    content head but different tool_calls fingerprinted the SAME — a false
+    prefix MATCH could serve stale KV (correctness, not just perf). The
+    serialization is CANONICAL (sort_keys + fixed separators, default=str),
+    so dict key-order drift across JSON round-trips (run-store save/load,
+    ledger replay) can never mint a false MISMATCH. Messages WITHOUT
+    tool_calls keep the pre-fix payload shape byte-for-byte, so the common
+    case pays zero fingerprint churn on upgrade (one-time rebuild only for
+    sessions whose history carries tool calls)."""
     if not isinstance(message, dict):
         payload = {"role": "", "content": str(message)}
     else:
@@ -302,6 +313,15 @@ def _prompt_cache_message_fingerprint(message: Any) -> str:
         else:
             content_norm = str(content)
         payload = {"role": role, "content": content_norm}
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            try:
+                payload["tool_calls"] = json.dumps(
+                    tool_calls, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":"), default=str,
+                )
+            except Exception:
+                payload["tool_calls"] = str(tool_calls)
 
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -376,9 +376,15 @@ def drives_cue_note(home_dir: Path, *, k: int = 4) -> Tuple[str, List[str]]:
             try:
                 from abstractmemory import AttentionConfig
 
+                from .phase_spec import load_phase_tunables as _load_tunables
+
+                _tun, _ = _load_tunables(home_dir=home_dir)
                 system = MemorySystem(
                     store=store, journal=journal,
-                    attention_config=AttentionConfig(window_limit=8192),
+                    attention_config=AttentionConfig(
+                        window_limit=int(_tun["window_limit"]),
+                        drive_window_limit=int(_tun["drive_window_limit"]),
+                    ),
                 )
             except ImportError:
                 # Version skew only (engine predates AttentionConfig).
@@ -3430,8 +3436,16 @@ def build_session_factory(
 
         # A resident's temporal window: ~a week at ~1k events/day (memory's
         # sizing note); the session-scale default zeroes old records within
-        # days of continuous life.
-        home = open_home(home_dir, embedder=embedder, attention_window=8192)
+        # days of continuous life. v16: the number is the BLUEPRINT's
+        # window_limit dial (seed 8192) - one home one horizon, laurent-
+        # modulated; the constant is gone.
+        from .phase_spec import load_phase_tunables as _load_tunables
+
+        _tun, _ = _load_tunables(home_dir=home_dir)
+        home = open_home(
+            home_dir, embedder=embedder,
+            attention_window=int(_tun["window_limit"]),
+        )
 
         from abstractcore import create_llm
 

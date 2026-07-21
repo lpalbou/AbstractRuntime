@@ -81,6 +81,24 @@ def _output_default_route_keys(spec: Dict[str, Any]) -> Tuple[Optional[str], Opt
             return "output.video.image_to_video", "output.video"
         if task in {"", "video_generation", "text_to_video", "t2v"}:
             return "output.video.text_to_video", "output.video"
+    # Voice/music/sound joined 2026-07-17 (assistant's finding while tracing
+    # the offline-TTS outage: a bare TTS spec never received the gateway's
+    # configured output.voice route at THIS layer, so abstractcore's facade
+    # resolved from ITS OWN config — two different truths, and the ledgered
+    # spec showed no merge. One resolution layer: the runtime merge is what
+    # the ledger records and what executes; the facade stays the fallback
+    # only when no route is configured.)
+    if modality == "voice":
+        if task in {"stt", "transcribe", "transcription", "speech_to_text", "asr"}:
+            return "input.voice.stt", "input.voice"
+        if task in {"", "tts", "text_to_speech", "speech", "speak"}:
+            return "output.voice.tts", "output.voice"
+    if modality == "music":
+        if task in {"", "music_generation", "text_to_music", "t2m"}:
+            return "output.music.text_to_music", "output.music"
+    if modality == "sound":
+        if task in {"", "sound_generation", "text_to_sound", "sfx", "sound_effect"}:
+            return "output.sound.text_to_sound", "output.sound"
     return None, None
 
 

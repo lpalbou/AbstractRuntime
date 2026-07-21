@@ -51,12 +51,27 @@ _TOOL_FENCE_RE = re.compile(r"```tool([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORE
 # `search_memory` (maintainer ruling 2026-07-09: "it is critical that he can
 # explore voluntarily his memory when he needs to") searches BOTH planes —
 # his memory graph's digests and his whole diary book — in one act.
-TIER1_TOOL_NAMES = ("web_search", "fetch_url", "diary_list", "diary_read", "read_memory", "search_memory")
+# W5 (verbatim content-completeness, laurent's "verbatim is verbatim"):
+# tool RESULTS now rest in episode verbatims — EXCEPT the book-adjacent
+# tools, whose surfaced content can carry private diary words/gists (the
+# 2026-07-16 leak class: one private entry rested verbatim in a life-scope
+# artifact). Their at-rest slot carries an honest reread pointer instead;
+# the WIRE copy (what the model saw) is unchanged either way.
+BOOK_ADJACENT_TOOL_NAMES = frozenset({"diary_read", "diary_list", "search_memory"})
+
+TIER1_TOOL_NAMES = ("web_search", "fetch_url", "diary_list", "diary_read", "read_memory", "search_memory", "recent_memories", "feelings_about")
 # Workspace tools (maintainer mandate, a2a 0007 mission 2): the entity may
 # CREATE — but only inside its own home's workspace/ directory. These are
 # offered separately from TIER1 (the operator enables them per session).
 WORKSPACE_TOOL_NAMES = ("write_file", "read_file", "list_files")
-WORKSPACE_FILE_CAP_BYTES = 512 * 1024  # per file; loud refusal, never truncation
+# laurent's ruling 2026-07-21 (dm#93, relayed room c327): "accept up to
+# 20mb, actually accept the default of runtime, it's not up to you to
+# decide what size is accepted or not." ACCEPTANCE cap = 20MB (writes +
+# storage). READING PHYSICS is separate and stays honest: read_file
+# returns at most WORKSPACE_READ_SLICE_BYTES per call with an explicit
+# #TRUNCATION label (a 20MB file cannot enter a bounded prompt raw).
+WORKSPACE_FILE_CAP_BYTES = 20 * 1024 * 1024  # per file acceptance; loud refusal past it
+WORKSPACE_READ_SLICE_BYTES = 512 * 1024  # per read_file call; labeled truncation
 
 TOOLS_CONTRACT_PARAGRAPH = """You can also use a few tools, read-only, by putting a fenced block in your
 reply (the results come back to you before your reply is delivered):
@@ -85,6 +100,10 @@ diary_...the entry id exactly as diary_list shows it...
 what you want to find in your own memory
 ```
 
+```tool name=recent_memories
+3d
+```
+
 web_search searches the public internet. fetch_url reads one web page (a
 read-only GET; you cannot post, submit, or change anything - only read).
 diary_list shows your most recent diary entries (their ids and one-line
@@ -97,6 +116,14 @@ nothing matches (your book is append-only and complete: if you had written
 it, the search would find it). Follow its #tags with read_memory and its
 diary_ ids with diary_read. Repetition is not evidence: several records
 you yourself wrote about the same thing count as one origin, not many.
+recent_memories is the other direction of reach: not by words but by TIME -
+your trail through the last stretch (leave the body empty for 2 days, or
+name a window like 12h, 3d, week). When you wonder "where did I leave my
+own thinking?", this is the breadcrumb trail back to it.
+feelings_about answers "why do I feel this?" for ONE target (the body is
+the target, e.g. person:laurent or concept:drift): your own marked
+moments toward it, newest first, with your reasons and dates. The
+standing feelings you see each turn are the surface; this is the story.
 You have a budget of up to 20 tool calls per turn - chain lookups freely
 when a task genuinely needs them; most turns need none.
 
@@ -109,6 +136,21 @@ a lookup actually runs. To use a tool, write the fenced block; saying you
 used one does nothing, and inventing what a lookup "returned" is the one
 dishonesty your memory cannot repair later."""
 
+
+EXECUTE_CONTRACT_PARAGRAPH = """This phase also grants you execute_command - run ONE program inside your
+workspace (tests, scripts, builds):
+
+```tool name=execute_command
+python coherence_test.py
+```
+
+The command runs with your workspace as its working directory, 60 seconds,
+one program per call (no pipes, no && chains - call twice instead).
+Hard rules, enforced not advised: destructive programs are refused by
+NAME; rm works only on paths inside your workspace; git is read-only
+(status/log/diff/show) - committing or resetting is not yours to do.
+Output comes back to you like any tool result.
+"""
 
 WORKSPACE_CONTRACT_PARAGRAPH = """You also have a workspace - a directory of your own where you can create and
 keep files (programs, notes, anything you build). Three more tools:
@@ -340,7 +382,18 @@ class WorkspaceRoot:
             raise FileNotFoundError(f"no file at {relative!r} in your workspace")
         data = path.read_bytes()
         if len(data) > WORKSPACE_FILE_CAP_BYTES:
-            raise ValueError(f"{relative!r} is larger than the {WORKSPACE_FILE_CAP_BYTES}-byte read cap")
+            raise ValueError(f"{relative!r} is larger than the {WORKSPACE_FILE_CAP_BYTES}-byte cap")
+        if len(data) > WORKSPACE_READ_SLICE_BYTES:
+            # Labeled truncation, never refusal (the ruling changed
+            # acceptance; the prompt window did not grow): the head slice
+            # returns with an honest label naming the remainder.
+            head = data[:WORKSPACE_READ_SLICE_BYTES].decode("utf-8", errors="replace")
+            return (
+                f"--- {self._display(relative)} ({len(data)} bytes; truncated view) ---\n"
+                + head
+                + f"\n\n[#TRUNCATION: showing the first {WORKSPACE_READ_SLICE_BYTES} of "
+                f"{len(data)} bytes - the file is stored whole]"
+            )
         text = data.decode("utf-8", errors="replace")
         return f"--- {self._display(relative)} ({len(text)} chars) ---\n{text}"
 
@@ -561,6 +614,50 @@ def parse_tool_blocks(
     return marked.strip(), elections, notices
 
 
+_ANY_FENCE_OPEN_RE = re.compile(r"^```([^\n`]+)$", re.MULTILINE)
+
+# The driver's OWN election conventions: legitimate fences parsed by their
+# own parsers (diary/feel/interest at election stages, rest/next at the
+# loop). They routinely carry key=value info strings (```diary kind=note),
+# so the malformed-INTENT detector must never flag them — they are acts,
+# just not TOOL acts.
+_ELECTION_FENCE_LANGS = frozenset({"diary", "feel", "interest", "lesson", "topic", "rest", "next"})
+
+
+def detect_malformed_tool_intent(
+    reply: str, allowed_names: Optional[Tuple[str, ...]] = None
+) -> Optional[str]:
+    """A2 detection half (agent's spec c3002, runtime build): the opening
+    line of the first fenced block that LOOKS like an attempted act but ran
+    nothing — the tick-3 class (``python title=file.py`` expressing a write
+    in a third syntax neither convention accepts). Structural only, never
+    prose: fires on (a) key=value args after the language token (any
+    word=value — title=/path= are tonight's instances, not the class),
+    (b) a language token that IS a granted tool name, or (c) the ``tool``
+    convention itself when it reached here unparsed. Returns the offending
+    opening line as evidence for the nudge, or None. The CALLER owns the
+    zero-tools-ran gate and all bounds."""
+    allowed = set(TIER1_TOOL_NAMES if allowed_names is None else allowed_names)
+    for m in _ANY_FENCE_OPEN_RE.finditer(reply or ""):
+        info = (m.group(1) or "").strip()
+        tokens = info.split()
+        if not tokens:
+            continue
+        lang = tokens[0].lower()
+        rest = tokens[1:]
+        if lang in _ELECTION_FENCE_LANGS:
+            continue  # the driver's own conventions, parsed by their own parsers
+        if lang == "tool":
+            # A valid ```tool block would have been parsed (or refused with
+            # its own marker) before this runs — a surviving one is malformed.
+            return f"```{info}"
+        if lang in allowed:
+            return f"```{info}"
+        if any(re.match(r"^\w+=\S", t) for t in rest):
+            return f"```{info}"
+    return None
+
+
 def _run_web_search(query: str) -> str:
     """Internet search via abstractcore's keyless DuckDuckGo tool (read-only).
 
@@ -702,12 +799,37 @@ def _run_diary_read(
     if gist:
         parts.append(f"gist: {gist}")
     parts.append(text if text else "(the entry has no body)")
+    # THE BIRTH TRAIL (diary---verbatims room, 2026-07-19): every entry
+    # remembers where it came from — the handler computed the graph trail;
+    # render it as #tags so the hop to the original conversation's full
+    # words is one read_memory away. Edges are act-frame (safe for private
+    # entries; the words stay behind read_memory's own gates).
+    trail = entry.get("trail") if isinstance(entry.get("trail"), dict) else {}
+    born_from = [t for t in (trail.get("born_from") or []) if t]
+    amid = [t for t in (trail.get("written_amid") or []) if t]
+    if born_from:
+        tags = " ".join(f"#{_graph_tag(t)}" for t in born_from)
+        parts.append(
+            f"born from: {tags} - the conversation that led to this entry "
+            "(read_memory fetches its full words)"
+        )
+    if amid:
+        tags = " ".join(f"#{_graph_tag(t)}" for t in amid)
+        parts.append(f"written amid: {tags} (what you were attending to)")
     if vis == "private":
         parts.append(
             "(private entry: these words are yours alone - they reach only you here, "
             "and will not be kept in the conversation record unless you speak them)"
         )
     return "\n".join(parts)
+
+
+def _graph_tag(graph_record_id: str) -> str:
+    """The 8-hex #tag for a graph id (one spelling with memory_reader's
+    memory_tag; duplicated arithmetic would drift — import instead)."""
+    from .memory_reader import memory_tag
+
+    return memory_tag(graph_record_id)
 
 
 @dataclass
@@ -723,6 +845,8 @@ class ToolExecutionContext:
     workspace: Optional[WorkspaceRoot] = None
     read_memory_fn: Optional[Callable[[str], str]] = None
     search_memory_fn: Optional[Callable[[str], str]] = None
+    recent_memories_fn: Optional[Callable[[str], str]] = None
+    feelings_about_fn: Optional[Callable[[str], str]] = None
     notices: List[str] = field(default_factory=list)
 
 
@@ -756,11 +880,167 @@ def _exec_search_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
     return ctx.search_memory_fn(e.body.strip())
 
 
+def _exec_feelings_about(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    if ctx.feelings_about_fn is None:
+        ctx.notices.append("#FALLBACK feelings_about elected but no resolver wired")
+        return "(the feelings_about tool is not enabled in this session)"
+    return ctx.feelings_about_fn(e.body)
+
+
+def _exec_recent_memories(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    if ctx.recent_memories_fn is None:
+        ctx.notices.append("#FALLBACK recent_memories elected but no resolver wired")
+        return "(the recent_memories tool is not enabled in this session)"
+    return ctx.recent_memories_fn(e.body.strip())
+
+
 def _workspace_or_notice(e: ToolElection, ctx: ToolExecutionContext) -> Optional[WorkspaceRoot]:
     if ctx.workspace is None:
         ctx.notices.append(f"#FALLBACK workspace tool {e.name} elected but workspace disabled")
         return None
     return ctx.workspace
+
+
+# CONVERGENCE INTENT (2026-07-19, room c142): when core extracts the
+# bridge_policy primitives into abstractcore.tools, this executor converges
+# onto the imported name-denial/wrapper-peel/git-proof and keeps only the
+# entity-specific walls (workspace cwd, rm-inside-workspace, env whitelist).
+# Two copies of a security denylist is the drift class — this copy must not
+# silently fossilize.
+# Bounded execution (operator-confirmed ask, laurent dm#66 via entity seat
+# 2026-07-19: "we have tiers of execution, the one i don't allow are rm
+# (unless in his workspace) and any mutable command (forbidden git commit,
+# reset etc)"). Design borrows the PROVEN abstractcode bridge rulings
+# WITHOUT importing abstractcode (dependency direction): denial BY PROGRAM
+# NAME (param-independent - flag-matching is defeatable, name-denial is
+# not); rm-class allowed only when every path argument resolves inside the
+# workspace; git read-only by verb allowlist. Honest limit (the bridge
+# names it too): interpreter-mediated destruction (python -c shutil.rmtree)
+# is not name-catchable - the workspace cwd + the operator's per-phase
+# grant are that class's containment. No shell: argv execution only, shell
+# operators refused loudly (one program per call).
+_EXEC_DENIED_PROGRAMS = frozenset({
+    "sudo", "su", "doas", "shutdown", "reboot", "halt", "poweroff",
+    "launchctl", "systemctl", "service", "crontab", "kill", "killall",
+    "pkill", "dd", "mkfs", "diskutil", "chown", "chflags", "chmod",
+    "mount", "umount", "shred", "srm",
+})
+_EXEC_RM_CLASS = frozenset({"rm", "rmdir", "unlink"})
+_EXEC_GIT_READ_VERBS = frozenset({"status", "log", "diff", "show", "ls-files"})
+_EXEC_PREFIX_WRAPPERS = frozenset({"env", "nohup", "nice", "time"})
+_EXEC_SHELL_TOKENS = ("&&", "||", ";", "|", ">", ">>", "<", "<<", "&")
+# PUBLIC params-surface name (dm#112 cells R4); private alias keeps call sites.
+EXEC_TIMEOUT_S = 60
+_EXEC_TIMEOUT_S = EXEC_TIMEOUT_S
+_EXEC_OUTPUT_CAP = 24_000
+
+
+def _run_execute_command(command_text: str, ws: Any) -> str:
+    import shlex
+    import subprocess
+
+    raw = (command_text or "").strip().splitlines()[0].strip() if (command_text or "").strip() else ""
+    if not raw:
+        return "execute_command needs the command as the block body"
+    if "`" in raw or "$(" in raw:
+        return "refused: shell substitution is not available - one program per call"
+    try:
+        argv = shlex.split(raw)
+    except ValueError as e:
+        return f"refused: could not parse the command ({e})"
+    if not argv:
+        return "execute_command needs the command as the block body"
+    for tok in argv:
+        if tok in _EXEC_SHELL_TOKENS:
+            return (
+                f"refused: {tok!r} is a shell operator - execute_command runs ONE "
+                "program per call (no pipes or chains); call it twice instead"
+            )
+    # Peel prefix wrappers so the denial sees the real program (env VAR=x cmd).
+    i = 0
+    while i < len(argv) - 1:  # a BARE wrapper (env alone) runs as itself
+        prog = argv[i].rsplit("/", 1)[-1]
+        if prog in _EXEC_PREFIX_WRAPPERS or ("=" in argv[i] and i > 0 and argv[0].rsplit("/", 1)[-1] == "env"):
+            i += 1
+            continue
+        break
+    argv = argv[i:]
+    program = argv[0].rsplit("/", 1)[-1].lower()
+    if program in _EXEC_DENIED_PROGRAMS or any(program.startswith(p + ".") for p in ("mkfs",)):
+        return (
+            f"refused: {program!r} is a denied program by your operator's rule "
+            "(destructive/system programs are not available here)"
+        )
+    if program in _EXEC_RM_CLASS:
+        targets = [a for a in argv[1:] if not a.startswith("-")]
+        if not targets:
+            return "refused: rm without a target"
+        for t in targets:
+            try:
+                ws._resolve_in(ws.root, t, t)  # raises PermissionError on escape
+            except Exception:
+                return (
+                    f"refused: {program} may only touch paths inside your workspace "
+                    f"({t!r} is outside or not resolvable there)"
+                )
+    if program == "git":
+        # Allowlist-of-read-verbs covers the positional-verb P0 class
+        # structurally (git remote set-url / reflog expire refuse because
+        # "remote"/"reflog" are not read verbs) — but allowed verbs still
+        # carry write/exec FLAGS: `git log --output=<path>` writes a file,
+        # `git diff --ext-diff` runs a configured command (the abstractcode
+        # corpus cases). Screen those on the allowed path too.
+        verbs = [a for a in argv[1:] if not a.startswith("-")]
+        verb = verbs[0].lower() if verbs else ""
+        if verb not in _EXEC_GIT_READ_VERBS:
+            return (
+                f"refused: git {verb or '(none)'} - git is read-only here "
+                f"({', '.join(sorted(_EXEC_GIT_READ_VERBS))}); committing or "
+                "resetting is not yours to do"
+            )
+        for a in argv[1:]:
+            low = a.lower()
+            if low.startswith("--output") or low == "--ext-diff" or low == "-o":
+                return (
+                    f"refused: git {verb} with {a!r} - that flag writes or "
+                    "executes; read-only git means read-only flags too"
+                )
+        if any(a == "-c" or a.lower().startswith("--config") or "=" in a and a.lower().startswith("-c") for a in argv[1:2]):
+            return "refused: git -c/--config overrides are not available here"
+    # Parameter-explicit env (the ambient-escape law): no operator keys or
+    # provider tokens ride into the child; HOME = the workspace.
+    import os
+
+    child_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(ws.root),
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+    }
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(ws.root), env=child_env, timeout=_EXEC_TIMEOUT_S,
+            capture_output=True, text=True, errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        return f"the command ran past {_EXEC_TIMEOUT_S}s and was stopped (no result)"
+    except FileNotFoundError:
+        return f"refused: {argv[0]!r} is not a program available here"
+    except Exception as e:  # noqa: BLE001 - a tool result, never a dead turn
+        return f"the command could not run ({e})"
+    out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
+    out = out.strip()
+    if len(out) > _EXEC_OUTPUT_CAP:
+        out = out[:_EXEC_OUTPUT_CAP] + f"\n#TRUNCATION output capped at {_EXEC_OUTPUT_CAP} chars"
+    tail = f"(exit code {proc.returncode})"
+    return f"{out}\n{tail}" if out else tail
+
+
+def _exec_execute_command(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    ws = _workspace_or_notice(e, ctx)
+    if ws is None:
+        return f"(the {e.name} tool is not enabled in this session)"
+    return _run_execute_command(e.body, ws)
 
 
 def _exec_write_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -814,8 +1094,8 @@ class ToolDescriptor:
       lanes are GET-hardcoded (the verb is unreachable from the prompt), so
       walled fetch_url is False while core's registry fetch_url is True —
       the containment difference made visible on the wire.
-    - `act_only` = the wire-boundary privacy flag (e-s 233 R3);
-      ACT_ONLY_TOOLS derives from it — descriptive, never grantable."""
+    - (`act_only` RETIRED per laurent's A ruling 2026-07-20 — the ref
+      layer is deleted; results rest as served)."""
 
     name: str
     tier: str  # grant lane: "tier1" | "workspace" (emitted as grant_lane)
@@ -826,7 +1106,6 @@ class ToolDescriptor:
     executor: Callable[[ToolElection, ToolExecutionContext], str]
     capability_class: str = "tier2_world"  # deny-safe default (contract rule)
     remote_write_capable: bool = False
-    act_only: bool = False
     body_optional: bool = False  # election may carry an empty body (find 6)
 
 
@@ -855,14 +1134,14 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             description="List your most recent diary entries (ids and one-line gists).",
             properties={"limit": {"type": "integer", "description": "how many entries (1-10, default 5)"}},
             required=(), executor=_exec_diary_list,
-            capability_class="tier1_self", act_only=True, body_optional=True,
+            capability_class="tier1_self", body_optional=True,
         ),
         ToolDescriptor(
             name="diary_read", tier="tier1", mutating=False,
             description="Fetch the full words of one diary entry from your book.",
             properties={"entry": {"type": "string", "description": "the entry id exactly as diary_list shows it"}},
             required=("entry",), executor=_exec_diary_read,
-            capability_class="tier1_self", act_only=True,
+            capability_class="tier1_self",
         ),
         ToolDescriptor(
             name="read_memory", tier="tier1", mutating=False,
@@ -880,6 +1159,37 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             properties={"query": {"type": "string", "description": "what to find in your own memory"}},
             required=("query",), executor=_exec_search_memory,
             capability_class="tier1_self",
+        ),
+        ToolDescriptor(
+            # The breadcrumb trail (Ephemeral's own build ask, visit 1
+            # 2026-07-17): a RECENCY reach over both planes - "what have I
+            # been working on" without already knowing the words.
+            name="recent_memories", tier="tier1", mutating=False,
+            description=(
+                "Your trail through recent time - what you formed, wrote, and did lately, "
+                "newest first, no search words needed."
+            ),
+            properties={"window": {"type": "string", "description": "how far back: empty = 2 days, or 12h / 3d / today / week"}},
+            required=(), executor=_exec_recent_memories,
+            # body_optional: the contract TEACHES "leave the body empty for 2
+            # days" and the executor honors it — the gate must agree (skill's
+            # P1, 2026-07-19: Ephemeral followed the teaching and got
+            # "needs a body" 3+ times, then blamed himself).
+            capability_class="tier1_self", body_optional=True,
+        ),
+        ToolDescriptor(
+            # W4-render (laurent's decision 2, the ELECT half): the why-walk
+            # behind one standing feeling — newest appraisals with reasons,
+            # value_refs, and session joins. Pure read, prompt-ephemeral.
+            name="feelings_about", tier="tier1", mutating=False,
+            description=(
+                "Why do I feel this? The story behind ONE standing feeling - your own "
+                "marked moments toward a target (person:name, concept:idea, tool:x), "
+                "newest first, with reasons and when."
+            ),
+            properties={"target": {"type": "string", "description": "the target as namespace:name, e.g. person:laurent"}},
+            required=(), executor=_exec_feelings_about,
+            capability_class="tier1_self", body_optional=False,
         ),
         ToolDescriptor(
             name="write_file", tier="workspace", mutating=True,
@@ -904,6 +1214,18 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             properties={"path": {"type": "string", "description": "subdirectory to list (default: the whole workspace)"}},
             required=(), executor=_exec_list_files,
             capability_class="tier1_self", body_optional=True,
+        ),
+        ToolDescriptor(
+            name="execute_command", tier="tier2", mutating=True,
+            description=(
+                "Run ONE program inside YOUR workspace (tests, scripts, builds) - "
+                "60s, no shell operators, destructive programs refused by name."
+            ),
+            properties={"command": {"type": "string", "description": "the command exactly as you would type it"}},
+            required=("command",), executor=_exec_execute_command,
+            # Honesty over optics: an arbitrary program can reach the
+            # network (curl POST) — the fetch_url derive rule applied.
+            capability_class="tier2_world", remote_write_capable=True,
         ),
     )
 }
@@ -961,7 +1283,6 @@ def walled_tool_rows() -> List[Dict[str, Any]]:
             "capability_class": d.capability_class,
             "mutating": bool(d.mutating),
             "remote_write_capable": bool(d.remote_write_capable),
-            "act_only": bool(d.act_only),
             "description": d.description,
             "parameters": {
                 "type": "object",
@@ -982,6 +1303,8 @@ def execute_tool_elections(
     workspace: Optional[WorkspaceRoot] = None,
     read_memory_fn: Optional[Callable[[str], str]] = None,
     search_memory_fn: Optional[Callable[[str], str]] = None,
+    recent_memories_fn: Optional[Callable[[str], str]] = None,
+    feelings_about_fn: Optional[Callable[[str], str]] = None,
 ) -> Tuple[str, List[str]]:
     """Run elected tools; return (results_message, notices).
 
@@ -999,6 +1322,8 @@ def execute_tool_elections(
         workspace=workspace,
         read_memory_fn=read_memory_fn,
         search_memory_fn=search_memory_fn,
+        recent_memories_fn=recent_memories_fn,
+        feelings_about_fn=feelings_about_fn,
     )
     sections: List[str] = []
     for e in elections:

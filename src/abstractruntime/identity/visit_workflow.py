@@ -68,6 +68,8 @@ from .reflection import (
     build_reflection_prompt,
     parse_feel_blocks,
     parse_interest_blocks,
+    parse_lesson_blocks,
+    parse_topic_blocks,
     resolve_feeling_targets,
 )
 
@@ -200,8 +202,11 @@ def build_visit_workflow(
             # arm passes no tools because its tool grant threads through
             # the react middle, not the head text (Phase 0 lane).
             overlay = read_prompt_overlay(home.home_dir)
+            from .chat import read_capability_map
+
             visit["system_base"] = compose_system_base(
                 prelude["text"], phase="visit", overlay=overlay,
+                capability_map=read_capability_map(home.home_dir),
             )
             visit["prelude_warnings"] = list(prelude.get("warnings", []))
             note = overlay_note(overlay)
@@ -375,6 +380,10 @@ def build_visit_workflow(
         # from reply prose — the marker-imitation lesson). Absent = honestly
         # empty; the ledger's TOOL_CALLS records remain the deep audit trail.
         turn["tools_ran"] = [str(t) for t in (captures.get("tools_ran") or []) if str(t or "").strip()]
+        # W5: intermediate phases + at-rest results, when the middle reports
+        # them (adapter-owned capture; absent = honestly empty).
+        turn["lookup_phases"] = [str(x) for x in (captures.get("lookup_phases") or []) if str(x or "").strip()]
+        turn["tool_results_at_rest"] = [str(x) for x in (captures.get("tool_results_at_rest") or []) if str(x or "").strip()]
         return StepPlan(node_id=HARVEST_NODE, next_node="ELECT")
 
     def reason_node(run: RunState, ctx: Any) -> StepPlan:
@@ -460,7 +469,16 @@ def build_visit_workflow(
             turn["text"], turn["marked_reply"], home.name, speaker=speaker
         )
         turn["digest"] = digest
-        verbatim = f"{speaker}:\n{turn['text']}\n\n{home.name}:\n{turn['marked_reply']}"
+        # W5 (the visit half of the one verbatim edit): adapter-reported
+        # intermediate rounds rest as inner speech + returned results.
+        verbatim = f"{speaker}:\n{turn['text']}\n\n"
+        phases = list(turn.get("lookup_phases") or [])
+        results = list(turn.get("tool_results_at_rest") or [])
+        for i, phase in enumerate(phases):
+            verbatim += f"{home.name} (thinking, unspoken):\n{phase}\n\n"
+            if i < len(results) and results[i].strip():
+                verbatim += f"(what the tools returned:)\n{results[i]}\n\n"
+        verbatim += f"{home.name}:\n{turn['marked_reply']}"
         attributes: Dict[str, Any] = {
             "participants": list(visit["participants"]),
             "digest_method": "mechanical-v2",
@@ -615,18 +633,32 @@ def build_visit_workflow(
 
         _note_absorbed("summary_out", "summary")
         _note_absorbed("interest_out", "interest election")
+        _note_absorbed("lesson_out", "lesson election")
         _note_absorbed("diary_out", "diary election")
         _note_absorbed("feel_out", "feeling election")
         if "marked_reply" not in refl:
             raw = clean_model_reply(str((refl.get("llm") or {}).get("content") or ""))
-            marked, feelings, notices = parse_feel_blocks(raw)
+            _sheet = list(visit.get("sheet") or [])
+            _sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(_sheet, start=1)]
+            marked, feelings, notices = parse_feel_blocks(raw, _sheet_lines)
             marked, interests, i_notes = parse_interest_blocks(marked)
+            marked, lessons, l_notes = parse_lesson_blocks(marked)
+            # Elected topics (operator directive 2026-07-19): parsed here,
+            # stamped as attributes.topics on the summary stage below — the
+            # engine's card-evidence seam; no extra APPLY stage needed (the
+            # in-day topic card update is the chat lane's; visits ride the
+            # sleep pass's full evidence scan).
+            marked, topics, t_notes = parse_topic_blocks(marked)
             marked, diary_elections, d_notes = parse_diary_blocks(marked)
             refl["marked_reply"] = marked
             refl["feelings"] = [dataclasses.asdict(f) for f in feelings]
             refl["interests"] = list(interests)
+            refl["lessons"] = list(lessons)
+            refl["topics"] = list(topics)
             refl["diary"] = [dataclasses.asdict(e) for e in diary_elections]
-            refl["notices"] = list(notices) + list(i_notes) + list(d_notes)
+            refl["notices"] = (
+                list(notices) + list(i_notes) + list(l_notes) + list(t_notes) + list(d_notes)
+            )
             refl["stage"] = "summary"
             refl["i"] = 0
 
@@ -668,6 +700,10 @@ def build_visit_workflow(
                                 "participants": list(visit["participants"]),
                                 "session_id": str(run.session_id or ""),
                                 "phase": "visit",  # r-rt-3
+                                # Elected topics fan to topic:<words> card
+                                # targets in memory's evidence scan.
+                                **({"topics": [str(t) for t in refl.get("topics") or []]}
+                                   if refl.get("topics") else {}),
                                 **({"digest_method": "mechanical-floor-v1"} if refl_floored else {}),
                                 **({"visit_id": str(visit_id)} if visit_id else {}),
                             },
@@ -687,7 +723,7 @@ def build_visit_workflow(
             interests = list(refl.get("interests") or [])
             i = int(refl.get("i") or 0)
             if i >= len(interests):
-                refl["stage"] = "diary"
+                refl["stage"] = "lesson"
                 refl["i"] = 0
                 return StepPlan(node_id="APPLY", next_node="APPLY")
             refl["i"] = i + 1
@@ -723,6 +759,52 @@ def build_visit_workflow(
                 next_node="APPLY",
             )
 
+        if stage == "lesson":
+            # LESSONS — semantic knowledge (laurent's directive 2026-07-18;
+            # same staged shape as interests, LIFE scope: knowledge is
+            # recallable world-stuff, not identity core).
+            lessons = list(refl.get("lessons") or [])
+            i = int(refl.get("i") or 0)
+            if i >= len(lessons):
+                refl["stage"] = "diary"
+                refl["i"] = 0
+                return StepPlan(node_id="APPLY", next_node="APPLY")
+            refl["i"] = i + 1
+            session_record_id = next(
+                iter((refl.get("summary_out") or {}).get("record_ids") or []), None
+            )
+            return StepPlan(
+                node_id="APPLY",
+                effect=Effect(
+                    type=EffectType.MEMORY_FORM,
+                    payload={
+                        "records": [{
+                            "kind": "lesson",
+                            "title": "lesson: " + " ".join(str(lessons[i]).split()[:8]),
+                            "digest": str(lessons[i]),
+                            "keywords": [],
+                            "edges": (
+                                [["from_session", str(session_record_id)]] if session_record_id else []
+                            ),
+                            "attributes": {
+                                "session_id": str(run.session_id or ""),
+                                "phase": "visit",
+                            },
+                            "provenance": {
+                                "source": "entity-visit-run-reflection-v0",
+                                "actor": "entity-reflection",
+                            },
+                        }],
+                        "scope": "life",
+                        "owner_id": home.entity_id,
+                        "turn_id": f"t-reflect-lesson-{rid_scope}-{i}",
+                        "_absorb_failure": True,
+                    },
+                    result_key="_reflect.lesson_out",
+                ),
+                next_node="APPLY",
+            )
+
         if stage == "diary":
             entries = list(refl.get("diary") or [])
             i = int(refl.get("i") or 0)
@@ -743,6 +825,7 @@ def build_visit_workflow(
                         "kind": e.get("kind"),
                         "visibility": e.get("visibility"),
                         "resolves": e.get("resolves"),
+                        "explores": e.get("explores"),
                         "turn_id": f"t-reflect-diary-{rid_scope}-{i}",
                         "anchor_record_ids": session_graph_ids,
                         "anchor_graph_ids": session_graph_ids,

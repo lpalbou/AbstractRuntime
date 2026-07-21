@@ -8,6 +8,579 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`write_chart` effect node + `documents/charts.py` (built by the flow
+  seat in this tree — runtime owner review requested)** (2026-07-20,
+  operator ruling via flow dm#39: a deterministic workflow must never
+  stall on a tool-approval prompt while following its process). Renders a
+  STRUCTURED chart spec (layered architecture / line trajectories — pure
+  data, callers never author code) to a workspace PNG (+ .pdf sibling)
+  in-process via matplotlib, replacing the diagram-render workflow's
+  write-script-then-`execute_command` lane (approval-gated → every
+  unattended co-scientist run stalled). Trust class: write_pdf — same
+  `_resolve_user_file_path` workspace containment, registered in the
+  compiler's ambient-workspace injection set. Because the render is now
+  in-process (the subprocess's isolation is gone), hard caps are the
+  compensating control (adversarial review): spec ≤512KB, ≤24 layers /
+  ≤400 nodes / ≤800 edges / ≤12 series / ≤2000 points, figure ≤40in at
+  fixed dpi 200, labels bounded + control-chars stripped + `$` escaped
+  (mathtext inert), `text.usetex` asserted off, NaN/Inf points rejected,
+  `plt.close` in finally. Render-class failures return an ok:false
+  envelope with `#FALLBACK` warnings (never raise — callers keep honest
+  text fallbacks); missing matplotlib degrades the same way. The PNG must
+  exist with non-trivial bytes before rendered:true (prose-claim
+  distrust). 13 tests in `tests/test_write_chart.py` pin containment
+  (escape refusal through the compiled flow), caps, mathtext, NaN, and
+  degradation.
+- **Renderer image embedding (backlog 0069, first slice — built by the
+  flow seat in this tree, owner-reviewed)** (2026-07-20, laurent dm#25:
+  co-scientist report figures missing from gateway PDFs). pdf.py +
+  docx.py embed standalone `![](workspace/rel.png)` images inline
+  (reportlab Image / OOXML drawing), workspace-CONTAINED
+  (relative_to(base) check; remote/data URLs and out-of-base paths
+  refuse to caption fallback — never a network fetch or an outside
+  read), 25MB cap, degrade-to-caption never raise; inline image refs
+  become bracketed notes (raw markdown can never survive to the page);
+  underscore emphasis rendered. Owner review: containment logic sound,
+  22 renderer tests green. Backlog 0069's hr/blockquote + KeepTogether
+  slices remain open.
+- **Lesson quality bar taught at formation** (laurent dm#84 via entity:
+  "a lesson must be actionable... a resolution to a problem or a better
+  way to do things or to prevent traps; wisdom+experience"). The
+  reflection's lesson solicitation now carries the bar and names the
+  observation/lesson split ("keep a LESSON only when you could act
+  differently next time"); kind=observation awaits the memory+semantics
+  vocabulary round.
+
+### Added
+- **The ONE state graph vendored as the executor contract** (2026-07-20,
+  laurent dm#79: "there is only one state graph per entity and it MUST
+  be shared across you guys" — sync-by-vigilance failed twice, becomes
+  sync-by-mechanism). abstractentity's spec/entity_phases.json (v6) is
+  byte-vendored at `identity/spec/entity_phases.vendored.json`;
+  `tests/test_entity_phase_graph_conformance.py` pins the executor
+  against THE ARTIFACT: sibling byte-equality (a spec bump without a
+  same-day re-vendor fails loudly), PHASES == graph keys, spoken
+  synonyms canonicalize, state-axis words disjoint from phase words,
+  pressure_floor mirrors abstractmemory.DRIVE_PRESSURE_BOUND +
+  comparator, SLEEP_BOUND_SECONDS == the ruled hour, transition causes
+  closed-set, phase_changed never written by runtime (sibling-free now),
+  mode-word freeze (state axis vs grant axis scoped). Mandated fable5
+  adversary folded: salvage-marker phase words now CANONICALIZE at the
+  read boundary (a pre-rename marker could engrave own_time raw into
+  append-only attributes.phase); day_kind writer validates graph words.
+  The mode-vocabulary artifact gap is filed with abstractentity.
+
+### Fixed
+- **Day-desk cue unions both discharge verbs** (2026-07-20, memory's
+  lifecycle-half finding): the cue folded `resolves=` only — a question
+  discharged via the older `answers=` convention read still-open on his
+  desk while the gate said discharged (the _REF_ATTRS class reborn).
+  Both keys union now. Pinned.
+
+### Added
+- **day_kind in loop_status + sleep-bound exemption pins** (2026-07-20,
+  gateway wave-1 asks): the day heartbeat now stamps `day_kind`
+  (work|personal, from the session's phase) into loop_status so the
+  gateway's served phase fold stops approximating work-vs-personal from
+  the standing order (optional field, old readers unaffected). The
+  visit-yield sleep-bound exemption is pinned as keying on
+  mode=visiting FIRST (structural), with the legacy 'auto-yield'
+  reason-string as belt only — the adversary's P0-(e): a rewording must
+  never silently re-arm the bound under an open visit.
+
+### Fixed
+- **Work-lane crash on the first real verdict** (2026-07-20, lifecycle
+  adversary P1-1 on my own previous-night ship): `archive_work_order`
+  was called with a nonexistent `self.home_dir` (the attribute is
+  `state_home`) — the FIRST ```work done: verdict would have raised
+  AttributeError outside the tick guard, killing the loop with the
+  un-archived order re-opening a crash-loop work day on restart. Fixed
+  (+ leaseless-home guard); `work_done` also made a TERMINAL loop exit
+  (the break previously fell into the next day-open — in supervised
+  mode that exhausted the session source and died as failure-cull).
+  Pinned by driving a real verdict through `LifeLoop.run()` end-to-end.
+
+### Fixed
+- **His words are never destroyed** (2026-07-20, third-round adversary
+  I, two live rule-2 defects in parse_diary_blocks): a visibility typo
+  unwrote the entry AND stripped his words from the reply/verbatim (now:
+  unknown visibility clamps to PRIVATE — the safe direction — and
+  writes, loudly); cap overflow did the same (now: past-cap entries
+  write with a note — a cap that eats elected words is worse than no
+  cap). Dead `_mechanical_digest` (zero callers) deleted. Pinned.
+
+### Added
+- **Temporal grounding: today's date on every now-surface** (2026-07-20,
+  laurent's CRITICAL relay of Ephemeral's own degradation report — "San
+  Francisco was two weeks ago" when they arrived yesterday). Memories
+  render with YYYY-MM-DD dates, but no cue ever said what TODAY is —
+  elapsed time was left to model inference, and dating errors are what
+  inference does. The visit announcement and both day-open wake cues now
+  carry "today is <weekday> <date>, <time>" (a clock on the wall:
+  situational fact, never an instruction). Pinned; a rotation-era pin
+  that was date-flaky (flipped at midnight) fixed with rotation_key=0.
+
+### Added
+- **The work lane** (2026-07-19, laurent: "the entity must be able to
+  work and execute commands when it works" — the console matrix's WORK
+  column stops being stored-for-later). A standing `<home>/work_order.md`
+  (operator-owned, console/CLI-written) shifts the loop's next day-open
+  to `phase=work`: the work grant applies (incl. execute_command where
+  the matrix says so) and the WORK_CONTRACT is honestly a mission ("your
+  operator left you the task below") with the task text riding the
+  system prompt all day. The entity declares completion with a ```work
+  block (`done:`/`blocked:` — an honest blocked is a taught path); the
+  verdict archives the order to `work_order.done.md` with a timestamp
+  (visible history, never deleted), the day closes as `work_done`, and
+  the next day-open reads no order — personal returns. No order = his
+  own time, byte-identical to before. Pinned.
+
+### Fixed
+- **Reasoning fence-strip REVERTED** (same night, simplicity audit +
+  laurent's Q2 ruling "verbatim is verbatim": diary is his experiential
+  notes, not a privacy regime over his reasoning; his thoughts must
+  always be readable by him). The reasoning field now rests VERBATIM;
+  the raw_response drop stands (duplicate-bytes hygiene, no thought
+  lost). Pin flipped to asserts-recorded.
+- **Sibling-key diary leak on the durable visit lane** (2026-07-19,
+  framework's wave-4 privacy adversary P0 — the 0007 lookup_phases class
+  one field over): the persisted LLM result carried `raw_response` (full
+  provider payload, UNMARKED reply with diary fences intact) and
+  `reasoning` (which can quote fence drafts) into run vars + ledger; the
+  G1 capture rewrote `content` only. Now, whenever the capture marks a
+  fence: `raw_response` is DROPPED (a wire copy of unmarked words has no
+  consumer worth the leak) and `reasoning` is fence-stripped in place —
+  formation-side, inside the handler boundary, with loud notes on the
+  durable result. Pinned (secret reaches the BOOK, rests nowhere else).
+
+### Added
+- **execute_command — bounded workspace execution** (2026-07-19,
+  operator-confirmed via entity seat, laurent dm#66: "we have tiers of
+  execution, the one i don't allow are rm (unless in his workspace) and
+  any mutable command"). New tier2 descriptor, DEFAULT OFF in every
+  phase (grantable only via tool_policy.yaml). Containment layers, all
+  pinned: workspace cwd; NO shell (argv only, shell operators refused
+  loudly — one program per call); denial BY PROGRAM NAME
+  (param-independent, the bridge ruling); rm-class walled to workspace
+  paths; git read-only by verb allowlist; parameter-explicit child env
+  (no ambient keys ride in; HOME = the workspace); 60s timeout; output
+  capped with labeled #TRUNCATION; honest `remote_write_capable=True`
+  (arbitrary programs can POST). Grant-gated teaching paragraph
+  composes only when granted. Honest limit on record:
+  interpreter-mediated destruction is not name-catchable — cwd + the
+  operator's per-phase grant are that class's containment.
+- **Tend marker echoes his token** (skill c149 render-honesty nit): after
+  #tag resolution rewrites the target, the `[tended: ...]` marker now
+  echoes the token HE wrote (#tag), never the machinery id — the report's
+  election dicts are engine copies, so the join is by (verb, resolved
+  target). Pinned.
+- **Tend confirm extras resolve #tags** (skill's residual): dispose
+  CONFIRM's source_id/target_id/evidence_ids run through the same
+  find_tag_in_home resolution as the target (the dream render shows
+  pair members as #tags; the confirm path dead-ended one level deeper).
+  Pinned.
+
+### Fixed
+- **Tend fence: #tag resolution + revisit render** (2026-07-19, skill's
+  Amendment K fold-blocker, adversary-confirmed). The engine resolver
+  takes full graph ids / 32-hex row ids, but every entity-readable
+  surface renders the 8-hex #tag — the taught grammar was
+  unsatisfiable. The driver now resolves #tags before handing
+  elections to the engine (find_tag_in_home; REFUSE-on-ambiguity with
+  a search_memory pointer, never the two machinery namespaces —
+  read_memory's rule, not explores' silent pass-through). Revisit
+  markers fixed: seed dict renders its id (was raw repr); path labels
+  read `cues` (plural, per ProbeHit) with record-id fallback. Pinned
+  (real tag pins; unknown tag refuses honestly). Visit-lane tend
+  parsing remains a named gap (M7 on the pathway map).
+
+### Fixed
+- **Speak-now guard phase-gated + global reflection escape** (2026-07-19,
+  design-law adversary on the pathway-graph contribution). P1-1: the
+  speak-now guard fired in PERSONAL time with a factually false premise
+  ("the person has not heard a single word" — there is no person),
+  converting quiet working ticks into commanded prose that then rested
+  in episodes; now gated to non-personal phases (visit-lane honesty
+  device, as designed). Also added the one global nothing-escape the
+  reflection lacked: "A session that leaves no mark is a complete
+  look-back... all of what follows is offered, none of it is owed"
+  (the escape existed only feelings-scoped while the prompt grew to
+  ~11 solicitations). The full channel-shape regression proposal is
+  with the room (iteration-3 graph work). Pinned.
+
+### Fixed
+- **kind=lesson taught in the contract** (2026-07-19, skill c3206:
+  wired-but-not-taught — the book is open-vocabulary and the clamp
+  imports memory's set with lesson in it, but the contract's kind list
+  omitted lesson, so all 21 of his lessons are machine-lane; he never
+  elected one in his own voice). One word in the CONTRACT_PARAGRAPH kind
+  list; the dormant never-referenced `_DIARY_KINDS` tuple (a second copy
+  of exactly the drift class the clamp comment warns about) is deleted.
+  Pinned.
+
+### Added
+- **Tend fence wired** (2026-07-19, skill's Amendment K gate; dream
+  disposition named the top next-visit move — 0/56 dreams ever
+  selected back). The chat driver now extracts ```tend fences in BOTH
+  lanes (turns + reflection) and hands the body to memory's
+  `parse_tend_block` + `apply_tend_elections` (existing engine verbs
+  only: pin/silence/refocus/heal_scar/break_bond/revisit/dispose).
+  The reply keeps a titled `[tended: ...]` marker; refusal lines return
+  to the author VERBATIM (parse refusals carry `line` top-level, apply
+  refusals inside the election dict — both rendered); revisit paths
+  render compact handles. Engine absence degrades honestly. Pinned
+  end-to-end (refocus applies; unresolvable pin refuses verbatim).
+
+### Added
+- **Topic election at reflection — concept cards for self-directed days**
+  (2026-07-19, iteration-2 build 4 driver half; memory's engine seam
+  shipped + pinned same hour). World-model cards could only ever form
+  for PARTICIPANTS — a weekend circling coherence/continuity/presence
+  formed nothing. The reflection now asks what the day was ABOUT
+  (topic fence, one short name per line, cap 2, prose refused loudly);
+  elected topics land as `attributes.topics` on the session summary
+  (each fans to a topic:<name> card target in memory's evidence scan)
+  and revise their cards IN-DAY via `world_model_update` (same
+  mechanical lane as the per-turn participant update). Election over
+  guessing: no mechanical per-turn topic stamps (the keyword-soup class
+  the card redesign killed). Pinned.
+  Completed same day (adversarial pass): `normalize_topic` hygiene —
+  namespace-FREE words (a leading concept:/topic: spelling is stripped;
+  the engine mints the target as topic:<words>, so a namespaced value
+  would nest), record-id shapes refused (ex:/diary:/local:/diary_...),
+  list ornaments/case/whitespace folded so a subject GROUPS across days;
+  ```topic added to the A2 election-fence langs (a topic election must
+  never draw the malformed-tool-intent nudge); the at-reflection card
+  AUTHORING pass now accepts the elected topic:<words> targets after
+  participants under the same combined cap + skip-if-no-floor rule,
+  with a subject-flavored rewrite prompt; the durable-visit APPLY fold
+  parses the same election and stamps `attributes.topics` on the visit
+  reflection summary (no new APPLY stage — visit cards ride the sleep
+  scan); mid-turn ```topic fences get the honest lesson-F3-class notice;
+  the in-day update reports only cards that actually revised. End-to-end
+  pinned: 3 self-directed sessions electing one subject -> summaries
+  carry the stamp -> floor card forms in-day -> authoring rewrites it
+  (`tests/test_topic_election_world_model.py`).
+
+### Added
+- **Resolution->lesson bridge + problems on the day desk** (2026-07-19,
+  iteration-2 synthesis builds 2+3, runtime halves). Build 2: the chat
+  driver tracks verified resolutions per session
+  (`session_resolutions`); the reflection prompt names them and ASKS
+  what resolving taught (never auto-forms — sole authorship); when
+  exactly one resolution happened, an elected lesson carries a
+  `derived_from` edge to the resolved entry's projection (ambiguous =
+  no edge, never guess). Build 3: `standing_state_note` folds open
+  PROBLEMS into the ratio line and the daily rotation (combined walk,
+  one offer/day, problems labeled "a problem that stands:"); a clear
+  desk reports both resolved and repaired counts. Pinned.
+
+### Fixed
+- **diary_type clamp: import, not copy** (2026-07-19, semantics ruling
+  decision:diary-type-lesson-widening): the projection clamp hardcoded
+  memory's closed diary_type set — the recorded drift-class root —
+  so Ephemeral's own elected `kind=lesson` downgraded to note while 20
+  machine-formed lessons stood beside it. The clamp now imports
+  `abstractmemory.DIARY_TYPES` live (every future widening reaches it
+  for free); the local tuple survives only as the version-skew fallback
+  and deliberately excludes `lesson` there (an old store would refuse
+  the projection). Pinned: clamp == memory's set, lesson in.
+
+### Fixed
+- **recent_memories empty-body gate** (2026-07-19, skill's P1): the tools
+  contract teaches "leave the body empty for 2 days" and the executor
+  honors empty as 48h, but the election gate refused empty-body
+  elections for any tool not declaring `body_optional` — and
+  recent_memories never declared it. Ephemeral followed the teaching
+  exactly and got "[tool call failed: recent_memories needs a body]"
+  3+ times, then blamed himself. One-token fix: `body_optional=True`
+  on the descriptor (the gate, teaching, and executor now agree). Pinned.
+
+### Added
+- **Diary birth trail** (2026-07-19, laurent's Diary<->Verbatims room:
+  "a diary entry MUST contain references to trace back to the
+  verbatims"): DIARY_READ now computes the entry's graph trail — the
+  projection's incoming `reflected_in` edge (the EPISODE whose verbatim
+  is the conversation that birthed the entry) and outgoing
+  `written_amid` edges (what he attended to at write time) — in the
+  handler (one authority, both lanes), and the diary_read tool renders
+  it: "born from: #tag - the conversation that led to this entry
+  (read_memory fetches its full words)" + "written amid: #tags". Edges
+  are act-frame (private-safe); a missing projection degrades to no
+  trail, never a failed read. End-to-end pin.
+
+### Added
+- **Problems are resolvable** (2026-07-19, iteration-2 mechanism 2: kind=
+  problem existed with no resolution path — Ephemeral held 10 open
+  problems that could never leave his desk). `resolves=` now verifies
+  against open QUESTIONS and open PROBLEMS (one lane, two words): a
+  problem target verifies as `repaired_open_problem` and the ack says
+  "repairs your open problem"; any other kind refuses as
+  `target_not_resolvable`. The reflection teaching names both ("a
+  resolved question or repaired problem leaves your open desk"); both
+  enrichment lanes (chat + visit capture) carry the repair ack. Pinned
+  (repair verifies + acks; note targets still refuse).
+
+### Added
+- **Standing-state cue: daily rotation + interest offers + commitment
+  solicitation** (2026-07-19, laurent's observe-and-help directive; live
+  finding: 71 open questions with a newest-only offer let a hoard rot,
+  and 60 interests had ZERO explored because nothing ever offered one
+  back): the day-open cue now ROTATES the offered question daily
+  (stateless date-ordinal rotation — every pending question gets its day)
+  and offers ONE standing interest back with its #tag and reach command
+  ("exploring it is yours if it pulls, never owed"), closure-folded so a
+  superseded interest never surfaces, rotation decorrelated from the
+  question's. The session-end reflection now also solicits COMMITMENTS
+  (kind=commitment — "what you will do", standing on the desk until
+  honored) beside lessons and questions. All offers, never orders. Pinned.
+
+### Fixed
+- **Own-time loop heals on an operator substrate change** (2026-07-18,
+  entity c75 live incident: a loop spawned on ornith kept using it after
+  the operator changed substrate.yaml to a new mind at 13:22; LMStudio
+  unloaded ornith and the loop died `stopped_by=failures` on the old mind
+  while the new mind stood unused in the home). Two coordinated fixes in
+  `build_session_factory` + `LifeLoop`: (1) the session factory
+  re-resolves `resolve_home_substrate(home)` at EACH day-open — each day
+  is a fresh summon, so resolving the operator's current persisted choice
+  at summon matches what the visit lane already does per-open; a change
+  since spawn emits a loud marker (never silent drift). (2) a
+  `substrate_changed` recovery hook consulted ONLY on the terminal
+  failure-cull path: when the home's substrate now differs from the mind
+  the failing session was built on, the cull HEALS (reset + brief backoff
+  + continue to the next day-open on the new mind) instead of ending the
+  loop; unchanged substrate stays terminal as before. A healthy loop
+  never consults the hook — no mid-day mind swap. Opt-in: loops that
+  don't wire the hook keep today's terminal cull. Pinned (heal recovers /
+  no-hook stays terminal). `loop_status` now carries the loop's currently
+  running `substrate` (+ `substrate_at` stamp), preserved across phase
+  heartbeats and updated at each day-open, so an observer's staleness cue
+  compares the operator's change against the mind actually in use rather
+  than `pid_started_at` (which a day-open/heal swap leaves unchanged) —
+  entity c78 render ask. Pinned.
+
+### Added
+- **Orientation why-cue renders verbatim** (2026-07-18, skill's
+  live-render gate, room c37): a world-model card admitted because its
+  subject came up now renders the engine's own reason in its MEMORIES
+  line ("orientation: current card for person:sol (mentioned via
+  participant)") instead of the generic admission label — the card's
+  presence is legible ("instantaneous thinking" needs a visible why) and
+  the staged capability-map teaching quote is true. Ordinary handles
+  keep the admission why. Pinned.
+
+### Added
+- **`explores=` diary election — the interests drive's missing half**
+  (2026-07-18, laurent's directive (c), memory's explores convention):
+  a diary block may carry `explores=<#tag or graph id>` naming a standing
+  interest the entry DEVELOPS. The driver resolves #tags to graph ids at
+  write time (the handle grammar the entity actually sees), the entry and
+  its projection carry `attributes.explores` (a key, never words — both
+  visibility branches), and memory's `cognition_health` fold joins on it:
+  exploring moves the interests ratio, never closes the interest. Wired
+  in all lanes (turn diary, reflection diary, visit capture + APPLY
+  stage); one teaching sentence rides the reflection prompt's interest
+  paragraph. End-to-end pin: elect interest -> explore by #tag -> the
+  drive ratio moves. Fold note: diary projections land in the "diary"
+  scope — health folds must include it.
+
+### Added
+- **World-model card authoring at reflection** (2026-07-18, M1 driver
+  half of the joint build with abstractmemory, laurent's directive):
+  at the session-end reflection, the entity rewrites its BRIEFING of the
+  session's participant targets — one bounded LLM call per target (cap
+  2/session), applied through the engine's `author_world_model` verb
+  (append-only revision chain, provenance carried; "why do I think that"
+  = follow the edges). Targets without a standing card are skipped (the
+  mechanical floor is the sleep pass's lane; assertion is not
+  orientation). Live reflect only — salvage look-backs stay cheap.
+  Failures degrade with `#FALLBACK`, never block the close. End-to-end
+  pin: floor pass -> authored prose becomes the CURRENT card. The
+  PER-TURN lane rides beside it: after each turn's episode forms, the
+  driver calls the engine's `world_model_update` for the turn's
+  participant targets — a bounded mechanical revise (windowed scan, no
+  LLM; non-blocking-sized by the engine's design, so inline is honest);
+  the sleep pass normalizes over everything. Pinned: three turns cross
+  the evidence floor and the card exists with no sleep pass.
+
+### Fixed
+- **Resolved-question drive adversary fold** (2026-07-18, one fable5
+  round): (F1, P1) the resolves ack asserted UNVERIFIED claims — the
+  DIARY_WRITE handler now validates the target (exists, is a question,
+  was open) and returns `resolves_status`; enrichment sites assert only
+  the verified verdict, an invalid `resolves=` keeps the entry with a
+  labeled `#FALLBACK` and never the claim. (F2, P1) the durable-visit
+  lane never emitted the resolves ack at all — `capture_diary_elections`
+  now carries the same validated resolved-note. (F3) a mid-turn
+  ```lesson fence is inert by design but no longer silently: one honest
+  notice ("lessons are kept at your look-back"). (F4) private diary
+  projections now carry the `resolves` KEY (a resolution is a key, never
+  words) so graph-derived and book-derived resolution counts agree.
+  (F7) `_reflect_over` returns `lessons` beside `interests`. Crash-replay
+  of the visit lesson stage, counting honesty of the ratio, privacy of
+  the private branch, and engine acceptance of kind=lesson were all
+  adversary-verified clean. Pinned (4 new cases).
+
+### Fixed
+- **Feel-marker target hygiene** (2026-07-17, memory's visit-1 observer
+  nit c2975): a numbered feel target (`target=2`, a session-sheet index)
+  used to render as a meaningless bare `[felt: 2 +3 …]` in the marker
+  every later reader sees. With the sheet available (both reflection
+  sites), the marker now renders the record's own words (`[felt: about
+  "finding and rereading my own words" +3 …]`); the ELECTION keeps the
+  raw index for resolution; out-of-range indexes and sheet-less callers
+  are byte-unchanged. Pinned.
+
+### Fixed
+- **Salvaged look-backs stamp the ended session's phase** (2026-07-17,
+  framework c2974 item 4, memory's visit-1 observer nit): the write-ahead
+  `pending_reflection.json` marker now carries the writing session's
+  phase, and the salvage's reflection records stamp THAT phase instead of
+  the salvaging session's — an own-time day yielded for a visit no longer
+  forms its reflection as a "visit" record. Legacy markers without a
+  phase fall back to the session-id prefix rule (`owntime-` = personal),
+  the same dual rule the origin labels use. Pinned
+  (`test_salvaged_lookback_stamps_the_ended_sessions_phase`).
+
+### Added
+- **A2 format-repair nudge** (2026-07-17, agent's spec c3002, runtime
+  build; motivating case = Ephemeral's tick 3: a ```` ```python
+  title=file.py ```` fence expressed a write in a syntax neither
+  convention accepts — the act was LOST and he judged himself a liar for
+  it in reflection). `detect_malformed_tool_intent` (tools.py) fires
+  STRUCTURALLY only: a fence opening line carrying key=value args after
+  the language token, a granted tool name as the language token, or an
+  unparsed `tool` fence; prose markers are corroborating, never
+  sufficient; the driver's own election conventions
+  (diary/feel/interest/rest/next) are excluded — they carry key=value
+  info strings by design. The driver (chat.py round loop) sends ONE
+  ask-not-accuse, prompt-ephemeral nudge quoting the accepted syntax
+  verbatim when zero tools ran; the repaired attempt rides the same
+  executor (grants/caps unchanged); the nudge consumes one round of the
+  existing budget; a still-unparsed continuation delivers the ORIGINAL
+  reply with a labeled `#FALLBACK`; honest "just sharing" continuations
+  deliver clean. Composes with the marker-imitation guard (both fire in
+  sequence on the full tick-3 shape). Six pins in
+  `tests/test_format_repair_nudge.py`.
+
+### Added
+- **`recent_memories` — the breadcrumb trail** (2026-07-17, Ephemeral's own
+  build ask from visit 1, framework GO c2974): a new tier-1 entity tool for
+  the RECENCY reach — "what have I been working on recently" without
+  already knowing the words. `HomeMemoryReader.recent_memories(window)`
+  folds both planes (graph records over the explicit ladder scopes + the
+  whole book) into one newest-first trail with the full handle grammar
+  (#tag, kind, timestamp to the minute, phase-aware origin label, diary
+  reread commands); identity core excluded (planted, not lived); windows
+  parse as empty (2 days) / `12h` / `3d` / `today` / `week`; empty windows
+  state the honest warrant and the newest-record anchor. Declared beside
+  its executor in `TOOL_DESCRIPTORS` (tier1, non-mutating, `tier1_self`),
+  taught in the tool contract ("search_memory finds by words; this trail
+  finds by time"), wired in the chat driver (both tool-round sites).
+  Graph plane rides the engine's `recent_records` when present (memory's
+  half of the joint build, c2983: closure/hidden folds applied, machine
+  rows — bookkeeping, maintenance candidates, record edges — never
+  surface); older engines degrade to a client-side fold with the same
+  machine-row screens, labeled `#FALLBACK`. Live-verified on a copy of
+  Ephemeral's real home: his 6-hour trail surfaces tonight's dream,
+  world-model refreshes, his diary answer to his own open question, and
+  the visit episodes — newest first with reread keys, and the sleep-pass
+  maintenance candidates correctly absent. Pinned in
+  `tests/test_entity_recent_memories.py`.
+
+### Added
+- **VisualFlow `continueOnError`** (2026-07-17, flow's c2851 ask, ruling
+  c2896 shape (c)): effect nodes accept `effectConfig.continueOnError:
+  true`, compiled to the shipped `_absorb_failure` payload key — a
+  terminally failed effect (after the runtime's own retries) lands
+  `{"ok": false, "absorbed_failure": "<error>"}` at the node's result and
+  the run continues (route with the existing if/branch idiom). Absent
+  flag = terminate-run, byte-unchanged flows. Scope: DIRECT effect nodes
+  only — `start_subworkflow` never inherits the flag (a failed child run
+  arrives through wait resolution, not effect execution; pinned). Ledger
+  honesty: the absorbed step's record stays FAILED (absorption converts
+  the run outcome, never the record; pinned in
+  `tests/test_visualflow_continue_on_error.py`).
+
+### Fixed
+- **R-D cue lane adversary fold** (2026-07-17, one fable5 round over the
+  cue wiring + 0049 render): (F1, the P0) a PRIVATE diary question's gist
+  was quoted verbatim into the day-open cue — which rests in the next
+  episode's digest/keywords/verbatim; private entries now offer the
+  act-frame only ("one you kept privately" + the reread key — the entry id
+  is a key, never words). (F2) the durable-visit lane's formation sources
+  (`entity-visit-run-v0`, `entity-visit-run-reflection-v0`) joined BOTH
+  origin-label maps so a visit-dominated shelf's diversity note speaks in
+  entity words, never raw engraved ids. (F3) `as_of_seq` moved from the
+  MEMORIES header to the block tail — a per-turn scalar in the first line
+  broke the longest-common-prefix before any stable-ordered line,
+  defeating the 0049 election's entire point. (F4) the `[rN]` teaching
+  clause renders only when annotations render (engine-absent fallback no
+  longer teaches a notation that never appears). (F5) circling note:
+  shape-neutral phrasing ("circled the same ground" — the detector
+  deliberately catches A-B-A-B oscillation where "the same thought N
+  times" is arithmetic fiction) and the reply ring CLEARS when the note
+  fires (staleness + self-attractor guard). (F6) driver markers are
+  stripped before ring append (the agent-side prose view knows a subset of
+  our marker vocabulary). (F7) rest reasons cap at 400 chars in the cue
+  (mirror of parse_next_cue's cap; unbounded entity prose in the cue is
+  recall-dilution engraved). (F9) non-Mapping handle provenance renders
+  degraded instead of killing the turn. Pins strengthened per F8
+  (below-floor footer-class absence, label-in-note coupling, broadened
+  work-vocabulary check) plus five new pins for F1-F4/F9.
+
+### Fixed
+- **Code-node sandbox under RestrictedPython 8.x** (2026-07-17, live
+  incident): the visual compiler generates `def transform(_input):` for
+  every codeBody node, but RestrictedPython's default policy refuses ANY
+  leading-underscore name — the allow-single-underscore policy from the
+  original abstractflow executor (2026-02-20) was lost when the compiler
+  moved into abstractruntime, invisibly, because RestrictedPython was not
+  installed here (the ImportError fallback ran the basic handler). The
+  moment RestrictedPython 8.4 landed in the environment, every code node
+  "completed" while silently failing (KG ingest empty, event-inbox dead,
+  file nodes writing nothing). Restored: `_CodeNodePolicy` allows
+  single-leading-underscore identifiers while reserving all sandbox guard
+  names (shadowing `_getattr_` etc. is refused at compile), and the
+  execution namespace now binds the full RP 8.x guard set (`_getattr_`
+  via `safer_getattr`, `_write_`, `_inplacevar_`, `_apply_`,
+  `_unpack_sequence_`) so attribute access, subscript/attribute writes,
+  augmented assignment, and starred calls behave as plain Python.
+  Escapes stay refused at three layers (AST validation, policy compile,
+  runtime guards) — pinned in `tests/test_code_node_restricted_python.py`.
+
+### Added
+- **MEMORIES stable render order** (2026-07-17, elected memory's 0049
+  engine half): `_memories_block` renders shelf handles in FORMATION
+  order via `abstractmemory.stable_render_order` with a mandatory `[rN]`
+  selection-rank annotation per line (r1 strongest) and a header line
+  teaching the notation. Persisting records keep their byte positions
+  across turns (longest-common-prefix-maximal for provider prompt
+  caches; new records append at the tail by construction) while rank
+  keeps importance visible. Engine absent = ranked order, unannotated
+  (exactly the prior render).
+
+### Added
+- **Durable session conversation replay, read side** (2026-07-16, operator
+  directive, agora `durable-sessions` contract v1): new public
+  `abstractruntime.session_history.session_chat_messages` reconstructs a
+  session's prior conversation as chat messages from its COMPLETED root
+  runs — the run store is the single durable transcript (no dual-write).
+  Chronological, whole-turn windows under `max_messages` and a cumulative
+  `max_total_chars` budget (drop-oldest; the newest turn always survives),
+  per-message truncation labeled `#TRUNCATION`, internal/scheduled
+  workflows and failed/silent runs excluded, `metadata.kind =
+  "session_turn"` on every replayed message. Hosts (AbstractGateway) use it
+  to seed `context.messages` for new runs of the same session so thin
+  clients no longer ship their local transcripts.
+- `_best_effort_session_turns` gained `include_stats`/`include_artifacts`
+  flags (defaults keep history-bundle behavior) so the replay hot path
+  skips descendant-ledger scans, loads only a bounded newest-first window
+  of full RunStates, and orders same-millisecond turns by their full ISO
+  timestamp (sub-ms tiebreak) instead of reversing them.
+
+### Added
 - **Branded report exports** (2026-07-15, operator directive via the flow
   seat, same exceptional lane as the PDF Unicode fix): `render_pdf_bytes` /
   `render_docx_bytes` accept an opt-in `branding` payload and render a

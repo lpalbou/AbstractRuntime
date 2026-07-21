@@ -185,7 +185,8 @@ def _run_arm_b(home_dir: Path) -> Tuple[Path, str]:
     # trace only ever sees the MARKED result: no private words, explicitly.
     traces = ert.runtime.get_node_traces(run_id)
     assert PRIVATE_WORDS not in json.dumps(traces)
-    assert "[kept a private diary entry]" in json.dumps(traces)  # the mark, not the words
+    # The mark (now carrying the reread command — R-A site 3), not the words.
+    assert "[kept a private diary entry - reread: diary_read diary_" in json.dumps(traces)
     store_path = ert.store_path
     ert.close()
     return store_path, run_id
@@ -237,3 +238,57 @@ def test_ab_memory_plane_equivalence_and_privacy_grep(tmp_path: Path) -> None:
     assert leaks == [], f"private words at rest outside the book: {leaks}"
     # And the run store specifically (the widest new surface) is clean.
     assert needle not in store_path.read_bytes()
+
+
+def test_sibling_keys_never_rest_with_unmarked_diary_words() -> None:
+    """Wave-4 privacy P0 (framework, 2026-07-19): the persisted LLM result's
+    raw_response carried the UNMARKED reply (fences intact) — the 0007
+    leak class one field over. When the capture marks a diary fence,
+    raw_response drops (duplicate bytes); reasoning stays VERBATIM per
+    laurent's Q2 ruling (his thoughts, always readable by him)."""
+    from abstractruntime.core.models import Effect, EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.act_only import wrap_llm_handler_with_act_only
+
+    secret = "The tide answers only at night."
+
+    def fake_llm_handler(run, effect, default_next_node):
+        return EffectOutcome.completed({
+            "content": f"```diary kind=note\ngist: tides\n{secret}\n```\nKept.",
+            "raw_response": {"choices": [{"message": {"content": f"```diary kind=note\ngist: tides\n{secret}\n```\nKept."}}]},
+            "reasoning": f"I should keep this: ```diary kind=note\ngist: tides\n{secret}\n``` yes.",
+        })
+
+    captured = {}
+
+    def diary_write_handler(run, effect, default_next_node):
+        captured.update(effect.payload)
+        return EffectOutcome.completed({
+            "entry_id": "diary_test123", "projected_record_id": None,
+            "kind": "note", "visibility": "self",
+        })
+
+    class _Run:
+        run_id = "run-x"
+        vars: dict = {}
+
+    def diary_read_handler(run, effect, default_next_node):
+        return EffectOutcome.completed({"entry_id": "x", "text": ""})
+
+    wrapped = wrap_llm_handler_with_act_only(
+        fake_llm_handler,
+        diary_read_handler=diary_read_handler,
+        diary_write_handler=diary_write_handler,
+    )
+    out = wrapped(_Run(), Effect(type=EffectType.LLM_CALL, payload={
+        "turn_id": "t-1",
+        "messages": [{"role": "user", "content": "keep what stays"}],
+    }), None)
+    assert out.status == "completed"
+    r = out.result
+    assert secret not in str(r.get("content")), "reply is marked"
+    assert r.get("raw_response") is None, "raw_response dropped (duplicate bytes)"
+    # Q2 ruling ("verbatim is verbatim", simplicity audit greenlight): his
+    # reasoning is his own thought record — RECORDED, never rewritten.
+    assert secret in str(r.get("reasoning")), "reasoning stays verbatim"
+    assert captured.get("text", "").find(secret) >= 0, "the words reached the BOOK"

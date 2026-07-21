@@ -76,6 +76,7 @@ from .tools import TIER1_TOOL_NAMES, WORKSPACE_TOOL_NAMES
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "TIER2_TOOL_NAMES",
     "LEGACY_PHASE_ALIASES",
     "PHASES",
     "PHASE_PERSONAL",
@@ -114,11 +115,16 @@ LEGACY_PHASE_ALIASES: Dict[str, str] = {
     "own_time": PHASE_PERSONAL,
     "tasked": PHASE_WORK,
 }
+# tier2: world-effect tools, DEFAULT OFF in every phase — grantable only
+# by the operator's explicit word (tool_policy.yaml add:/tools: lists).
+# execute_command (laurent dm#66 2026-07-19): bounded workspace execution.
+TIER2_TOOL_NAMES: Tuple[str, ...] = ("execute_command",)
 TIERS: Dict[str, Tuple[str, ...]] = {
     "tier1": TIER1_TOOL_NAMES,
     "workspace": WORKSPACE_TOOL_NAMES,
+    "tier2": TIER2_TOOL_NAMES,
 }
-ALL_TOOL_NAMES: Tuple[str, ...] = TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES
+ALL_TOOL_NAMES: Tuple[str, ...] = TIER1_TOOL_NAMES + WORKSPACE_TOOL_NAMES + TIER2_TOOL_NAMES
 POLICY_FILENAME = "tool_policy.yaml"
 
 # The sleep default (maintainer ruling 2026-07-11): read-only exploration

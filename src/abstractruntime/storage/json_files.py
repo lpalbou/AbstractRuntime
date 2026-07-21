@@ -108,14 +108,29 @@ class JsonFileRunStore(RunStore):
             int(getattr(st, "st_size", 0) or 0),
         )
 
-    def _cache_put(self, rid: str, token: tuple[int, int, int], run: RunState) -> None:
-        """Insert/refresh under the lock, evicting least-recently-used."""
+    def _cache_put(
+        self,
+        rid: str,
+        token: tuple[int, int, int],
+        run: RunState,
+        *,
+        memo_rid: Optional[str] = None,
+    ) -> None:
+        """Insert/refresh under the lock, evicting least-recently-used.
+
+        `memo_rid` keys the SCAN MEMO (a per-FILE index — always the
+        filename-derived id) separately from the RunState LRU (keyed by the
+        internal run_id). They differ exactly for glob-matching copies
+        (run_<id>_backup.json): memoizing the copy's token under the
+        INTERNAL id used to poison the original's memo entry whenever
+        directory order parsed the copy last (adversary P2-1's ping-pong,
+        second head)."""
         with self._run_cache_lock:
             self._run_cache[rid] = (token, run)
             self._run_cache.move_to_end(rid)
             while len(self._run_cache) > self._run_cache_max:
                 self._run_cache.popitem(last=False)
-        self._scan_memo_put(rid, token, self._index_fields_of(run))
+        self._scan_memo_put(memo_rid or rid, token, self._index_fields_of(run))
 
     @staticmethod
     def _index_fields_of(run: RunState) -> Dict[str, Any]:
@@ -357,7 +372,10 @@ class JsonFileRunStore(RunStore):
         )
         rid = str(getattr(run, "run_id", "") or "").strip() or rid_hint
         if rid and token[0] > 0:
-            self._cache_put(rid, token, run)
+            # Memo under the FILENAME id: the memo indexes FILES (scans walk
+            # the glob), the LRU indexes RUNS — for a copy the two diverge
+            # and the copy's token must never overwrite the original's memo.
+            self._cache_put(rid, token, run, memo_rid=rid_hint or rid)
         return run
 
     def _iter_all_runs(self) -> List[RunState]:

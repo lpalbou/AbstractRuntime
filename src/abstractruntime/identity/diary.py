@@ -100,6 +100,11 @@ class DiaryEntry:
     # questions" read joins on this.
     resolves: Optional[str] = None
 
+    # Interest-exploration election (laurent's directive 2026-07-18 (c),
+    # memory's explores convention): the GRAPH id of an interest this entry
+    # develops. Exploring moves the drive ratio, never closes the interest.
+    explores: Optional[str] = None
+
     # Provenance of the volitional act (which run/turn elected this).
     origin: Dict[str, Any] = field(default_factory=dict)
 
@@ -128,6 +133,8 @@ class DiaryEntry:
             out["remind_at"] = self.remind_at
         if self.resolves:
             out["resolves"] = self.resolves
+        if self.explores:
+            out["explores"] = self.explores
         if self.origin:
             out["origin"] = dict(self.origin)
         return out
@@ -241,6 +248,56 @@ def _coerce_receipts(value: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _birth_trail(memory_system: Any, entity_id: str, entry_id: str) -> Dict[str, Any]:
+    """The graph trail behind one diary entry (diary---verbatims room,
+    2026-07-19): find the entry's PROJECTION record (attributes.entry_id
+    joins the two namespaces), then read its edges — outgoing written_amid
+    (what he attended to at write time) and incoming reflected_in (the
+    EPISODE whose verbatim is the conversation that birthed the entry).
+
+    Returns {"projection_id", "written_amid": [gid...], "born_from":
+    [gid...]} with graph ids (the #tag/read_memory currency); {} when the
+    projection is absent (chain-only diaries, engine down) — a missing
+    trail is an honest absence, never an error."""
+    if memory_system is None or not entry_id:
+        return {}
+    store = getattr(memory_system, "store", None)
+    if store is None:
+        return {}
+    from abstractmemory import TripleQuery
+
+    projection_id = ""
+    for scope in ("diary", "life", "self"):
+        for a in store.query(TripleQuery(
+                predicate="dcterms:abstract", scope=scope,
+                owner_id=entity_id, limit=0)):
+            attrs = a.attributes if isinstance(a.attributes, dict) else {}
+            if attrs.get("record_kind") == "diary" and str(attrs.get("entry_id") or "") == entry_id:
+                projection_id = str(a.subject or "")
+                break
+        if projection_id:
+            break
+    if not projection_id:
+        return {}
+    written_amid: List[str] = []
+    born_from: List[str] = []
+    for scope in ("diary", "life", "self"):
+        for a in store.query(TripleQuery(subject=projection_id, scope=scope,
+                                          owner_id=entity_id, limit=0)):
+            if str(a.predicate) == "written_amid":
+                written_amid.append(str(a.object or ""))
+        for a in store.query(TripleQuery(object=projection_id, scope=scope,
+                                          owner_id=entity_id, limit=0)):
+            if str(a.predicate) == "reflected_in":
+                born_from.append(str(a.subject or ""))
+    out: Dict[str, Any] = {"projection_id": projection_id}
+    if written_amid:
+        out["written_amid"] = sorted(set(written_amid))[:8]
+    if born_from:
+        out["born_from"] = sorted(set(born_from))[:4]
+    return out
+
+
 def build_diary_effect_handlers(
     *,
     entity_id: str,
@@ -291,11 +348,13 @@ def build_diary_effect_handlers(
             kind=entry.kind,
             visibility=entry.visibility,
             gist=entry.gist,
+            text=entry.text,
             written_at=entry.written_at,
             turn_id=str(entry.origin.get("turn_id") or ""),
             origin=dict(entry.origin),
             anchor_graph_ids=list(entry.anchor_graph_ids),
             resolves=entry.resolves,
+            explores=entry.explores,
         )
 
     def _handle_diary_write(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
@@ -351,6 +410,53 @@ def build_diary_effect_handlers(
         gist_raw = payload.get("gist")
         gist = gist_raw.strip() if isinstance(gist_raw, str) and gist_raw.strip() else None
 
+        # RESOLVES VALIDATION (adversary F1, 2026-07-18): the ack marker
+        # downstream says "resolves your open question <id>" — an UNVERIFIED
+        # claim until here (the model often types ids from memory; the
+        # sheet carries none). The book is append-only, so the entry stores
+        # the claim AS CLAIMED (his words, his act); the RESULT carries the
+        # verdict so enrichment sites assert only what is true. One site,
+        # both lanes (chat driver + visit capture read the same result).
+        resolves_raw = (str(payload.get("resolves")).strip() or None) if payload.get("resolves") else None
+        resolves_status: Optional[str] = None
+        if resolves_raw:
+            try:
+                existing = diary_store.list_entries()
+                target = next(
+                    (x for x in existing if str(x.get("entry_id")) == resolves_raw), None
+                )
+                if target is None and resolves_raw:
+                    # P1-3 (pathway adversary): every drive surface hands him
+                    # the #tag / a hex tail, not the full book id - the
+                    # transcription-tolerance rule from diary_read applies:
+                    # ONE unique suffix match resolves; ambiguity refuses.
+                    tail = resolves_raw.lstrip("#").lower()
+                    if len(tail) >= 6:
+                        matches = [
+                            x for x in existing
+                            if str(x.get("entry_id") or "").lower().endswith(tail)
+                        ]
+                        if len(matches) == 1:
+                            target = matches[0]
+                            resolves_raw = str(target.get("entry_id"))
+                target_kind = str(target.get("kind")) if target is not None else ""
+                if target is None:
+                    resolves_status = "target_not_found"
+                elif target_kind not in ("question", "problem"):
+                    # Mechanism 2 (iteration-2 order, 2026-07-19): PROBLEMS
+                    # are resolvable too — a problem is not a question
+                    # (something is WRONG and got fixed), but the resolution
+                    # mechanics are one lane. Any other kind stays refused.
+                    resolves_status = "target_not_resolvable"
+                elif any(str(x.get("resolves") or "") == resolves_raw for x in existing):
+                    resolves_status = "target_already_resolved"
+                elif target_kind == "problem":
+                    resolves_status = "repaired_open_problem"
+                else:
+                    resolves_status = "resolved_open_question"
+            except Exception as e:  # noqa: BLE001 - a read hiccup never blocks the write
+                resolves_status = "unverified"
+
         run_id = str(getattr(run, "run_id", "") or "")
         entry = DiaryEntry(
             entry_id=derive_entry_id(run_id=run_id, turn_id=turn_id, text=text),
@@ -366,7 +472,8 @@ def build_diary_effect_handlers(
             anchor_graph_ids=anchor_gids,
             receipts=_coerce_receipts(payload.get("receipts")),
             remind_at=remind_at,
-            resolves=(str(payload.get("resolves")).strip() or None) if payload.get("resolves") else None,
+            resolves=resolves_raw,
+            explores=(str(payload.get("explores")).strip() or None) if payload.get("explores") else None,
             origin={
                 "run_id": run_id or None,
                 "turn_id": turn_id,
@@ -402,6 +509,15 @@ def build_diary_effect_handlers(
             result["projected_record_id"] = projected_record_id
         if stored.get("remind_at"):
             result["remind_at"] = stored.get("remind_at")
+        if resolves_status:
+            result["resolves_status"] = resolves_status
+            # P2-3 (pathway adversary): repaired_open_problem is the problem
+            # lane's SUCCESS - warning on it gaslit his rare wins.
+            if resolves_status not in ("resolved_open_question", "repaired_open_problem"):
+                warnings = list(warnings) + [
+                    f"#FALLBACK resolves={resolves_raw} did not match an open question "
+                    f"({resolves_status}) - the entry stands, the resolution claim does not"
+                ]
         if warnings:
             result["warnings"] = warnings
         return EffectOutcome.completed(result)
@@ -439,6 +555,21 @@ def build_diary_effect_handlers(
         if entry.get("anchor_record_ids"):
             re_entry["anchor_record_ids"] = list(entry.get("anchor_record_ids") or [])
         result["re_entry"] = re_entry
+        # THE BIRTH TRAIL (laurent, diary---verbatims room 2026-07-19: "a
+        # diary references the proper verbatims... MUST contain those
+        # references to trace back"): the graph already holds it — the
+        # projection's written_amid edges (what he attended to at write
+        # time) and the INCOMING reflected_in edge from the episode whose
+        # verbatim IS the conversation that birthed the entry. Computed
+        # HERE (one authority; both lanes' reads get it), rendered by the
+        # tool surface. Pure read; failure degrades to no trail, never a
+        # failed read.
+        try:
+            trail = _birth_trail(memory_system, eid, str(entry.get("entry_id") or ""))
+            if trail:
+                result["trail"] = trail
+        except Exception:  # noqa: BLE001
+            pass
         return EffectOutcome.completed(result)
 
     return {

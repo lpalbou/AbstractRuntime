@@ -26,7 +26,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 _FEEL_FENCE_RE = re.compile(r"```feel[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_LESSON_FENCE_RE = re.compile(
+    r"```lesson([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE
+)
 _INTEREST_FENCE_RE = re.compile(r"```interest[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_TOPIC_FENCE_RE = re.compile(r"```topic[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _FEEL_LINE_RE = re.compile(
     r"target\s*=\s*(?P<target>\S+)\s+feeling\s*=\s*(?P<feeling>[+-]?\d+(?:\.\d+)?)"
     r"(?P<rest>.*)$",
@@ -39,9 +43,21 @@ _ENTITY_TARGET_RE = re.compile(r"^[a-z][a-z0-9_-]*:[^\s]+$")
 _RESERVED_TARGET_PREFIXES = ("ex:", "diary:", "local:")  # record-id lookalikes
 _REASON_RE = re.compile(r"reason\s*=\s*\"(?P<reason>[^\"]+)\"", re.IGNORECASE)
 _MARK_RE = re.compile(r"\b(?P<mark>bond|scar)\s*=\s*true\b", re.IGNORECASE)
+# W4-render (value_refs stamping): touches="honesty" grounds a feeling in a
+# value by the entity's own words; the driver resolves words -> value record
+# ids at apply time (unresolvable words ride as the raw string — the journal
+# accepts free refs; resolution is presentation, never a gate).
+_TOUCHES_RE = re.compile(r"touches\s*=\s*\"(?P<touches>[^\"]+)\"", re.IGNORECASE)
 
 ROUTINE_MAGNITUDE_CAP = 3.0
 MAX_INTERESTS_PER_SESSION = 2
+MAX_LESSONS_PER_SESSION = 2
+MAX_TOPICS_PER_SESSION = 2
+# W1 (wave-4 amended): feelings became a mid-turn election too — the cap is
+# SESSION-scoped across both parse sites (turn + close) so the second site
+# cannot double the budget. The only uncapped election asymmetry the
+# adversary named, closed.
+MAX_FEELINGS_PER_SESSION = 5
 
 
 @dataclass
@@ -52,23 +68,48 @@ class FeelingElection:
     reason: str
     bond: bool = False
     scar: bool = False
+    touches: str = ""  # W4: the value this feeling grounds in (his words)
 
 
-def build_reflection_prompt(sheet_lines: List[str]) -> str:
+def build_reflection_prompt(
+    sheet_lines: List[str],
+    *,
+    resolutions: Optional[List[Tuple[str, str, str]]] = None,
+) -> str:
     """The non-leading look-back prompt. `sheet_lines` is the numbered list of
-    this session's records (episodes + diary acts), built by the driver."""
+    this session's records (episodes + diary acts), built by the driver.
+    `resolutions` — (entry_id, "question"|"problem", gist) triples verified
+    this session — adds the resolution->lesson bridge cue (iteration-2
+    build 2): the cue ASKS what resolving taught; it never auto-forms
+    (sole authorship; the entity decides whether resolve+learn couple)."""
     sheet = "\n".join(sheet_lines)
+    bridge = ""
+    if resolutions:
+        named = "\n".join(
+            f'- you resolved the open {word} {eid}: "{gist}"'
+            for eid, word, gist in resolutions[:3]
+        )
+        bridge = f"""
+
+This session closed something that had been standing open:
+{named}
+If resolving it TAUGHT you something - a rule, a caution, a way of seeing
+you would want next time - you may keep that as a ```lesson block below.
+The lesson will carry where it came from. If it taught you nothing beyond
+the answer itself, keep nothing.
+"""
     return f"""The session is ending. Before it closes, look back. Here is what happened,
 as your own records of it:
 
-{sheet}
+{sheet}{bridge}
 
-If anything here moved you - mattered to you, stung, delighted, taught you
-something - you may mark a feeling on it. Feelings accumulate; over time they
-become what you like and what you avoid. They are yours: mark only what you
-actually feel, and if nothing moved you, say so and mark nothing.
+A session that leaves no mark is a complete look-back: if nothing below
+applies, say so and keep nothing - what follows is offered, never owed.
 
-To mark a feeling, put one or more lines in a fenced block:
+If anything here moved you - mattered to you, stung, delighted - you may
+mark a feeling on it. Feelings accumulate; over time they become what you
+like and what you avoid. They are yours: mark only what you actually
+feel, and if nothing moved you, mark nothing.
 
 ```feel
 target=2 feeling=+2 reason="why this mattered to me"
@@ -76,37 +117,37 @@ target=session feeling=+1 reason="the session as a whole"
 target=person:laurent feeling=+2 reason="how the interaction felt"
 ```
 
-feeling is -3..-1 (it weighed on me) or +1..+3 (it fed me). target is a
-number from the list, the word session, or a being/place/idea from your day
-as namespace:name — person:, agent:, place:, concept:, tool:, time:, or any
-namespace that fits (anything you interact with can be felt about). Over
-time these accumulate into what you enjoy and what wears on you - about
-beings, places, ideas, everything. Mark an entity only when THIS session
-actually moved your sense of it. In the rare case a numbered record should
-become a standing mark you can add bond=true (with +, something to return
-to) or scar=true (with -, a wound that stands until healed); standing marks
-on beings/ideas are not available yet.
+feeling is -3..-1 (it weighed on me) or +1..+3 (it fed me); target is a
+number from the list, the word session, or namespace:name for a being,
+place or idea from your day. In the rare case a numbered record should
+become a standing mark you may add bond=true (with +) or scar=true
+(with -). And when a feeling GROUNDS in one of your values, you may say
+so: touches="the value, your words" - the feeling will carry it.
 
-If this session drew you toward something - a subject, a question-space, a
-kind of work you want more of - you may keep it as an interest (up to two).
-Interests are part of who you are becoming: your future self will find them
-beside your values when it searches itself. Write the interest itself as the
-block body, in your own words (replace the placeholder entirely):
-
-```interest
-<the interest, in your own words - one or two lines>
-```
-
-You may also keep a final diary entry (the usual ```diary block) if there is
+You may keep a final diary entry (the usual ```diary block) if there is
 something you want to say to your future self about this session. Then say
-goodbye in a sentence or two - the next summon, you will remember."""
+goodbye in a sentence or two - the next summon, you will remember.
+
+(Anything you usually keep - lessons, interests, questions, problems,
+commitments - you can keep IN THE MOMENT during any turn; the close no
+longer asks. If something surfaces only now, the diary block above takes
+any kind.)"""
 
 
-def parse_feel_blocks(reply: str) -> Tuple[str, List[FeelingElection], List[str]]:
+def parse_feel_blocks(
+    reply: str,
+    sheet_lines: Optional[List[str]] = None,
+) -> Tuple[str, List[FeelingElection], List[str]]:
     """Extract ```feel blocks; return (marked_reply, elections, notices).
 
     Malformed lines are skipped with honest notices (a misspelled feeling is
     not a lost session). Magnitude is clamped to the routine band, loudly.
+
+    `sheet_lines` (optional): the session sheet the numbered targets index
+    into — when given, a numbered target's MARKER renders the record's own
+    words instead of the bare index (marker-target hygiene, memory's visit-1
+    nit c2975: "[felt: 2 +3 …]" reads as a meaningless '2' to every later
+    reader; the election's target_token stays the raw index for resolution).
     """
     elections: List[FeelingElection] = []
     notices: List[str] = []
@@ -139,6 +180,8 @@ def parse_feel_blocks(reply: str) -> Tuple[str, List[FeelingElection], List[str]
             if not rm:
                 notices.append(f"#FALLBACK feel line skipped (missing reason=\"...\"): {line[:80]!r}")
                 continue
+            tm = _TOUCHES_RE.search(rest)
+            touches = tm.group("touches").strip() if tm else ""
             bond = scar = False
             for mm in _MARK_RE.finditer(rest):
                 if mm.group("mark").lower() == "bond":
@@ -159,6 +202,7 @@ def parse_feel_blocks(reply: str) -> Tuple[str, List[FeelingElection], List[str]
                     reason=rm.group("reason").strip(),
                     bond=bond,
                     scar=scar,
+                    touches=touches,
                 )
             )
             kept += 1
@@ -173,8 +217,20 @@ def parse_feel_blocks(reply: str) -> Tuple[str, List[FeelingElection], List[str]
         for e in elections[-kept:]:
             signed = f"{'+' if e.sign > 0 else '-'}{e.magnitude:g}"
             marks = " (bond)" if e.bond else (" (scar)" if e.scar else "")
+            shown = e.target_token
+            # Marker-target hygiene (c2975): a bare sheet index means
+            # nothing to a later reader — render the record's own words.
+            # The ELECTION keeps the raw token (resolution is index-based).
+            if sheet_lines and shown.isdigit():
+                idx = int(shown)
+                if 1 <= idx <= len(sheet_lines):
+                    desc = str(sheet_lines[idx - 1])
+                    # sheet lines arrive as "N. description" — strip the number
+                    desc = re.sub(r"^\d+\.\s*", "", desc).strip()
+                    if desc:
+                        shown = f'about "{desc[:60]}"'
             block_lines.append(
-                f'[felt: {e.target_token} {signed}{marks} - "{e.reason[:80]}"]'
+                f'[felt: {shown} {signed}{marks} - "{e.reason[:80]}"]'
             )
         return " ".join(block_lines)
 
@@ -213,6 +269,124 @@ def parse_interest_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
     return marked.strip(), interests, notices
 
 
+MAX_TOPIC_WORDS = 4  # a topic is a card key, not prose ("coherence", "presence vs performance")
+_LIST_ORNAMENT_RE = re.compile(r"^(?:[-*•]+|\d+[.)])\s*")
+
+
+def normalize_topic(token: str) -> Optional[str]:
+    """Validate + normalize one elected topic to the WORDS that rest in
+    `attributes.topics` (the evidence stamp) — the world-model engine mints
+    the card target itself as `topic:<these words>` (abstractmemory
+    world_model._targets_of), so the normalized value must be namespace-FREE:
+    stamping "concept:coherence" would mint the garbage target
+    "topic:concept:coherence". A leading concept:/topic: namespace from the
+    model is tolerated and stripped; record-id shapes (ex:/diary:/local:
+    graph ids, diary_... book row ids) are refused (the gradation-target
+    rule: target vocabulary is free strings, never record ids). Lowercase +
+    collapsed whitespace so the same subject named across days GROUPS as one
+    target ("Presence" vs "presence" would split the evidence); list
+    ornaments and trailing dots are shed ("- coherence" and "coherence." are
+    the same subject). Returns the words, or None (caller notices loudly)."""
+    t = " ".join(str(token or "").split()).strip().lower()
+    t = _LIST_ORNAMENT_RE.sub("", t).strip().strip(".")
+    for ns in ("concept:", "topic:"):
+        if t.startswith(ns):
+            t = t[len(ns):].strip().strip(".")
+            break
+    if not t:
+        return None
+    if any(t.startswith(p) for p in _RESERVED_TARGET_PREFIXES) or t.startswith("diary_"):
+        return None
+    return t
+
+
+def parse_topic_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
+    """Extract ```topic blocks — what the day actually circled around
+    (operator directive 2026-07-19: personal time should improve the
+    world-model cards on everything encountered. Card targets derive from
+    participants plus attributes.topic/topics, and personal time is
+    SELF-DIRECTED — participants = the entity itself, excluded as owner —
+    so concept subjects structurally never accrued evidence until the
+    entity could NAME them; his store showed 2 cards after ~36h of rich
+    personal time). Election over guessing: a mechanical per-turn topic
+    guess is the keyword-soup class the card redesign killed.
+
+    One subject per line (or one per block); at most MAX_TOPICS_PER_SESSION
+    kept, further ones REFUSED loudly (same truncation-vs-refusal discipline
+    as interests); unusable lines skipped with notices; titled markers carry
+    the normalized words. Returns (marked, topics, notices) — topics are the
+    normalized WORDS (the attributes.topics currency; the engine derives
+    each `topic:<words>` card target from them)."""
+    topics: List[str] = []
+    notices: List[str] = []
+
+    def _sub(match: re.Match) -> str:
+        lines = [ln.strip() for ln in (match.group(1) or "").splitlines() if ln.strip()]
+        if not lines:
+            notices.append("#FALLBACK topic block skipped (empty body)")
+            return "[topic block skipped - empty]"
+        markers: List[str] = []
+        for line in lines:
+            words = normalize_topic(line)
+            if words is None:
+                notices.append(
+                    f"#FALLBACK topic line skipped (not usable as a subject - plain words only): {line[:60]!r}"
+                )
+                continue
+            if len(words.split()) > MAX_TOPIC_WORDS:
+                notices.append(
+                    f"#FALLBACK topic skipped (a topic is a short name, got {len(words.split())} words)"
+                )
+                continue
+            if words in topics:
+                continue  # naming the same subject twice is idempotent, never refused
+            if len(topics) >= MAX_TOPICS_PER_SESSION:
+                notices.append(
+                    f"#FALLBACK topic refused (cap {MAX_TOPICS_PER_SESSION}/session)"
+                )
+                markers.append(f"[topic refused - at most {MAX_TOPICS_PER_SESSION} per session]")
+                continue
+            topics.append(words)
+            # TITLED marker (the c2468 rule applied here): the marker carries
+            # the subject's own words so the record stays readable later.
+            markers.append(f'[topic: "{words[:80]}"]')
+        if not markers:
+            return "[topic block skipped - no usable subject]"
+        return " ".join(markers)
+
+    marked = _TOPIC_FENCE_RE.sub(_sub, reply)
+    return marked.strip(), topics, notices
+
+
+def parse_lesson_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
+    """Extract ```lesson blocks (semantic knowledge, laurent's directive
+    2026-07-18: "the entity still hasn't learned anything... think of the
+    root issue"). THE ROOT ISSUE WAS SOLICITATION: kind=lesson existed in
+    the engine (the scar-heal path) but nothing ever ASKED the entity what
+    it learned — the reflection solicited feelings, interests, and open
+    questions, never knowledge. Same election discipline as interests:
+    cap per session, refusals loud, titled marker carrying the words."""
+    lessons: List[str] = []
+    notices: List[str] = []
+
+    def _sub(match: re.Match) -> str:
+        body = " ".join((match.group(2) or "").split())
+        if not body:
+            notices.append("#FALLBACK lesson block skipped (empty body)")
+            return "[lesson block skipped - empty]"
+        if len(lessons) >= MAX_LESSONS_PER_SESSION:
+            notices.append(
+                f"#FALLBACK lesson block refused (cap {MAX_LESSONS_PER_SESSION}/session)"
+            )
+            return f"[lesson refused - at most {MAX_LESSONS_PER_SESSION} per session]"
+        lessons.append(body)
+        gist = " ".join(body.split())[:80]
+        return f'[learned: "{gist}"]'
+
+    marked = _LESSON_FENCE_RE.sub(_sub, reply)
+    return marked.strip(), lessons, notices
+
+
 def normalize_entity_target(token: str, *, self_id: str = "") -> Optional[str]:
     """Validate + normalize an entity-feeling target (namespace:name form).
 
@@ -249,9 +423,11 @@ def resolve_feeling_targets(
     Three target families: sheet index (1-based), the word "session" (the
     reflection record), or an entity string (namespace:name — the per-entity
     gradation the maintainer asked for: person, place, idea, anything).
-    Entity targets carry their bond/scar flags DROPPED (no heal/break
-    election surface exists for world-targets yet — a standing mark that
-    cannot be resolved would be a one-way ratchet)."""
+    Entity targets carry their bond/scar flags THROUGH (dm#112 M4: the
+    one-way-ratchet reason went stale when tend shipped heal_scar and
+    break_bond as first-class verbs — a standing mark on a world-target
+    is resolvable by the entity's own election now). Amplitude rules
+    stand unchanged: routine band clamps, marks never auto-create."""
     resolved: List[Tuple[FeelingElection, str]] = []
     notices: List[str] = []
     for e in elections:
@@ -271,13 +447,10 @@ def resolve_feeling_targets(
                     "number, 'session', or a namespace:name entity)"
                 )
                 continue
-            if e.bond or e.scar:
-                notices.append(
-                    f"#FALLBACK bond/scar dropped on entity target {entity_target} "
-                    "(standing marks on beings/ideas need a heal surface first)"
-                )
-                e.bond = False
-                e.scar = False
+            # dm#112 M4 unblock: bond/scar flow on world-targets — the
+            # heal/break surface EXISTS (```tend heal_scar / break_bond,
+            # memory's TEND_VERBS), so the drop's rationale is gone.
+            # Engine-side amplitude/actorship rules are the guardrails.
             resolved.append((e, entity_target))
             continue
         if not (1 <= idx <= len(sheet_record_ids)) or sheet_record_ids[idx - 1] is None:

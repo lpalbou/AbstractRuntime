@@ -32,7 +32,7 @@ from .output_specs import (
     output_request_has_non_text_result,
     normalize_output_specs_for_runtime,
 )
-from .tool_executor import ToolExecutor
+from .tool_executor import ToolApprovalPolicy, ToolExecutor
 from .logging import get_logger
 from .session_attachments import (
     dedup_messages_view,
@@ -2212,6 +2212,51 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     return True
 
 
+def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
+    """Per-run tool-policy consumer (restores the 2026-02-21 feature that
+    regressed; two independent confirmations it was consumer-less — the
+    2026-07-06 audit and flow's live gateway check 2026-07-20).
+
+    `_runtime.tool_policy = {"auto_approve_tools": [...],
+    "require_approval_tools": [...]}` (the wire shape thin clients send)
+    OVERRIDES the executor's static approval policy for THIS run, both
+    directions: a run-auto name skips the static gate (execute_approved),
+    a run-require name forces the approval wait even where the static
+    policy would auto-run. Applies only to approval-gated executors
+    (execute_approved present) — plain executors have no approval concept
+    to override. Malformed policy = static behavior (fail toward asking)."""
+    pol = None
+    if isinstance(run.vars, dict):
+        rt = run.vars.get("_runtime")
+        if isinstance(rt, dict):
+            pol = rt.get("tool_policy")
+    if (
+        isinstance(pol, dict)
+        and (pol.get("auto_approve_tools") or pol.get("require_approval_tools"))
+        and callable(getattr(tools, "execute_approved", None))
+    ):
+        auto = {str(t).strip() for t in (pol.get("auto_approve_tools") or []) if str(t).strip()}
+        req = {str(t).strip() for t in (pol.get("require_approval_tools") or []) if str(t).strip()}
+        run_policy = ToolApprovalPolicy(auto_approve_tools=auto, require_approval_tools=req)
+        try:
+            requires = run_policy.requires_approval(calls)
+        except Exception:
+            requires = True
+        if not requires:
+            return tools.execute_approved(tool_calls=calls)
+        return {
+            "mode": "approval_required",
+            "wait_reason": "user",
+            "tool_calls": _jsonable(calls),
+            "details": {
+                "kind": "tool_approval",
+                "policy": run_policy.describe(),
+                "policy_source": "run",
+            },
+        }
+    return tools.execute(tool_calls=calls)
+
+
 def make_tool_calls_handler(
     *,
     tools: Optional[ToolExecutor] = None,
@@ -3263,7 +3308,7 @@ def make_tool_calls_handler(
                         host_tool_calls.append(tc2)
 
             try:
-                result = tools.execute(tool_calls=host_tool_calls)
+                result = _execute_with_run_policy(tools, host_tool_calls, run)
             except Exception as e:
                 logger.error("TOOL_CALLS execution failed", error=str(e))
                 return EffectOutcome.failed(str(e))
@@ -3397,7 +3442,7 @@ def make_tool_calls_handler(
                 continue
 
             try:
-                seg_result = tools.execute(tool_calls=seg_calls)
+                seg_result = _execute_with_run_policy(tools, seg_calls, run)
             except Exception as e:
                 logger.error("TOOL_CALLS execution failed", error=str(e))
                 return EffectOutcome.failed(str(e))

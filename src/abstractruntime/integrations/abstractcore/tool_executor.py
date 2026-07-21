@@ -838,8 +838,39 @@ class ToolApprovalPolicy:
     ) -> None:
         # Important: callers may intentionally pass an empty set to disable auto-approval
         # (e.g., "approval required for all tools"). Treat None as "use defaults".
-        auto = _DEFAULT_SAFE_AUTO_APPROVE if auto_approve_tools is None else set(auto_approve_tools)
-        req = _DEFAULT_REQUIRE_APPROVAL if require_approval_tools is None else set(require_approval_tools)
+        if auto_approve_tools is None or require_approval_tools is None:
+            # Owner-review wiring (c3835 review): defaults flow through the
+            # toolset-aware fold point so ENABLED toolsets' approval facts
+            # (camera today) ride every default-constructed policy. Lazy
+            # import; on any failure the base constants stand (fail toward
+            # the stricter base, never toward silence).
+            try:
+                from .default_tools import default_approval_policy_sets
+
+                fold_auto, fold_req = default_approval_policy_sets()
+            except Exception as exc:  # noqa: BLE001
+                # LOUD degrade (camera adversary P2-1): the fold's actionable
+                # error must not die silently — but never RAISE here:
+                # bundle_host catches around this constructor and falls back
+                # to the UNGATED MappingToolExecutor (a raise here = real
+                # fail-open at the gateway). Base constants are the stricter
+                # default (default-deny: unlisted names ask).
+                # %s-format, never kwargs (gateway door-half P2, c3934): on
+                # the stdlib-logger fallback a kwargs call raises TypeError
+                # INSIDE this except block, escapes __init__, and engages
+                # bundle_host's UNGATED executor fallback - the exact
+                # fail-open this catch exists to prevent.
+                try:
+                    logger.warning(
+                        "default approval fold failed; using base constants: %s", exc,
+                    )
+                except Exception:  # noqa: BLE001 - logging must never fail the gate
+                    pass
+                fold_auto, fold_req = set(_DEFAULT_SAFE_AUTO_APPROVE), set(_DEFAULT_REQUIRE_APPROVAL)
+        else:
+            fold_auto, fold_req = set(), set()
+        auto = fold_auto if auto_approve_tools is None else set(auto_approve_tools)
+        req = fold_req if require_approval_tools is None else set(require_approval_tools)
         self.auto_approve_tools = set(auto)
         self.require_approval_tools = set(req)
 

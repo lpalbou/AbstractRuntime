@@ -589,16 +589,29 @@ def _best_effort_session_turns(
     session_id: str,
     limit: int,
     until_ms: Optional[int] = None,
+    include_stats: bool = True,
+    include_artifacts: bool = True,
 ) -> List[Dict[str, Any]]:
     """Best-effort session turn list (root runs only).
 
     This is a pragmatic bridge for thin clients (AbstractCode Web/mobile) until a more
     explicit session history contract exists.
+
+    `include_stats`/`include_artifacts` exist for the session-replay read path
+    (`abstractruntime.session_history`), which needs only prompt+answer per turn:
+    stats and artifact listings scan every descendant ledger and are wasted work
+    on that hot path. Defaults keep the history-bundle behavior unchanged.
     """
 
     def _classify_turn(*, workflow_id: str, vars_obj: Any) -> str:
         wid = str(workflow_id or "")
-        if wid.startswith("__"):
+        # Internal = the runtime's RESERVED dunder ids (__session_memory__,
+        # __global_memory__): both start AND end with `__`. A bare
+        # startswith("__") also swallowed every tenant-catalog workflow
+        # (`__catalog__v2__...@ver:flow`) — which is how gateway thin clients
+        # run — silently hiding ALL their turns from session views and the
+        # durable session replay (live-proof finding, 2026-07-16).
+        if wid.startswith("__") and wid.endswith("__"):
             return "internal"
         if wid.startswith("scheduled:"):
             return "scheduled"
@@ -666,7 +679,13 @@ def _best_effort_session_turns(
             rows = list_run_index(session_id=sid, root_only=True, limit=max(1000, int(limit) * 5))
         except Exception:
             rows = []
-        for row in rows or []:
+        # Load only a bounded newest-first window of full RunStates: the
+        # result is sliced to the newest `limit` turns anyway, and loading
+        # every root of a long-lived session made each session-replay read
+        # O(session length) in full JSON parses (audit finding #3). The 3x
+        # over-fetch absorbs rows that classify out (internal/scheduled).
+        load_window = max(int(limit) * 3, int(limit) + 8)
+        for row in (rows or [])[:load_window]:
             if not isinstance(row, dict):
                 continue
             rid0 = str(row.get("run_id") or "").strip()
@@ -746,12 +765,17 @@ def _best_effort_session_turns(
                 bounded_roots.append(r)
         roots = bounded_roots
 
-    def _ts_key(r: Any) -> float:
+    def _ts_key(r: Any) -> tuple:
+        # (parsed ms, raw ISO string): _parse_iso_ms rounds to milliseconds,
+        # and a stable ascending sort would otherwise keep the newest-first
+        # index order WITHIN a tie — reversing same-millisecond turns. The
+        # raw ISO string preserves sub-ms precision as the tiebreak.
         for k in ("created_at", "updated_at"):
-            ms = _parse_iso_ms(getattr(r, k, None))
+            raw = getattr(r, k, None)
+            ms = _parse_iso_ms(raw)
             if ms is not None:
-                return float(ms)
-        return 0.0
+                return (float(ms), str(raw or ""))
+        return (0.0, "")
 
     roots.sort(key=_ts_key)
     roots = roots[-int(limit) :] if limit > 0 else roots
@@ -797,22 +821,25 @@ def _best_effort_session_turns(
                 answer_meta = None
 
         stats: Optional[Dict[str, Any]] = None
-        try:
-            run_ids = [rid]
-            run_ids.extend(_list_descendant_run_ids(run_store=run_store, root_run_id=rid))
-            all_records: List[Dict[str, Any]] = []
-            for rid2 in run_ids:
-                all_records.extend(_ledger_for(rid2))
-            stats = _extract_repl_stats_from_ledger(all_records)
-        except Exception:
-            run_ids = [rid]
-            stats = None
+        run_ids = [rid]
+        if include_stats:
+            try:
+                run_ids.extend(_list_descendant_run_ids(run_store=run_store, root_run_id=rid))
+                all_records: List[Dict[str, Any]] = []
+                for rid2 in run_ids:
+                    all_records.extend(_ledger_for(rid2))
+                stats = _extract_repl_stats_from_ledger(all_records)
+            except Exception:
+                run_ids = [rid]
+                stats = None
 
-        artifacts = _list_replay_artifacts_for_runs(
-            artifact_store=artifact_store,
-            run_ids=run_ids,
-            limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
-        )
+        artifacts: List[Dict[str, Any]] = []
+        if include_artifacts:
+            artifacts = _list_replay_artifacts_for_runs(
+                artifact_store=artifact_store,
+                run_ids=run_ids,
+                limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
+            )
 
         out.append(
             {

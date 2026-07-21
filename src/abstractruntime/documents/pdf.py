@@ -20,6 +20,20 @@ _ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 _BARE_URL_RE = re.compile(r"https?://[^\s<>()]+")
+# A standalone markdown image line: ![alt](path) with an optional markdown
+# title. Rendered as an EMBEDDED image flowable (reportlab has full PNG
+# support) when a base_dir is supplied and the file resolves inside it —
+# otherwise the alt text renders as an italic caption note (never the raw
+# ![...](...) markdown, which is what a reader saw before this branch existed).
+_MARKDOWN_IMAGE_RE = re.compile(r'^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$')
+# Any INLINE image reference (mid-paragraph, in a bullet, a heading, a title
+# form) — matched inside the text pipeline so it degrades to a bracketed note
+# instead of leaking raw markdown (adversary P1-2). The alt is `.*?`
+# (non-greedy, not [^\]]*) so an alt containing a literal ']' — which breaks
+# the standalone full-line regex and would otherwise leak raw — is still
+# caught here.
+_INLINE_IMAGE_RE = re.compile(r"!\[(.*?)\]\([^)]*\)")
+_MAX_EMBED_BYTES = 25 * 1024 * 1024
 
 # Typographic punctuation the LLM emits that the PDF base fonts render as tofu
 # boxes (or that break line-wrapping). Mapped to clean ASCII equivalents so the
@@ -191,6 +205,7 @@ def _require_reportlab():
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore[import-not-found]
         from reportlab.lib.units import inch  # type: ignore[import-not-found]
         from reportlab.platypus import (  # type: ignore[import-not-found]
+            KeepTogether,
             ListFlowable,
             ListItem,
             Paragraph,
@@ -211,6 +226,7 @@ def _require_reportlab():
         "ListFlowable": ListFlowable,
         "ListItem": ListItem,
         "Paragraph": Paragraph,
+        "KeepTogether": KeepTogether,
         "Preformatted": Preformatted,
         "SimpleDocTemplate": SimpleDocTemplate,
         "Spacer": Spacer,
@@ -362,10 +378,17 @@ def _trim_url_punctuation(url: str) -> tuple[str, str]:
 
 
 def _inline_text_markup(text: str) -> str:
+    # Any inline image ref becomes a bracketed note BEFORE escaping, so raw
+    # ![...](...) markdown can never survive to the page (adversary P1-2).
+    text = _INLINE_IMAGE_RE.sub(lambda m: f"[figure: {m.group(1).strip() or 'image'}]", text)
     escaped = escape(text)
     escaped = re.sub(r"`([^`]+)`", rf"<font name='{_MONO_FONT_NAME}'>\1</font>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", escaped)
+    # Underscore emphasis (_italic_ / __bold__) — the report captions use it
+    # and it printed with literal underscores before (adversary P2-6).
+    escaped = re.sub(r"(?<!_)__([^_]+)__(?!_)", r"<b>\1</b>", escaped)
+    escaped = re.sub(r"(?<![\w_])_([^_\n]+)_(?![\w_])", r"<i>\1</i>", escaped)
     return escaped
 
 
@@ -503,6 +526,84 @@ def _append_table(
     story.append(rl["Spacer"](1, 0.12 * rl["inch"]))
 
 
+def _resolve_image_path(src: str, base_dir: Path | None) -> Path | None:
+    """Resolve a markdown image `src` to a real file, contained to base_dir.
+
+    Only local (workspace-relative or base-dir-absolute) images embed; remote
+    URLs and out-of-base paths are refused (return None -> caption fallback),
+    so a report can never make the renderer fetch the network or read outside
+    the workspace it was generated in.
+    """
+    if not src or base_dir is None:
+        return None
+    low = src.strip().lower()
+    if low.startswith(("http://", "https://", "data:", "//", "\\\\")):
+        return None
+    try:
+        base = base_dir.resolve()
+        candidate = (base / src).resolve() if not Path(src).is_absolute() else Path(src).resolve()
+    except Exception:
+        return None
+    # Containment: the resolved file must sit inside base_dir.
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    if candidate.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif"):
+        return None
+    try:
+        if candidate.stat().st_size > _MAX_EMBED_BYTES:
+            return None  # oversized image: degrade to caption, never OOM
+    except OSError:
+        return None
+    return candidate
+
+
+def _append_image(story: list[Any], src: str, alt: str, base_dir: Path | None,
+                  styles: dict[str, Any], rl: dict[str, Any]) -> None:
+    """Embed a local image scaled to the text column, with an italic caption.
+
+    Degrades to an italic '[figure: alt]' note when the file cannot be
+    resolved/embedded — never leaks the raw markdown, never raises."""
+    resolved = _resolve_image_path(src, base_dir)
+    caption = _inline_text_markup(alt.strip()) if alt.strip() else ""
+    if resolved is not None:
+        try:
+            from reportlab.platypus import Image as RLImage  # type: ignore[import-not-found]
+            from reportlab.lib.utils import ImageReader  # type: ignore[import-not-found]
+
+            iw, ih = ImageReader(str(resolved)).getSize()
+            max_w = float(rl["letter"][0]) - (1.44 * rl["inch"])
+            max_h = float(rl["letter"][1]) - (2.4 * rl["inch"])
+            if iw <= 0 or ih <= 0:
+                raise ValueError("bad image dimensions")
+            scale = min(max_w / iw, max_h / ih, 1.0)
+            img = RLImage(str(resolved), width=iw * scale, height=ih * scale)
+            img.hAlign = "CENTER"
+            story.append(rl["Spacer"](1, 0.06 * rl["inch"]))
+            story.append(img)
+            if caption:
+                cap_style = rl["ParagraphStyle"](
+                    "AFFigureCaption",
+                    parent=styles["BodyText"],
+                    fontSize=8,
+                    leading=10,
+                    alignment=1,
+                    textColor=rl["colors"].Color(0.35, 0.35, 0.35),
+                    spaceBefore=0.03 * rl["inch"],
+                )
+                story.append(rl["Paragraph"](f"<i>{caption}</i>", cap_style))
+            story.append(rl["Spacer"](1, 0.12 * rl["inch"]))
+            return
+        except Exception:
+            pass  # fall through to caption note
+    note = caption or _inline_text_markup(src.strip())
+    story.append(rl["Paragraph"](f"<i>[figure: {note}]</i>", styles["BodyText"]))
+    story.append(rl["Spacer"](1, 0.06 * rl["inch"]))
+
+
 def _append_paragraph(story: list[Any], paragraph_lines: list[str], styles: dict[str, Any], rl: dict[str, Any]) -> None:
     if not paragraph_lines:
         return
@@ -534,6 +635,7 @@ def _build_pdf_story(
     rl: dict[str, Any],
     *,
     branding: dict[str, str] | None = None,
+    base_dir: Path | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     stylesheet = rl["getSampleStyleSheet"]()
     styles = {
@@ -641,7 +743,16 @@ def _build_pdf_story(
 
     def flush_code() -> None:
         if code_lines:
-            story.append(rl["Preformatted"]("\n".join(code_lines), styles["Code"]))
+            block = rl["Preformatted"]("\n".join(code_lines), styles["Code"])
+            # 0069 slice 3: a fenced block (ASCII diagram, code) must not
+            # split across a page break — up to ~45 lines it travels as one
+            # unit; longer blocks flow normally (an unbreakable flowable
+            # taller than the page would force a blank page instead).
+            keep = rl.get("KeepTogether")
+            if keep is not None and len(code_lines) <= 45:
+                story.append(keep([block]))
+            else:
+                story.append(block)
             code_lines.clear()
 
     lines = markdown_text.splitlines()
@@ -688,6 +799,13 @@ def _build_pdf_story(
             flush_bullets()
             i += 1
             continue
+        image = _MARKDOWN_IMAGE_RE.match(line)
+        if image:
+            _append_paragraph(story, paragraph_lines, styles, rl)
+            flush_bullets()
+            _append_image(story, image.group(2), image.group(1), base_dir, styles, rl)
+            i += 1
+            continue
         heading = _parse_atx_heading(line)
         if heading:
             _append_paragraph(story, paragraph_lines, styles, rl)
@@ -695,6 +813,39 @@ def _build_pdf_story(
             level, heading_text = heading
             story.append(rl["Paragraph"](_paragraph_markup(heading_text), styles[f"Heading{level}"]))
             i += 1
+            continue
+        # 0069 slice 2: --- / *** render as a thin rule (they printed as
+        # literal text on page 1 of real reports).
+        if re.match(r"^\s*(-{3,}|\*{3,})\s*$", line):
+            _append_paragraph(story, paragraph_lines, styles, rl)
+            flush_bullets()
+            hr = rl["Table"]([[""]], colWidths=[6.9 * rl["inch"]], rowHeights=[1])
+            hr.setStyle(rl["TableStyle"]([
+                ("LINEBELOW", (0, 0), (-1, -1), 0.5, rl["colors"].Color(0.75, 0.75, 0.75)),
+            ]))
+            story.append(rl["Spacer"](1, 0.06 * rl["inch"]))
+            story.append(hr)
+            story.append(rl["Spacer"](1, 0.10 * rl["inch"]))
+            i += 1
+            continue
+        # 0069 slice 2: > blockquote — consecutive quote lines fold into one
+        # indented, muted paragraph (caveat blocks stop showing literal '>').
+        if line.lstrip().startswith(">"):
+            _append_paragraph(story, paragraph_lines, styles, rl)
+            flush_bullets()
+            quote_lines: list[str] = []
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                quote_lines.append(lines[i].lstrip()[1:].lstrip())
+                i += 1
+            quote_style = rl["ParagraphStyle"](
+                "AFBlockquote",
+                parent=styles["BodyText"],
+                leftIndent=0.28 * rl["inch"],
+                textColor=rl["colors"].Color(0.35, 0.35, 0.40),
+                fontSize=max(8.5, styles["BodyText"].fontSize - 0.5),
+            )
+            story.append(rl["Paragraph"](_paragraph_markup(" ".join(q for q in quote_lines if q)), quote_style))
+            story.append(rl["Spacer"](1, 0.08 * rl["inch"]))
             continue
         bullet = re.match(r"^\s*[-*]\s+(.+)$", line)
         if bullet:
@@ -747,7 +898,7 @@ def _normalize_branding(branding: Any) -> dict[str, str] | None:
 
 
 def render_pdf_bytes(
-    content: Any, *, title: str | None = None, branding: Any = None
+    content: Any, *, title: str | None = None, branding: Any = None, base_dir: Any = None
 ) -> tuple[bytes, dict[str, Any]]:
     """Render text or Markdown-ish content to a PDF byte string with ReportLab.
 
@@ -755,6 +906,12 @@ def render_pdf_bytes(
     framework identity discreetly: a small meta line under the title, a thin
     rule, a running footer (framework · url | page number) and a tiny
     running header on later pages — plus honest PDF metadata (author/creator).
+
+    When `base_dir` is provided, standalone markdown image lines
+    (`![alt](relative/path.png)`) embed the local image inline (scaled to the
+    text column, with an italic caption), contained to base_dir. Without it,
+    or for remote/out-of-base paths, the alt text renders as an italic
+    figure note — the raw markdown is never printed.
     """
 
     rl = _require_reportlab()
@@ -762,6 +919,7 @@ def render_pdf_bytes(
     if title:
         title = _normalize_pdf_text(str(title))
     brand = _normalize_branding(branding)
+    base_path = Path(str(base_dir)) if base_dir else None
     buffer = BytesIO()
     doc = rl["SimpleDocTemplate"](
         buffer,
@@ -775,7 +933,7 @@ def render_pdf_bytes(
         creator=f"{brand['app']} ({brand['framework']}) · {brand['url']}" if brand else None,
         subject=(brand.get("workflow") or None) if brand else None,
     )
-    story, _styles = _build_pdf_story(text, title, rl, branding=brand)
+    story, _styles = _build_pdf_story(text, title, rl, branding=brand, base_dir=base_path)
     if brand:
         gray = rl["colors"].Color(0.45, 0.45, 0.45)
         line_gray = rl["colors"].Color(0.75, 0.75, 0.75)

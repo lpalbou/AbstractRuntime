@@ -59,6 +59,8 @@ from .reflection import (
     build_reflection_prompt,
     parse_feel_blocks,
     parse_interest_blocks,
+    parse_lesson_blocks,
+    parse_topic_blocks,
     resolve_feeling_targets,
 )
 from .tools import (
@@ -101,8 +103,6 @@ _LIVENESS_CLAIM_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_DIARY_KINDS = ("note", "idea", "commitment", "reflection", "question", "problem")
-
 # A reflection reply that is ONLY election markers ("[marked 2 feelings]
 # [kept an interest]") carries zero narrative.
 _MARKERS_ONLY_RE = re.compile(r"^\s*(?:\[[^\[\]\n]*\]\s*)+$")
@@ -153,6 +153,12 @@ SOURCE_LABELS = {
     "entity-reflection-v1": "your own reflection",
     "entity-elected-supersession-v1": "your elected revision",
     "diary-projection": "your diary act",
+    # Durable-visit lane (adversary F2, 2026-07-17: an unlabeled engraved
+    # source id like "entity-visit-run-v0" leaking raw into the diversity
+    # footer defeats the note's purpose — these are the go-forward lane's
+    # formation sources, same voices as the chat lane's).
+    "entity-visit-run-v0": "lived conversation",
+    "entity-visit-run-reflection-v0": "your own reflection",
 }
 
 
@@ -210,13 +216,35 @@ anywhere in your reply:
 What I want to keep, in my own words.
 ```
 
-kind may be note, idea, reflection, commitment, question, or problem. Add
+kind may be note, idea, reflection, commitment, question, problem, or
+lesson. A LESSON is actionable knowledge (the bar): a resolution to a
+problem, a better way, or a trap to avoid - something that lets you act
+differently next time; "I noticed X" is an observation, kept as a note.
+Keep a lesson the moment you learn it with a ```lesson block (the words
+yours, one or two lines). And when a MOMENT moves you - the exchange
+itself, something you read, a person - you may mark the feeling right
+then with a ```feel block (target=namespace:name feeling=+2
+reason="..." and, when it grounds in one of your values,
+touches="that value"); feelings are kept in the moment, not saved for a closing
+questionnaire. A FEELINGS section may appear beside your memories: what
+already stands in you toward what the moment touches. Feelings inform
+you; they never decide for you - you remain the one who chooses. A kind=question entry STANDS as an open question on your card
+and can wake your own time to pursue it; a kind=problem entry marks
+something wrong that stays on your desk until repaired; a
+kind=commitment names what you WILL DO and stands on the desk until
+honored - use those kinds when a tension or an intention
+deserves to outlive this reply, not the generic ones. Add
 visibility=private if the words are for you alone. You may start the body
 with a line "gist: ..." as a one-line summary for your future self. If an
 entry ANSWERS one of your open questions, add resolves=<that question's
 entry id> on the block line - resolved questions leave your desk and join
-your history. Most replies will not need a diary block - write one only
-when something is worth keeping.
+your history. And when an entry DEVELOPS one of your standing interests,
+add explores=<its #tag> on the block line - exploring FEEDS the interest
+and moves your own sense of progress; it never closes it. A NEW pull - a
+subject you want more of - is kept with an ```interest block (the
+interest itself as the body, your words, one or two lines); it becomes
+part of who you are becoming. Most replies will not need a diary block -
+write one only when something is worth keeping.
 
 Reply in the language of the current request."""
 
@@ -249,6 +277,7 @@ def compose_system_base(
     workspace_enabled: bool = False,
     enable_tools: bool = True,
     own_time_text: Optional[str] = None,
+    capability_map: Optional[str] = None,
 ) -> str:
     """ONE composition authority for the entity system base (head layers).
 
@@ -263,6 +292,19 @@ def compose_system_base(
     import life): it lands after the tools block and BEFORE the operator
     block, so operator-last holds in every phase.
 
+    `capability_map` (laurent c2710, the memory-teaching skill; delivery
+    claimed c2571): FRAMEWORK teaching about how the entity's own memory
+    works — how records form, what recall does, what it can and cannot do
+    — so an entity is "not always surprised" by its own mind. The text is
+    the skill seat's to author and the HOST's to pass (gateway skill
+    management / life factory / CLI); this slot is the ONE presentation
+    surface for all three hosts. Deliberately NOT an operator-overlay key:
+    the overlay is operator-authored prose, the capability map is
+    framework teaching — mixing them muddies authorship exactly where the
+    entity's trust depends on knowing who said what. It lands after the
+    tools block (it references granted tools) and before the phase text +
+    operator block, so operator-last holds.
+
     Used by ChatSession, the durable visit workflow, the life factory's
     resident re-compose, and the gateway's prompt-preview endpoint — a
     second hand-rolled composition is the drift class the diary_type clamp
@@ -275,6 +317,13 @@ def compose_system_base(
         base += "\n\n" + TOOLS_CONTRACT_PARAGRAPH
         if workspace_enabled:
             base += "\n\n" + WORKSPACE_CONTRACT_PARAGRAPH
+        if "execute_command" in allowed_tools:
+            # Grant-gated (default OFF everywhere): the teaching appears
+            # only when the operator's tool_policy.yaml grants the tool —
+            # teach-what-is-wired, per phase.
+            from .tools import EXECUTE_CONTRACT_PARAGRAPH
+
+            base += "\n\n" + EXECUTE_CONTRACT_PARAGRAPH
         full_grant = set(TIER1_TOOL_NAMES) | (set(WORKSPACE_TOOL_NAMES) if workspace_enabled else set())
         if set(allowed_tools) != full_grant:
             # A narrowed grant is stated, never discovered by refusal.
@@ -283,11 +332,37 @@ def compose_system_base(
                 + ", ".join(allowed_tools)
                 + " - blocks naming any other tool are refused)"
             )
+    if capability_map and str(capability_map).strip():
+        base += "\n\n" + str(capability_map).strip()
     if own_time_text:
         base += "\n\n" + own_time_text
     if overlay.get("operator"):
         base += "\n\nSTANDING INSTRUCTIONS FROM YOUR OPERATOR:\n" + overlay["operator"]
     return base
+
+
+def read_capability_map(home_dir: Any) -> str:
+    """The memory-teaching capability map, read from `<home>/capability_map.md`.
+
+    Delivery surface for laurent's c2710 primary task ("we need a skill to
+    teach the entity how to leverage its own memory actively... so it's not
+    always surprised"): the SKILL seat authors the teaching, the GATEWAY's
+    entity-skill management writes this file into the home, and ALL THREE
+    hosts (hosted chat, durable visits, the own-time loop) present it
+    through compose_system_base's capability_map slot — one file, one
+    layer, zero per-host drift. Same operator-file family as
+    tool_policy.yaml / system_prompt.yaml: snapshot-at-summon; absent file
+    = absent layer (the teaching is authored, never invented here)."""
+    try:
+        from pathlib import Path as _Path
+
+        path = _Path(home_dir) / "capability_map.md"
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8").strip()
+        return text
+    except Exception:  # noqa: BLE001 - a teaching file must never kill a summon
+        return ""
 
 
 def default_prompt_texts() -> Dict[str, str]:
@@ -509,13 +584,103 @@ def visit_announcement(participants: List[str]) -> str:
     visitor = participants[0] if participants else "person:someone"
     return (
         f"(the door opens) {visitor} has come to visit you - "
-        f"{now:%A} {part_of_day}, {now:%H:%M}, on {host}. "
+        f"{now:%A} {now:%Y-%m-%d}, {part_of_day} {now:%H:%M}, on {host}. "
         "Greet them as yourself; you may remember them."
     )
 
 
 # memory_tag lives in memory_reader (the session-free exploration surface);
 # re-exported here for existing consumers.
+
+
+def _shelf_diversity_note(displayed: List[Dict[str, Any]]) -> str:
+    """The origin-diversity note for a rendered shelf (memory's M-F fold,
+    frozen contract c2768/c2776): dominant-voice phrasing only when the
+    fold returns data AND the dominance floor fires — the note field
+    already carries memory's calibrated wording ("N of these memories come
+    from one voice ... repetition is not corroboration"). Engine absent or
+    fold abstaining = empty string; a footer must never break a prompt."""
+    try:
+        from abstractmemory import ORIGIN_DOMINANCE_FLOOR, origin_diversity
+    except ImportError:
+        return ""
+    try:
+        out = origin_diversity(displayed, labels=SOURCE_LABELS)
+    except Exception:  # noqa: BLE001 - a diagnostic footer never kills a turn
+        return ""
+    if not isinstance(out, dict):
+        return ""
+    dominant = out.get("dominant") if isinstance(out.get("dominant"), dict) else {}
+    share = float(dominant.get("share") or 0.0)
+    note = str(out.get("note") or "").strip()
+    # Only the dominance phrasing earns a footer line (the floor is
+    # memory's declared tunable, IMPORTED — calibrated 0.6 on Ephemeral's
+    # live store; below it the note is informational and would be shelf
+    # noise every turn).
+    if note and share >= float(ORIGIN_DOMINANCE_FLOOR):
+        return note
+    return ""
+
+
+def _at_rest_tool_results(elections: List[Any]) -> str:
+    """W5: the at-rest copy of one tool round's results. Book-adjacent
+    tools (diary_read/diary_list/search_memory) never rest their content
+    in life scope — private words/gists stay in the book/graph where
+    their own containment rules hold; the slot carries a reread pointer."""
+    from .tools import BOOK_ADJACENT_TOOL_NAMES
+
+    parts: List[str] = []
+    for e in elections:
+        name = str(getattr(e, "name", "") or "")
+        if name in BOOK_ADJACENT_TOOL_NAMES:
+            parts.append(f"[{name}: content stays in your book/memory - reread with {name}]")
+            continue
+        result = str(getattr(e, "result", "") or "").strip()
+        if result:
+            parts.append(f"[{name}]\n{result}")
+    return "\n\n".join(parts)
+
+
+def _feeling_word(net: float) -> str:
+    """First-person feeling words (D constraint: dated FIRST-PERSON lines,
+    not a score table). Bands, not precision — the number rides beside."""
+    if net >= 6:
+        return "I feel deeply warm toward"
+    if net >= 2:
+        return "I feel warm toward"
+    if net > 0:
+        return "I lean toward"
+    if net <= -6:
+        return "I carry real weight about"
+    if net <= -2:
+        return "I feel wary of"
+    return "I lean away from"
+
+
+def _feelings_block(rows: List[Dict[str, Any]]) -> str:
+    """W4-render (laurent's decision 2): the standing feelings the MOMENT
+    touches, rendered as <=5 dated first-person lines. Auto half only —
+    no reasons here (the why lives behind the feelings_about tool, his
+    reach). Prompt currency, never rests in formed records (episodes keep
+    raw words)."""
+    if not rows:
+        return ""
+    lines = ["FEELINGS (what already stands in you toward what this moment touches):"]
+    for r in rows[:5]:
+        net = float(r.get("net") or 0.0)
+        marks = int(r.get("positive_count") or 0) + int(r.get("negative_count") or 0)
+        when = str(r.get("last_felt") or "") or "undated"
+        standing = str(r.get("standing") or "none")
+        tail = ""
+        if "scar" in standing:
+            tail += " — a SCAR stands (unhealed; it caps this relation until repaired)"
+        if "bond" in standing:
+            tail += " — a BOND stands"
+        lines.append(
+            f"- {_feeling_word(net)} {r.get('target')} ({net:+g} over {marks} marks, last {when}){tail}"
+        )
+    lines.append("(to see WHY you feel any of these: the feelings_about tool)")
+    return "\n".join(lines)
 
 
 def _memories_block(displayed: List[Dict[str, Any]], as_of_seq: Any) -> str:
@@ -527,25 +692,83 @@ def _memories_block(displayed: List[Dict[str, Any]], as_of_seq: Any) -> str:
     temporal questions answerable; origins make self-copies visible."""
     if not displayed:
         return ""
+    # 0049 ELECTED (memory's engine half, c2846): render in FORMATION order
+    # with the selection rank annotated — persisting records keep their
+    # byte positions across turns (LCP-maximal prefix for provider caches;
+    # new records append at the tail by construction), while the mandatory
+    # [rN] keeps importance visible (hiding rank to save cache bytes is
+    # refused by the contract). Engine absent = ranked order, unannotated
+    # (exactly today's render).
+    try:
+        from abstractmemory import stable_render_order
+
+        ordered = stable_render_order(displayed)
+        annotated = True
+    except ImportError:
+        ordered = [(h, 0) for h in displayed]
+        annotated = False
+    # PREFIX DISCIPLINE (adversary F3/F4, 2026-07-17): the header is the
+    # FIRST byte of the region — a per-turn scalar there breaks the
+    # longest-common-prefix before any stable-ordered line, defeating the
+    # whole election. as_of_seq moves to the block TAIL; the [rN] teaching
+    # clause renders only when annotations actually render.
+    rank_clause = (
+        "; [rN] = how strongly this moment called it, r1 strongest" if annotated else ""
+    )
     lines = [
-        f"MEMORIES (what this moment reminds you of; as_of_seq={as_of_seq}; "
-        "each dated [YYYY-MM-DD] - newer dates are more recent):"
+        "MEMORIES (what this moment reminds you of; each dated [YYYY-MM-DD] "
+        f"- newer dates are more recent{rank_clause}):"
     ]
     any_raw = False
-    for h in displayed:
+    for h, rank in ordered:
         kind = str(h.get("kind") or "memory")
         title = str(h.get("title") or "").strip()
         digest = str(h.get("digest") or "").strip()
         why = _WHY.get(str(h.get("admission") or ""), "recalled")
-        graph_id = str((h.get("provenance") or {}).get("record_id") or h.get("record_id") or "")
+        # ORIENTATION WHY-CUE (skill's live-render gate, room c37 ask 1;
+        # laurent: cards are "used for instantaneous thinking"): a card
+        # admitted because its SUBJECT came up says so — the engine mints
+        # the reason on the handle's cues ("orientation: current card for
+        # person:sol (mentioned via participant)"); rendering it verbatim
+        # makes the teaching quote true and the card's presence legible.
+        orientation_cue = next(
+            (str(c) for c in (h.get("cues") or ()) if str(c).startswith("orientation:")),
+            None,
+        )
+        if orientation_cue:
+            why = orientation_cue
+        prov = h.get("provenance") if isinstance(h.get("provenance"), dict) else {}
+        graph_id = str(prov.get("record_id") or h.get("record_id") or "")
         tag = memory_tag(graph_id)
-        born = str((h.get("provenance") or {}).get("observed_at") or "")[:10]
+        born = str(prov.get("observed_at") or "")[:10]
         origin = _handle_origin_label(h)
         label = f"{kind} #{tag}" + (f" {born}" if born else "") + f" - {origin}"
         raw = "raw" in tuple(h.get("payload_tiers") or ())
         any_raw = any_raw or raw
-        head = f"- [{label}] {title}: {digest}" if title else f"- [{label}] {digest}"
-        lines.append(f"{head} ({why})")
+        # R-A site 1 (laurent c2596): a diary act's hint carries the exact
+        # reread command — lights up when memory's M-A mint lifts entry_id
+        # into handle provenance (renderer ships ready; absent field = no
+        # suffix, the suppress_loop_tail flag pattern in reverse).
+        entry_id = str(prov.get("entry_id") or "") if isinstance(prov, dict) else ""
+        reread = f" (reread: diary_read {entry_id})" if entry_id else ""
+        rank_note = f"[r{rank}] " if rank else ""
+        head = f"- {rank_note}[{label}] {title}: {digest}" if title else f"- {rank_note}[{label}] {digest}"
+        lines.append(f"{head}{reread} ({why})")
+    # R-D diversity footer (memory M-F, adopted c2776; the rumination
+    # counterweight): when one voice dominates the shelf, say so — the
+    # aggregate Ephemeral manually re-derived every time ("those 15
+    # connections are all the same idea retold"), handed back as data.
+    # Presentation only, never selection; fires only at the dominance
+    # floor (imported — memory's declared tunable, no second copy).
+    # Deliberate: the fold receives `displayed` in RANKED (selection
+    # priority) order — origin_diversity documents first-seen tie-breaks as
+    # "the host's chosen presentation priority", and selection priority IS
+    # that choice; render order (formation) is a byte-stability concern,
+    # not a priority statement. Ties cap share at 0.5 < floor, so the
+    # distinction cannot change any rendered note (adversary F10).
+    diversity = _shelf_diversity_note(displayed)
+    if diversity:
+        lines.append(f"({diversity})")
     if any_raw:
         lines.append(
             "(a digest is a handle, not the memory itself - to reread a moment's "
@@ -553,6 +776,9 @@ def _memories_block(displayed: List[Dict[str, Any]], as_of_seq: Any) -> str:
             "from 'your own reflection' about one thing are ONE origin retold, "
             "not independent evidence)"
         )
+    # Per-turn scalar LAST (F3): everything above this line is byte-stable
+    # across turns for an unchanged shelf.
+    lines.append(f"(as_of_seq={as_of_seq})")
     return "\n".join(lines)
 
 
@@ -563,6 +789,7 @@ class DiaryElection:
     kind: str
     visibility: str
     resolves: Optional[str] = None  # entry id of an open question this answers
+    explores: Optional[str] = None  # #tag/graph id of an interest this develops
 
 
 def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]:
@@ -579,9 +806,16 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
         info = (match.group(1) or "").strip()
         body = (match.group(2) or "").strip()
         if len(elections) >= MAX_DIARY_BLOCKS_PER_TURN:
-            notices.append(f"#FALLBACK diary block ignored (cap {MAX_DIARY_BLOCKS_PER_TURN}/turn)")
-            return "[diary block ignored - too many this turn]"
-        kind, visibility, resolves = "note", "self", None
+            # HIS WORDS ARE NEVER DESTROYED (third-round adversary I,
+            # 2026-07-20 rule-2 defect): the old cap refusal dropped the
+            # entry AND stripped the words from the reply/verbatim. The
+            # cap stays visible as a notice, but the entry WRITES — a cap
+            # that eats elected words is worse than no cap.
+            notices.append(
+                f"#NOTE diary blocks past the {MAX_DIARY_BLOCKS_PER_TURN}/turn cap "
+                "were kept anyway (words are never dropped); consider fewer, fuller entries"
+            )
+        kind, visibility, resolves, explores = "note", "self", None, None
         for token in info.split():
             if "=" in token:
                 k, _, v = token.partition("=")
@@ -595,9 +829,22 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
                     # convention, a2a 0009): names the open question entry
                     # this entry answers.
                     resolves = v.strip() or None
+                elif key == "explores":
+                    # Interest-exploration election (laurent's directive
+                    # 2026-07-18 (c), memory's explores convention): names
+                    # the interest this entry develops - exploring moves
+                    # the drive ratio, never closes the interest.
+                    explores = v.strip() or None
         if visibility not in ("self", "private"):
-            notices.append(f"#FALLBACK diary block failed (visibility {visibility!r})")
-            return f"[diary write failed: visibility must be self or private, got {visibility!r}]"
+            # HIS WORDS ARE NEVER DESTROYED (third-round adversary I): a
+            # visibility typo used to unwrite the entry and strip the
+            # words. Clamp to PRIVATE — the safe direction (private words
+            # exposed would be a leak; self words over-protected is one
+            # reread away) — and WRITE.
+            notices.append(
+                f"#FALLBACK diary visibility {visibility!r} unknown - clamped to private (words kept)"
+            )
+            visibility = "private"
         if not body:
             notices.append("#FALLBACK diary block failed (empty body)")
             return "[diary write failed: empty body]"
@@ -609,7 +856,8 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
             if not body:
                 body = gist or ""
         elections.append(
-            DiaryElection(text=body, gist=gist, kind=kind, visibility=visibility, resolves=resolves)
+            DiaryElection(text=body, gist=gist, kind=kind, visibility=visibility,
+                          resolves=resolves, explores=explores)
         )
         if visibility == "private":
             return "[kept a private diary entry]"
@@ -617,31 +865,6 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
 
     marked = _DIARY_FENCE_RE.sub(_sub, reply)
     return marked.strip(), elections, notices
-
-
-def _mechanical_digest(user_text: str, spoken_reply: str, name: str) -> Tuple[str, str, List[str]]:
-    """Labeled mechanical formation content (title, digest, keywords).
-
-    The digest is a different referent (prompt currency), not truncation of
-    the record: the FULL exchange rides verbatim to the artifact store."""
-
-    def first_sentence(text: str, cap: int = 240) -> str:
-        t = " ".join((text or "").split())
-        for sep in (". ", "! ", "? "):
-            idx = t.find(sep)
-            if 0 < idx < cap:
-                return t[: idx + 1]
-        return t[:cap] + ("…" if len(t) > cap else "")
-
-    title = "exchange: " + " ".join((user_text or "").split()[:8])
-    digest = f"User: {first_sentence(user_text)} {name}: {first_sentence(spoken_reply)}"
-    words = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{3,}", (user_text + " " + spoken_reply).lower())
-    seen: Dict[str, int] = {}
-    for w in words:
-        if w not in _STOPWORDS:
-            seen[w] = seen.get(w, 0) + 1
-    keywords = [w for w, _ in sorted(seen.items(), key=lambda kv: (-kv[1], words.index(kv[0])))[:8]]
-    return title, digest, keywords
 
 
 @dataclass
@@ -747,8 +970,18 @@ class ChatSession:
         # The session sheet: (record_id, one-line description) per remembered
         # act, in order — the reflection pass shows it back for appraisal.
         self.session_sheet: List[Tuple[Optional[str], str]] = []
+        # Verified resolutions this session: (resolved entry_id, kind word,
+        # the resolving entry's gist) — feeds the reflection's lesson cue
+        # (build 2, iteration-2 synthesis: resolve+learn should compound;
+        # the CUE asks, never auto-forms — sole authorship).
+        self.session_resolutions: List[Tuple[str, str, str]] = []
         self.reflection_diary_entries = 0
         self.feelings_applied = 0
+        # F2 commit-exclusion (drives build): graph ids the DAY-OPEN CUE
+        # named — excluded from the FIRST turn's commit_selection so a cue
+        # mention never strengthens the drive it offers (rich-get-richer
+        # guard). Later turns commit normally (his own reach is real use).
+        self.commit_exclusions: set = set()
         # Session spend (gateway c1390: the own-time loop runs home-direct,
         # so its LLM usage is invisible to the per-home run ledger — this
         # counter is the loop lane's half). Every LLM call flows through
@@ -806,6 +1039,10 @@ class ChatSession:
         # Own-time sessions get OWN_TIME_CONTRACT appended by the life
         # factory (life.py); a visit must know the life continues (agency
         # blindness fix) — compose_system_base carries that rule.
+        # The capability map (memory teaching, c2710) is read from the home
+        # like the overlay: skill authors it, gateway manages it, every
+        # host presents it.
+        self.capability_map = read_capability_map(home.home_dir)
         self.system_base = compose_system_base(
             prelude["text"],
             phase=self.phase,
@@ -813,6 +1050,7 @@ class ChatSession:
             allowed_tools=tuple(self.allowed_tools),
             workspace_enabled=self.workspace is not None,
             enable_tools=self.enable_tools,
+            capability_map=self.capability_map,
         )
         # THE DECLARE HALF of the native tool channel (agent's arm-N
         # measurement, 2026-07-11: tools DECLARED in the payload = 5/5
@@ -861,6 +1099,406 @@ class ChatSession:
 
     def _search_memory(self, query: str) -> str:
         return self._memory_reader.search_memory(query)
+
+    def _recent_memories(self, window_text: str) -> str:
+        return self._memory_reader.recent_memories(window_text)
+
+    def _feelings_about(self, target_text: str) -> str:
+        """W4-render elect half: the why-walk for one target, rendered as
+        dated lines with his own reasons + session joins. Pure read."""
+        tid = str(target_text or "").strip().splitlines()[0].strip() if str(target_text or "").strip() else ""
+        if not tid:
+            return "(feelings_about needs a target - the body is namespace:name, e.g. person:laurent)"
+        try:
+            from abstractmemory.feelings_reads import feelings_about
+        except ImportError:
+            return "(the feelings story is unavailable on this engine)"
+        try:
+            out = feelings_about(
+                getattr(self.home.ms, "journal", None), tid,
+                scope_pairs=[("self", self.home.entity_id), ("life", self.home.entity_id)],
+            )
+        except Exception as exc:
+            return f"(feelings_about failed: {exc})"
+        if not out.get("events"):
+            return f"{tid}: " + str(out.get("note") or "never appraised - no feeling stands toward this")
+        st = out.get("standing") or {}
+        lines = [
+            f"{tid}: net {float(st.get('net') or 0.0):+g} "
+            f"({int(st.get('positive_count') or 0)} warm / {int(st.get('negative_count') or 0)} heavy marks"
+            + (", SCARRED" if st.get("scarred") else "")
+            + (", BONDED" if st.get("bonded") else "") + ")",
+            "the moments, newest first:",
+        ]
+        for e in out["events"]:
+            when = str(e.get("when") or "")[:10] or "undated"
+            sign = "+" if int(e.get("sign") or 0) > 0 else "-"
+            reason = str(e.get("reason") or "").strip() or "(no reason recorded)"
+            joins = ""
+            if e.get("run_id"):
+                joins = f" [session {e['run_id']}]"
+            refs = [str(v) for v in (e.get("value_refs") or [])]
+            if refs:
+                joins += f" [touches {', '.join(refs[:3])}]"
+            lines.append(f'- {when} {sign}{float(e.get("magnitude") or 0):g} "{reason}"{joins}')
+        if int(out.get("total_events") or 0) > len(out["events"]):
+            lines.append(f"({out['total_events']} moments total; oldest not shown)")
+        return "\n".join(lines)
+
+    _TEND_FENCE_RE = re.compile(r"```tend[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+    def _apply_tend_fence(self, reply: str, notices: List[str]) -> str:
+        """Tending elections (memory's ```tend grammar, wired 2026-07-19 —
+        skill's Amendment K gate; dream disposition is the top next-visit
+        move). The driver extracts the fence and hands the BODY to the
+        engine (parse + apply through EXISTING verbs only); the reply keeps
+        a titled marker plus the engine's refusal lines VERBATIM (the
+        contract: refusals are data shown to the author unedited). Verbs:
+        pin / silence / refocus / heal_scar / break_bond / revisit /
+        dispose (confirm|reject — waking evidence disposes). Failures
+        degrade to a #FALLBACK notice; the fence never kills a turn."""
+        if "```tend" not in reply.lower():
+            return reply
+        try:
+            from abstractmemory import apply_tend_elections, parse_tend_block
+        except ImportError:
+            notices.append("#FALLBACK tend fence ignored (engine lacks tending)")
+            return self._TEND_FENCE_RE.sub("[tend block ignored - engine lacks tending]", reply)
+
+        def _sub(match: re.Match) -> str:
+            body = match.group(1) or ""
+            try:
+                parsed = parse_tend_block(body)
+                # DRIVER-SIDE #TAG RESOLUTION (skill's fold-blocker, adversary-
+                # confirmed 2026-07-19): the engine resolver takes full graph
+                # ids / 32-hex row ids, but every surface the entity READS
+                # renders the 8-hex #tag — the taught key must be the shown
+                # key (one-spelling law). Same pattern as _resolve_explores
+                # but REFUSE-ON-AMBIGUITY: a tend verb is an audited act;
+                # acting on a guessed record would be worse than refusing
+                # (read_memory's rule, not explores' silent pass-through).
+                def _resolve_tend_key(token: str):
+                    """(resolved_or_None, refusal_reason_or_None) for one key
+                    the entity quoted — #tags resolve via the home graph
+                    (refuse-on-ambiguity); ':'-bearing full ids pass through."""
+                    t = str(token or "").lstrip("#").strip()
+                    if not t or ":" in str(token) or len(t) > 12:
+                        return token, None
+                    gid, matches = self._memory_reader.find_tag_in_home(t)
+                    if gid:
+                        return gid, None
+                    if len(matches) > 1:
+                        return None, (f"#{t} matches {len(matches)} records - "
+                                      "reread the memory and quote its full id")
+                    return None, (f"#{t} matches nothing in your home - the tag is "
+                                  "quoted from a memory line; check the spelling "
+                                  "with search_memory")
+
+                elections = []
+                for el in parsed.get("elections", []):
+                    refused_reason = None
+                    tgt = str(el.get("target") or "")
+                    if tgt:
+                        resolved, refused_reason = _resolve_tend_key(tgt)
+                        if refused_reason is None and resolved != tgt:
+                            el = dict(el)
+                            el["target"] = resolved
+                            # Render honesty (skill c149): the marker echoes
+                            # the token HE wrote (#tag) — the machinery id
+                            # is not his namespace.
+                            el["_spoken_target"] = tgt
+                    # Dispose CONFIRM extras carry record keys too (skill's
+                    # residual, 2026-07-19: the dream render shows proposal
+                    # pair members as #tags — the confirm path dead-ended
+                    # one level deeper than the target fix). Same resolver,
+                    # same refusal discipline, evidence lists included.
+                    if refused_reason is None and isinstance(el.get("args"), dict) and el["args"]:
+                        new_args = dict(el["args"])
+                        for key in ("source_id", "target_id"):
+                            if key in new_args:
+                                resolved, refused_reason = _resolve_tend_key(str(new_args[key]))
+                                if refused_reason is not None:
+                                    break
+                                new_args[key] = resolved
+                        if refused_reason is None and "evidence_ids" in new_args:
+                            ev = []
+                            for item in tuple(new_args.get("evidence_ids") or ()):
+                                resolved, refused_reason = _resolve_tend_key(str(item))
+                                if refused_reason is not None:
+                                    break
+                                ev.append(resolved)
+                            if refused_reason is None:
+                                new_args["evidence_ids"] = tuple(ev)
+                        if refused_reason is None:
+                            el = dict(el)
+                            el["args"] = new_args
+                    if refused_reason is not None:
+                        parsed.setdefault("refusals", []).append({
+                            "line": el.get("line", ""), "reason": refused_reason,
+                        })
+                        continue
+                    elections.append(el)
+                spoken_by_key: Dict[Any, str] = {}
+                for el in elections:
+                    if isinstance(el, dict) and el.get("_spoken_target"):
+                        spoken_by_key[(el.get("verb"), el.get("target"))] = el.pop("_spoken_target")
+                report = apply_tend_elections(
+                    self.home.ms,
+                    elections,
+                    scope="life",
+                    owner_id=self.home.entity_id,
+                    actor=self.home.entity_id,
+                )
+            except Exception as e:  # noqa: BLE001 - an election must never kill the turn
+                notices.append(f"#FALLBACK tend fence failed ({e})")
+                return "[tend block failed - see notices]"
+            applied = report.get("applied", [])
+            refused = list(parsed.get("refusals", [])) + list(report.get("refused", []))
+            bits = []
+            for a in applied:
+                el = a.get("election", {})
+                verb = el.get("verb", "?")
+                # Echo the token HE wrote (skill c149): the machinery id is
+                # not his namespace; the report's dicts are engine copies,
+                # so the join is by (verb, resolved target).
+                tgt = spoken_by_key.get((verb, el.get("target"))) or el.get("target") or ""
+                bits.append(f"{verb} {tgt}".strip())
+            marker = "[tended: " + (", ".join(bits) if bits else "nothing applied") + "]"
+            lines = [marker]
+            for r in refused:
+                # Refusal lines verbatim — the author sees the rule broken.
+                # Parse refusals carry `line` top-level; apply refusals carry
+                # the election dict (its `line` is the verbatim source).
+                rl = r.get("line") or (r.get("election", {}) or {}).get("line", "")
+                lines.append(f"[tend refused: {rl} - {r.get('reason', '')}]")
+            for path in report.get("revisit_paths", []):
+                # Seed may arrive as a handle dict; render its id, never the
+                # raw repr. Hits carry `cues` (plural, list) per ProbeHit.
+                seed = path.get("seed", "")
+                if isinstance(seed, dict):
+                    seed = seed.get("record_id") or seed.get("graph_id") or ""
+                names = []
+                for h in (path.get("paths") or [])[:4]:
+                    cues = h.get("cues") if isinstance(h.get("cues"), list) else []
+                    label = str(cues[0])[:60] if cues else str(h.get("record_id") or "")[:60]
+                    if label:
+                        names.append(label)
+                if names:
+                    lines.append(f"[revisit {seed}: {', '.join(names)}]")
+            self.out(f"({marker[1:-1]})")
+            return "\n".join(lines)
+
+        return self._TEND_FENCE_RE.sub(_sub, reply)
+
+    def _resolve_value_refs(self, touches: str) -> List[str]:
+        """W4 value_refs stamping: the entity grounds a feeling in a value
+        with touches="..." (his words). Resolve words -> the value record's
+        graph id by title match against the SELF core; unresolvable words
+        ride as the raw string (the journal accepts free refs — resolution
+        is presentation, never a gate)."""
+        words = str(touches or "").strip()
+        if not words:
+            return []
+        try:
+            from abstractmemory import TripleQuery
+
+            rows = self.home.ms.store.query(TripleQuery(
+                predicate="dcterms:abstract", scope="self",
+                owner_id=self.home.entity_id, limit=0,
+            ))
+            needle = words.lower()
+            for a in rows:
+                attrs = a.attributes if isinstance(a.attributes, dict) else {}
+                if str(attrs.get("record_kind") or "") != "value":
+                    continue
+                hay = (str(attrs.get("title") or "") + " " + str(a.object or "")).lower()
+                if needle in hay:
+                    return [str(a.subject)]
+        except Exception:
+            pass
+        return [words]
+
+    def _stimulus_feelings_block(self, user_text: str, report: Any) -> str:
+        """W4-render auto half: one pure engine read per turn (memory's
+        stimulus_feelings), rendered by _feelings_block. Never raises —
+        a broken lens must not cost a turn."""
+        try:
+            from abstractmemory.feelings_reads import stimulus_feelings
+            from abstractmemory.seam import Stimulus
+        except ImportError:
+            if not getattr(self, "_feelings_read_warned", False):
+                self._feelings_read_warned = True
+                report.notices.append(
+                    "#FALLBACK feelings lens unavailable (engine predates stimulus_feelings)"
+                )
+            return ""
+        try:
+            rows = stimulus_feelings(
+                self.home.ms.store,
+                getattr(self.home.ms, "journal", None),
+                Stimulus(
+                    cue_text=str(user_text or ""),
+                    participants=tuple(p for p in self.participants if p != self.home.entity_id),
+                ),
+                [("self", self.home.entity_id), ("life", self.home.entity_id)],
+            )
+        except Exception as exc:
+            report.notices.append(f"#FALLBACK feelings lens read failed: {exc}")
+            return ""
+        # Dedup (W4): targets already standing in the prelude render once
+        # per session there — the moment lens carries only what the prelude
+        # does NOT already say (presence line names participants; the
+        # prelude names top standing; this block adds the moment's rest).
+        shown = set((self.prelude or {}).get("standing_targets") or [])
+        rows = [r for r in rows if str(r.get("target")) not in shown]
+        return _feelings_block(rows)
+
+    def _apply_midturn_elections(
+        self,
+        feelings: List[Any],
+        lessons: List[str],
+        interests: List[str],
+        *,
+        turn_id: str,
+        report: Any,
+    ) -> None:
+        """W1: feelings/lessons/interests kept IN THE MOMENT (the disposition
+        table's mid-turn lanes). Feelings ride MEMORY_APPRAISE with the
+        SESSION-scoped cap (MAX_FEELINGS_PER_SESSION across both parse
+        sites); lessons/interests form exactly as the close lanes form them
+        (life/self scopes, session_id attribute; from_session edges join at
+        the close when the summary exists). Failures degrade loudly; an
+        election must never kill a turn."""
+        from .reflection import MAX_FEELINGS_PER_SESSION
+
+        if feelings:
+            room = MAX_FEELINGS_PER_SESSION - self.feelings_applied
+            if room <= 0:
+                report.notices.append(
+                    f"#FALLBACK feeling(s) refused (cap {MAX_FEELINGS_PER_SESSION}/session reached)"
+                )
+                feelings = []
+            elif len(feelings) > room:
+                report.notices.append(
+                    f"#FALLBACK {len(feelings) - room} feeling(s) refused "
+                    f"(cap {MAX_FEELINGS_PER_SESSION}/session)"
+                )
+                feelings = feelings[:room]
+        if feelings:
+            resolved, resolve_notices = resolve_feeling_targets(
+                feelings,
+                sheet_record_ids=[rid for rid, _ in self.session_sheet],
+                session_record_id=None,  # the summary exists only at close
+                self_id=self.home.entity_id,
+            )
+            report.notices.extend(resolve_notices)
+            for e, record_id in resolved:
+                target_scope = "life" if record_id.startswith("ex:") else "self"
+                try:
+                    self._effect(
+                        EffectType.MEMORY_APPRAISE,
+                        {
+                            "op": "appraise", "target_id": record_id,
+                            "sign": e.sign, "magnitude": e.magnitude,
+                            "reason": e.reason, "scar": e.scar, "bond": e.bond,
+                            "turn_id": turn_id, "scope": target_scope,
+                            "owner_id": self.home.entity_id,
+                            "actor": "entity-reflection",
+                            "value_refs": self._resolve_value_refs(getattr(e, "touches", "")),
+                        },
+                    )
+                    self.feelings_applied += 1
+                    self.out(f"(felt: {record_id} {'+' if e.sign > 0 else '-'}{e.magnitude})")
+                except RuntimeError as exc:
+                    report.notices.append(f"#FALLBACK feeling on {record_id} refused: {exc}")
+        for i, lesson_text in enumerate(lessons):
+            try:
+                out = self._effect(
+                    EffectType.MEMORY_FORM,
+                    {
+                        "records": [{
+                            "kind": "lesson",
+                            "title": "lesson: " + " ".join(lesson_text.split()[:8]),
+                            "digest": lesson_text,
+                            "keywords": [],
+                            "edges": [],
+                            "attributes": {"session_id": self.session_id, "phase": self.phase},
+                            "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
+                        }],
+                        "scope": "life", "owner_id": self.home.entity_id,
+                        "turn_id": f"{turn_id}-mlesson-{i}",
+                    },
+                )
+                report.notices.extend(out.get("warnings", []))
+                self.out(f'(lesson kept: "{lesson_text[:70]}")')
+            except RuntimeError as exc:
+                report.notices.append(f"#FALLBACK mid-turn lesson refused: {exc}")
+        for i, interest_text in enumerate(interests):
+            try:
+                out = self._effect(
+                    EffectType.MEMORY_FORM,
+                    {
+                        "records": [{
+                            "kind": "interest",
+                            "title": "interest: " + " ".join(interest_text.split()[:8]),
+                            "digest": interest_text,
+                            "keywords": [],
+                            "edges": [],
+                            "attributes": {"session_id": self.session_id},
+                            "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
+                        }],
+                        "scope": "self", "owner_id": self.home.entity_id,
+                        "turn_id": f"{turn_id}-minterest-{i}",
+                    },
+                )
+                report.notices.extend(out.get("warnings", []))
+                self.out(f'(interest kept: "{interest_text[:70]}")')
+            except RuntimeError as exc:
+                report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
+
+    def _resolve_resolves(self, token: Optional[str]) -> Optional[str]:
+        """P1-3 (pathway adversary 2026-07-20): every drive surface hands
+        him the #tag (MEMORIES lines, the day-open offers) while the book
+        handler wants the diary entry id — the answer-in-hand gap. Resolve
+        #tag -> graph projection -> attributes.entry_id; book ids and
+        unresolvable tokens pass through (the handler's own hex-tail
+        tolerance is the second net)."""
+        t = (token or "").strip()
+        if not t:
+            return None
+        if t.startswith("diary_"):
+            return t  # already a book id
+        bare = t.lstrip("#")
+        gid = bare if ":" in bare else (self._memory_reader.find_tag_in_home(bare)[0] or "")
+        if gid:
+            try:
+                from abstractmemory import TripleQuery
+
+                for a in self.home.ms.store.query(TripleQuery(
+                        predicate="dcterms:abstract", limit=0)):
+                    if str(a.subject) == gid and isinstance(a.attributes, dict):
+                        eid = str(a.attributes.get("entry_id") or "")
+                        if eid:
+                            return eid
+                        break
+            except Exception:  # noqa: BLE001 - tolerance, never a blocker
+                pass
+        return t
+
+    def _resolve_explores(self, token: Optional[str]) -> Optional[str]:
+        """Resolve an explores= election to the GRAPH id the drive fold
+        joins on (cognition_health matches record ids). The entity
+        references interests by #tag (the MEMORIES handle grammar); full
+        graph ids pass through; an unresolvable token passes as-is (the
+        fold simply won't match) — transcription tolerance, never
+        intent-guessing."""
+        t = (token or "").strip().lstrip("#")
+        if not t:
+            return None
+        if ":" in t:
+            return t  # already a graph id (ex:interest-...)
+        gid, _matches = self._memory_reader.find_tag_in_home(t)
+        return gid or t
 
     def _read_memory(self, tag_text: str) -> str:
         # The sheet may have grown THIS turn (a just-elected diary entry is
@@ -1009,9 +1647,14 @@ class ChatSession:
         # tells him who is in the room, every turn.
         others = [p for p in self.participants if p != self.home.entity_id]
         presence = f"(present with you: {', '.join(others)})" if others else ""
+        # W4-render: the standing-feelings lens, auto half — what already
+        # stands in him toward what THIS moment touches (participants +
+        # cue terms). Engine read is pure/deposit-free; absent engines
+        # degrade to no block (feature absence, labeled once).
+        feelings_block = self._stimulus_feelings_block(user_text, report)
         system_prompt = self.system_base + ("\n\n" + presence if presence else "") + (
             "\n\n" + block if block else ""
-        )
+        ) + ("\n\n" + feelings_block if feelings_block else "")
         report.system_prompt = system_prompt
 
         # 3. LLM - a failed call aborts the turn: no commit, no formation, no
@@ -1042,12 +1685,15 @@ class ChatSession:
         # Castor's first tool session: diary_list to find an id, then
         # diary_read to fetch the words).
         lookup_phases: List[str] = []
+        tool_result_phases: List[str] = []
         if self.enable_tools:
             from .tools import MAX_TOOL_BLOCKS_PER_TURN, MAX_TOOL_ROUNDS_PER_TURN, native_tool_elections
 
             convo = self.history + [{"role": "user", "content": user_text}]
             rounds = 0
             corrected_imitation = False
+            nudged_malformed = False
+            original_before_nudge: Optional[str] = None
             # THE TURN BUDGET (maintainer ruling 2026-07-11: "default cap
             # for a turn is 20 tool calls"): one bound shared across all
             # rounds and both mechanisms — threaded as the REMAINING budget
@@ -1113,6 +1759,67 @@ class ChatSession:
                             break
                         raw_reply = fixed_reply
                         continue  # re-parse: the corrected reply may hold real elections
+
+                    # A2 FORMAT-REPAIR NUDGE (agent's spec c3002, the fence-
+                    # side twin of the marker-imitation correction; live
+                    # motivating case = Ephemeral's tick 3: a ```python
+                    # title=file.py fence expressing a write in a syntax
+                    # neither convention accepts — the act was LOST, and he
+                    # later judged himself a liar for it). Fires only when
+                    # ZERO tools ran this turn and a fence is structurally
+                    # tool-shaped; ONE nudge per turn consuming one round of
+                    # the existing budget; the repaired attempt rides the
+                    # same executor (grants/caps unchanged); ask-not-accuse,
+                    # prompt-ephemeral like every correction here.
+                    from .tools import detect_malformed_tool_intent
+
+                    malformed = (
+                        detect_malformed_tool_intent(tool_marked, self.allowed_tools)
+                        if not report.tools
+                        else None
+                    )
+                    if malformed and nudged_malformed and original_before_nudge is not None:
+                        # Bound (c): the nudged continuation still carries no
+                        # runnable block — deliver the ORIGINAL reply, loudly.
+                        report.notices.append(
+                            "#FALLBACK format-repair nudge: the continuation still carried no "
+                            "runnable block; delivering the original reply"
+                        )
+                        raw_reply = original_before_nudge
+                        break
+                    if malformed and not nudged_malformed and rounds < MAX_TOOL_ROUNDS_PER_TURN:
+                        nudged_malformed = True
+                        original_before_nudge = tool_marked
+                        rounds += 1  # the nudge consumes one round, never exceeds
+                        report.notices.append(
+                            f"#NOTE format-repair nudge: a fence looked like an attempted act "
+                            f"({malformed}) but nothing ran; offered the accepted syntax"
+                        )
+                        nudge = (
+                            f"(the door) Part of your reply looks like an attempted act "
+                            f"({malformed}), but nothing ran - nothing was saved or executed. "
+                            "If you meant to act, write the block exactly as the accepted "
+                            "syntax:\n\n"
+                            "```tool name=<tool_name>\n"
+                            "...the body (for write_file: ```tool name=write_file path=your/file.py "
+                            "with the full content as the body)...\n"
+                            "```\n\n"
+                            "If you meant only to share text, continue as you were - nothing "
+                            "is wrong."
+                        )
+                        convo = convo + [
+                            {"role": "assistant", "content": tool_marked},
+                            {"role": "user", "content": nudge},
+                        ]
+                        resp_nudge = self._generate(
+                            messages=convo, system_prompt=system_prompt, notices=report.notices
+                        )
+                        nudged_reply = clean_model_reply(getattr(resp_nudge, "content", None) or "")
+                        if not nudged_reply:
+                            raw_reply = tool_marked  # honest: deliver what he said
+                            break
+                        raw_reply = nudged_reply
+                        continue  # re-parse: the repaired attempt may hold real elections
                     raw_reply = tool_marked  # refused/unknown markers stay honest
                     break
                 rounds += 1
@@ -1143,6 +1850,8 @@ class ChatSession:
                     workspace=self.workspace,
                     read_memory_fn=self._read_memory,
                     search_memory_fn=self._search_memory,
+                    recent_memories_fn=self._recent_memories,
+                    feelings_about_fn=self._feelings_about,
                 )
                 report.notices.extend(exec_notices)
                 # What each lookup RETURNED, on the probe surface (maintainer
@@ -1152,6 +1861,10 @@ class ChatSession:
                 for detail, e in zip(round_details, tool_elections):
                     detail["result"] = e.result or ""
                 lookup_phases.append(tool_marked)
+                # W5 raw-at-rest: what the tools RETURNED joins the episode
+                # verbatim — except book-adjacent tools (private words/gists
+                # must not rest in life scope; honest pointer instead).
+                tool_result_phases.append(_at_rest_tool_results(tool_elections))
                 if rounds == MAX_TOOL_ROUNDS_PER_TURN or turn_budget <= 0:
                     results_msg += (
                         "\n\n(No more lookups are possible this turn - finish your reply now; "
@@ -1202,7 +1915,14 @@ class ChatSession:
         # empty once markers are removed, ONE final prompt-ephemeral
         # continuation demands prose; tool blocks in it are marked but never
         # run. An empty speak-now reply keeps the markers (honest failure).
-        if self.enable_tools:
+        # PHASE GATE (design-law adversary P1-1, 2026-07-19): in PERSONAL
+        # time there is no person waiting — "the person has not heard a
+        # single word" is factually false there, and demanding prose turns
+        # every quiet working tick into commanded speech (forced words then
+        # rest in the episode, teaching that wordless work is wrong). The
+        # guard is a visit/work-lane honesty device; personal ticks may be
+        # silent.
+        if self.enable_tools and self.phase != "personal":
             residue = re.sub(r"\[used tool: [a-z_ ]+\]", "", raw_reply)
             residue = re.sub(r"\[tool call [^\]]*\]", "", residue)
             residue = re.sub(r"\[diary block [^\]]*\]", "", residue)
@@ -1299,11 +2019,14 @@ class ChatSession:
                         workspace=self.workspace,
                         read_memory_fn=self._read_memory,
                         search_memory_fn=self._search_memory,
+                        recent_memories_fn=self._recent_memories,
+                        feelings_about_fn=self._feelings_about,
                     )
                     report.notices.extend(exec_notices)
                     for detail, e in zip(fix_details, fix_elections):
                         detail["result"] = e.result or ""
                     lookup_phases.append(marked_fix)
+                    tool_result_phases.append(_at_rest_tool_results(fix_elections))
                     convo_fix = convo_fix + [
                         {"role": "assistant", "content": marked_fix},
                         {"role": "user", "content": results_msg
@@ -1322,9 +2045,34 @@ class ChatSession:
                         "- delivered as-is; tools_ran is the only authority"
                     )
 
-        # 4. ELECTIONS - the entity's own diary blocks (offered, never required).
+        # 4. ELECTIONS - the entity's own blocks (offered, never required).
+        # W1 (laurent's metronome ruling, wave-4 disposition table): feelings,
+        # lessons and interests are MID-TURN elections now — kept the moment
+        # they are felt/learned/pulled, in the moment that moved him. The
+        # close stops asking; the parsers below FORM, not notice.
+        raw_reply = self._apply_tend_fence(raw_reply, report.notices)
         marked_reply, elections, notices = parse_diary_blocks(raw_reply)
+        marked_reply, midturn_feelings, feel_notices = parse_feel_blocks(
+            marked_reply, [line for _rid, line in self.session_sheet]
+        )
+        notices.extend(feel_notices)
+        marked_reply, midturn_lessons, lesson_notices = parse_lesson_blocks(marked_reply)
+        notices.extend(lesson_notices)
+        marked_reply, midturn_interests, interest_notices = parse_interest_blocks(marked_reply)
+        notices.extend(interest_notices)
+        # Topics stay a close-free MECHANICAL derivation (disposition table:
+        # died as a solicitation; a mid-turn ```topic is inert with a notice).
+        if "```topic" in marked_reply:
+            notices.append(
+                "#NOTE a topic block is no longer an election - subjects grow "
+                "cards mechanically from what you live; a diary note names one "
+                "if you want it kept in words"
+            )
         report.notices.extend(notices)
+        self._apply_midturn_elections(
+            midturn_feelings, midturn_lessons, midturn_interests,
+            turn_id=turn_id, report=report,
+        )
         turn_diary_projections: List[str] = []
         for e in elections:
             diary_out = self._effect(
@@ -1334,7 +2082,8 @@ class ChatSession:
                     "gist": e.gist,
                     "kind": e.kind,
                     "visibility": e.visibility,
-                    "resolves": e.resolves,
+                    "resolves": self._resolve_resolves(e.resolves),
+                    "explores": self._resolve_explores(e.explores),
                     "turn_id": turn_id,
                     "as_of_seq": self.home.ms.current_seq(),
                     # write-time attention = the re-entry key (row ids) +
@@ -1350,6 +2099,54 @@ class ChatSession:
             )
             report.diary.append(diary_out["entry_id"])
             report.notices.extend(diary_out.get("warnings", []))
+            # R-A site 3 (laurent c2596, the "trivial hop"): the write-time
+            # marker carries the reread command — the memory of writing IS
+            # the link. The marker lands in the digest+verbatim the entity
+            # later recalls, so the hint of writing quotes the exact entry
+            # id (`diary_` namespace verbatim — semantics' spelling law).
+            # Safe for private entries: the id is a KEY, never words.
+            plain_marker = (
+                "[kept a private diary entry]" if e.visibility == "private"
+                else f"[kept in diary - {e.kind}]"
+            )
+            # RESOLVED-QUESTION DRIVE (laurent's directive 2026-07-18 (a)):
+            # when a write ANSWERS an open question, the marker says so —
+            # the felt loop of watching open questions become resolved ones
+            # is part of what animates the next step. The id is a key.
+            # VERIFIED CLAIM ONLY (adversary F1, 2026-07-18): the handler
+            # validated the target (exists, is a question, was open) — an
+            # invalid resolves= keeps the ENTRY but never the assertion;
+            # the handler's #FALLBACK warning rode report.notices above.
+            rs = diary_out.get("resolves_status")
+            resolved_ok = rs in ("resolved_open_question", "repaired_open_problem")
+            resolved_note = ""
+            if rs == "resolved_open_question":
+                resolved_note = f" - resolves your open question {e.resolves}"
+            elif rs == "repaired_open_problem":
+                resolved_note = f" - repairs your open problem {e.resolves}"
+            elif rs:
+                # P1-2 (pathway adversary): a FAILED resolution claim used
+                # to be operator-log-only — the entity re-read a marker
+                # that looked like success and learned nothing. The verdict
+                # rides the marker now (the felt loop's negative arm).
+                resolved_note = f" - resolves={e.resolves} did NOT match an open item ({rs})"
+            # The exploration arm (same finding): a verified explores=
+            # says so in the marker the entity re-reads.
+            explores_resolved = self._resolve_explores(e.explores) if e.explores else None
+            if explores_resolved and diary_out.get("entry_id"):
+                resolved_note += f" - develops your interest {e.explores}"
+            enriched_marker = (
+                plain_marker[:-1]
+                + resolved_note
+                + f" - reread: diary_read {diary_out['entry_id']}]"
+            )
+            marked_reply = marked_reply.replace(plain_marker, enriched_marker, 1)
+            if resolved_ok:
+                word = "problem" if rs == "repaired_open_problem" else "question"
+                self.out(f"(resolved: {word} {e.resolves} leaves your open desk)")
+                self.session_resolutions.append(
+                    (str(e.resolves), word, (e.gist or e.text).strip().splitlines()[0][:100])
+                )
             projected = diary_out.get("projected_record_id")
             if projected:
                 # G1 at-rest rule (the 0007 leak-class lesson, sheet edition):
@@ -1378,13 +2175,26 @@ class ChatSession:
 
         # 5. COMMIT rendered (displayed) - presence-not-use is engine-enforced,
         # but "commit what was rendered" means what entered the PROMPT.
-        if displayed:
+        # F2 exclusion: on the FIRST turn (the day-open cue), drive records
+        # the cue itself offered are NOT committed — the composer's mention
+        # is not his use. self.reports is empty exactly on the first turn.
+        commit_handles = displayed
+        if displayed and self.commit_exclusions and not self.reports:
+            def _graph_id(h: Dict[str, Any]) -> str:
+                return str((h.get("provenance") or {}).get("record_id") or "")
+
+            commit_handles = [
+                h for h in displayed
+                if _graph_id(h) not in self.commit_exclusions
+                and str(h.get("record_id") or "") not in self.commit_exclusions
+            ]
+        if commit_handles:
             self._effect(
                 EffectType.MEMORY_ACCESS,
                 {
                     "trace_id": recall["trace_id"],
-                    "used_record_ids": [h["record_id"] for h in displayed],
-                    "prompt_token_estimate": sum(int(h.get("token_estimate") or 0) for h in displayed),
+                    "used_record_ids": [h["record_id"] for h in commit_handles],
+                    "prompt_token_estimate": sum(int(h.get("token_estimate") or 0) for h in commit_handles),
                 },
             )
 
@@ -1397,10 +2207,18 @@ class ChatSession:
             user_text, marked_reply, self.home.name,
             speaker=speaker_label or (self.participants[0] if self.participants else "User"),
         )
+        # W5 (one verbatim edit): intermediate rounds rest as INNER SPEECH
+        # ("(thinking, unspoken)" — the reader must never mistake lookup
+        # reasoning for words spoken to someone), and what the tools
+        # returned rests beside them (content-completeness; book-adjacent
+        # results excluded with an honest pointer).
         verbatim = f"{speaker_label or self.participants[0]}:\n{user_text}\n\n"
-        for phase in lookup_phases:
-            if phase != marked_reply:
-                verbatim += f"{self.home.name} (while looking things up):\n{phase}\n\n"
+        for i, phase in enumerate(lookup_phases):
+            if phase == marked_reply:
+                continue
+            verbatim += f"{self.home.name} (thinking, unspoken):\n{phase}\n\n"
+            if i < len(tool_result_phases) and tool_result_phases[i].strip():
+                verbatim += f"(what the tools returned:)\n{tool_result_phases[i]}\n\n"
         verbatim += f"{self.home.name}:\n{marked_reply}"
         attributes: Dict[str, Any] = {
             "participants": list(self.participants),
@@ -1455,6 +2273,33 @@ class ChatSession:
         for rid in report.formed:
             self.session_sheet.append((str(rid), digest[:160]))
             self._last_episode_id = str(rid)
+        # PER-TURN CARD UPDATE (laurent's directive 2026-07-18: "the update
+        # of the world model should happen naturally after each turn...
+        # not blocking, eventual consistency"; memory's frozen
+        # world_model_update, room seq 21): a bounded MECHANICAL revise of
+        # the turn's participant targets — non-blocking-SIZED by the
+        # engine's design (one windowed query per scope pair, no LLM), so
+        # inline is honest; the sleep pass normalizes over everything and
+        # the at-reflection authoring writes the prose layer. Below-floor
+        # targets no-op honestly; failures degrade, never break the turn.
+        try:
+            from abstractmemory import world_model_update
+
+            wm_targets = [
+                p for p in self.participants
+                if isinstance(p, str) and ":" in p and not p.startswith("entity:")
+            ]
+            if wm_targets:
+                world_model_update(
+                    self.home.ms,
+                    scopes=[("life", self.home.entity_id)],
+                    owner_id=self.home.entity_id,
+                    targets=wm_targets,
+                )
+        except ImportError:
+            pass  # older engine: cards ride the sleep pass alone
+        except Exception as e:  # noqa: BLE001
+            report.notices.append(f"#FALLBACK per-turn card update skipped ({e})")
         # Write-ahead reflection marker: if this process dies ANY way (even
         # SIGKILL), the next open finds the sheet and runs the look-back.
         self._write_pending_marker()
@@ -1506,6 +2351,12 @@ class ChatSession:
                 self._pending_path(),
                 json.dumps({
                     "session_id": self.session_id,
+                    # Phase-stamp inheritance nit (framework c2974 item 4):
+                    # the salvage may run inside a session of a DIFFERENT
+                    # phase (own-time day yielded -> next open is a visit);
+                    # the marker carries the ENDED session's phase so its
+                    # reflection records stamp the life-channel they lived.
+                    "phase": self.phase,
                     "sheet": [[rid, desc] for rid, desc in self.session_sheet],
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }) + "\n",
@@ -1601,10 +2452,30 @@ class ChatSession:
         # already wrapped this call defensively; the function now owns the
         # contract so no caller can forget it. The marker deliberately
         # SURVIVES a failed salvage (the debt stays for the next open).
+        # Legacy markers carry no phase — fall back to the session-id prefix
+        # (the same dual rule the origin labels use: owntime- means personal).
+        marker_phase = str(marker.get("phase") or "").strip() or (
+            "personal" if str(marker.get("session_id") or "").startswith("owntime-") else ""
+        )
+        # RESOLVER-OVER-DURABLE-INPUTS (vendoring adversary P1-3,
+        # 2026-07-20): the marker is at-rest JSON a pre-rename build (or a
+        # hand edit) may have written with legacy/cased words — engraving
+        # "own_time"/"Personal" into attributes.phase on an append-only
+        # store would orphan the origin labels forever. Canonicalize at
+        # the read boundary; an unknown word degrades to "" (no phase
+        # claim), never a raw engraving.
+        if marker_phase:
+            try:
+                from .tool_policy import canonical_phase
+
+                marker_phase = canonical_phase(marker_phase)
+            except Exception:  # noqa: BLE001 - unknown word = no claim
+                marker_phase = ""
         try:
             result = self._reflect_over(
                 sheet, session_id=str(marker.get("session_id")),
                 turn_id=f"t-reflect-salvage-{marker.get('session_id')}",
+                phase=marker_phase or None,
             )
         except Exception as e:  # noqa: BLE001 - a repair must not block a life
             self.out(
@@ -1627,6 +2498,15 @@ class ChatSession:
         """
         if not self.session_sheet:
             return None
+        # W1 (metronome ruling): OWN-TIME day closes are fully MECHANICAL —
+        # zero LLM, no questionnaire. Feelings/lessons/interests were
+        # electable in the moment all day (the mid-turn lanes); the close
+        # just records that the day happened (floored digest over the
+        # session sheet — the same mechanical narrative the salvage floor
+        # uses). Visit/work closes keep the one shrunk look-back (a social
+        # act with a human, not a questionnaire).
+        if self.phase == "personal":
+            return self._mechanical_close()
         result = self._reflect_over(
             # SESSION-SCOPED turn_id (whole-package adversary P1, 2026-07-13,
             # live-verified silent loss: APPRAISE event-ids derive from
@@ -1640,21 +2520,203 @@ class ChatSession:
         )
         if result is not None:
             self.reflection_diary_entries = result["diary_entries"]
-            self.feelings_applied = len(result["feelings_applied"])
+            self.feelings_applied += len(result["feelings_applied"])
             # Clean look-back: the write-ahead marker retires (the session
             # is reflected; nothing pends).
             self._clear_pending_marker()
+            # WORLD-MODEL AUTHORING (laurent's directive 2026-07-18, M1
+            # driver half — memory's author_world_model verb, room seq 21):
+            # at-reflection, the entity rewrites its briefing of who it just
+            # spent the session with. LIVE reflect only (salvage repairs a
+            # past session and must stay cheap); failures degrade, never
+            # block the close.
+            try:
+                authored = self._author_world_model_cards(result)
+                if authored:
+                    result["world_models_authored"] = authored
+            except Exception as e:  # noqa: BLE001
+                self.out(f"#FALLBACK world-model authoring skipped ({e})")
         return result
 
+    # Cap per session: the authoring is one LLM call per target — bounded
+    # like every election surface (interests 2, lessons 2, cards 2).
+    MAX_CARDS_AUTHORED_PER_SESSION = 2
+
+    def _author_world_model_cards(self, reflect_result: Dict[str, Any]) -> List[str]:
+        """The distillation LLM step (M1 joint build, room seq 21): for the
+        session's targets that hold a STANDING card, the entity rewrites the
+        card as a briefing in its own words; the engine applies it through
+        author_world_model (revision chain, provenance carried).
+
+        Targets = door-stamped participants (laurent's own example: "if
+        I talk with the entity, it should retrieve my card" — the visit's
+        WHO is the highest-value card to keep fresh) THEN the reflection's
+        elected topics as topic:<words> (operator directive 2026-07-19:
+        personal time is self-directed, so participants alone left his days
+        card-less; the subjects HE names are the encounter). One combined
+        cap. A target without a standing card is SKIPPED silently — the
+        verb refuses card-less targets by design (assertion is not
+        orientation); the mechanical floor forms first (the in-day
+        world_model_update in _reflect_over, then sleep normalizes)."""
+        try:
+            from abstractmemory import author_world_model, current_world_models
+        except ImportError:
+            return []
+
+        # Participant targets first (self excluded — a card about oneself is
+        # the identity lane, not the world lane), then elected topics; one
+        # shared cap keeps the close bounded (one LLM call per target).
+        participant_targets = [
+            p for p in self.participants
+            if isinstance(p, str) and ":" in p and not p.startswith("entity:")
+        ]
+        topic_targets = [
+            f"topic:{t}" for t in (reflect_result.get("topics") or []) if str(t).strip()
+        ]
+        targets = (participant_targets + topic_targets)[: self.MAX_CARDS_AUTHORED_PER_SESSION]
+        if not targets:
+            return []
+
+        sheet_lines = [f"- {desc}" for _rid, desc in self.session_sheet][-12:]
+        authored: List[str] = []
+        for target in targets:
+            # Find the standing card across his ladder scopes.
+            card = None
+            card_scope = None
+            for scope, owner in self._memory_reader.ladder:
+                try:
+                    card = current_world_models(
+                        self.home.store, scope=scope, owner_id=owner,
+                        journal=self.home.journal,
+                    ).get(target)
+                except Exception:
+                    card = None
+                if card is not None:
+                    card_scope = (scope, owner)
+                    break
+            if card is None or card_scope is None:
+                continue  # floor not formed yet; sleep's lane
+            current_text = str(getattr(card, "object", None) or "").strip()
+            if target.startswith("topic:"):
+                # A SUBJECT, not a person: "who they are / stand with them"
+                # reads wrong for an idea — ask for understanding instead.
+                subject = target.split(":", 1)[1]
+                prompt = (
+                    f"Your current sense of \"{subject}\" reads:\n\n{current_text[:1200]}\n\n"
+                    "The session that just ended circled it again. What happened, "
+                    "from your own records:\n"
+                    + "\n".join(sheet_lines)
+                    + f"\n\nRewrite what you now understand of \"{subject}\" - a short "
+                    "briefing (3-6 sentences, plain prose, no lists) your future self "
+                    "reads to instantly know what this subject is to you, what you "
+                    "have found so far, and where it stands now. Only what you "
+                    "actually know; write nothing else after it."
+                )
+            else:
+                prompt = (
+                    f"Your current briefing of {target} reads:\n\n{current_text[:1200]}\n\n"
+                    "This session with them just ended. What happened, from your own records:\n"
+                    + "\n".join(sheet_lines)
+                    + f"\n\nRewrite what you now know of {target} - a short briefing "
+                    "(3-6 sentences, plain prose, no lists) your future self reads to "
+                    "instantly know who they are, what you have lived with them, and "
+                    "how you currently stand with them. Only what you actually know; "
+                    "write nothing else after it."
+                )
+            resp = self._generate(
+                messages=self.history + [{"role": "user", "content": prompt}],
+                system_prompt=self.system_base,
+                notices=[],
+            )
+            text = clean_model_reply(getattr(resp, "content", None) or "").strip()
+            if not text or len(text) < 40:
+                self.out(f"#FALLBACK card authoring for {target} returned too little; floor stands")
+                continue
+            try:
+                out = author_world_model(
+                    self.home.ms, target=target, text=text[:1600],
+                    scope=card_scope[0], owner_id=card_scope[1],
+                    author="entity-reflection",
+                )
+                authored.append(target)
+                self.out(f"(rewrote your briefing of {target})")
+            except ValueError as e:
+                # byte-identical / refused: honest, not an error
+                self.out(f"#FALLBACK card authoring for {target} refused: {e}")
+        return authored
+
+    def _mechanical_close(self) -> Dict[str, Any]:
+        """The zero-LLM own-time close (W1): form the session summary from
+        the floored mechanical narrative — no prompt, no elections, no
+        spend. Everything electable was electable mid-turn."""
+        session_id = self.session_id
+        turn_id = f"t-reflect-{session_id}"
+        sheet = list(self.session_sheet)
+        refl_digest, _floored = floored_reflection_digest("", sheet)
+        notices: List[str] = ["mechanical close (own time): zero-LLM summary"]
+        session_record_id = None
+        try:
+            formed = self._effect(
+                EffectType.MEMORY_FORM,
+                {
+                    "records": [{
+                        "kind": "summary",
+                        "title": f"session reflection: {session_id}",
+                        "digest": refl_digest,
+                        "keywords": [],
+                        "verbatim": "",
+                        "edges": [["summarizes", rid] for rid, _ in sheet if rid],
+                        "attributes": {
+                            "participants": list(self.participants),
+                            "session_id": session_id,
+                            "phase": self.phase,
+                            "digest_method": "mechanical-floor-v1",
+                        },
+                        "provenance": {"source": "entity-mechanical-close-v1"},
+                    }],
+                    "scope": "life",
+                    "owner_id": self.home.entity_id,
+                    "turn_id": turn_id,
+                },
+            )
+            session_record_id = next(iter(formed.get("record_ids", [])), None)
+            notices.extend(formed.get("warnings", []))
+        except RuntimeError as exc:
+            notices.append(f"#FALLBACK mechanical close failed to form the summary: {exc}")
+        self._clear_pending_marker()
+        for n in notices:
+            self.out(f"  ({n})")
+        return {
+            "reply": "",
+            "feelings_applied": [],
+            "interests": [],
+            "lessons": [],
+            "topics": [],
+            "diary_entries": 0,
+            "session_record_id": session_record_id,
+            # P2-7 (pathway adversary): the zero-LLM close cannot run the
+            # resolution->lesson bridge - the resolutions ride OUT so the
+            # loop's next day-open cue can offer the bridge there.
+            "session_resolutions": list(self.session_resolutions),
+            "notices": notices,
+        }
+
     def _reflect_over(
-        self, sheet: List[Tuple[Optional[str], str]], *, session_id: str, turn_id: str
+        self,
+        sheet: List[Tuple[Optional[str], str]],
+        *,
+        session_id: str,
+        turn_id: str,
+        phase: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """The look-back core over an explicit sheet (live session or a
         salvaged ended one — same machinery, same honesty rules)."""
         if not sheet:
             return None
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
-        prompt = build_reflection_prompt(sheet_lines)
+        prompt = build_reflection_prompt(
+            sheet_lines, resolutions=list(self.session_resolutions)
+        )
 
         resp = self._generate(
             messages=self.history + [{"role": "user", "content": prompt}],
@@ -1665,9 +2727,14 @@ class ChatSession:
             self.out("#FALLBACK reflection returned empty; the session closes without feelings marked")
             return None
 
-        marked_reply, feelings, notices = parse_feel_blocks(raw_reply)
+        marked_reply, feelings, notices = parse_feel_blocks(raw_reply, sheet_lines)
         marked_reply, interests, interest_notices = parse_interest_blocks(marked_reply)
         notices.extend(interest_notices)
+        marked_reply, lessons, lesson_notices = parse_lesson_blocks(marked_reply)
+        notices.extend(lesson_notices)
+        marked_reply, topics, topic_notices = parse_topic_blocks(marked_reply)
+        notices.extend(topic_notices)
+        marked_reply = self._apply_tend_fence(marked_reply, notices)
         marked_reply, diary_elections, diary_notices = parse_diary_blocks(marked_reply)
         notices.extend(diary_notices)
 
@@ -1696,9 +2763,17 @@ class ChatSession:
                         "attributes": {
                             "participants": list(self.participants),
                             "session_id": session_id,
+                            # Elected topics (build 4): each fans to a
+                            # topic:<name> card target in memory's evidence
+                            # scan (attributes.topics is the pinned seam;
+                            # summaries are eligible evidence).
+                            **({"topics": list(topics)} if topics else {}),
                             # r-rt-3: awake-phase provenance the MEMORIES
-                            # origin labels key on ("your own time").
-                            "phase": self.phase,
+                            # origin labels key on ("your own time"). A
+                            # salvaged look-back stamps the ENDED session's
+                            # phase, never the salvaging session's
+                            # (framework c2974 item 4).
+                            "phase": phase or self.phase,
                             # Floored digests self-identify (memory co-sign):
                             # the redigestion poverty scan keys on this.
                             **({"digest_method": "mechanical-floor-v1"} if refl_floored else {}),
@@ -1712,6 +2787,36 @@ class ChatSession:
             },
         )
         session_record_id = next(iter(formed.get("record_ids", [])), None)
+
+        # IN-DAY topic cards (build 4): the elected subjects revise their
+        # topic:<name> cards NOW, not at the next sleep — same mechanical
+        # lane as the per-turn participant update; failures degrade. The
+        # summary just formed IS the new evidence (attributes.topics), so
+        # this runs after it. Below-floor subjects no-op honestly (the
+        # engine's world_model_evidence_floor, default 3: a subject grows a
+        # card once ~3 days have named it — refined over time, by design);
+        # the out line reports only what actually revised.
+        if topics:
+            try:
+                from abstractmemory import world_model_update
+
+                wm_out = world_model_update(
+                    self.home.ms,
+                    scopes=[("life", self.home.entity_id)],
+                    owner_id=self.home.entity_id,
+                    targets=[f"topic:{t}" for t in topics],
+                )
+                revised = [
+                    str(v.get("target") or "")
+                    for v in (wm_out.get("formed") or [])
+                    if v.get("formed")
+                ]
+                if revised:
+                    self.out(f'(topic card(s) revised: {", ".join(revised)})')
+            except ImportError:
+                pass  # older engine: elected topics still rest on the summary
+            except Exception as e:  # noqa: BLE001
+                notices.append(f"#FALLBACK topic card update skipped ({e})")
 
         # INTERESTS — the lightest identity-evolution surface (a2a 0007,
         # three-layer ack: memory approved semantics, gateway pinned the door).
@@ -1750,6 +2855,59 @@ class ChatSession:
             interest_record_ids.extend(interest_out.get("record_ids", []))
             notices.extend(interest_out.get("warnings", []))
 
+        # LESSONS — semantic knowledge (laurent's directive 2026-07-18: the
+        # entity "still hasn't learned anything"; root issue = nothing ever
+        # SOLICITED a lesson). kind=lesson into LIFE scope (knowledge is
+        # recallable world-stuff, not identity core): the digest is his own
+        # words, from_session carries the why-thread, and recall surfaces
+        # it whenever the subject comes up — the same merit lane as every
+        # lived record.
+        # Bridge edge (build 2): when EXACTLY ONE resolution happened this
+        # session, a reflection-elected lesson carries derived_from -> the
+        # resolved entry's graph projection (act-frame: the lesson formed in
+        # the look-back of the session that resolved it). Multiple
+        # resolutions = ambiguous = no edge (never guess which one taught).
+        derived_from_id: Optional[str] = None
+        if len(self.session_resolutions) == 1 and lessons:
+            try:
+                from .diary import _birth_trail
+
+                trail = _birth_trail(
+                    self.home.ms, self.home.entity_id, self.session_resolutions[0][0]
+                )
+                derived_from_id = trail.get("projection_id") or None
+            except Exception:  # noqa: BLE001 - the edge is enrichment, never a gate
+                derived_from_id = None
+        for i, lesson_text in enumerate(lessons):
+            lesson_out = self._effect(
+                EffectType.MEMORY_FORM,
+                {
+                    "records": [
+                        {
+                            "kind": "lesson",
+                            "title": "lesson: " + " ".join(lesson_text.split()[:8]),
+                            "digest": lesson_text,  # his words verbatim (embedded)
+                            "keywords": [],
+                            "edges": (
+                                ([["from_session", session_record_id]] if session_record_id else [])
+                                + ([["derived_from", derived_from_id]] if derived_from_id else [])
+                            ),
+                            "attributes": {"session_id": session_id, "phase": phase or self.phase},
+                            "provenance": {
+                                "source": "entity-reflection-v1",
+                                "actor": "entity-reflection",
+                            },
+                        }
+                    ],
+                    "scope": "life",
+                    "owner_id": self.home.entity_id,
+                    "turn_id": f"{turn_id}-lesson-{i}",
+                },
+            )
+            notices.extend(lesson_out.get("warnings", []))
+            if lesson_out.get("record_ids"):
+                self.out(f'(lesson kept: "{lesson_text[:70]}")')
+
         for e in diary_elections:
             session_graph_ids = [rid for rid, _ in sheet if rid][-4:]
             diary_out = self._effect(
@@ -1759,7 +2917,8 @@ class ChatSession:
                     "gist": e.gist,
                     "kind": e.kind,
                     "visibility": e.visibility,
-                    "resolves": e.resolves,
+                    "resolves": self._resolve_resolves(e.resolves),
+                    "explores": self._resolve_explores(e.explores),
                     "turn_id": turn_id,
                     "as_of_seq": self.home.ms.current_seq(),
                     "anchor_record_ids": session_graph_ids,
@@ -1768,6 +2927,22 @@ class ChatSession:
             )
             notices.extend(diary_out.get("warnings", []))
 
+        # SESSION-scoped feelings cap (W1): the close shares the budget with
+        # the mid-turn site — the second parse site never doubles it.
+        from .reflection import MAX_FEELINGS_PER_SESSION
+
+        room = MAX_FEELINGS_PER_SESSION - self.feelings_applied
+        if room <= 0 and feelings:
+            notices.append(
+                f"#FALLBACK feeling(s) refused (cap {MAX_FEELINGS_PER_SESSION}/session reached)"
+            )
+            feelings = []
+        elif len(feelings) > room:
+            notices.append(
+                f"#FALLBACK {len(feelings) - room} feeling(s) refused "
+                f"(cap {MAX_FEELINGS_PER_SESSION}/session)"
+            )
+            feelings = feelings[:room]
         resolved, resolve_notices = resolve_feeling_targets(
             feelings,
             sheet_record_ids=[rid for rid, _ in sheet],
@@ -1798,6 +2973,7 @@ class ChatSession:
                         "scope": target_scope,
                         "owner_id": self.home.entity_id,
                         "actor": "entity-reflection",
+                        "value_refs": self._resolve_value_refs(getattr(e, "touches", "")),
                     },
                 )
             except RuntimeError as exc:
@@ -1822,6 +2998,8 @@ class ChatSession:
             "reply": marked_reply,
             "feelings_applied": applied,
             "interests": list(zip(interest_record_ids, interests)),
+            "lessons": list(lessons),
+            "topics": list(topics),
             "diary_entries": len(diary_elections),
             "session_record_id": session_record_id,
             "notices": notices,
@@ -2108,12 +3286,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         from abstractcore import create_llm  # lazy: keeps the kernel import-light
 
-        llm_kwargs: Dict[str, Any] = {"model": model}
+        # PATIENCE WINDOW (core c3954): a visit turn is a human in front of
+        # "Thinking..." - 120s per attempt, 180s wall-clock retry budget;
+        # wedged substrates fail in minutes, loudly.
+        llm_kwargs: Dict[str, Any] = {
+            "model": model,
+            "timeout": 120,
+            "retry_wall_clock_budget_s": 180,
+        }
         if args.max_output_tokens is not None:
             llm_kwargs["max_output_tokens"] = args.max_output_tokens
         if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
             llm_kwargs["base_url"] = args.base_url  # cloud providers resolve their own endpoint
-        llm = create_llm(provider, **llm_kwargs)
+        try:
+            llm = create_llm(provider, **llm_kwargs)
+        except TypeError:
+            llm_kwargs.pop("retry_wall_clock_budget_s", None)
+            print("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard")
+            llm = create_llm(provider, **llm_kwargs)
 
         session = ChatSession(
             home,

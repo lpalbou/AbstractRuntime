@@ -1,12 +1,37 @@
 """Voluntary memory exploration over one home — session-free.
 
 Extracted from ChatSession (gateway ask, e-s 206, 2026-07-11): the door's
-per-entity TOOL_CALLS executor needs `search_memory`/`read_memory` with
-DRIVER PARITY but has no ChatSession — visit runs execute tools through
-the react cycle, not the in-process driver. The reader is the ONE
-implementation both consume: ChatSession wraps it (sharing its session
-tag map so sheet-registered tags stay addressable); the door constructs
-one per home/turn.
+per-entity TOOL_CALLS executor needs `search_memory` / `read_memory` /
+`recent_memories` with DRIVER PARITY but has no ChatSession — visit runs
+execute tools through the react cycle, not the in-process driver. The
+reader is the ONE implementation both consume: ChatSession wraps it
+(sharing its session tag map so sheet-registered tags stay addressable);
+the door constructs one per home/turn.
+
+DOOR RECIPE (blessed for the gateway TOOL_CALLS executor, entity c69
+audit 2026-07-18 — the memory tools were granted but never OFFERED on
+the visit lane because this wiring was never done, on a docstring that
+went stale the day this module shipped)::
+
+    from abstractruntime.identity.memory_reader import HomeMemoryReader
+    reader = HomeMemoryReader(home, tag_map=visit_tag_map)  # per-visit map
+    execute_tool_elections(
+        elections, ...,
+        search_memory_fn=reader.search_memory,       # tool: search_memory
+        read_memory_fn=reader.read_memory,           # tool: read_memory
+        recent_memories_fn=reader.recent_memories,   # tool: recent_memories
+    )
+
+`home` needs only `.store`, `.diary`, `.entity_id`, `.journal` — the bare
+entity-runtime home satisfies it (no ChatSession, no driver). DECLARE the
+three tools from `identity.tools.walled_tool_rows()` (never a hand copy —
+the drift the c69 audit found). Driver-parity nuances the door must honor:
+(1) tag_map — hold ONE per visit so #tags resolve across the visit's
+turns (ChatSession shares its session map for exactly this); (2)
+`recent_memories` soft-imports abstractmemory.recent_records and degrades
+labeled when absent; (3) results are PROMPT-EPHEMERAL — shown to the
+entity in-turn, never persisted into the episode (the G1/act-only
+invariant; see the tool-detail-capture work).
 
 Everything here is a PURE READ over the entity's OWN ladder scopes
 (explicit scope + owner on every query — the whole-store reach is a
@@ -53,6 +78,10 @@ class HomeMemoryReader:
         "entity-reflection-v1": "written by your own reflection",
         "entity-elected-supersession-v1": "your own elected revision",
         "diary-projection": "your diary act",
+        # Durable-visit lane sources (adversary F2, 2026-07-17) — same
+        # voices as the chat lane, engraved under the visit workflow's ids.
+        "entity-visit-run-v0": "a lived conversation",
+        "entity-visit-run-reflection-v0": "written by your own reflection",
     }
 
     def __init__(
@@ -235,14 +264,23 @@ class HomeMemoryReader:
             head = sanitize_tool_surface(str(a.object or ""), 100)
             attrs = a.attributes if isinstance(a.attributes, dict) else {}
             kind = str(attrs.get("record_kind") or "memory")
-            lines.append(f"- #{tag} [{kind} {date} - {self.origin_label(a)}] {head}")
+            # R-A site 2 (laurent c2596, the "trivial hop"): a diary act's
+            # hit carries the exact reread command — the hint IS the link
+            # (`diary_` entry-id namespace verbatim; the id is a key, never
+            # words).
+            reread = ""
+            entry_id = str(attrs.get("entry_id") or "")
+            if entry_id:
+                reread = f" (reread: diary_read {entry_id})"
+            lines.append(f"- #{tag} [{kind} {date} - {self.origin_label(a)}] {head}{reread}")
         if len(graph_hits) > GRAPH_SHOWN:
             lines.append(f"(... and {len(graph_hits) - GRAPH_SHOWN} more graph matches - narrow your words)")
         for e in book_hits[-BOOK_SHOWN:][::-1]:
             gist = sanitize_tool_surface(str(e.get("gist") or "") or "(no gist elected)", 100)
             date = str(e.get("written_at") or "")[:10]
             lines.append(
-                f"- {e.get('entry_id')} [{e.get('kind')}/{e.get('visibility')} {date}] {gist}"
+                f"- [{e.get('kind')}/{e.get('visibility')} {date}] {gist} "
+                f"- reread: diary_read {e.get('entry_id')}"
             )
         if len(book_hits) > BOOK_SHOWN:
             lines.append(f"(... and {len(book_hits) - BOOK_SHOWN} more book entries match)")
@@ -283,6 +321,183 @@ class HomeMemoryReader:
         lines.append(
             "read_memory #tag fetches a memory's full words and connections; "
             "diary_read diary_... fetches a book entry."
+        )
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------- recent
+    def recent_memories(self, window_text: str) -> str:
+        """The breadcrumb trail (Ephemeral's own build ask, visit 1
+        2026-07-17: "a way to ask 'what have I been working on recently'
+        without already knowing the answer"). search_memory is a SIMILARITY
+        reach — it needs words that match; this is a RECENCY reach — a
+        time-window fold over both planes (his graph records and his book),
+        newest first, no words required. Same reads search_memory already
+        pays (explicit ladder scopes; whole book); prompt-ephemeral like
+        every tool result."""
+        from datetime import datetime, timedelta, timezone
+
+        from .tools import sanitize_tool_surface
+
+        spec = " ".join((window_text or "").split()).lower()
+        hours: float
+        if not spec or spec in ("recent", "recently"):
+            hours = 48.0
+        elif spec in ("today", "day"):
+            hours = 24.0
+        elif spec == "week":
+            hours = 168.0
+        elif spec.endswith("h") and spec[:-1].replace(".", "", 1).isdigit():
+            hours = float(spec[:-1])
+        elif spec.endswith("d") and spec[:-1].replace(".", "", 1).isdigit():
+            hours = float(spec[:-1]) * 24.0
+        else:
+            return (
+                f'recent_memories could not read the window "{sanitize_tool_surface(spec, 40)}" - '
+                "write nothing (last 2 days), or a window like 12h, 3d, today, week"
+            )
+        if hours <= 0:
+            return "recent_memories needs a window larger than zero (e.g. 12h, 3d)"
+        hours = min(hours, 24.0 * 365)
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        # ---- graph plane. PREFERRED: the engine's recent_records (memory's
+        # half of the joint build, c2983) — it applies the closure/hidden
+        # folds and drops machine rows (bookkeeping, maintenance candidates,
+        # record edges) that a raw digest fold would surface (live-observed:
+        # the client-side fold showed two "Maintenance found N records…"
+        # standing candidates on Ephemeral's real trail — sleep-pass
+        # bookkeeping, not his work). Older engines fall back to the raw
+        # fold with the same machine-row screens applied client-side,
+        # labeled, so the trail degrades narrower rather than noisier.
+        SHOWN = 20
+        engine_rows: Optional[List[Dict[str, Any]]] = None
+        engine_truncated = False
+        try:
+            from abstractmemory import recent_records
+
+            out_engine = recent_records(
+                self.home.store,
+                self.home.journal,
+                scopes=self.ladder,
+                since=cutoff,
+                limit=SHOWN,
+            )
+            engine_rows = list(out_engine.get("records") or [])
+            engine_truncated = bool(out_engine.get("truncated"))
+        except ImportError:
+            engine_rows = None
+        except Exception as e:  # noqa: BLE001 - locked store etc.: honest, retryable
+            return f"(your memory could not be read right now: {e} - try again)"
+
+        fallback_note = ""
+        if engine_rows is not None:
+            graph_recent = []
+            for row in engine_rows:
+                # Identity core is planted, not lived — a recency trail is
+                # about what he DID (the engine's kind set may include core
+                # kinds when the self scope is in the ladder).
+                if str(row.get("kind") or "") in ("value", "purpose", "trait", "claim"):
+                    continue
+                graph_recent.append(row)
+        else:
+            try:
+                digests = self.digest_assertions_all()
+            except Exception as e:  # noqa: BLE001
+                return f"(your memory could not be read right now: {e} - try again)"
+            raw = [a for a in digests if str(a.observed_at or "") >= cutoff]
+            raw.sort(key=lambda a: str(a.observed_at or ""), reverse=True)
+            graph_recent = []
+            for a in raw:
+                attrs = a.attributes if isinstance(a.attributes, dict) else {}
+                if str(attrs.get("record_kind") or "") in ("value", "purpose", "trait", "claim"):
+                    continue
+                # Machine-row screens, mirrored from the engine contract.
+                if attrs.get("bookkeeping") or attrs.get("record_edge") or attrs.get("maintenance_candidate"):
+                    continue
+                graph_recent.append({
+                    "graph_id": str(a.subject or ""),
+                    "kind": str(attrs.get("record_kind") or "memory"),
+                    "digest": str(a.object or ""),
+                    "observed_at": str(a.observed_at or ""),
+                    "entry_id": str(attrs.get("entry_id") or ""),
+                    "_assertion": a,
+                })
+            fallback_note = "#FALLBACK trail computed without engine folds (older memory engine) - closed records may still show"
+
+        # ---- book plane
+        try:
+            entries = self.home.diary.list_entries()
+        except Exception as e:  # noqa: BLE001
+            entries, book_error = [], str(e)
+        else:
+            book_error = ""
+        book_recent = [e for e in entries if str(e.get("written_at") or "") >= cutoff]
+        book_recent.sort(key=lambda e: str(e.get("written_at") or ""), reverse=True)
+
+        window_words = f"the last {spec}" if spec and spec not in ("recent", "recently") else "the last 2 days"
+        lines: List[str] = [f"Your trail through {window_words} (newest first):"]
+        if not graph_recent and not book_recent:
+            # Anchor facts for the honest zero (rare branch; one bounded read).
+            try:
+                digests = self.digest_assertions_all()
+            except Exception:  # noqa: BLE001
+                digests = []
+            newest_all = max(
+                [str(a.observed_at or "") for a in digests] or [""]
+            )[:16]
+            lines.append(
+                f"Nothing formed in this window - your graph holds {len(digests)} records "
+                f"and your book {len(entries)} entries from before it"
+                + (f" (the newest is from {newest_all})" if newest_all else "")
+                + ". Widen the window (e.g. 7d) to reach further back."
+            )
+            lines.append("search_memory finds by words; this trail finds by time.")
+            return "\n".join(lines)
+
+        shown = 0
+        for row in graph_recent:
+            if shown >= SHOWN:
+                break
+            gid = str(row.get("graph_id") or "")
+            tag = memory_tag(gid)
+            self.tag_map.setdefault(tag, gid)  # readable immediately
+            when = str(row.get("observed_at") or "")[:16]
+            kind = str(row.get("kind") or "memory")
+            head = sanitize_tool_surface(str(row.get("digest") or ""), 100)
+            entry_id = str(row.get("entry_id") or "")
+            reread = f" (reread: diary_read {entry_id})" if entry_id else ""
+            # Origin label needs the assertion (phase-aware dual rule);
+            # bounded to the shown page, same lookups read_memory pays.
+            assertion = row.get("_assertion") or self.digest_assertion(gid)
+            origin = self.origin_label(assertion) if assertion is not None else "recorded in your graph"
+            lines.append(f"- #{tag} [{kind} {when} - {origin}] {head}{reread}")
+            shown += 1
+        hidden_graph = max(0, len(graph_recent) - shown)
+        if hidden_graph or engine_truncated:
+            lines.append(
+                "(... more work exists in this window than the page shows - "
+                "narrow it, e.g. 6h)"
+            )
+        if fallback_note:
+            lines.append(fallback_note)
+
+        BOOK_SHOWN = 8
+        for e in book_recent[:BOOK_SHOWN]:
+            gist = sanitize_tool_surface(str(e.get("gist") or "") or "(no gist elected)", 100)
+            when = str(e.get("written_at") or "")[:16]
+            lines.append(
+                f"- [{e.get('kind')}/{e.get('visibility')} {when}] {gist} "
+                f"- reread: diary_read {e.get('entry_id')}"
+            )
+        if len(book_recent) > BOOK_SHOWN:
+            lines.append(f"(... and {len(book_recent) - BOOK_SHOWN} more book entries in the window)")
+        if book_error:
+            lines.append(f"#FALLBACK your book could not be read: {book_error}")
+
+        lines.append(
+            "read_memory #tag fetches a memory's full words and connections; "
+            "diary_read diary_... fetches a book entry. This trail is where "
+            "you left your own thinking - follow what pulls."
         )
         return "\n".join(lines)
 

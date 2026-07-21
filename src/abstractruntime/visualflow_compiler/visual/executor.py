@@ -349,6 +349,49 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             path = Path.cwd() / path
         return path, str(path)
 
+    def _workspace_root_for(resolved_path: Any, virtual_path: Any):
+        """Derive the workspace root that `virtual_path` was resolved against.
+
+        The resolver maps a workspace-relative virtual path (e.g.
+        'reports/co-scientist-....pdf') onto an absolute path; peeling the
+        virtual path's components off the tail of the absolute path yields the
+        root the report's OTHER relative refs (figures/) resolve against. Used
+        only to let the PDF/DOCX renderer embed workspace-local images inline;
+        any mismatch returns None (renderer falls back to a caption note).
+        """
+        from pathlib import PurePath, Path as _P
+
+        try:
+            rp = _P(str(resolved_path)).resolve()
+            # Split on BOTH separators (a backslash virtual path must not peel
+            # depth 1 and mis-root the base — adversary P2-4).
+            vp = str(virtual_path or "").strip().lstrip("/\\")
+            if not vp:
+                return rp.parent
+            comps = [c for c in PurePath(vp.replace("\\", "/")).parts if c and c != "."]
+            depth = len(comps)
+            if depth == 0:
+                return rp.parent
+            # SECURITY (adversary P0): peeling the virtual-path depth off the
+            # resolved path only yields a valid workspace root if the resolved
+            # path actually ENDS WITH those components. When the resolver had
+            # no workspace scope it returns the absolute path as the virtual
+            # path too, so depth == full component count and a naive peel
+            # collapses base_dir to "/" — making the renderer's containment
+            # check vacuous (any image anywhere on disk would embed). Verify
+            # the tail matches and never peel past root; on any mismatch
+            # return None so the renderer degrades to a caption note.
+            if tuple(rp.parts[-depth:]) != tuple(comps):
+                return None
+            root = rp
+            for _ in range(depth):
+                if root == root.parent:
+                    return None
+                root = root.parent
+            return root
+        except Exception:
+            return None
+
     def _artifact_id_from_value(value: Any) -> str:
         if isinstance(value, dict):
             raw = value.get("$artifact") or value.get("artifact_id")
@@ -578,8 +621,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             title = payload.get("title")
             pdf_title = title.strip() if isinstance(title, str) and title.strip() else None
+            # base_dir lets the renderer embed workspace-relative markdown
+            # images (![alt](reports/figures/x.png)) INLINE. The report md
+            # uses paths relative to the workspace ROOT, so base_dir is the
+            # resolved PDF path with its virtual-path depth peeled off — i.e.
+            # the workspace root that the resolver mapped file_path against.
+            image_base = _workspace_root_for(path, virtual_path)
             pdf_bytes, metadata = render_pdf_bytes(
-                payload.get("content"), title=pdf_title, branding=_resolve_report_branding(payload)
+                payload.get("content"), title=pdf_title,
+                branding=_resolve_report_branding(payload), base_dir=image_base,
             )
 
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,10 +656,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
             from abstractruntime.documents import render_docx_bytes
 
+            docx_image_base = _workspace_root_for(path, virtual_path)
             title = payload.get("title")
             docx_title = title.strip() if isinstance(title, str) and title.strip() else None
             docx_bytes, metadata = render_docx_bytes(
-                payload.get("content"), title=docx_title, branding=_resolve_report_branding(payload)
+                payload.get("content"), title=docx_title,
+                branding=_resolve_report_branding(payload), base_dir=docx_image_base,
             )
 
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,6 +670,54 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return {
                 **metadata,
                 "file_path": virtual_path,
+            }
+
+        return handler
+
+    def _create_write_chart_handler(_data: Dict[str, Any]):
+        """Render a STRUCTURED chart spec to a workspace PNG (+ .pdf sibling).
+
+        Trust class: write_pdf — a fixed in-process renderer over pure data
+        (no shell, no code authoring surface), so deterministic workflows
+        render figures without a tool-approval prompt (operator ruling
+        2026-07-20; the old path shelled matplotlib through execute_command
+        and stalled every unattended run). Render-class failures return an
+        ok:false envelope (never raise) so callers keep honest fallbacks;
+        path violations still raise like every workspace writer.
+        """
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_path = payload.get("file_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("write_chart requires a non-empty 'file_path' input.")
+
+            file_path = raw_path.strip()
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_chart")
+            if path.suffix.lower() != ".png":
+                raise ValueError("write_chart requires a .png file path.")
+            # The .pdf sibling derives from the RESOLVED png path (same dir,
+            # same stem) — never from a second user-supplied path — so its
+            # containment is exactly the png's. Re-assert the resolved parent
+            # anyway: two files are written through one resolution.
+            pdf_sibling = path.with_suffix(".pdf")
+            if pdf_sibling.parent != path.parent:
+                raise ValueError("write_chart internal path derivation failed")
+
+            from abstractruntime.documents import render_chart
+
+            result = render_chart(payload.get("spec"), path)
+            virtual_pdf = None
+            if result.pdf_path is not None:
+                base_virtual = virtual_path[: -len(path.suffix)] if virtual_path.endswith(path.suffix) else virtual_path
+                virtual_pdf = base_virtual + ".pdf"
+            return {
+                "ok": result.ok,
+                "rendered": result.rendered,
+                "file_path": virtual_path if result.rendered else None,
+                "pdf_path": virtual_pdf,
+                "error": result.error,
+                "warnings": list(result.warnings),
             }
 
         return handler
@@ -3986,6 +4086,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         if type_str == "write_docx":
             return _create_write_docx_handler(data)
+
+        if type_str == "write_chart":
+            return _create_write_chart_handler(data)
 
         if type_str == "list_folder_files":
             return _create_list_folder_files_handler(data)

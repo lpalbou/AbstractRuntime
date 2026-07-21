@@ -281,3 +281,68 @@ def test_runtime_applies_task_specific_media_capability_defaults() -> None:
     assert explicit["provider"] == "custom"
     assert explicit["model"] == "explicit"
     assert "resolution" not in explicit
+
+
+def test_runtime_applies_voice_music_sound_capability_defaults() -> None:
+    """Voice/music/sound/STT joined the route merge 2026-07-17 (laurent's
+    offline-TTS outage; assistant's finding): a bare TTS spec must receive
+    the gateway-configured output.voice route AT THE RUNTIME LAYER so the
+    ledgered spec is what actually executes — never a second resolution
+    truth inside abstractcore's facade."""
+    from abstractruntime.integrations.abstractcore import llm_client as llm_client_mod
+
+    defaults = {
+        "output.voice": {
+            "provider": "supertonic",
+            "model": "supertonic-3",
+            "options": {"voice": "M1"},
+        },
+        "input.voice": {"provider": "whisper-local", "model": "faster-whisper-base"},
+        "output.music": {"provider": "abstractmusic", "model": "acestep-v15"},
+        "output.sound": {"provider": "abstractmusic", "model": "acestep-sfx"},
+    }
+    normalized = llm_client_mod._normalize_core_capability_defaults(defaults)
+
+    # The exact wedged shape from the outage ledger: bare TTS spec.
+    tts = llm_client_mod._with_capability_default_route(
+        {"modality": "voice", "task": "tts", "format": "wav"}, normalized
+    )
+    assert tts["provider"] == "supertonic"
+    assert tts["model"] == "supertonic-3"
+    assert tts["voice"] == "M1", "route options merge (the voice option rode output.voice)"
+
+    stt = llm_client_mod._with_capability_default_route(
+        {"modality": "voice", "task": "stt"}, normalized
+    )
+    assert stt["provider"] == "whisper-local"
+    assert stt["model"] == "faster-whisper-base"
+
+    music = llm_client_mod._with_capability_default_route(
+        {"modality": "music", "task": ""}, normalized
+    )
+    assert music["provider"] == "abstractmusic"
+    assert music["model"] == "acestep-v15"
+
+    sound = llm_client_mod._with_capability_default_route(
+        {"modality": "sound", "task": "sfx"}, normalized
+    )
+    assert sound["model"] == "acestep-sfx"
+
+    # Task-level sub-keys win over modality-level (mirror of the image shape).
+    layered = llm_client_mod._normalize_core_capability_defaults(
+        {
+            "output.voice": {"provider": "supertonic", "model": "supertonic-3"},
+            "output.voice.tts": {"provider": "piper", "model": "piper-en"},
+        }
+    )
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "voice", "task": "tts"}, layered
+    )["provider"] == "piper"
+
+    # Explicit specs stay untouched (caller routing always wins).
+    explicit_tts = llm_client_mod._with_capability_default_route(
+        {"modality": "voice", "task": "tts", "provider": "openai", "model": "tts-1"},
+        normalized,
+    )
+    assert explicit_tts["provider"] == "openai"
+    assert "voice" not in explicit_tts

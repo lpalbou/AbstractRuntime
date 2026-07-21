@@ -121,6 +121,10 @@ from .history_bundle import (
     export_run_history_bundle,
     persist_workflow_snapshot,
 )
+from .session_history import (
+    SESSION_TURN_KIND,
+    session_chat_messages,
+)
 
 __all__ = [
     # Core models
@@ -242,4 +246,7 @@ __all__ = [
     "RUN_HISTORY_BUNDLE_VERSION_V1",
     "export_run_history_bundle",
     "persist_workflow_snapshot",
+    # Durable session conversation replay (read side)
+    "SESSION_TURN_KIND",
+    "session_chat_messages",
 ]

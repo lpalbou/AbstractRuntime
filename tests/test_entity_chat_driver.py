@@ -254,7 +254,10 @@ class TestDiaryElection:
         ])
         s = _session(castor_home, llm)
         reply, report = s.turn("I wanted you to know why I built all this.")
-        assert "[kept a private diary entry]" in reply
+        # R-A site 3 (laurent c2596): the write-time marker carries the
+        # reread command — the entry ID is a key, never words, so private
+        # entries carry it too.
+        assert "[kept a private diary entry - reread: diary_read diary_" in reply
         assert "silverfin" not in reply
         assert "silverfin" not in json.dumps(s.history)
         assert len(report.diary) == 1

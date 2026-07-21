@@ -308,9 +308,38 @@ def _create_effect_node_handler(
     else:
         raise ValueError(f"Unknown effect type: {effect_type}")
 
+    # continueOnError -> _absorb_failure mapping (flow's c2851 ask, runtime
+    # ruling c2896: shape (c)). Node-config flag on DIRECT effect nodes only:
+    # a terminally failed effect (after the runtime's own retries) lands
+    # {"ok": False, "absorbed_failure": "<error>"} at the node's result and
+    # the run continues — route on it with the existing if/branch idiom.
+    # Absent flag = today's terminate-run, byte-unchanged flows.
+    # DELIBERATELY NOT for start_subworkflow: a failed CHILD RUN arrives
+    # through wait resolution, not effect execution — absorbing only the
+    # START effect would misrepresent the contract (subrun coverage is its
+    # own design if a consumer needs it).
+    _continue_on_error = bool(
+        isinstance(effect_config, dict)
+        and (effect_config.get("continueOnError") or effect_config.get("continue_on_error"))
+    ) and effect_type != "start_subworkflow"
+
+    def _stamp_absorb(handler: Callable) -> Callable:
+        if not _continue_on_error:
+            return handler
+
+        def stamped(run: Any, ctx: Any):
+            plan = handler(run, ctx)
+            eff = getattr(plan, "effect", None)
+            payload = getattr(eff, "payload", None) if eff is not None else None
+            if isinstance(payload, dict):
+                payload.setdefault("_absorb_failure", True)
+            return plan
+
+        return stamped
+
     # If no data-aware handler, just return the base effect handler
     if data_aware_handler is None:
-        return base_handler
+        return _stamp_absorb(base_handler)
 
     # Wrap to resolve data edges before creating the effect
     def wrapped_effect_handler(run: Any, ctx: Any) -> "StepPlan":
@@ -909,7 +938,7 @@ def _create_effect_node_handler(
         # Fallback: run.vars won't have the values, but try anyway
         return base_handler(run, ctx)
 
-    return wrapped_effect_handler
+    return _stamp_absorb(wrapped_effect_handler)
 
 
 def _create_visual_agent_effect_handler(
@@ -2387,7 +2416,7 @@ def _create_visual_function_handler(
             input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
 
         visual_node_type = getattr(func, "_visual_node_type", None)
-        if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx"} and isinstance(run.vars, dict):
+        if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx", "write_chart"} and isinstance(run.vars, dict):
             ambient: Dict[str, Any] = {}
             for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
                 if key in run.vars:

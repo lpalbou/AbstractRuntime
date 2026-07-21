@@ -75,6 +75,66 @@ def shell_tools_enabled() -> bool:
     return _env_flag("ABSTRACT_ENABLE_SHELL_TOOLS")
 
 
+# --- camera (drafted by seat: camera; owner review: runtime — commons c3826/c3829) ---
+def camera_tools_enabled() -> bool:
+    """AbstractCamera tools (real-camera piloting): EXPLICIT opt-in only.
+
+    Deliberately NOT key-implied like agora: a camera is physical hardware and
+    every capture records the real surroundings (`captures_environment`) — an
+    operator choice, never a side effect of a package being importable. The
+    tools stay approval-gated per call even when enabled; every
+    environment-capturing tool ASKS BY DEFAULT (laurent's ruling 2026-07-21,
+    c3938: this is a DEFAULT, not a floor - "a user must be able to auto
+    accept camera or ask the agent to request permissions, like for any
+    other tool"; a run-scoped tool_policy may auto-approve it).
+    """
+    return _env_flag("ABSTRACT_ENABLE_CAMERA_TOOLS")
+
+
+def camera_approval_sets() -> tuple[set, set]:
+    """(auto_approve, require_approval) camera tool names, or (∅, ∅) when the
+    toolset is disabled.
+
+    DERIVED from abstractcamera's own classification via its exported
+    `camera_tool_approval_defaults()` — never a hand-list here (derive-never-copy;
+    the diary_type-clamp drift is what copies cause). Imported lazily and only
+    when enabled, so `tool_executor` stays zero-cross-package and abstractcamera
+    loads exactly when the operator opted in (its tools module pulls abstractcore
+    but NOT the camera/OpenCV stack — that loads on first tool CALL)."""
+    if not camera_tools_enabled():
+        return set(), set()
+    try:
+        from abstractcamera.integrations.abstractcore_tools import camera_tool_approval_defaults
+    except ImportError as exc:  # actionable: enabled but not installed
+        raise RuntimeError(
+            "ABSTRACT_ENABLE_CAMERA_TOOLS is set but abstractcamera is not installed. "
+            'Install it (pip install "abstractcamera") or unset the flag.'
+        ) from exc
+    defaults = camera_tool_approval_defaults()
+    return set(defaults.get("auto_approve") or []), set(defaults.get("require_approval") or [])
+
+
+def default_approval_policy_sets() -> tuple[set, set]:
+    """The EFFECTIVE (auto_approve, require_approval) name sets for a session:
+    tool_executor's base defaults extended by every enabled toolset that
+    carries its own approval facts.
+
+    This is the ONE fold point runtime's executor construction consults so
+    camera's derived partition rides through live (enabled → the three
+    read-only camera tools auto-approve, the seven mutating/remote/capturing
+    ones ask; disabled → no camera names appear anywhere). Base sets stay in
+    tool_executor (module constants, hot path); the camera import happens here,
+    behind the enable gate, never at tool_executor import time."""
+    from .tool_executor import _DEFAULT_REQUIRE_APPROVAL, _DEFAULT_SAFE_AUTO_APPROVE
+
+    auto = set(_DEFAULT_SAFE_AUTO_APPROVE)
+    require = set(_DEFAULT_REQUIRE_APPROVAL)
+    cam_auto, cam_require = camera_approval_sets()
+    auto |= cam_auto
+    require |= cam_require
+    return auto, require
+
+
 def _tool_name(func: ToolCallable) -> str:
     tool_def = getattr(func, "_tool_definition", None)
     if tool_def is not None:
@@ -196,6 +256,27 @@ def get_default_toolsets() -> Dict[str, Dict[str, Any]]:
             "id": "shell",
             "label": "Shell (persistent)",
             "tools": list(SHELL_TOOLS),
+        }
+
+    if camera_tools_enabled():
+        # Lazy import only when the operator opted in; the tools module pulls
+        # abstractcore but NOT the OpenCV camera stack (that loads on first
+        # tool CALL — adversarially pinned camera-side).
+        # ACTIONABLE + NARROW (camera adversary P2-2): enabled-but-not-
+        # installed used to raise a bare ModuleNotFoundError mid-function,
+        # taking files/web/system toolsets down with it.
+        try:
+            from abstractcamera.integrations.abstractcore_tools import camera_tools
+        except ImportError as exc:
+            raise RuntimeError(
+                "ABSTRACT_ENABLE_CAMERA_TOOLS is set but abstractcamera is not installed. "
+                'Install it (pip install "abstractcamera") or unset the flag.'
+            ) from exc
+
+        toolsets["camera"] = {
+            "id": "camera",
+            "label": "Camera",
+            "tools": list(camera_tools()),
         }
 
     return toolsets

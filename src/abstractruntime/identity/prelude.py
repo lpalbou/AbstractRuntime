@@ -216,11 +216,13 @@ def render_summon_prelude(
         warnings.append("#FALLBACK no diary store wired; diary tail omitted")
 
     standing_lines: List[str] = []
+    standing_targets: List[str] = []
     if callable(getattr(memory_system, "gradation", None)):
         try:
             grades = memory_system.gradation(None, scope=scope, owner_id=entity_id)
             ranked = sorted(grades.items(), key=lambda kv: (-abs(float(kv[1].get("net") or 0.0)), kv[0]))
             for target, g in ranked[: max(0, int(gradation_top_k))]:
+                standing_targets.append(str(target))
                 net = float(g.get("net") or 0.0)
                 flags = ""
                 if g.get("bonded"):
@@ -297,4 +299,8 @@ def render_summon_prelude(
         "warnings": warnings,
         "as_of_seq": as_of_seq,
         "spark_version": spark_version,
+        # W4-render dedup: which gradation targets the STANDING section
+        # rendered — the per-turn feelings lens skips these (one feeling,
+        # one surface per session; the prelude is present all session).
+        "standing_targets": standing_targets if "standing" in sections else [],
     }

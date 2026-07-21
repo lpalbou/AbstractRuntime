@@ -253,10 +253,11 @@ def test_entity_feelings_target_world_entities(tmp_path: Path) -> None:
         assert refl is not None
         applied = {f["target_id"]: f for f in refl["feelings_applied"]}
         assert "person:laurent" in applied and "concept:solitude" in applied
-        # bond dropped on entity target (no heal surface), feeling kept.
+        # dm#112 M4: bond/scar FLOW on world-targets now (tend shipped the
+        # heal/break surface); the old drop notice must be gone.
         laurent_marks = [f for f in refl["feelings_applied"] if f["target_id"] == "person:laurent"]
-        assert all(not f["bond"] and not f["scar"] for f in laurent_marks)
-        assert any("bond/scar dropped" in n for n in refl["notices"])
+        assert any(f["bond"] for f in laurent_marks), "the elected bond flag rides through"
+        assert not any("bond/scar dropped" in n for n in refl["notices"])
         # Bare names and record-id spoofs refused loudly.
         assert any("'laurent'" in n and "skipped" in n for n in refl["notices"])
         assert any("ex:episode-fake" in n for n in refl["notices"])
@@ -608,3 +609,217 @@ def test_read_memory_redirects_diary_tags_to_the_book(tmp_path: Path) -> None:
         assert "diary act" in out and "diary_read" in out
     finally:
         home.close()
+
+
+# ------------------------------------------------ title = 1-line summary
+
+
+def test_title_is_a_summary_not_the_wake_cue() -> None:
+    """Operator 2026-07-17: 'a node label must never be its type/boilerplate
+    — it MUST be a short 1 sentence summary.' Own-time ticks feed the
+    NEUTRAL cue as user_text; the title must come from the substantive
+    side, not echo the cue (63 episodes on one life read 'your own time
+    continues')."""
+    title, _, _ = mechanical_digest_v2(
+        "your own time continues",
+        "I keep returning to what persists when no one is reading. "
+        "Today I compare my notes on narrative coherence with the Voyager record idea.",
+        "Ephemeral",
+    )
+    assert "your own time continues" not in title
+    assert "narrative coherence" in title or "persists" in title
+
+
+def test_title_keeps_substantive_visitor_ask() -> None:
+    title, _, _ = mechanical_digest_v2(
+        "Do you remember what we discussed about formal verification of weight-space changes?",
+        "Yes — we mapped audit-log mechanisms to certify self-modifications.",
+        "Ephemeral",
+    )
+    assert "formal verification" in title
+
+
+def test_title_never_a_marker_line() -> None:
+    title, _, _ = mechanical_digest_v2(
+        "your own time continues",
+        "[used tool: diary_list] [kept in diary - reflection]",
+        "Ephemeral",
+    )
+    # Marker-only reply + boilerplate cue: falls back to the cue words —
+    # low-content but honest; it must NEVER be the raw marker line.
+    assert "[used tool" not in title
+
+
+def test_title_self_prompted_never_titles_from_the_cue() -> None:
+    """Adversary P1 (2026-07-17): timestamped wake cues outscore real prose
+    on the raw information heuristic (ISO timestamps get the NUMBERISH
+    bonus). Self-prompted turns (speaker == the entity) must title from
+    the REPLY side only — the cue is machine scaffolding."""
+    cue = (
+        "you were asleep since 2026-07-13T10:52:37.572239+00:00 (operator-initiated) "
+        "and are awake again - your own time continues. where do you want to go?"
+    )
+    reply = "I want to return to the narrative coherence question and compare it with the Voyager record."
+    title, _, _ = mechanical_digest_v2(cue, reply, "Ephemeral", speaker="entity:ephemeral")
+    assert "asleep since" not in title and "own time" not in title
+    assert "narrative coherence" in title
+
+    # Pre-correction homes stamp entity:<slug>@<home_id> — same rule.
+    title2, _, _ = mechanical_digest_v2(cue, reply, "Ephemeral", speaker="entity:ephemeral@ab12cd34")
+    assert "narrative coherence" in title2
+
+    # A VISITOR keeps its ask in the running (not self-prompted).
+    title3, _, _ = mechanical_digest_v2(
+        "Do you remember the dam project timeline we sketched?",
+        "Yes, broadly.",
+        "Ephemeral",
+        speaker="person:laurent",
+    )
+    assert "dam project" in title3
+
+
+def test_title_strips_leading_markers_before_scoring() -> None:
+    """Adversary P1: '[used tool: …] So here's the thing.' must title as
+    the prose, never the marker prefix."""
+    title, _, _ = mechanical_digest_v2(
+        "your own time continues",
+        "[used tool: web_search] The results show the dam holds under the revised load model.",
+        "Ephemeral",
+        speaker="entity:ephemeral",
+    )
+    assert "[used tool" not in title
+    assert "dam holds" in title
+
+
+def test_recent_memories_empty_body_passes_the_election_gate() -> None:
+    """Skill's P1 (2026-07-19): the contract teaches 'leave the body empty
+    for 2 days' and the executor honors empty=48h — the gate must not
+    refuse the exact form the teaching shows (Ephemeral hit 'needs a
+    body' 3+ times following it, and took our bug as his failure)."""
+    from abstractruntime.identity.tools import parse_tool_blocks
+
+    reply = "```tool name=recent_memories\n```\nLooking back."
+    marked, els, notices = parse_tool_blocks(reply)
+    assert len(els) == 1 and els[0].name == "recent_memories"
+    assert not any("needs a body" in n for n in notices)
+    assert "[used tool: recent_memories]" in marked
+
+
+def test_w5_verbatim_carries_inner_speech_and_tool_results(tmp_path) -> None:
+    """W5 (laurent: verbatim is verbatim): intermediate tool rounds rest as
+    '(thinking, unspoken)' inner speech WITH what the tools returned;
+    book-adjacent results stay out (private words never rest in life
+    scope - the 2026-07-16 leak class), replaced by an honest pointer."""
+    import copy
+    import json as _json
+
+    import pytest
+
+    yaml = pytest.importorskip("yaml")
+    pytest.importorskip("abstractmemory")
+    from abstractmemory import (
+        DEFAULT_SPARK_TEMPLATE,
+        MemorySystem,
+        SQLiteJournal,
+        SQLiteTripleStore,
+        TripleQuery,
+        engram,
+        lint_spark,
+    )
+
+    from abstractruntime.identity.chat import ChatSession, open_home
+
+    home_dir = tmp_path / "entities" / "innerspeech"
+    home_dir.mkdir(parents=True)
+    entity_id = "entity:innerspeech@home-test"
+    spark = copy.deepcopy(dict(DEFAULT_SPARK_TEMPLATE))
+    spark["name"] = "Innerspeech"
+    assert lint_spark(spark) == []
+    (home_dir / "spark.yaml").write_text(yaml.safe_dump(spark, sort_keys=False), encoding="utf-8")
+    (home_dir / "manifest.json").write_text(_json.dumps({"entity_id": entity_id}), encoding="utf-8")
+    db = home_dir / "memory.sqlite3"
+    store = SQLiteTripleStore(db)
+    journal = SQLiteJournal(db)
+    ms = MemorySystem(store=store, journal=journal)
+    assert engram(ms, spark, owner_id=entity_id).created is True
+    store.close()
+    journal.close()
+
+    class _LLM:
+        def __init__(self, replies):
+            self.replies = list(replies)
+
+        def generate(self, *, messages, system_prompt):
+            class _R:
+                pass
+
+            r = _R()
+            r.content = self.replies.pop(0) if self.replies else "…"
+            return r
+
+    home = open_home(home_dir)
+    s = ChatSession(
+        home,
+        _LLM([
+            "Let me check.\n```tool name=web_search\ntide cycles\n```",
+            "The tide turns twice a day.",
+        ]),
+        participants=["person:asker"], context_window=20000, out=lambda s: None,
+        web_search_fn=lambda q: "MOON-PULL-RESULT: gravity does it",
+    )
+    s.turn("Why does the tide turn?")
+    rows = home.store.query(TripleQuery(predicate="dcterms:abstract", scope="life",
+                                        owner_id=entity_id, limit=0))
+    episodes = [a for a in rows if isinstance(a.attributes, dict)
+                and a.attributes.get("record_kind") == "episode"]
+    assert episodes, "the exchange formed"
+    # Fetch the verbatim artifact.
+    ref = episodes[0].attributes.get("payload_ref") or ""
+    verb = home.artifacts.load_text(ref) if ref else ""
+    assert "(thinking, unspoken):" in verb, "inner speech labeled"
+    assert "while looking things up" not in verb, "old label gone"
+    assert "MOON-PULL-RESULT" in verb, "world-tool results rest (W5 completeness)"
+    home.close()
+
+
+def test_w5_book_adjacent_results_never_rest() -> None:
+    """The at-rest filter: diary/search results carry a pointer, never
+    content; world tools rest verbatim."""
+    from abstractruntime.identity.chat import _at_rest_tool_results
+
+    class _E:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+
+    out = _at_rest_tool_results([
+        _E("web_search", "PUBLIC FACT"),
+        _E("diary_read", "MY PRIVATE WORDS"),
+        _E("search_memory", "private gist line"),
+    ])
+    assert "PUBLIC FACT" in out
+    assert "MY PRIVATE WORDS" not in out and "private gist line" not in out
+    assert "reread with diary_read" in out and "reread with search_memory" in out
+
+
+def test_keyword_quality_subject_shaped_compounds() -> None:
+    """Wave-4 keyword quality (memory's discovery gate): recurring adjacent
+    content pairs become compound keywords ('coherence-tests'), taking the
+    first slots; singles fill remaining coverage without repeating words a
+    compound already carries."""
+    from abstractruntime.identity.digest import mechanical_digest_v2
+
+    _t, _d, keywords = mechanical_digest_v2(
+        "I ran the coherence tests again today. The coherence tests pass on the second home.",
+        "The coherence tests holding is what matters; the tide question can wait.",
+        "Ephemeral", speaker="person:laurent",
+    )
+    assert keywords[0] == "coherence-tests", keywords
+    assert "coherence" not in keywords and "tests" not in keywords, (
+        "singles inside a chosen compound are covered, not repeated"
+    )
+    # Non-recurring pairs stay single words (no fake compounds).
+    _t2, _d2, k2 = mechanical_digest_v2(
+        "A quick word about beavers.", "Beavers build dams.", "E", speaker="U",
+    )
+    assert not any("-" in w for w in k2), k2

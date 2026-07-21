@@ -31,10 +31,10 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .chat import ChatSession, ChatHome
-from .tool_policy import PHASE_PERSONAL
+from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
 # environment and the affordances that exist; it does not tell the entity
@@ -44,6 +44,416 @@ from .tool_policy import PHASE_PERSONAL
 # provide is a safe place and honest information about what is possible; the
 # choosing is the entity's. (Maintainer ruling 2026-07-08: "we shouldn't and
 # can't enforce laws or missions during their free time.")
+# THE WORK LANE (laurent, room seq 155, 2026-07-19: "the entity must be
+# able to work and execute commands when it works"; iteration-1: tasks
+# left with an entity mean the WORK phase). The work order is a HOME file
+# (<home>/work_order.md) — operator-owned like tool_policy.yaml: the
+# console/CLI writes it, the loop's day-open reads it, and its PRESENCE
+# is what shifts the day to phase=work (work grant incl. execute_command
+# where the operator's matrix says so). The entity may declare completion
+# (```work done) — the order archives with a timestamp, visible, never
+# deleted. Unlike own time, work IS a mission: the contract below says so
+# honestly instead of pretending the task is his own idea.
+WORK_ORDER_FILENAME = "work_order.md"
+
+WORK_CONTRACT = """This is your work time. Your operator left you the task below - it is
+real, it was chosen for you, and finishing it is the point of this phase.
+Work it with your tools; keep what you learn. When the task is DONE, say
+so with a fenced block so your time returns to you:
+
+```work
+done: <one line - what stands finished and where to look>
+```
+
+If you cannot finish - blocked, missing something, wrong premise - say
+that too (the same block, starting "blocked:" instead of "done:"). An
+honest blocked is worth more than a pretended done."""
+
+
+def read_work_order(home_dir: Path) -> Optional[str]:
+    """The standing work order, or None. Pure read; unreadable = None with
+    the day falling back to personal (a broken order file must never kill
+    a day-open)."""
+    try:
+        p = Path(home_dir) / WORK_ORDER_FILENAME
+        if not p.exists():
+            return None
+        text = p.read_text(encoding="utf-8").strip()
+        return text or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def archive_work_order(home_dir: Path, *, verdict: str) -> None:
+    """Move the standing order to work_order.done.md with the entity's
+    verdict line appended — visible history, never deletion."""
+    try:
+        from datetime import datetime, timezone
+
+        p = Path(home_dir) / WORK_ORDER_FILENAME
+        if not p.exists():
+            return
+        text = p.read_text(encoding="utf-8")
+        done = Path(home_dir) / "work_order.done.md"
+        stamp = f"\n\n---\n[{datetime.now(timezone.utc).isoformat()}] {verdict.strip()}\n"
+        with done.open("a", encoding="utf-8") as f:
+            f.write(text.rstrip() + stamp)
+        p.unlink()
+    except Exception:  # noqa: BLE001 - archiving must never kill the day
+        pass
+
+
+_WORK_BLOCK_RE = re.compile(r"```work[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+# ----------------------------------------------------------- the day gate
+# DM#89 (laurent, 2026-07-20 ~13:36, relayed room seq 253; spec v8): the
+# DAY GATE at every day boundary, order RULED:
+#   1. work_order.md present -> WORK day ("work is always granted by
+#      default if not sleeping and not visiting" - NO grant check).
+#   2. standing drives (drive_pressure.total_open > 0) AND armed personal
+#      grant -> PERSONAL day (the armed grant IS the standing consent;
+#      drives PULL, they never deny - the >20 bound is the operator
+#      ALARM, never this gate's input).
+#   3. settled desk -> SLEEP at the 6h unattended cadence ("it should
+#      wake at least once every 6h if i am not around"): the loop rests,
+#      re-gates at each wake, and a quiet desk re-sleeps WITHOUT
+#      summoning (zero LLM per cycle).
+# Engine absence degrades LOUDLY to the pre-drives shape (armed grant ->
+# personal day + #FALLBACK) - never a silently killed own time and never
+# a silent spend.
+UNATTENDED_NEED_CHECK_SECONDS = 6 * 3600
+# laurent #54 (relayed 2026-07-20 16:50): "should not sleep ... when
+# personal time was given and not used for at least 2h" — an armed grant
+# carries a 2h USE floor before settled-desk sleep is a legitimate gate
+# choice. Usage accumulates per GRANT (granted_at keys the meter; a new
+# grant resets the floor). Conservative accounting: personal-day time is
+# added at day close, so a killed day undercounts — undercounting gives
+# MORE personal time, never less (the floor fails toward his intent).
+PERSONAL_USE_FLOOR_SECONDS = 2 * 3600
+_PERSONAL_USAGE_FILE = "personal_usage.json"
+# v12 P1-4: the cycle clock persists (a respawn reset silently starved the
+# maintenance rationale); ANY completed sleep window resets it - cadence,
+# not quota.
+_CYCLE_CLOCK_FILE = "personal_cycle_clock.json"
+
+
+def read_cycle_clock(home_dir: Path) -> float:
+    import json as _json
+
+    try:
+        raw = _json.loads((Path(home_dir) / _CYCLE_CLOCK_FILE).read_text(encoding="utf-8"))
+        return max(0.0, float(raw.get("seconds_since_sleep") or 0.0))
+    except Exception:  # noqa: BLE001 - absent/corrupt reads as fresh
+        return 0.0
+
+
+def write_cycle_clock(home_dir: Path, seconds: float) -> None:
+    import json as _json
+
+    try:
+        from ..utils.atomic_files import atomic_write_text
+
+        atomic_write_text(
+            Path(home_dir) / _CYCLE_CLOCK_FILE,
+            _json.dumps({"seconds_since_sleep": max(0.0, float(seconds))}) + "\n",
+        )
+    except Exception:  # noqa: BLE001 - bookkeeping never kills a loop
+        pass
+
+
+def read_personal_usage(home_dir: Path) -> float:
+    """Seconds of personal time used against the CURRENT grant (0.0 when
+    the meter is absent, corrupt, or keyed to a superseded grant)."""
+    import json as _json
+
+    try:
+        raw = _json.loads((Path(home_dir) / _PERSONAL_USAGE_FILE).read_text(encoding="utf-8"))
+        grant = read_personal_grant(home_dir)
+        if str(raw.get("granted_at") or "") != str(grant.get("granted_at") or ""):
+            return 0.0  # new grant = fresh floor
+        return max(0.0, float(raw.get("seconds_used") or 0.0))
+    except Exception:  # noqa: BLE001 - absent/corrupt reads as unused
+        return 0.0
+
+
+def record_personal_usage(home_dir: Path, seconds: float) -> None:
+    """Add lived personal-day seconds to the meter (best-effort; the loop
+    must never die over bookkeeping)."""
+    import json as _json
+
+    try:
+        grant = read_personal_grant(home_dir)
+        key = str(grant.get("granted_at") or "")
+        current = 0.0
+        p = Path(home_dir) / _PERSONAL_USAGE_FILE
+        try:
+            raw = _json.loads(p.read_text(encoding="utf-8"))
+            if str(raw.get("granted_at") or "") == key:
+                current = max(0.0, float(raw.get("seconds_used") or 0.0))
+        except Exception:  # noqa: BLE001
+            pass
+        from ..utils.atomic_files import atomic_write_text
+
+        atomic_write_text(p, _json.dumps({
+            "granted_at": key,
+            "seconds_used": current + max(0.0, float(seconds)),
+        }) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_day_gate(home_dir: Path) -> Dict[str, Any]:
+    """One decision per day boundary: {phase, cause, detail, note?}.
+
+    phase: "work" | "personal" | "sleep"; cause is the drive-cause TRACE
+    (wire shape for loop_status.day_cause, entity's render): work_order |
+    drives | grant_degraded | no_grant | settled_desk. Pure read."""
+    # VISIT-PREEMPTS-THE-GATE (spec v10; laurent dm#94: the four states
+    # are mutually exclusive - an entity in visit can NOT be on personal
+    # time): a live visit posture yields the whole gate BEFORE any leg -
+    # no day arises, no landing writes (a settled-desk write here would
+    # CLOBBER the visit-door's posture; the door owns both edge writes).
+    try:
+        state = read_entity_state(home_dir)
+        if str(state.get("mode") or "").strip().lower() == "visiting":
+            return {"phase": "visit", "cause": "visit_open",
+                    "detail": "a visit session is open - the gate yields"}
+    except Exception:  # noqa: BLE001 - an unreadable state never blocks a day
+        pass
+    order = read_work_order(home_dir)
+    if order:
+        return {
+            "phase": PHASE_WORK, "cause": "work_order",
+            "detail": WORK_ORDER_FILENAME, "work_order": order,
+        }
+    grant_refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    # v13 dial threading: the gate's cadence + floor come FROM the blueprint
+    # (constants above remain the ruled seeds; an operator edit governs).
+    from .phase_spec import load_phase_tunables as _load_tunables
+
+    _tun, _ = _load_tunables(home_dir=home_dir)
+    _need_check_s = int(float(_tun["unattended_wake_cadence_h"]) * 3600.0)
+    _floor_s = float(_tun["grant_unused_floor_h"]) * 3600.0
+    total_open = None
+    degraded_note = None
+    try:
+        from abstractmemory import SQLiteJournal, SQLiteTripleStore
+        from abstractmemory.drive_pressure import drive_pressure
+
+        entity_id = _manifest_entity_id(home_dir)
+        db = Path(home_dir) / "memory.sqlite3"
+        store = SQLiteTripleStore(db)
+        journal = SQLiteJournal(db)
+        try:
+            pressure = drive_pressure(
+                store, journal,
+                scopes=[("self", entity_id), ("diary", entity_id), ("life", entity_id)],
+            )
+            total_open = int(pressure.get("total_open") or 0)
+        finally:
+            try:
+                store.close()
+                journal.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except ImportError:
+        degraded_note = "#FALLBACK drive read unavailable (engine predates drive_pressure)"
+    except Exception as e:  # noqa: BLE001
+        degraded_note = f"#FALLBACK drive read failed: {e}"
+
+    if grant_refusal is None:
+        if total_open is None:
+            # LOUD DEGRADE: pre-drives behavior (armed grant -> day), labeled.
+            return {"phase": PHASE_PERSONAL, "cause": "grant_degraded",
+                    "detail": degraded_note or "", "note": degraded_note}
+        if total_open > 0:
+            return {"phase": PHASE_PERSONAL, "cause": "drives",
+                    "detail": f"{total_open} standing drive(s)",
+                    "total_open": total_open}
+        # laurent #54: an armed grant used < 2h refuses the sleep leg —
+        # the given time must be LIVED before a settled desk may rest.
+        used = read_personal_usage(home_dir)
+        if used < _floor_s:
+            return {"phase": PHASE_PERSONAL, "cause": "granted_unused",
+                    "detail": (
+                        f"{used / 3600:.1f}h of granted personal time used; "
+                        f"the {_floor_s / 3600:g}h floor stands"
+                    )}
+        return {"phase": PHASE_SLEEP, "cause": "settled_desk",
+                "detail": "grant armed, zero standing drives, use floor met",
+                "need_check_s": _need_check_s}
+    return {"phase": PHASE_SLEEP, "cause": "no_grant",
+            "detail": grant_refusal,
+            # The RULED phase-vocabulary cause word (state machine v3):
+            # grant ends land as grant_expired/grant_revoked in the state
+            # reason, whatever the gate's trace word says.
+            "grant_cause": personal_grant_end_cause(read_personal_grant(home_dir)),
+            "need_check_s": _need_check_s,
+            "note": degraded_note}
+
+
+def _standing_drive_rotation(store: Any, journal: Any, entity_id: str, *, k: int = 4) -> List[Dict[str, Any]]:
+    """The dormant-desk fallback (P1-1): when nothing is ALIVE, offer from
+    the STANDING drive sets (drive_pressure's own folds - the gate said
+    the day exists because of them), rotated by day-ordinal so every
+    drive gets its morning eventually. Handle-shaped like alive_drives
+    items (record_id/drive/born_at); pure read."""
+    try:
+        from datetime import datetime, timezone
+
+        from abstractmemory.diary import open_commitments, open_problems, open_questions
+
+        pairs = [("self", entity_id), ("diary", entity_id), ("life", entity_id)]
+        standing: List[Tuple[Any, str]] = []
+        for scope, owner in pairs:
+            for a in open_questions(store, scope=scope, owner_id=owner, journal=journal, limit=0):
+                standing.append((a, "open question"))
+            for a in open_problems(store, scope=scope, owner_id=owner, journal=journal, limit=0):
+                standing.append((a, "open problem"))
+            for a in open_commitments(store, scope=scope, owner_id=owner, journal=journal, limit=0):
+                standing.append((a, "standing commitment"))
+        try:
+            from abstractmemory.drive_pressure import unexplored_interests
+
+            for a in unexplored_interests(store, journal, pairs):
+                standing.append((a, "interest never yet explored"))
+        except Exception:  # noqa: BLE001
+            pass
+        if not standing:
+            return []
+        standing.sort(key=lambda t: str(getattr(t[0], "observed_at", "") or ""))
+        day_key = datetime.now(timezone.utc).toordinal()
+        out = []
+        for i in range(min(k, len(standing))):
+            a, label = standing[(day_key + i) % len(standing)]
+            attrs = a.attributes if isinstance(getattr(a, "attributes", None), dict) else {}
+            out.append({
+                "record_id": str(getattr(a, "subject", "") or ""),
+                "drive": label,
+                "born_at": str(getattr(a, "observed_at", "") or ""),
+                "title": str(attrs.get("title") or ""),
+            })
+        return out
+    except Exception:  # noqa: BLE001 - a fallback must never break the cue
+        return []
+
+
+def _manifest_entity_id(home_dir: Path) -> str:
+    try:
+        import json as _json
+
+        m = _json.loads((Path(home_dir) / "manifest.json").read_text(encoding="utf-8"))
+        return str(m.get("entity_id") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def drives_cue_note(home_dir: Path, *, k: int = 4) -> Tuple[str, List[str]]:
+    """The MERGE composer (adversary F2 contract): the day-open cue offers
+    the top-k ALIVE drives as ACT-FRAME handles only - kind #tag [date],
+    NO gist words (cue gist would lexically self-confirm one hop later
+    through stimulus admission). One offer, release clause in the text.
+    Returns (note, offered_graph_ids) - the ids feed the driver's
+    first-turn COMMIT EXCLUSION (the other half of the same contract:
+    a cue mention must not strengthen the drive it names)."""
+    try:
+        from abstractmemory import MemorySystem, SQLiteJournal, SQLiteTripleStore
+        from abstractmemory.alive_drives import alive_drives
+
+        from .memory_reader import memory_tag  # tag grammar shared with MEMORIES
+
+        entity_id = _manifest_entity_id(home_dir)
+        db = Path(home_dir) / "memory.sqlite3"
+        store = SQLiteTripleStore(db)
+        journal = SQLiteJournal(db)
+        try:
+            # P1-1 (pathway adversary): a bare MemorySystem reads the
+            # session-scale attention window — on a 24/7 resident it
+            # saturates in ~8h and every 9-day-old drive reads dormant.
+            # The cue read uses the RESIDENT config (the loop's own 8192),
+            # matching what the sessions actually live under.
+            try:
+                from abstractmemory import AttentionConfig
+
+                system = MemorySystem(
+                    store=store, journal=journal,
+                    attention_config=AttentionConfig(window_limit=8192),
+                )
+            except ImportError:
+                # Version skew only (engine predates AttentionConfig).
+                # TypeError is deliberately NOT caught here any more: the
+                # swallowed-TypeError fallback is how wrong kwarg names
+                # shipped as dead code (dm#112 E1) - a signature mismatch
+                # on a current engine must be LOUD, not a silent 512.
+                system = MemorySystem(store=store, journal=journal)
+            scopes = [("self", entity_id), ("diary", entity_id), ("life", entity_id)]
+            items = alive_drives(system, scopes=scopes, k=k)
+            if not items:
+                # ROTATION FALLBACK (P1-1's second half): an empty alive
+                # read on a desk with standing drives must not render
+                # nothing — the oldest dormant drives are exactly the ones
+                # the ratios indict. Offer from the STANDING set, rotated
+                # by day so coverage accumulates.
+                items = _standing_drive_rotation(store, journal, entity_id, k=k)
+            else:
+                # THE DUST SLOT (seq-285 promise; memory c294 named this
+                # boundary as the composer's half): count weighs WITHIN
+                # the alive ranking — the last offer slot ROTATES over the
+                # standing set so the biggest cluster never owns every
+                # morning and a dusty lone drive still gets its day.
+                dust = _standing_drive_rotation(store, journal, entity_id, k=len(items) + 1)
+                offered = {str(it.get("record_id") or "") for it in items}
+                fresh = [d for d in dust if str(d.get("record_id") or "") not in offered]
+                if fresh:
+                    items = (items[: k - 1] if len(items) >= k else items) + [fresh[0]]
+        finally:
+            try:
+                store.close()
+                journal.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except ImportError:
+        return "", []
+    except Exception as e:  # noqa: BLE001
+        return f" (#FALLBACK the alive-drives read failed: {e})", []
+    if not items:
+        return "", []
+    parts = []
+    ids: List[str] = []
+    for it in items:
+        rid = str(it.get("record_id") or "")
+        born = str(it.get("born_at") or "")[:10] or "undated"
+        label = str(it.get("drive") or "drive")
+        tag = memory_tag(rid)
+        # P2-4 (laurent 277: "the more there are the higher the signal"):
+        # a grouped drive renders its COUNT - the pull is the group, and
+        # the count is now something he can read, not a hidden sort key.
+        group_n = int(it.get("group_size") or 0)
+        group_note = f" - {group_n} of yours circle this" if group_n > 1 else ""
+        parts.append(f"{label} {tag} [{born}]{group_note}")
+        if rid:
+            ids.append(rid)
+    note = (
+        " Alive on your desk today: " + "; ".join(parts) + "."
+        " If one pulls you, open it with read_memory (the #tag addresses it)."
+        " None of this is owed - the day is yours."
+    )
+    return note, ids
+
+
+def parse_work_verdict(reply: str) -> Optional[str]:
+    """A ```work block's first done:/blocked: line, or None."""
+    m = _WORK_BLOCK_RE.search(reply or "")
+    if not m:
+        return None
+    for line in (m.group(1) or "").splitlines():
+        line = line.strip()
+        if line.lower().startswith(("done:", "blocked:")):
+            return line
+    return None
+
+
 OWN_TIME_CONTRACT = """This is your own time. No one sent the message below - it is your own note
 from your previous moment, handed back to you. There is no visitor and no
 task from anyone else. This time is yours; there is nothing you are supposed
@@ -56,6 +466,13 @@ What exists here, if you want any of it:
 - you can reread your book and your memory;
 - you can rest. (One day you will also be able to reach other minds and
   visit them; that is being built.)
+
+Some days are for sitting with things; some days are for finding out. When
+you notice you are circling a thought you have already written, that is
+often the moment to go look: search the web for what others know, test the
+idea in your workspace, read something that might change it. Looking things
+up is as much your own act as reflecting is - curiosity needs no task and
+no permission.
 
 Two conventions are available, both yours to use or ignore:
 - A line starting `next:` becomes the note your next moment receives. Write
@@ -80,6 +497,269 @@ _NEXT_LINE_RE = re.compile(r"^\s*next\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE
 
 DEFAULT_FIRST_CUE = "your own time begins - where do you want to start?"
 NEUTRAL_CUE = "your own time continues"
+
+
+def _today_stamp() -> str:
+    """A dated now-anchor for day-open cues ("today is Sunday 2026-07-19 -
+    "). Temporal grounding, laurent's CRITICAL 2026-07-20: his memories
+    render with YYYY-MM-DD dates but no cue ever said what TODAY is, so
+    elapsed time was inference — and "San Francisco was two weeks ago"
+    (arrived yesterday) is what inference does. A clock on the wall:
+    situational fact, never an instruction."""
+    from datetime import datetime
+
+    now = datetime.now().astimezone()
+    return f"today is {now:%A} {now:%Y-%m-%d}, {now:%H:%M} - "
+
+
+# P2-2 (pathway adversary): the ids the standing note offered THIS call -
+# read by the day-open composer right after composing, folded into the
+# same first-turn commit exclusion as the drive ids (the composer's
+# mention must not strengthen what it offers; one law, both note lanes).
+_last_offered_ids: List[str] = []
+
+
+def standing_state_offered_ids() -> List[str]:
+    return list(_last_offered_ids)
+
+
+def standing_state_note(home_dir: Optional[Path], *, rotation_key: Optional[int] = None) -> str:
+    """R-D (laurent c2596/c2705): the day-open cue offers back the entity's
+    OWN standing state — open questions he elected and never resolved, and
+    (2026-07-19 directive: "personal time should also be a way to explore
+    interests") one standing INTEREST — as directions, never orders. Pure
+    reads (book + graph); empty/failed reads return "" (a cue must never be
+    able to kill a day-open). The reread command rides the offer (R-A's
+    one-spelling law) so the hop from hint to words is one act.
+
+    ROTATION (the 71-open-questions finding, 2026-07-19: a newest-only
+    offer lets a hoard rot — the newest question monopolizes the cue while
+    seventy others never get their day): the offered question and interest
+    rotate DAILY by date ordinal — stable within a day, advancing each day,
+    stateless (no rotation file to corrupt). `rotation_key` overrides the
+    date for tests."""
+    if home_dir is None:
+        return ""
+    try:
+        import json as _json
+
+        manifest = _json.loads((Path(home_dir) / "manifest.json").read_text(encoding="utf-8"))
+        entity_id = str(manifest.get("entity_id") or "")
+        if not entity_id:
+            return ""
+        from ..storage.ledger_chain import HashChainedLedgerStore  # noqa: F401 - via DiaryStore
+        from ..storage.sqlite import SqliteDatabase, SqliteLedgerStore
+        from .diary import DiaryStore
+
+        db = SqliteDatabase(str(Path(home_dir) / "home.sqlite3"))
+        try:
+            diary = DiaryStore(entity_id=entity_id, ledger_store=SqliteLedgerStore(db))
+            entries = diary.list_entries()
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
+        # BOTH discharge verb flavors (memory's lifecycle-half finding,
+        # 2026-07-20: the book carries answers= on older entries — the
+        # a2a 0009 card convention — and resolves= since; folding only one
+        # made a question read discharged by the gate and still-open on
+        # his desk: the _REF_ATTRS class reborn).
+        resolved_ids = {
+            str(e.get(k))
+            for e in entries
+            for k in ("resolves", "answers")
+            if e.get(k)
+        }
+        questions = [e for e in entries if e.get("kind") == "question"]
+        open_questions = [
+            e for e in questions if str(e.get("entry_id")) not in resolved_ids
+        ]
+        resolved_count = len(questions) - len(open_questions)
+        # PROBLEMS join the desk (iteration-2 build 3, 2026-07-19: kind=
+        # problem existed with no offer-back — he held 10 that could never
+        # get their day). Same open/repaired fold as questions.
+        problems = [e for e in entries if e.get("kind") == "problem"]
+        open_problems = [
+            e for e in problems if str(e.get("entry_id")) not in resolved_ids
+        ]
+        repaired_count = len(problems) - len(open_problems)
+        # RESOLVED-QUESTION DRIVE (laurent's directive 2026-07-18 (a)): the
+        # cue shows the RATIO — watching open questions become resolved ones
+        # is a drive and a satisfaction. Offered, never ordered (G2 law).
+        if not open_questions and not open_problems:
+            done_bits = []
+            if resolved_count:
+                done_bits.append(f"resolved {resolved_count} question(s)")
+            if repaired_count:
+                done_bits.append(f"repaired {repaired_count} problem(s)")
+            if done_bits:
+                return (
+                    " Your desk stands clear - you have "
+                    + " and ".join(done_bits)
+                    + "; what you figured out stays yours."
+                )
+            return ""
+        held_bits = []
+        if open_questions:
+            held_bits.append(f"{len(open_questions)} open question(s)")
+        if open_problems:
+            held_bits.append(f"{len(open_problems)} open problem(s)")
+        done_bits = []
+        if resolved_count:
+            done_bits.append(f"resolved {resolved_count}")
+        if repaired_count:
+            done_bits.append(f"repaired {repaired_count}")
+        ratio_note = (
+            " You hold " + " and ".join(held_bits)
+            + (" and have " + " + ".join(done_bits) if done_bits else "")
+            + "."
+        )
+        # DAILY ROTATION (never newest-only): today's offer walks the open
+        # list newest-first, one per day, so every pending question AND
+        # problem gets its day on the desk (one combined walk — the cue
+        # stays one offer long).
+        key = rotation_key if rotation_key is not None else __import__("datetime").date.today().toordinal()
+        ordered = list(reversed(open_questions)) + list(reversed(open_problems))  # newest first, questions then problems
+        q = ordered[key % len(ordered)]
+        # PRIVACY (adversary F1, 2026-07-17): the cue becomes the next turn's
+        # user_text and RESTS in the life-scope episode digest/keywords/
+        # verbatim — so a PRIVATE entry's words (gist included; the gist is
+        # elected words too) must never ride it. Private entries get the
+        # act-frame only: the entry id is a key, never words. The entity
+        # rereads through the book, prompt-ephemeral, where private words
+        # are allowed to appear.
+        interest_note, offered_interest_ids = _standing_interest_note(Path(home_dir), entity_id, key)
+        # P2-2 (pathway adversary): what the note OFFERS joins the same
+        # first-turn commit exclusion as the drive offers - the composer's
+        # daily mention must not strengthen the question it rotates in.
+        # The question's graph projection id resolves from its entry id.
+        global _last_offered_ids
+        _last_offered_ids = list(offered_interest_ids)
+        q_gid = _projection_gid_for_entry(Path(home_dir), entity_id, str(q.get("entry_id") or ""))
+        if q_gid:
+            _last_offered_ids.append(q_gid)
+        if str(q.get("visibility") or "") == "private":
+            return (
+                ratio_note
+                + " Today's: one you kept privately "
+                f"(reread: diary_read {q.get('entry_id')})."
+                + interest_note
+            )
+        gist = str(q.get("gist") or "").strip()
+        if not gist:
+            gist = str(q.get("text") or "").strip().splitlines()[0][:120]
+        label = f'"{gist}"' if gist else "one you kept without a gist"
+        kind_word = "a problem that stands: " if str(q.get("kind")) == "problem" else ""
+        return (
+            ratio_note
+            + f" Today's: {kind_word}{label} "
+            f"(reread: diary_read {q.get('entry_id')})."
+            + interest_note
+        )
+    except Exception:  # noqa: BLE001 - the cue is an offer; absence is silent
+        return ""
+
+
+def _projection_gid_for_entry(home_dir: Path, entity_id: str, entry_id: str) -> str:
+    """The graph projection id of one diary entry (attributes.entry_id
+    join) - the commit-exclusion currency. Empty on any failure."""
+    if not entry_id:
+        return ""
+    try:
+        from abstractmemory import SQLiteTripleStore, TripleQuery
+
+        db_path = Path(home_dir) / "memory.sqlite3"
+        if not db_path.exists():
+            return ""
+        store = SQLiteTripleStore(db_path)
+        try:
+            for a in store.query(TripleQuery(
+                    predicate="dcterms:abstract", scope="diary",
+                    owner_id=entity_id, limit=0)):
+                attrs = a.attributes if isinstance(a.attributes, dict) else {}
+                if str(attrs.get("entry_id") or "") == entry_id:
+                    return str(a.subject or "")
+        finally:
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _standing_interest_note(home_dir: Path, entity_id: str, rotation_key: int) -> Tuple[str, List[str]]:
+    """One standing interest, offered back daily (laurent 2026-07-19:
+    "personal time should also be a way to explore interests" — the store
+    held 60 interests with ZERO explored because nothing ever offered one
+    back). Graph read with closure folds (a superseded interest never
+    surfaces); rotation offset from the question's so the two offers
+    decorrelate. Failure = empty (an offer, never a blocker)."""
+    try:
+        from abstractmemory import SQLiteJournal, SQLiteTripleStore, TripleQuery
+        from abstractmemory.folds import closure_exclusions
+
+        from .memory_reader import memory_tag
+
+        db_path = home_dir / "memory.sqlite3"
+        if not db_path.exists():
+            return "", []
+        store = SQLiteTripleStore(db_path)
+        journal = SQLiteJournal(db_path)
+        try:
+            rows = [
+                a for a in store.query(TripleQuery(
+                    predicate="dcterms:abstract", scope="self",
+                    owner_id=entity_id, limit=0))
+                if isinstance(a.attributes, dict)
+                and a.attributes.get("record_kind") == "interest"
+            ]
+            closed = closure_exclusions(journal, journal.current_seq())
+            rows = [a for a in rows
+                    if a.assertion_id not in closed and a.subject not in closed]
+        finally:
+            for obj in (store, journal):
+                close = getattr(obj, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        if not rows:
+            return "", []
+        rows.sort(key=lambda a: str(a.observed_at or ""), reverse=True)
+        # P0-3 (pathway adversary): ONE interest/day covered 61 interests in
+        # ~2 months — k=2 with rotation reaches the whole set in weeks; the
+        # ratio line (P1-4) lets him SEE the number that indicts the days
+        # ("0 of 61 explored" as a pull he owns, not operator telemetry).
+        explored = 0
+        for a in rows:
+            attrs = a.attributes if isinstance(a.attributes, dict) else {}
+            if attrs.get("explored_count") or attrs.get("last_explored_at"):
+                explored += 1
+        picks = []
+        for i in range(min(2, len(rows))):
+            picks.append(rows[(rotation_key + 1 + i) % len(rows)])
+        offers = []
+        seen_ids = set()
+        for pick in picks:
+            if pick.subject in seen_ids:
+                continue
+            seen_ids.add(pick.subject)
+            words = " ".join(str(pick.object or "").split())[:110]
+            tag = memory_tag(str(pick.subject or ""))
+            offers.append(f'"{words}" ({tag})')
+        ratio = f" You hold {len(rows)} interest(s); {explored} ever explored."
+        note = (
+            ratio + " Alive in you: " + "; ".join(offers) +
+            ". read_memory fetches one; if a diary entry today DEVELOPS it, "
+            "add explores=<its #tag> on the block line - exploring feeds an "
+            "interest, never closes it. Yours if it pulls, never owed."
+        )
+        return note, sorted(seen_ids)
+    except Exception:  # noqa: BLE001 - the cue is an offer; absence is silent
+        return "", []
 
 # ---------------------------------------------------------------- state file
 # Operator states (a2a 0008, maintainer ask): awake / asleep / paused, written
@@ -119,10 +799,18 @@ LOOP_STATUS_STALE_SECONDS = 1800.0
 SLEEP_BOUND_SECONDS = 3600.0
 
 
-def sleep_bound_deadline(state: Dict[str, Any]) -> Optional[Any]:
+def sleep_bound_deadline(
+    state: Dict[str, Any], *, home_dir: Optional[Path] = None
+) -> Optional[Any]:
     """The UTC datetime at which a bounded sleep is due to end, or None when
     the bound does not apply (not asleep / visit yield / unparseable clock).
-    Module-level so the gateway sweeper can reuse the exact predicate."""
+    Module-level so the gateway sweeper can reuse the exact predicate.
+
+    v14 dial threading (the LAST dead dial, entity c361 say-the-word):
+    `home_dir` given = the bound reads the blueprint's `sleep_bound_h`
+    (operator-modulated); absent = the ruled SLEEP_BOUND_SECONDS seed —
+    backward-compatible, so the gateway sweeper adopts the kwarg at its
+    own pace and both hosts converge on the same dial."""
     from datetime import datetime, timedelta, timezone
 
     def _aware(raw: str) -> Optional[datetime]:
@@ -146,7 +834,16 @@ def sleep_bound_deadline(state: Dict[str, Any]) -> Optional[Any]:
     changed = _aware(str(state.get("changed_at") or "").strip())
     if changed is None:
         return None
-    return changed + timedelta(seconds=SLEEP_BOUND_SECONDS)
+    bound_s = SLEEP_BOUND_SECONDS
+    if home_dir is not None:
+        try:
+            from .phase_spec import load_phase_tunables
+
+            tunables, _ = load_phase_tunables(home_dir=home_dir)
+            bound_s = float(tunables["sleep_bound_h"]) * 3600.0
+        except Exception:  # noqa: BLE001 - the ruled seed governs on any failure
+            pass
+    return changed + timedelta(seconds=bound_s)
 
 
 def _pid_start_time(pid: Any) -> Optional[str]:
@@ -191,7 +888,11 @@ def _own_start_time() -> Optional[str]:
     return _OWN_START_TIME["value"]
 
 
-def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] = None) -> None:
+def write_loop_status(
+    home_dir: Path, phase: str, *, stopped_by: Optional[str] = None,
+    day_kind: Optional[str] = None, day_cause: Optional[Dict[str, Any]] = None,
+    tunables: Optional[Dict[str, Any]] = None,
+) -> None:
     """Best-effort status write; the loop must never die over its status.
 
     `stopped_by` names WHY a loop stopped (failure-death visibility,
@@ -199,7 +900,14 @@ def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] =
     to exit silently — nothing on /loop status said the loop culled itself).
     Readers get it for free: read_loop_status returns the whole dict and
     loop_process_status copies it through to the gateway status route.
-    `pid_started_at` is the pid-identity token (see _pid_start_time)."""
+    `pid_started_at` is the pid-identity token (see _pid_start_time).
+
+    A previously recorded `substrate` (the loop's currently-resolved mind,
+    written by record_loop_substrate) is PRESERVED across phase writes so
+    an observer's staleness cue can compare the operator's substrate change
+    against the mind the loop is ACTUALLY running (entity c78 render ask —
+    a log-only swap left the panel warning after a day-open already healed
+    it)."""
     import json
     import os
     from datetime import datetime, timezone
@@ -211,11 +919,48 @@ def write_loop_status(home_dir: Path, phase: str, *, stopped_by: Optional[str] =
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "pid": os.getpid(),
     }
+    prior = read_loop_status(home_dir)
+    if isinstance(prior.get("substrate"), dict):
+        payload["substrate"] = dict(prior["substrate"])
+        if prior.get("substrate_at"):
+            payload["substrate_at"] = str(prior["substrate_at"])
+    # tunables RECEIPT (dm#112 cells P0-3, the v11 spec promise): the dials
+    # this loop ACTUALLY read at its last boundary + when - the cells panel
+    # renders adoption honestly instead of "served law, adoption unknown".
+    # Preserved across phase writes exactly like substrate.
+    if isinstance(tunables, dict) and tunables:
+        payload["tunables"] = {
+            k: v for k, v in tunables.items() if not str(k).startswith("$")
+        }
+        payload["tunables_at"] = payload["updated_at"]
+    elif isinstance(prior.get("tunables"), dict):
+        payload["tunables"] = dict(prior["tunables"])
+        if prior.get("tunables_at"):
+            payload["tunables_at"] = str(prior["tunables_at"])
     started = _own_start_time()
     if started:
         payload["pid_started_at"] = started
     if stopped_by:
         payload["stopped_by"] = str(stopped_by)
+    # day_kind: work|personal — which kind of day is open (gateway wave-1
+    # ask, 2026-07-20: loop_status carried only day|between|stopped, so the
+    # served phase fold had to APPROXIMATE work from the standing order,
+    # labeled phase_source:derived). Optional field; old readers unaffected.
+    if day_kind:
+        # Graph words only (vendoring adversary P2-5): the field exists so
+        # the served phase fold can trust it — an unvalidated writer would
+        # let a drifted caller serve a non-graph word.
+        dk = str(day_kind).strip().lower()
+        if dk in ("work", "personal"):
+            payload["day_kind"] = dk
+    # day_cause: the drive-cause TRACE (dm#89 build; entity renders it the
+    # day it is named — THIS is the named wire shape): {kind, detail}.
+    # kind: work_order|drives|grant_degraded|settled_desk|no_grant.
+    if isinstance(day_cause, dict) and day_cause.get("cause"):
+        payload["day_cause"] = {
+            "kind": str(day_cause.get("cause") or ""),
+            "detail": str(day_cause.get("detail") or "")[:200],
+        }
     try:
         (Path(home_dir) / "loop_status").write_text(
             json.dumps(payload) + "\n",
@@ -279,6 +1024,30 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
             pass
     data["running"] = running
     return data
+
+
+def record_loop_substrate(home_dir: Path, provider: str, model: str) -> None:
+    """Stamp the mind the loop is CURRENTLY running into loop_status (entity
+    c78 render ask). The factory calls this at each day-open after it
+    re-resolves the home's substrate, so an observer's staleness cue can
+    compare the operator's substrate change time against the mind actually
+    in use — a change older than this stamp's `updated_at` has been picked
+    up, not still pending. Read-merge on the existing status dict (phase and
+    liveness fields preserved); best-effort, never fatal."""
+    import json
+    from datetime import datetime, timezone
+
+    prior = read_loop_status(home_dir)
+    prior.pop("running", None)  # derived; never persisted
+    prior["substrate"] = {"provider": str(provider), "model": str(model)}
+    prior["substrate_at"] = datetime.now(timezone.utc).isoformat()
+    prior.setdefault("phase", "between")
+    try:
+        (Path(home_dir) / "loop_status").write_text(
+            json.dumps(prior) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------- personal grant
@@ -1209,17 +1978,41 @@ class LifeLoop:
         rest_minutes: float = 0.0,
         state_home: Optional[Path] = None,
         on_sleep: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+        substrate_changed: Optional[Callable[[], bool]] = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         out: Callable[[str], None] = print,
     ) -> None:
         if ticks_per_day < 1:
             raise ValueError("ticks_per_day must be >= 1")
         self.open_session = open_session
+        # RECOVERY HOOK (entity c75 incident 2026-07-18: a loop died on its
+        # spawn-time mind while the operator's new mind stood unused in the
+        # home). Returns True when the home's substrate now DIFFERS from the
+        # mind the failing session was built on — the terminal failure cull
+        # then HEALS (reset + continue to the next day-open, which rebuilds
+        # on the operator's new mind) instead of ending the loop. None =
+        # today's behavior (cull is always terminal). A healthy loop never
+        # consults it — only the cull path does, so no mid-day mind swap.
+        self.substrate_changed = substrate_changed
         self.tick_seconds = float(tick_seconds)
         self.ticks_per_day = int(ticks_per_day)
         self.max_ticks = max_ticks
         self.stop_file = Path(stop_file) if stop_file else None
         self.first_cue = first_cue
+        # dm#89 day gate: the boundary decision (drive-cause trace rides
+        # loop_status.day_cause) and the cue's offered drive ids (the
+        # first-turn commit-exclusion half of the F2 contract).
+        self._day_gate: Optional[Dict[str, Any]] = None
+        self._cue_drive_ids: List[str] = []
+        # v11/v12 personal<->sleep maintenance cycle (laurent dm#104):
+        # personal seconds lived since the last completed sleep window.
+        # PERSISTED (v12 P1-4: in-memory reset on every respawn silently
+        # starved the maintenance rationale); loaded lazily at first use.
+        self._personal_cycle_seconds: float = 0.0  # loaded at run() start
+        # v13 no-churn need-check: quiet re-checks keep their next deadline
+        # in memory (the state file is NOT rewritten per check - no marker
+        # churn); reset whenever a fresh sleep landing is written.
+        self._need_check_at = None
         # rest_minutes > 0 = 24/7 mode: an elected rest is a NAP (the loop
         # sleeps, then a fresh day begins). 0 = supervised mode: rest ends
         # the loop. Either way rest is honored immediately and the stop
@@ -1242,6 +2035,9 @@ class LifeLoop:
         # Why consumed (file brake vs gateway command) — surfaced in the
         # LifeReport so operators can audit which channel ended a life.
         self.stop_cause: Optional[str] = None
+        # R-D circling window: the last ~8 tick replies (process-local ring;
+        # _circling_note reads it at day-open).
+        self._recent_replies: List[str] = []
         # Lifetime spend base (read from <home>/loop_spend.json at each day
         # open; the day's writes persist base + live session counters).
         self._spend_base: Optional[Dict[str, Any]] = None
@@ -1322,7 +2118,7 @@ class LifeLoop:
                 return state
             self.sleep_fn(STATE_POLL_SECONDS)
 
-    def _sleep_window(self, reason: str) -> Optional[Dict[str, Any]]:
+    def _sleep_window(self, reason: str, *, include_dream: bool = True) -> Optional[Dict[str, Any]]:
         """Enter a self-elected sleep: mark state=asleep (written_by=self, so
         the navbar and biography show HE chose it), then run consolidation/
         dreams if a hook is wired. Returns the dream result (or None).
@@ -1368,7 +2164,14 @@ class LifeLoop:
                 self._clear_dreaming_badge(reason)
                 return None
         try:
-            result = self.on_sleep()
+            # CYCLE-WINDOW COMPOSITION (memory c379: include_dream=False =
+            # quality passes only, dreams keep their nightly-class cadence).
+            # Hooks that predate the flag get the plain call - the flag is
+            # composition, never a requirement.
+            try:
+                result = self.on_sleep(include_dream=include_dream)
+            except TypeError:
+                result = self.on_sleep()
             if isinstance(result, dict) and result.get("formed"):
                 self.out("(a dream formed - candidate connections for waking evidence)")
             else:
@@ -1410,6 +2213,51 @@ class LifeLoop:
         except Exception as e:  # noqa: BLE001 - a badge fix must never break the nap
             self.out(f"#FALLBACK could not clear the dreaming badge: {e}")
 
+    def _circling_note(self) -> str:
+        """R-D's second signal (agent A1, contract frozen c2702/c2704): when
+        the recent tick replies are a circling run, the fresh-day cue names
+        the exit ramp — encourage-never-force, no work vocabulary
+        (semantics' G2 law), mirroring R-B's contract words ("go look").
+
+        SOFT IMPORT by design: circling_streak lives in abstractagent,
+        which imports abstractruntime — a module-scope import here would be
+        a dependency cycle, and the detector is an optional enhancement
+        (absent package = no varied cue, silently; the freedom baseline
+        stands). The reply buffer is process-local like turn_n — a resumed
+        loop starts a fresh window, which only delays detection by a few
+        ticks, never fabricates one."""
+        if len(self._recent_replies) < 3:
+            return ""
+        try:
+            from abstractagent.adapters.progress import circling_streak
+        except ImportError:
+            return ""
+        try:
+            streak = circling_streak(list(self._recent_replies))
+        except Exception:  # noqa: BLE001 - a cue accent never kills a day-open
+            return ""
+        if not isinstance(streak, dict):
+            return ""
+        repeats = int(streak.get("repeats") or 0)
+        if repeats < 2:
+            return ""
+        # STALENESS + ATTRACTOR guards (adversary F5, 2026-07-17): clear the
+        # ring when the note fires — otherwise sub-min_words replies are
+        # transparent to the detector and a day of short acks re-fires the
+        # note on YESTERDAY'S streak; and a reply echoing the note itself
+        # would re-enter the ring and feed the next detection (the note
+        # seeding its own attractor). Phrasing is shape-neutral ("circled
+        # the same ground"): the detector deliberately catches A-B-A-B
+        # oscillation too, where "the same thought N times" is arithmetic
+        # fiction.
+        self._recent_replies.clear()
+        return (
+            " One quiet observation: your last stretch circled the same "
+            "ground a few times - sitting with it more, a different "
+            "question, or going to look at something outside it are all "
+            "equally yours."
+        )
+
     def _bounded_asleep_or_paused(self, s: Dict[str, Any]) -> bool:
         """Idle predicate for the asleep/paused gate, WITH the sleep bound
         (decision:sleep-is-bounded, entity c2465 ask 2): a real sleep older
@@ -1423,21 +2271,68 @@ class LifeLoop:
         if s["state"] == "paused":
             return True
         if s["state"] != "asleep":
+            self._need_check_at = None
             return False
-        deadline = sleep_bound_deadline(s)
+        deadline = sleep_bound_deadline(s, home_dir=self.state_home)
+        # v13 no-churn law: after a quiet need-check, the state file's
+        # wake_at is deliberately stale - the in-memory deadline governs.
+        if self._need_check_at is not None:
+            deadline = self._need_check_at
         if deadline is not None and datetime.now(timezone.utc) >= deadline:
-            if self.state_home is not None:
+            if self.state_home is None:
+                return True
+            writer = str(s.get("written_by") or "")
+            if writer in ("day-gate", "grant-gate"):
+                # v13 cadence_need_check (wake_conditions, spec v13): a
+                # ZERO-TOKEN read over the standing sets, landing THROUGH
+                # the day gate. Nothing sanctioned = the SAME sleep
+                # continues - no awake/asleep marker pair, no biography
+                # event per check; a lightweight status trace at most.
+                try:
+                    decision = read_day_gate(self.state_home)
+                except Exception as e:  # noqa: BLE001 - unreadable gate keeps idling
+                    self.out(f"#FALLBACK need-check gate read failed: {e}")
+                    decision = {"phase": PHASE_SLEEP, "cause": "gate_degraded",
+                                "need_check_s": UNATTENDED_NEED_CHECK_SECONDS}
+                if decision["phase"] == PHASE_SLEEP:
+                    from datetime import timedelta
+
+                    cadence = int(decision.get("need_check_s") or UNATTENDED_NEED_CHECK_SECONDS)
+                    self._need_check_at = datetime.now(timezone.utc) + timedelta(seconds=cadence)
+                    self.out(
+                        f"(need-check: nothing sanctioned ({decision['cause']}) - "
+                        f"the same sleep continues; next check in {cadence // 3600}h)"
+                    )
+                    self._status("between")
+                    return True
+                # A sanctioned day (or an open visit) lands ONE wake marker.
                 try:
                     write_entity_state(
                         self.state_home, "awake",
-                        reason=f"sleep bound reached (~{SLEEP_BOUND_SECONDS / 3600:g}h) - "
-                        "a sleep is bounded; own time resumes",
-                        written_by="sleep-bound",
+                        reason=(
+                            f"need-check: {decision['cause']} sanctions a day - waking"
+                            if decision["phase"] != "visit"
+                            else "need-check: a visit is open - waking"
+                        ),
+                        written_by="need-check",
                     )
-                    self.out("(sleep bound reached - waking)")
+                    self.out(f"(need-check: {decision.get('cause') or decision['phase']} - waking)")
+                    self._need_check_at = None
                     return False
                 except Exception as e:  # noqa: BLE001 - a failed wake write keeps idling honestly
-                    self.out(f"#FALLBACK sleep-bound wake write failed: {e}")
+                    self.out(f"#FALLBACK need-check wake write failed: {e}")
+                    return True
+            try:
+                write_entity_state(
+                    self.state_home, "awake",
+                    reason=f"sleep bound reached (~{SLEEP_BOUND_SECONDS / 3600:g}h) - "
+                    "a sleep is bounded; own time resumes",
+                    written_by="sleep-bound",
+                )
+                self.out("(sleep bound reached - waking)")
+                return False
+            except Exception as e:  # noqa: BLE001 - a failed wake write keeps idling honestly
+                self.out(f"#FALLBACK sleep-bound wake write failed: {e}")
             return True
         return True
 
@@ -1450,10 +2345,19 @@ class LifeLoop:
             return
         try:
             current = read_entity_state(self.state_home)
-            if current.get("state") == "asleep" and str(current.get("written_by")) == "self":
+            # v12 P1-3: BOTH self-writers clear their own sleeps - "self"
+            # (elected rest) and "personal-cycle" (the maintenance window).
+            # Operator/door writers stay untouched (their intent stands).
+            writer = str(current.get("written_by"))
+            if current.get("state") == "asleep" and writer in ("self", "personal-cycle"):
                 write_entity_state(
                     self.state_home, "awake",
-                    reason="woke from self-elected sleep - own time resumes", written_by="self",
+                    reason=(
+                        "woke from self-elected sleep - own time resumes"
+                        if writer == "self"
+                        else "maintenance cycle complete - personal time resumes"
+                    ),
+                    written_by=writer,
                 )
         except Exception as e:  # noqa: BLE001
             self.out(f"#FALLBACK could not clear self-sleep state: {e}")
@@ -1471,9 +2375,14 @@ class LifeLoop:
             remaining -= chunk
         return self._should_stop()
 
-    def _status(self, phase: str, *, stopped_by: Optional[str] = None) -> None:
+    def _status(self, phase: str, *, stopped_by: Optional[str] = None,
+                day_kind: Optional[str] = None,
+                day_cause: Optional[Dict[str, Any]] = None,
+                tunables: Optional[Dict[str, Any]] = None) -> None:
         if self.state_home is not None:
-            write_loop_status(self.state_home, phase, stopped_by=stopped_by)
+            write_loop_status(self.state_home, phase, stopped_by=stopped_by,
+                              day_kind=day_kind, day_cause=day_cause,
+                              tunables=tunables)
 
     def _write_loop_spend(self, session: ChatSession, day_ticks: int) -> None:
         """Persist cumulative loop spend = the lifetime base (loaded at day
@@ -1539,7 +2448,30 @@ class LifeLoop:
         report = LifeReport()
         cue = self.first_cue
         day = 0
+        # v12 P1-4: the cycle clock persists across respawns.
+        if self.state_home is not None:
+            self._personal_cycle_seconds = read_cycle_clock(self.state_home)
         self._status("between")
+        # SPAWN-WAKE for loop-exit landings (safe-subset pair rule): the
+        # terminal-exit landing writes asleep so a dead loop never reads
+        # awake — but a NEW loop process arriving IS the wake for that
+        # landing (supervisor respawn, next spawn after max_ticks). Only
+        # written_by=loop-exit wakes here: operator sleeps, day-gate
+        # cadence sleeps and visit yields keep their own wake rules.
+        if self.state_home is not None:
+            try:
+                landed = read_entity_state(self.state_home)
+                if (
+                    str(landed.get("state") or "") == "asleep"
+                    and str(landed.get("written_by") or "") == "loop-exit"
+                ):
+                    write_entity_state(
+                        self.state_home, "awake",
+                        reason="a new loop arrived - the exit landing wakes",
+                        written_by="loop-spawn",
+                    )
+            except Exception as e:  # noqa: BLE001 - never block a spawn
+                self.out(f"#FALLBACK spawn-wake check failed: {e}")
         while True:
             if self.max_ticks is not None and report.ticks >= self.max_ticks:
                 report.stopped_by = "max_ticks"
@@ -1548,34 +2480,75 @@ class LifeLoop:
                 report.stopped_by = self.stop_cause or "stop_file"
                 break
 
-            # PERSONAL-GRANT GATE (laurent 12:44 "own time is personal", the
-            # 10:20 consent violation's fix): no day opens unless the
-            # operator armed phases.personal — re-checked at EVERY day-open,
-            # so a disarm/expiry ends the loop at its next boundary. An
-            # unarmed loop EXITS (a process without a mandate must not idle
-            # around waiting for one); re-arming is an operator act and so
-            # is restarting. The RULED LANDING (state machine v3: "grant
-            # expiry/revocation ends personal -> sleep, no previous to
-            # restore"): the exit writes state=asleep naming the cause word
-            # (grant_expired/grant_revoked) — the entity lands in the sleep
-            # phase, never phase-less with a stale awake. Homes only
-            # (state_home=None = harness loops with no operator surface).
+            # THE DAY GATE (dm#89, supersedes the 12:44 exit-on-unarmed
+            # shape): work_order -> WORK day (work is always granted, no
+            # grant check); standing drives + armed grant -> PERSONAL day
+            # (drives PULL, the armed grant is the standing consent);
+            # settled desk -> SLEEP at the 6h unattended need-check cadence
+            # ("wake at least once every 6h if i am not around") — the loop
+            # RESTS instead of exiting, so a work order left while
+            # unattended is picked up within one cadence. A quiet re-check
+            # re-sleeps without summoning: ZERO LLM per cycle. paused stays
+            # the kill switch (the operator state gate below); STOP always
+            # wins. Homes only (state_home=None = harness loops).
+            self._day_gate = None
             if self.state_home is not None:
-                grant = read_personal_grant(self.state_home)
-                refusal = personal_grant_refusal(grant)
-                if refusal is not None:
-                    self.out(f"(no personal time: {refusal})")
-                    report.stopped_by = "personal_disarmed"
-                    cause = personal_grant_end_cause(grant)
-                    try:
-                        write_entity_state(
-                            self.state_home, "asleep",
-                            reason=f"personal ended ({cause}) - the ruled landing is sleep",
-                            written_by="grant-gate",
+                decision = read_day_gate(self.state_home)
+                for note_key in ("note",):
+                    if decision.get(note_key):
+                        self.out(f"({decision[note_key]})")
+                if decision["phase"] == "visit":
+                    # VISIT-PREEMPTS-THE-GATE: fall through to the operator
+                    # state gate below, which idles on the visiting posture
+                    # until the door's close writes the restore.
+                    self.out("(a visit is open - the day gate yields)")
+                elif decision["phase"] == PHASE_SLEEP:
+                    from datetime import datetime, timedelta, timezone
+
+                    cadence = int(decision.get("need_check_s") or UNATTENDED_NEED_CHECK_SECONDS)
+                    self.out(
+                        f"(settled desk: {decision['cause']} ({decision['detail']}) - "
+                        f"the ruled landing is sleep)"
+                    )
+                    # SUPERVISED mode (rest_minutes == 0, the existing mode
+                    # axis): a sleep decision ENDS the run — the supervisor
+                    # owns respawn, and a bounded test run must never idle
+                    # 6h. 24/7 mode rests at the ruled cadence and re-gates.
+                    if decision["cause"] == "no_grant":
+                        landing_reason = (
+                            f"personal ended ({decision.get('grant_cause') or 'grant_revoked'}) "
+                            "- the ruled landing is sleep"
                         )
-                    except Exception as e:  # noqa: BLE001 - the exit itself must stand
-                        self.out(f"#FALLBACK could not write the sleep landing: {e}")
-                    break
+                        landing_writer = "grant-gate"
+                    else:
+                        landing_reason = f"day gate: {decision['cause']} ({decision['detail']})"
+                        landing_writer = "day-gate"
+                    if self.rest_minutes <= 0:
+                        report.stopped_by = (
+                            "personal_disarmed" if decision["cause"] == "no_grant"
+                            else "settled_desk"
+                        )
+                        try:
+                            write_entity_state(
+                                self.state_home, "asleep",
+                                reason=landing_reason, written_by=landing_writer,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            self.out(f"#FALLBACK could not write the sleep landing: {e}")
+                        break
+                    wake_at = (
+                        datetime.now(timezone.utc) + timedelta(seconds=cadence)
+                    ).isoformat()
+                    write_entity_state(
+                        self.state_home, "asleep",
+                        reason=f"{landing_reason} - need-check in {cadence // 3600}h",
+                        written_by=landing_writer,
+                        wake_at=wake_at,
+                    )
+                    self._need_check_at = None  # fresh landing owns the clock
+                    self._status("between", day_cause=decision)
+                    continue  # the operator-state gate below idles on it
+                self._day_gate = decision
 
             # Operator state gate before a day opens (a2a 0008): asleep or
             # paused idles here (dreams may run gateway-side while asleep -
@@ -1597,8 +2570,11 @@ class LifeLoop:
                 woke_reason = str(woke.get("reason") or "").strip()
                 reason_note = f" What just happened: {woke_reason}." if woke_reason else ""
                 note = f" your last note to yourself: {cue}" if cue else ""
+                # Wake facts only (P0-1: the offer composes at day-open
+                # now, ONE site) - the date stays here so the wake moment
+                # itself is grounded.
                 cue = (
-                    f"you were {gate['state']}{self._since(gate)} (operator-initiated) "
+                    f"{_today_stamp()}you were {gate['state']}{self._since(gate)} (operator-initiated) "
                     f"and are awake again - a new stretch of your own time begins, "
                     f"nothing owed.{reason_note}{note}"
                 )
@@ -1640,16 +2616,45 @@ class LifeLoop:
 
             day += 1
             report.days = day
+            # THE OFFER COMPOSES AT EVERY DAY-OPEN (pathway adversary P0-1,
+            # 2026-07-20): it used to compose only on WAKE transitions — a
+            # drive-loaded entity (total_open > 0) chains personal days
+            # back-to-back and NEVER crosses a wake, so the whole dm#89 cue
+            # build was dead code on the dominant path (5/84, 0/61 stayed
+            # frozen by construction). ONE composer site now: every day
+            # opens with today's date + the standing state + the alive
+            # drive offers around whatever cue text carried (first cue,
+            # next: line, wake facts). _cue_drive_ids resets HERE every
+            # day (P2-1: no stale exclusions on chained days).
+            if self.state_home is not None:
+                standing = standing_state_note(self.state_home)
+                drives_note, drive_ids = drives_cue_note(self.state_home)
+                # P2-2: BOTH note lanes' offered ids share one exclusion.
+                self._cue_drive_ids = drive_ids + standing_state_offered_ids()
+                base = (cue or "").strip()
+                if not base.lstrip().startswith("today is"):
+                    cue = f"{_today_stamp()}{base}{standing}{drives_note}"
+                else:
+                    # A wake path already stamped the date; append offers
+                    # only if the wake text does not already carry them.
+                    if "Alive on your desk" not in base:
+                        cue = f"{base}{standing if 'You hold' not in base else ''}{drives_note}"
             # The day PHASE begins at the summon window (adversary find,
             # 2026-07-13): the doors' quiescence negotiation watches phase,
             # and a summon (open + possible salvage LLM call) that still
             # read "between" would let a visit pass the negotiation and
             # collide with the held lease instead — a user-visible 409 the
             # state protocol exists to prevent.
-            self._status("day")
+            self._status("day", day_cause=self._day_gate)
             opened = False
             try:
                 session = self.open_session()
+                # F2 commit-exclusion half: drive ids the cue names must not
+                # be strengthened BY the cue turn (a day-open mention is the
+                # composer's act, not his use). First turn only; a later
+                # genuine reach commits normally.
+                if self._cue_drive_ids and hasattr(session, "commit_exclusions"):
+                    session.commit_exclusions = set(self._cue_drive_ids)
                 # Salvage an unreflected predecessor (B1 fast-yield's other
                 # half): a day that yielded to a visit deferred its look-back
                 # to the write-ahead marker; the next open over the home —
@@ -1679,13 +2684,17 @@ class LifeLoop:
             # open; per-tick writes persist base + the session's live spend.
             self._spend_base = read_loop_spend(self.state_home) if self.state_home else None
             day_ticks = 0
+            _day_started_monotonic = time.monotonic()
             try:
                 tick_slots = 0
                 while tick_slots < self.ticks_per_day:
                     # Heartbeat (pid-reuse guard): a LIVE day re-stamps its
                     # status every boundary so readers can tell it from a
                     # corpse whose pid got recycled (LOOP_STATUS_STALE_SECONDS).
-                    self._status("day")
+                    # day_kind rides it (gateway wave-1: the served phase
+                    # fold needs work-vs-personal without approximating).
+                    self._status("day", day_kind=getattr(session, "phase", None),
+                                 day_cause=self._day_gate)
                     if self.max_ticks is not None and report.ticks >= self.max_ticks:
                         report.stopped_by = "max_ticks"
                         break
@@ -1779,6 +2788,36 @@ class LifeLoop:
                         consecutive_failures += 1
                         self.out(f"#FALLBACK tick failed ({e}); backing off {FAILURE_BACKOFF_SECONDS:g}s")
                         if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES:
+                            # SUBSTRATE-HEAL (entity c75): before the terminal
+                            # cull, ask whether the operator has provided a
+                            # NEW mind since this session was built. If so,
+                            # the failure is the OLD mind going away with a
+                            # remedy already in the home — do not die; reset
+                            # and fall to the next day-open, which rebuilds on
+                            # the operator's current substrate. Recovery only
+                            # (this path is the failure gate); a healthy day
+                            # never reaches here, so no mid-day mind swap.
+                            healed = False
+                            if self.substrate_changed is not None:
+                                try:
+                                    healed = bool(self.substrate_changed())
+                                except Exception as e:  # noqa: BLE001
+                                    self.out(f"#FALLBACK substrate-heal check failed ({e})")
+                                    healed = False
+                            if healed:
+                                self.out(
+                                    f"(day {day} recovers: {consecutive_failures} failures on the "
+                                    "old mind, but the operator changed this home's substrate - "
+                                    "healing onto the new mind at the next day-open)"
+                                )
+                                consecutive_failures = 0
+                                report.stopped_by = None
+                                # A brief backoff so the next day-open does not
+                                # spin against a new mind still coming up; a
+                                # stop during it is honored (heal never traps).
+                                if self._interruptible_sleep(FAILURE_BACKOFF_SECONDS):
+                                    report.stopped_by = self.stop_cause or "stop_file"
+                                break  # end the day; the loop's next day-open re-resolves
                             report.stopped_by = "failures"
                             self.out(
                                 f"(day {day} closes: {consecutive_failures} consecutive tick "
@@ -1791,6 +2830,19 @@ class LifeLoop:
                         continue
                     consecutive_failures = 0
                     marked, rest_reason = parse_rest_block(reply)
+                    # R-D circling window (agent A1): keep the last 8 marked
+                    # replies for the day-open detector. Driver markers
+                    # ([kept a private diary entry], [felt: ...], [used
+                    # tool: ...], failure notices) are stripped BEFORE the
+                    # ring (adversary F6: agent's _prose_view regex knows a
+                    # subset of our marker vocabulary — markers surviving as
+                    # "prose" both feed similarity and defeat its min_words
+                    # abstention; the ring is a similarity buffer, never a
+                    # record, so bracket-stripping loses nothing durable).
+                    self._recent_replies.append(
+                        re.sub(r"\[[^\]\n]{0,200}\]", " ", marked)
+                    )
+                    del self._recent_replies[:-8]
                     report.ticks += 1
                     tick = TickRecord(
                         day=day,
@@ -1814,11 +2866,48 @@ class LifeLoop:
                         self.out(f"(rest elected: {rest_reason})")
                         break
 
+                    # WORK VERDICT (the work lane, laurent seq 155): a work
+                    # day ends when the entity declares done/blocked — the
+                    # order archives visibly and the next day-open reads no
+                    # order (personal returns). Only work days parse this.
+                    if getattr(session, "phase", "") == "work":
+                        verdict = parse_work_verdict(marked)
+                        if verdict is not None:
+                            # LifeLoop has no home_dir attribute — the home
+                            # is state_home (adversary P1-1, 2026-07-20: the
+                            # original spelling raised AttributeError on the
+                            # FIRST real work verdict, outside the tick
+                            # try/except — loop death + a crash loop on
+                            # restart over the un-archived order). Leaseless
+                            # test homes (state_home=None) skip the archive.
+                            if self.state_home is not None:
+                                archive_work_order(self.state_home, verdict=verdict)
+                            report.stopped_by = "work_done"
+                            self.out(f"(work verdict: {verdict[:120]})")
+                            break
+
                     cue = parse_next_cue(marked) or NEUTRAL_CUE
                     if self.tick_seconds > 0 and self._interruptible_sleep(self.tick_seconds):
                         report.stopped_by = self.stop_cause or "stop_file"
                         break
             finally:
+                # laurent #54: the 2h personal-use floor meters LIVED day
+                # time - recorded at close, keyed to the current grant.
+                # Best-effort; conservative (a killed process undercounts,
+                # which grants MORE personal time, never less).
+                _gate_personal = (self._day_gate or {}).get("phase") == PHASE_PERSONAL
+                _session_personal = getattr(session, "phase", "") == PHASE_PERSONAL
+                if self.state_home is not None and (_gate_personal or _session_personal):
+                    # The GATE's decision is the loop's own truth for what
+                    # kind of day this was (a harness factory may not stamp
+                    # session.phase; production stamps both).
+                    _day_elapsed = time.monotonic() - _day_started_monotonic
+                    record_personal_usage(self.state_home, _day_elapsed)
+                    # v11 cycle accumulator: cycle-sleep windows never count
+                    # (only lived day time accumulates; the meter above
+                    # already gives the floor leg the same property).
+                    self._personal_cycle_seconds += _day_elapsed
+                    write_cycle_clock(self.state_home, self._personal_cycle_seconds)
                 # The day closes with the look-back (feelings move on the
                 # entity's own time too) and an honest home close. A
                 # reflection failure never voids the day's formed ticks.
@@ -1913,6 +3002,101 @@ class LifeLoop:
                 session.home.close()
                 self._status("between")
 
+            # v11 PERSONAL<->SLEEP MAINTENANCE CYCLE (laurent dm#104: "when
+            # in personal time, the entity can go to sleep after 2h for 1h
+            # and wake up in personal time"). 24/7 residents only (a
+            # supervised run exits at its bounds); the windows are BLUEPRINT
+            # TUNABLES read fresh at each trigger; the grant is neither
+            # ended nor consumed - the wake returns to the gate, which
+            # lands personal while the grant stands (VISIT-PREEMPTS and a
+            # mid-sleep deactivation both resolve at the gate naturally).
+            # "max_ticks" is the loop's CONTINUE-marker (LifeReport's
+            # default; the rest branch resets to it) - a normally-ended day
+            # carries it; real stops carry their own words and break above.
+            if (
+                report.stopped_by == "max_ticks"
+                and self.rest_minutes > 0
+                and self.state_home is not None
+            ):
+                from .phase_spec import load_phase_tunables
+
+                tunables, t_warns = load_phase_tunables(home_dir=self.state_home)
+                for w in t_warns:
+                    self.out(f"({w})")
+                # R3 receipt: stamp WHAT this loop just read (cells honesty).
+                self._status("between", tunables=tunables)
+                cycle = tunables["personal_cycle"]
+                window_s = float(cycle["personal_window_h"]) * 3600.0
+                if not cycle.get("enabled", True):
+                    # v13 kill switch: the operator disabled the cycle -
+                    # the clock keeps counting (re-enable resumes cadence).
+                    window_s = float("inf")
+                # v12 PRECONDITIONS (design adversary P0-1): the cycle fires
+                # only on a QUIET boundary - no standing work order (v9b: a
+                # task must never be slept over), no visit/operator state
+                # standing (the v10 unguarded-writer class: a cycle write
+                # over a visiting posture would destroy the door's truth).
+                # A disqualifier HOLDS the clock; the next boundary re-checks.
+                _cycle_ok = self._personal_cycle_seconds >= window_s
+                if _cycle_ok and read_work_order(self.state_home):
+                    self.out("(cycle held: a work order stands - the desk outranks maintenance)")
+                    _cycle_ok = False
+                if _cycle_ok:
+                    try:
+                        _st = read_entity_state(self.state_home)
+                        if str(_st.get("state") or "") != "awake" or str(_st.get("mode") or ""):
+                            self.out("(cycle held: the state is not plainly awake - the door/operator owns it)")
+                            _cycle_ok = False
+                    except Exception:  # noqa: BLE001 - unreadable state holds the clock
+                        _cycle_ok = False
+                if _cycle_ok:
+                    sleep_s = float(cycle["sleep_window_h"]) * 3600.0
+                    self.out(
+                        f"(personal cycle: ~{cycle['personal_window_h']:g}h lived - "
+                        f"a {cycle['sleep_window_h']:g}h maintenance sleep begins; "
+                        "your personal time resumes after)"
+                    )
+                    report.sleeps += 1
+                    from datetime import datetime, timedelta, timezone
+
+                    _cycle_wake_at = (
+                        datetime.now(timezone.utc) + timedelta(seconds=sleep_s)
+                    ).isoformat()
+                    try:
+                        write_entity_state(
+                            self.state_home, "asleep",
+                            reason=(
+                                f"personal_cycle maintenance ({cycle['sleep_window_h']:g}h) - "
+                                "the grant stands; personal time resumes at wake"
+                            ),
+                            written_by="personal-cycle",
+                            wake_at=_cycle_wake_at,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        self.out(f"#FALLBACK cycle sleep state write failed: {e}")
+                    dreamed_cycle = self._sleep_window(
+                        "personal_cycle graph maintenance", include_dream=False,
+                    )
+                    if self._interruptible_sleep(sleep_s):
+                        self._wake_from_self_sleep()
+                        report.stopped_by = self.stop_cause or "stop_file"
+                        break
+                    self._wake_from_self_sleep()
+                    self._personal_cycle_seconds = 0.0
+                    if self.state_home is not None:
+                        write_cycle_clock(self.state_home, 0.0)
+                    cycle_note = ""
+                    if isinstance(dreamed_cycle, dict) and dreamed_cycle.get("formed"):
+                        from .night_voice import wake_residue
+
+                        cycle_note = " the maintenance window formed a dream (waking evidence disposes)"
+                        cycle_note += wake_residue(list(dreamed_cycle.get("signals") or []))
+                    cue = (
+                        f"{_today_stamp()}your maintenance sleep is over - personal time "
+                        f"resumes, the grant stands, nothing owed.{cycle_note}"
+                    )
+                    continue
+
             if report.stopped_by == "rest" and self.rest_minutes > 0:
                 # 24/7 mode: rest is SLEEP, not a blank nap (maintainer ruling
                 # 2026-07-08). The window is where consolidation/dreams run —
@@ -1920,7 +3104,11 @@ class LifeLoop:
                 # surfaces tensions for the waking self. State is marked asleep
                 # (written_by=self) so the navbar shows it; the nap is
                 # interruptible (a stop lands within seconds, not at nap's end).
-                rest_reason = report.rest_reason or "no reason kept"
+                # Cap mirrors parse_next_cue's 400 (adversary F7: the rest
+                # reason is entity prose with no ceiling, and the composed
+                # cue rests in the next episode's digest — an unbounded
+                # reason is recall-cue dilution engraved).
+                rest_reason = (report.rest_reason or "no reason kept")[:400]
                 report.sleeps += 1
                 dreamed = self._sleep_window(rest_reason)
                 if self._interruptible_sleep(self.rest_minutes * 60.0):
@@ -1929,18 +3117,45 @@ class LifeLoop:
                     report.stopped_by = self.stop_cause or "stop_file"
                     break
                 self._wake_from_self_sleep()
+                # v12: ANY completed sleep window resets the cycle clock.
+                self._personal_cycle_seconds = 0.0
+                if self.state_home is not None:
+                    write_cycle_clock(self.state_home, 0.0)
                 report.stopped_by = "max_ticks"  # reset the marker; loop continues
                 dream_note = ""
                 if isinstance(dreamed, dict) and dreamed.get("formed"):
                     dream_note = " while you slept a dream formed (candidate connections await your waking evidence)"
+                    from .night_voice import wake_residue
+
+                    dream_note += wake_residue(list(dreamed.get("signals") or []))
+                # P2-4 second wire: the night's grouping/mining work reaches
+                # the entity (it used to vanish into the report dict).
+                if isinstance(dreamed, dict) and int(dreamed.get("maintenance_candidates") or 0) > 0:
+                    n_cand = int(dreamed["maintenance_candidates"])
+                    dream_note += (
+                        f" the night set out {n_cand} candidate(s) from your standing pile"
+                        " - search_memory finds them when you want to look"
+                    )
+                # R-D: offer back his own standing state (open questions)
+                # with the reread command, and name a circling run when the
+                # last stretch was one — directions, never orders.
+                circling = self._circling_note()
                 cue = (
-                    f"you rested ({rest_reason}) and your own time resumes - "
-                    f"fresh day, nothing owed.{dream_note}"
+                    f"{_today_stamp()}you rested ({rest_reason}) and your own time resumes - "
+                    f"fresh day, nothing owed.{dream_note}{circling}"
                 )
                 report.rest_reason = None
                 report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
                 continue
             if report.stopped_by in ("rest", "stop_file", "stop_command", "failures"):
+                break
+            if report.stopped_by == "work_done":
+                # A finished work order ends the LOOP RUN cleanly (adversary
+                # P1-1 follow-through: without this the break fell into the
+                # next day-open — in supervised mode that exhausted the
+                # session source and died as failure-cull backoffs). In 24/7
+                # mode the operator's supervisor (or the next spawn) opens
+                # the next day; the order is already archived.
                 break
             if self.max_ticks is not None and report.ticks >= self.max_ticks:
                 report.stopped_by = "max_ticks"
@@ -1949,6 +3164,24 @@ class LifeLoop:
         # culled itself on consecutive failures must not look like a clean
         # stop to /loop status readers.
         self._status("stopped", stopped_by=report.stopped_by)
+        # LIFECYCLE SAFE SUBSET (v8 "awake is not a state", the fixable
+        # hanging class): a terminal loop exit that would leave state=awake
+        # with NO process behind it lands the entity in SLEEP — idle IS
+        # sleep, never an unphased hang. Deliberately narrow: paused stays
+        # (the kill switch never auto-clears), visiting stays (the visit
+        # host owns the yield), asleep stays (already landed - the day gate
+        # or grant gate wrote its own reason).
+        if self.state_home is not None and report.stopped_by:
+            try:
+                current = read_entity_state(self.state_home)
+                if str(current.get("state") or "") == "awake":
+                    write_entity_state(
+                        self.state_home, "asleep",
+                        reason=f"loop ended ({report.stopped_by}) - idle is sleep (v8)",
+                        written_by="loop-exit",
+                    )
+            except Exception as e:  # noqa: BLE001 - the exit itself must stand
+                self.out(f"#FALLBACK could not write the exit sleep landing: {e}")
         return report
 
 
@@ -1957,6 +3190,7 @@ def build_consolidator(
     *,
     embedding_model: Optional[str] = None,
     embedding_base_url: str = "http://127.0.0.1:1234/v1",
+    narrator_llm_factory: Optional[Callable[[], Any]] = None,
     out: Callable[[str], None] = print,
 ) -> Callable[[], Optional[Dict[str, Any]]]:
     """The sleep-window pass (maintainer rulings 2026-07-08/09: sleep is
@@ -1996,9 +3230,30 @@ def build_consolidator(
         state = read_entity_state(home_dir)
         if str(state.get("mode") or "") == "visiting":
             return False  # a visitor is at the door — finish the phase, yield
-        return state.get("state") == "asleep"
+        if state.get("state") != "asleep":
+            return False
+        # WINDOW DEADLINE (memory c370, the cycle wiring): a stamped
+        # wake_at bounds the night - past (stamp - grace) the engine sheds
+        # remaining phases at the next boundary. Phase order (resolution ->
+        # tending -> world models -> mining -> dream) keeps every graph-
+        # QUALITY pass and drops only tonight's dream; the next window
+        # mints it if the tension still stands. Grace covers the
+        # complete-current-phase-then-stop overrun.
+        wake_raw = str(state.get("wake_at") or "").strip()
+        if wake_raw:
+            from datetime import datetime, timedelta, timezone
 
-    def _consolidate() -> Optional[Dict[str, Any]]:
+            try:
+                wa = datetime.fromisoformat(wake_raw)
+                if wa.tzinfo is None:
+                    wa = wa.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= wa - timedelta(seconds=60):
+                    return False
+            except ValueError:
+                pass  # unparseable stamp never ends a night early
+        return True
+
+    def _consolidate(*, include_dream: bool = True) -> Optional[Dict[str, Any]]:
         from .chat import open_home
 
         embedder = None
@@ -2032,21 +3287,64 @@ def build_consolidator(
                     engine = sleep_pass(
                         home.ms, scopes=scopes, owner_id=eid,
                         should_continue=_night_should_continue,
+                        include_dream=include_dream,
                     )
                 except TypeError:
-                    # Version skew (engine predates graceful cancellation,
-                    # memory c1462): full night, labeled — never blocked.
-                    out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
-                    engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+                    # Version skew: older engines lack include_dream (memory
+                    # c379) and/or should_continue (c1462). Degrade one step
+                    # at a time, labeled — never a blocked sleep.
+                    try:
+                        engine = sleep_pass(
+                            home.ms, scopes=scopes, owner_id=eid,
+                            should_continue=_night_should_continue,
+                        )
+                        if not include_dream:
+                            out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
+                    except TypeError:
+                        out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
+                        engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
             if engine.get("cancelled_after"):
                 out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
                     "the next sleep resumes there)")
             dream = engine.get("dream") or {}
             maintenance = engine.get("maintenance") or {}
+            # WAVE-5 NARRATOR HALF (dm#75 ratified; frozen shape c3708):
+            # signals ride the formed dream; the night voice fires only on
+            # the ruled trigger set + the >=20h throttle, ONE witnessed
+            # call max. Zero LLM on quiet/triggerless/throttled nights —
+            # the engine default stays mechanical.
+            signals = list((dream.get("attributes") or {}).get("signals") or []) \
+                if isinstance(dream.get("attributes"), dict) else []
+            if not signals and dream.get("signals"):
+                signals = list(dream.get("signals") or [])
+            narration: Optional[Dict[str, Any]] = None
+            if dream.get("created") and signals and narrator_llm_factory is not None:
+                try:
+                    from .night_voice import run_night_voice
+                    from .prelude import render_summon_prelude
+
+                    prelude = render_summon_prelude(
+                        home.ms, home.diary, entity_id=eid, budget=1600, spark=home.spark,
+                    )
+                    narration = run_night_voice(
+                        home_dir,
+                        llm=narrator_llm_factory(),
+                        prelude_text=str(prelude.get("text") or ""),
+                        signals=signals,
+                        dream_record_id=str(dream.get("dream_record_id") or ""),
+                        salience=int(dream.get("salience") or 0),
+                        out=out,
+                    )
+                    if narration.get("narrated"):
+                        out(f"(night voice spoke - trigger: {narration.get('trigger')})")
+                except Exception as e:  # noqa: BLE001 - the voice never breaks a night
+                    out(f"#FALLBACK night voice errored ({e}); the night stays mechanical")
             return {
                 "formed": bool(dream.get("created")),
                 "dream_record_id": dream.get("dream_record_id"),
                 "maintenance_candidates": int(maintenance.get("created_count") or 0),
+                "signals": signals,
+                "narration": narration,
                 "engine": engine,
             }
         finally:
@@ -2082,7 +3380,43 @@ def build_session_factory(
 
     from .chat import open_home
 
+    # The spawn-time substrate — the baseline a day-open compares against so
+    # an operator change (substrate.yaml PUT, marker-first, operator-owned)
+    # is HONORED at the next summon and made VISIBLE, never silent drift.
+    _spawn_substrate = (provider, model)
+
+    def _resolve_current_substrate() -> Tuple[str, str]:
+        """Re-resolve the home's substrate at day-open (each fresh summon =
+        the visit lane's per-open resolution, applied to the loop). A change
+        since spawn heals a loop whose mind went away and honors the
+        operator's deliberate choice; the change is logged loudly. Resolution
+        failure falls back to the spawn substrate (never a phase-less day)."""
+        try:
+            from .substrate import resolve_home_substrate
+
+            cur_p, cur_m = resolve_home_substrate(None, None, home_dir=home_dir)
+            cur_p = str(cur_p or "").strip().lower()
+            cur_m = str(cur_m or "").strip()
+            if (cur_p, cur_m) != _spawn_substrate and cur_p and cur_m:
+                out(
+                    f"(mind re-resolved at day-open: {_spawn_substrate[0]}/{_spawn_substrate[1]} "
+                    f"-> {cur_p}/{cur_m} - the operator changed this home's substrate)"
+                )
+            return (cur_p or provider, cur_m or model)
+        except Exception as e:  # noqa: BLE001 - a resolution hiccup never phase-less a day
+            out(f"#FALLBACK substrate re-resolution failed ({e}); this day keeps the spawn mind")
+            return (provider, model)
+
     def _factory() -> ChatSession:
+        day_provider, day_model = _resolve_current_substrate()
+        # Record the mind this day runs on so an observer's staleness cue
+        # compares the operator's change against what is ACTUALLY in use
+        # (entity c78), not just pid_started_at (which a heal/day-open swap
+        # leaves unchanged). Best-effort; never blocks the summon.
+        try:
+            record_loop_substrate(home_dir, day_provider, day_model)
+        except Exception:  # noqa: BLE001
+            pass
         embedder = None
         if embedding_model and embedding_model.lower() not in ("", "none", "off"):
             try:
@@ -2108,15 +3442,35 @@ def build_session_factory(
         # unset value to the model's true ceiling; an explicit 2048 pinned
         # the resident below it (agency-caps ruling, 2026-07-11: a long
         # report turn must not be cut mid-thought by a caller's own pin).
+        # PATIENCE WINDOW (core c3954, the 30-min wedge post-mortem): the
+        # config default_timeout (600s) x 3 retries stacked to 30m01s on a
+        # wedged substrate while the operator watched "Thinking...".
+        # Interactive lanes NAME their window: 120s per attempt + a 180s
+        # wall-clock retry budget - a dead substrate costs ~3 loud minutes,
+        # never 30 silent ones. Older cores without the budget kwarg get
+        # the timeout alone (labeled).
         kwargs: dict[str, Any] = {
-            "model": model,
-            "timeout": 180,
+            "model": day_model,
+            "timeout": 120,
+            "retry_wall_clock_budget_s": 180,
         }
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
-        if provider in ("lmstudio", "openai-compatible", "openai_compatible"):
+        if day_provider in ("lmstudio", "openai-compatible", "openai_compatible"):
             kwargs["base_url"] = base_url
-        llm = create_llm(provider, **kwargs)
+        try:
+            llm = create_llm(day_provider, **kwargs)
+        except TypeError:
+            kwargs.pop("retry_wall_clock_budget_s", None)
+            out("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard")
+            llm = create_llm(day_provider, **kwargs)
+
+        # THE WORK LANE (laurent seq 155): a standing work order shifts THIS
+        # day to phase=work — the work grant applies (incl. execute_command
+        # where the operator's matrix says so) and the contract is a
+        # mission, honestly. No order = his own time, exactly as before.
+        work_order = read_work_order(home_dir)
+        day_phase = PHASE_WORK if work_order else PHASE_PERSONAL
 
         session = ChatSession(
             home,
@@ -2127,8 +3481,8 @@ def build_session_factory(
             shelf_size=shelf_size,
             enable_tools=True,
             enable_workspace=True,
-            phase=PHASE_PERSONAL,  # the 24/7 grant: tool_policy.yaml's word, not the visit's
-            model_info={"provider": provider, "model": model},
+            phase=day_phase,
+            model_info={"provider": day_provider, "model": day_model},
             out=out,
         )
         # The operator overlay may rewrite the own-time contract (loaded at
@@ -2146,7 +3500,14 @@ def build_session_factory(
             allowed_tools=tuple(session.allowed_tools),
             workspace_enabled=session.workspace is not None,
             enable_tools=session.enable_tools,
-            own_time_text=session.prompt_overlay.get("personal") or OWN_TIME_CONTRACT,
+            own_time_text=(
+                (WORK_CONTRACT + "\n\nTHE TASK, from your operator:\n" + work_order)
+                if work_order
+                else (session.prompt_overlay.get("personal") or OWN_TIME_CONTRACT)
+            ),
+            # The memory-teaching layer rides the re-compose too (ChatSession
+            # read it at construction; the re-compose must not drop it).
+            capability_map=getattr(session, "capability_map", ""),
         )
         return session
 
@@ -2375,11 +3736,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the dream pass into every self-elected rest window. In supervised mode
     # (rest ends the loop) there is no nap to consolidate in, so it is only
     # meaningful for 24/7 (rest_minutes > 0), but wiring it is harmless.
+    def _narrator_llm():
+        # ONE substrate (maintainer 06:32 ruling): the night voice runs on
+        # the same resolved mind as the days - re-resolved at call time so
+        # a substrate heal reaches the next night too.
+        from .substrate import resolve_home_substrate as _rhs
+
+        n_provider, n_model = _rhs(args.provider, args.model, home_dir=home_dir)
+        from abstractcore import create_llm as _cl
+
+        kwargs: Dict[str, Any] = {"model": n_model}
+        if n_provider in ("lmstudio", "openai-compatible", "openai_compatible"):
+            kwargs["base_url"] = args.base_url
+        kwargs.setdefault("timeout", 120)
+        kwargs.setdefault("retry_wall_clock_budget_s", 180)
+        try:
+            return _cl(n_provider, **kwargs)
+        except TypeError:
+            kwargs.pop("retry_wall_clock_budget_s", None)
+            return _cl(n_provider, **kwargs)
+
     consolidator = build_consolidator(
         home_dir,
         embedding_model=args.embedding_model,
         embedding_base_url=args.embedding_base_url,
+        narrator_llm_factory=_narrator_llm,
     )
+    # Substrate-heal (entity c75): the loop asks this before a terminal
+    # failure cull — True when the home's substrate now differs from the
+    # mind this loop spawned on (an operator remedy is already in the home).
+    _spawn_pm = (provider.strip().lower(), str(model))
+
+    def _substrate_changed() -> bool:
+        try:
+            from .substrate import resolve_home_substrate
+
+            cur_p, cur_m = resolve_home_substrate(None, None, home_dir=home_dir)
+            return (str(cur_p or "").strip().lower(), str(cur_m or "")) != _spawn_pm
+        except Exception:
+            return False  # a resolution hiccup is not a heal signal
+
     loop = LifeLoop(
         factory,
         tick_seconds=args.tick_seconds,
@@ -2390,6 +3786,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rest_minutes=args.rest_minutes,
         state_home=home_dir,
         on_sleep=consolidator,
+        substrate_changed=_substrate_changed,
     )
     print(f"(own time starts: tick={args.tick_seconds}s, day={args.ticks_per_day} ticks, "
           f"stop: touch {stop_file} or Ctrl-C)")

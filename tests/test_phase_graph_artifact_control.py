@@ -54,7 +54,9 @@ def test_spoken_synonyms_match_the_alias_table() -> None:
         phase: set(node.get("spoken_synonyms") or [])
         for phase, node in graph["phases"].items()
     }
-    assert synonyms["personal"] == {"own-time", "own time"}
+    # v8 added the at-rest spelling own_time to the artifact's synonym
+    # list itself (one list carries all three spellings now).
+    assert synonyms["personal"] == {"own-time", "own time", "own_time"}
     assert synonyms["visit"] == set() and synonyms["work"] == set() and synonyms["sleep"] == set()
     # The code's own_time legacy spelling maps to the phase that OWNS the
     # spoken synonym; resident/tasked are pre-ruling history, mapped to

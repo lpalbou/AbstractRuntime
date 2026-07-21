@@ -13,9 +13,14 @@ from typing import Any, Callable, Dict
 
 # Try to import RestrictedPython, fall back to basic execution if not available
 try:
-    from RestrictedPython import compile_restricted, safe_builtins
+    from RestrictedPython import RestrictingNodeTransformer, compile_restricted, safe_builtins
     from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
-    from RestrictedPython.Guards import guarded_iter_unpack_sequence
+    from RestrictedPython.Guards import (
+        full_write_guard,
+        guarded_iter_unpack_sequence,
+        guarded_unpack_sequence,
+        safer_getattr,
+    )
 
     RESTRICTED_PYTHON_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -24,6 +29,58 @@ except ImportError:  # pragma: no cover
 
 class CodeExecutionError(Exception):
     """Error during code execution."""
+
+
+# Names the sandbox machinery itself binds into the execution namespace.
+# User code may never define or reference them: shadowing a guard would let
+# code replace the sandbox's own access checks.
+_GUARD_NAMES = frozenset(
+    {
+        "_getattr_",
+        "_getitem_",
+        "_getiter_",
+        "_write_",
+        "_print_",
+        "_print",
+        "_inplacevar_",
+        "_unpack_sequence_",
+        "_iter_unpack_sequence_",
+        "_apply_",
+        "__builtins__",
+    }
+)
+
+
+if RESTRICTED_PYTHON_AVAILABLE:
+
+    class _CodeNodePolicy(RestrictingNodeTransformer):
+        """RestrictedPython policy for visual Code nodes.
+
+        The generated wrapper binds the node's input as ``_input`` and flow
+        authors legitimately use private (leading-underscore) helper names,
+        which the default policy refuses outright. This policy allows
+        single-leading-underscore identifiers while keeping the base rules
+        for everything else: guard helper names stay reserved (shadowing a
+        guard would disable the sandbox's own access checks), and dunder /
+        ``__roles__`` names remain refused by the base check.
+
+        Restored 2026-07-17: this leading-underscore allowance existed in
+        the original abstractflow executor (2026-02-20 note) but was lost
+        when the compiler moved into abstractruntime. The gap was invisible
+        while RestrictedPython was absent (the ImportError fallback ran the
+        basic handler); the moment any package installed RestrictedPython,
+        every generated ``def transform(_input)`` wrapper failed to compile.
+        """
+
+        def check_name(self, node, name, allow_magic_methods=False):  # type: ignore[override]
+            if name is None:
+                return
+            if name in _GUARD_NAMES:
+                self.error(node, f'"{name}" is a reserved sandbox name')
+                return
+            if name.startswith("_") and not name.startswith("__") and not name.endswith("__roles__"):
+                return
+            super().check_name(node, name, allow_magic_methods)
 
 
 def normalize_code_permissions(permissions: Any = "sandbox") -> str:
@@ -164,9 +221,52 @@ def _create_full_access_handler(code: str, function_name: str) -> Callable[[Any]
     return handler
 
 
+def _inplacevar(op: str, x: Any, y: Any) -> Any:
+    """Guard for augmented assignment on plain names (``total += 1``).
+
+    RestrictedPython compiles ``x <op>= y`` into ``_inplacevar_('<op>=', x, y)``
+    but ships no implementation (hosts supply their own). Delegating to the
+    operator module keeps Python semantics exactly (including ``+=`` on lists).
+    """
+    import operator as _op
+
+    table = {
+        "+=": _op.iadd,
+        "-=": _op.isub,
+        "*=": _op.imul,
+        "/=": _op.itruediv,
+        "//=": _op.ifloordiv,
+        "%=": _op.imod,
+        "**=": _op.ipow,
+        "@=": _op.imatmul,
+        "&=": _op.iand,
+        "|=": _op.ior,
+        "^=": _op.ixor,
+        "<<=": _op.ilshift,
+        ">>=": _op.irshift,
+    }
+    fn = table.get(op)
+    if fn is None:
+        raise CodeExecutionError(f"Unsupported in-place operator: {op}")
+    return fn(x, y)
+
+
+def _apply(func: Any, *args: Any, **kwargs: Any) -> Any:
+    """Guard for calls with starred arguments (``f(*args, **kwargs)``)."""
+    return func(*args, **kwargs)
+
+
 def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any], Any]:
     """Create handler using RestrictedPython for sandboxed execution."""
-    byte_code = compile_restricted(code, filename="<user_code>", mode="exec")
+    try:
+        byte_code = compile_restricted(
+            code, filename="<user_code>", mode="exec", policy=_CodeNodePolicy
+        )
+    except SyntaxError as e:
+        # compile_restricted raises SyntaxError carrying the policy errors
+        # (RestrictedPython >= 7 behavior); surface them as our error type so
+        # callers keep one exception surface.
+        raise CodeExecutionError(f"Compilation errors: {e}") from e
 
     if getattr(byte_code, "errors", None):
         errors = getattr(byte_code, "errors", None)
@@ -179,6 +279,11 @@ def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any],
             "_getiter_": default_guarded_getiter,
             "_getitem_": default_guarded_getitem,
             "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+            "_unpack_sequence_": guarded_unpack_sequence,
+            "_getattr_": safer_getattr,
+            "_write_": full_write_guard,
+            "_inplacevar_": _inplacevar,
+            "_apply_": _apply,
             # Allow some safe built-ins
             "len": len,
             "str": str,
@@ -216,7 +321,7 @@ def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any],
         # `exec(..., globals, locals)` stores definitions in `locals`, but functions
         # resolve globals against the `globals` dict. Make user-defined helpers
         # (and other top-level values) available to `transform`.
-        reserved = {"__builtins__", "_getiter_", "_getitem_", "_iter_unpack_sequence_"}
+        reserved = set(_GUARD_NAMES)
         for name, value in local_vars.items():
             if name in reserved:
                 continue

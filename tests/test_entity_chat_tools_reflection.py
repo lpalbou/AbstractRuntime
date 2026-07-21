@@ -135,8 +135,10 @@ def test_parse_feel_blocks_drops_mismatched_marks() -> None:
 
 
 def test_tool_round_web_search_stays_prompt_ephemeral(tmp_path: Path) -> None:
-    """The entity looks something up; the results reach its second call and
-    are NEVER persisted (history, verbatim, transcript)."""
+    """W5 UPDATE (laurent: verbatim is verbatim): world-tool results now
+    REST in the episode verbatim (content-completeness) - but the session
+    HISTORY and the graph digests stay clean (in-context ephemerality
+    unchanged; the artifact is the lossless record, the prompt is not)."""
     home_dir = _make_home(tmp_path)
     home = open_home(home_dir)
     searches: List[str] = []
@@ -171,21 +173,22 @@ def test_tool_round_web_search_stays_prompt_ephemeral(tmp_path: Path) -> None:
 
         rows = home.ms.query(TripleQuery(scope="life", owner_id=home.entity_id, limit=0))
         blob = json.dumps([str(a.object) + json.dumps(a.attributes or {}) for a in rows])
-        assert "SECRET-MARKER-XYZ" not in blob
+        assert "SECRET-MARKER-XYZ" not in blob, "graph digests stay clean"
         assert any(
             (a.attributes or {}).get("tools_used") == ["web_search"]
             for a in rows
             if isinstance(a.attributes, dict)
         )
-        # The verbatim (artifact store) keeps the honest lookup marker and
-        # NEVER the raw results.
+        # W5: the verbatim artifact NOW keeps the returned results (the
+        # lossless record is complete) beside the inner-speech phases.
         artifacts = "\n".join(
             p.read_text(encoding="utf-8", errors="ignore")
             for p in (home_dir / "artifacts").rglob("*")
             if p.is_file()
         )
         assert "[used tool: web_search]" in artifacts
-        assert "SECRET-MARKER-XYZ" not in artifacts
+        assert "SECRET-MARKER-XYZ" in artifacts, "W5: world results rest in the verbatim"
+        assert "(thinking, unspoken):" in artifacts, "inner speech labeled"
     finally:
         home.close()
 

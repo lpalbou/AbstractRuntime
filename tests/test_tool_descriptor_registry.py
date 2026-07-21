@@ -61,7 +61,9 @@ def test_mutating_flags_match_the_ruled_semantics() -> None:
     ruling; workspace reads don't mutate). Widening this set is a declared
     act on the descriptor, never an executor side effect."""
     mutating = {n for n, d in TOOL_DESCRIPTORS.items() if d.mutating}
-    assert mutating == {"write_file"}
+    # execute_command joined 2026-07-19 (operator-confirmed, laurent dm#66)
+    # — a declared act on the descriptor, exactly as this pin demands.
+    assert mutating == {"write_file", "execute_command"}
 
 
 def test_dispatch_goes_through_the_descriptor() -> None:
@@ -107,18 +109,18 @@ def test_walled_tool_rows_carry_the_contract_shape() -> None:
         d = TOOL_DESCRIPTORS[name]
         assert r["owner"] == "runtime"
         assert "executes_via" not in r  # the gateway attaches containment
-        assert r["grant_lane"] == d.tier and r["grant_lane"] in ("tier1", "workspace")
+        assert r["grant_lane"] == d.tier and r["grant_lane"] in ("tier1", "workspace", "tier2")
         assert r["capability_class"] in ("tier0_core", "tier1_self", "tier2_world")
         assert r["mutating"] == d.mutating
-        assert r["remote_write_capable"] is False  # walled web lanes are GET-hardcoded
-        assert r["act_only"] == d.act_only
+        # Walled web lanes are GET-hardcoded; execute_command declares True
+        # (arbitrary programs can POST — the fetch_url honesty rule).
+        assert r["remote_write_capable"] is (name == "execute_command")
         assert r["module"] == "identity.tools"
         assert r["parameters"]["properties"] == d.properties
     # The canonical opposite-numbering pair, served on the wire (rule 3).
     assert rows["web_search"]["grant_lane"] == "tier1"
     assert rows["web_search"]["capability_class"] == "tier2_world"
     # The act-only pair rides the emission (e-s 233 R3).
-    assert rows["diary_read"]["act_only"] is True and rows["diary_list"]["act_only"] is True
 
 
 def test_emission_parameters_are_deep_copies() -> None:
@@ -134,13 +136,18 @@ def test_emission_parameters_are_deep_copies() -> None:
     assert TOOL_DESCRIPTORS["web_search"].properties["query"]["description"] != "SCRIBBLED"
 
 
-def test_act_only_tools_derive_from_the_descriptors() -> None:
-    """One source: the wire flag (ACT_ONLY_TOOLS) and the descriptor
-    registry can never disagree."""
-    from abstractruntime.identity.act_only import ACT_ONLY_TOOLS
+def test_act_only_ref_layer_is_retired() -> None:
+    """Laurent's A ruling (2026-07-20): the ref/dereference layer is
+    DELETED — no ref minting, no tombstones, no act-only tool set. The
+    WRITE-boundary diary capture remains (the wrapper's one job)."""
+    import abstractruntime.identity.act_only as ao
 
-    assert ACT_ONLY_TOOLS == tuple(n for n, d in TOOL_DESCRIPTORS.items() if d.act_only)
-    assert set(ACT_ONLY_TOOLS) == {"diary_list", "diary_read"}
+    for retired in ("make_act_only_content", "parse_act_only_ref",
+                    "tombstone_content", "dereference_act_only_messages",
+                    "ACT_ONLY_TOOLS", "ACT_ONLY_KEY"):
+        assert not hasattr(ao, retired), f"{retired} must stay deleted"
+    assert hasattr(ao, "capture_diary_elections"), "the write half stays"
+    assert hasattr(ao, "wrap_llm_handler_with_act_only")
 
 
 def test_root_exports_the_inventory_surfaces() -> None:
@@ -172,7 +179,7 @@ def test_colliding_names_are_reserved_as_walled_descriptors() -> None:
     for name in _COLLIDING_NAMES:
         d = TOOL_DESCRIPTORS.get(name)
         assert d is not None, f"colliding name {name!r} left the walled registry"
-        assert d.tier in ("tier1", "workspace"), (name, d.tier)
+        assert d.tier in ("tier1", "workspace", "tier2"), (name, d.tier)
         assert callable(d.executor), name
 
 
@@ -184,18 +191,18 @@ def test_registry_only_names_never_execute_in_the_entity_lane() -> None:
     (honest error string + the election carries it), never a silent
     dispatch to a different containment."""
     # No declaration: native_tool_specs skips names without descriptors.
-    specs = native_tool_specs(("execute_command", "web_search"))
+    specs = native_tool_specs(("core_registry_only_tool", "web_search"))
     assert [s["name"] for s in specs] == ["web_search"]
 
     # No execution: the descriptor lookup is the ONLY dispatch — a
     # registry-only name refuses with the unknown-tool error.
-    e = ToolElection(name="execute_command", args={}, body="echo hi")
+    e = ToolElection(name="core_registry_only_tool", args={}, body="echo hi")
     msg, notices = execute_tool_elections(
         [e], diary_store=None, diary_read_effect=lambda _id: {},
     )
-    assert "unknown tool execute_command" in (e.result or "")
-    assert any("#FALLBACK tool execute_command failed" in n for n in notices)
-    assert "[execute_command]" in msg  # the refusal is visible, never silent
+    assert "unknown tool core_registry_only_tool" in (e.result or "")
+    assert any("#FALLBACK tool core_registry_only_tool failed" in n for n in notices)
+    assert "[core_registry_only_tool]" in msg  # the refusal is visible, never silent
 
 
 def test_no_registry_import_in_the_walled_executor_module() -> None:

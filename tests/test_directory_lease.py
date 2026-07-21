@@ -175,6 +175,18 @@ def _make_home(tmp_path: Path) -> Path:
     journal = SQLiteJournal(db)
     ms = MemorySystem(store=store, journal=journal)
     assert engram(ms, spark, owner_id=entity_id).created is True
+    # ONE standing drive (dm#89 day gate): a zero-drive desk rests, so
+    # loop-running fixtures seed a real open question.
+    from abstractruntime.integrations.abstractmemory.identity_support import (
+        project_diary_entry,
+    )
+
+    project_diary_entry(
+        ms, entity_id=entity_id, entry_id="diary_seedq", kind="question",
+        visibility="normal", gist="what does the lease protect?",
+        written_at="2026-07-19T08:00:00+00:00", turn_id="t-seed",
+        origin={"run_id": "seed"},
+    )
     store.close()
     journal.close()
     # Personal phase armed (laurent 12:44: own time is OFF by default) —

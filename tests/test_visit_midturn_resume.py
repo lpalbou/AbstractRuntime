@@ -1,21 +1,17 @@
-"""CRITERION 7 fixture (A/B gate, frozen seam spec §E): act-only refs on a
-RESUMED run — the process dies between the tool round and the reply; the
-durable transcript carries the act-frame REF (never words); re-resolution
-at send time is byte-identical against the book; the turn completes; the
-tool round is not re-executed.
+"""Durable-visit resume after a mid-turn kill (was: criterion 7).
 
-Authored by the agency seat (walkthrough thread 0016 / ledger row 7-10
-criterion-7 cell); placed and adapted by runtime per c177 ("I draft, they
-place"). Adaptations on this package's facts, on the record (0014 thread):
-diary fence syntax is `visibility=private` (the parser refuses
-`private=true`), and the mid-turn kill is driven by SINGLE-STEP ticking —
-the crash lands deterministically at the exact step where the ref first
-RESTS in durable vars, instead of a magic max_steps count that would rot
-when the node graph changes.
+REWRITTEN under laurent's A ruling (2026-07-20): the act-only ref layer is
+DELETED — diary tool results rest AS SERVED in the durable transcript (the
+home is the privacy boundary). What this fixture still pins, because it
+never depended on refs:
 
-The LIVE half of criterion 7 is walkthrough step 5b (GET /visit +
-POST /tick against a spawned gateway); this is the offline pin beside
-test_visit_ab_fixture.py.
+1. WRITE-BOUNDARY CAPTURE: a ```diary election's words fly to the book at
+   the result boundary and never rest in run vars from the ELECTION turn
+   (the marked reply rests; sole-authorship mechanics survive the ruling).
+2. MID-TURN KILL + RESUME: the process dies between the tool round and the
+   reply; a fresh process over the same home completes the turn.
+3. NO RE-EXECUTION: the resumed cycle reuses the completed acts — exactly
+   one tool round in the durable transcript, one book entry.
 """
 
 from __future__ import annotations
@@ -32,7 +28,6 @@ pytest.importorskip("abstractmemory")
 
 from abstractruntime.core.models import Effect, EffectType, RunStatus, StepPlan  # noqa: E402
 from abstractruntime.core.runtime import EffectOutcome  # noqa: E402
-from abstractruntime.identity.act_only import make_act_only_content  # noqa: E402
 from abstractruntime.identity.entity_runtime import (  # noqa: E402
     entity_run_store_path,
     open_entity_runtime,
@@ -128,14 +123,13 @@ def _act_only_middle(tool_ref_cell: Dict[str, Any]) -> ReactMiddle:
         temp["i"] = i
         entry_id = str(tool_ref_cell.get("entry_id") or "")
         if entry_id and i == 1:
-            # The act step ran an act-only diary_read: the DURABLE transcript
-            # gets the typed REF — never the words (frozen mechanic 1).
+            # The act step ran diary_read: under the A ruling the durable
+            # transcript carries the SERVED words (the home is the privacy
+            # boundary; no refs, no send-time dereference).
             msgs.append({
                 "role": "tool",
                 "tool_call_id": "call-1",
-                "content": make_act_only_content(
-                    tool="diary_read", entry_id=entry_id, reason="re-read my note"
-                ),
+                "content": f"[diary_read {entry_id}]\n" + str(tool_ref_cell.get("entry_text") or ""),
             })
             return StepPlan(node_id="observe", next_node="reason")
         temp["final_answer"] = content
@@ -185,7 +179,7 @@ def _mid_wf(ert: Any, cell: Dict[str, Any]):
     )
 
 
-def test_act_only_ref_survives_midturn_kill(tmp_path: Path) -> None:
+def test_visit_resumes_after_midturn_kill_without_reexecution(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     cell: Dict[str, Any] = {}
 
@@ -210,21 +204,21 @@ def test_act_only_ref_survives_midturn_kill(tmp_path: Path) -> None:
         max_steps=100,
     )
     assert state.status == RunStatus.WAITING
-    # The words are in the book; nothing durable carries them (G1 write leg).
+    # The words are in the book; the ELECTION turn's durable state carries
+    # only the marked reply (write-boundary capture — sole authorship).
     entry_text = _book_entry_text(ert.home, PRIVATE_TOKEN)
     assert PRIVATE_TOKEN not in json.dumps(_load_run_vars(home_dir, run_id), default=str)
-    # The stub middle learns the real entry id (the adapter learns it from
-    # the diary_read act-frame; HOW it learns it is not the seam under test).
     entries = ert.home.diary.list_entries()
     cell["entry_id"] = next(
         str(e.get("entry_id") or "") for e in entries if PRIVATE_TOKEN in str(e.get("text") or "")
     )
+    cell["entry_text"] = entry_text
     assert cell["entry_id"]
 
-    # ---- Turn 2: drive by SINGLE STEPS until the act-only REF first RESTS
-    # in the durable transcript, then "SIGKILL" (close mid-turn). This is
-    # deterministic against node-graph changes: the kill lands at the exact
-    # step the ref landed, before the reply that would consume it.
+    # ---- Turn 2: drive by SINGLE STEPS until the tool round's SERVED
+    # content first RESTS in the durable transcript, then "SIGKILL" (close
+    # mid-turn). Deterministic against node-graph changes: the kill lands
+    # at the exact step the tool message landed, before the reply.
     state = ert.runtime.resume(
         workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
         payload={"text": "What did you write? Read it back to yourself first.",
@@ -233,19 +227,19 @@ def test_act_only_ref_survives_midturn_kill(tmp_path: Path) -> None:
     )
     for _ in range(30):
         raw = json.dumps(_load_run_vars(home_dir, run_id), default=str)
-        if "$act_only" in raw:
+        if "[diary_read " in raw:
             break
         assert state.status == RunStatus.RUNNING, "turn ended before the tool round"
         state = ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=1)
     else:
-        raise AssertionError("the act-only ref never rested in durable vars")
+        raise AssertionError("the tool round never rested in durable vars")
     assert state.status == RunStatus.RUNNING  # mid-turn, not parked
     ert.close()  # the crash: process state gone, stores closed
 
-    # (1) AT REST MID-TURN: the ref, never the token.
+    # (1) AT REST MID-TURN (A ruling): the SERVED words rest in the home's
+    # own run store - the home is the privacy boundary.
     raw = json.dumps(_load_run_vars(home_dir, run_id), default=str)
-    assert PRIVATE_TOKEN not in raw, "private words RESTED in run vars mid-turn"
-    assert "$act_only" in raw, "act-frame ref missing from the durable transcript"
+    assert "[diary_read " in raw, "the served tool round is missing from the transcript"
 
     # ---- Session B: fresh process over the same home; drive to park.
     llm_b = _WireCapturingLLM([
@@ -258,20 +252,13 @@ def test_act_only_ref_survives_midturn_kill(tmp_path: Path) -> None:
         state = ert2.runtime.tick(workflow=wf2, run_id=run_id, max_steps=100)
         assert state.status == RunStatus.WAITING, "turn did not complete after resume"
 
-        # (2) DEREFERENCE-AT-SEND: the resumed WIRE payload carried the
-        # resolved words while the store kept the ref.
+        # (2) The resumed WIRE payload carried the served words (they are
+        # part of the transcript now - no dereference machinery).
         assert len(llm_b.wire_payloads) == 1, "expected exactly the resumed reply call"
         wire = json.dumps(llm_b.wire_payloads, default=str)
-        assert PRIVATE_TOKEN in wire, "dereference did not resolve the ref at send"
+        assert PRIVATE_TOKEN in wire, "the transcript's tool round did not reach the wire"
 
-        # (3) BYTE-IDENTITY against the book (append-only source).
-        assert entry_text in json.dumps(
-            [m for p in llm_b.wire_payloads for m in (p.get("messages") or [])
-             if isinstance(m, dict) and m.get("role") == "tool"],
-            default=str,
-        ).replace("\\n", "\n"), "wire words are not the book's words"
-
-        # (4) NO RE-EXECUTION: exactly one tool round in the durable
+        # (3) NO RE-EXECUTION: exactly one tool round in the durable
         # transcript — the resumed cycle reused the completed act, never
         # ran a second one.
         vars_after = _load_run_vars(home_dir, run_id)
@@ -279,18 +266,16 @@ def test_act_only_ref_survives_midturn_kill(tmp_path: Path) -> None:
         tool_msgs = [m for m in transcript if isinstance(m, dict) and m.get("role") == "tool"]
         assert len(tool_msgs) == 1
 
-        # (5) AT REST AFTER THE TURN: still refs only.
-        raw_after = json.dumps(vars_after, default=str)
-        assert PRIVATE_TOKEN not in raw_after
-        assert "$act_only" in raw_after
+        # (4) ONE BOOK ENTRY: the kill+resume never double-wrote the book.
+        matching = [e for e in ert2.home.diary.list_entries()
+                    if PRIVATE_TOKEN in str(e.get("text") or "")]
+        assert len(matching) == 1
 
-        # Close; the completed run's durable record stays word-free.
+        # Close completes cleanly.
         state = ert2.runtime.resume(
             workflow=wf2, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
             payload={"kind": "close"}, max_steps=300,
         )
         assert state.status == RunStatus.COMPLETED
-        assert PRIVATE_TOKEN not in json.dumps(_load_run_vars(home_dir, run_id), default=str)
-        assert PRIVATE_TOKEN not in json.dumps(ert2.runtime.get_ledger(run_id), default=str)
     finally:
         ert2.close()

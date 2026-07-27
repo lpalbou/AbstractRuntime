@@ -268,6 +268,145 @@ class TestProjectionPlane:
         assert projected.title.startswith("Diary entry (note)")
         assert "long prose here" not in projected.digest
 
+    def test_public_titles_carry_a_content_slug_and_differ_same_day(self):
+        """Uniform-title fix (flow c5208 ask 1): same-day public projections
+        used to share ONE exact title, so dreams composed from titles were
+        contentless and duplicate-group maintenance self-amplified. The
+        public title now folds a digest slug (already public-plane words by
+        the c302 ruling); two same-day entries get DISTINCT titles."""
+        store = _store()
+        mem = _RecordingMemorySystem()
+        handler = build_diary_effect_handlers(entity_id=ENTITY, diary_store=store, memory_system=mem)[
+            EffectType.DIARY_WRITE
+        ]
+        for gist, turn in (("the river changed course", "t1"), ("a name I misremembered", "t2")):
+            out = handler(
+                self._Run(),
+                Effect(type=EffectType.DIARY_WRITE, payload={"text": "prose", "gist": gist, "turn_id": turn}),
+                None,
+            )
+            assert out.status == "completed"
+        titles = [call["inputs"][0].title for call in mem.calls]
+        assert titles[0] != titles[1], "same-day public titles must differ on content"
+        assert "the river changed course" in titles[0]
+        assert "a name I misremembered" in titles[1]
+        assert titles[0].startswith("Diary entry (note)"), "the act-frame prefix survives"
+
+    def test_no_gist_public_title_stays_bare_template(self):
+        """The mechanical no-gist fallback digest is machine words — folding
+        it into the title would re-create clustering-on-form. Only reachable
+        through the projection function directly (DIARY_WRITE refuses empty
+        text), which is exactly the defensive branch this pins."""
+        from abstractruntime.integrations.abstractmemory.identity_support import project_diary_entry
+
+        mem = _RecordingMemorySystem()
+        rid, warnings = project_diary_entry(
+            mem,
+            entity_id=ENTITY,
+            entry_id="diary_barecase01",
+            kind="note",
+            visibility="normal",
+            gist=None,
+            text=None,
+            written_at="2026-07-24T10:00:00Z",
+            turn_id="t1",
+            origin={},
+        )
+        assert rid == "rec_1"
+        title = mem.calls[0]["inputs"][0].title
+        # No content SLUG (no machine words / colon segment) — but the
+        # entry-id tail disambiguates same-day multiples (adversary C4): a
+        # key, never words, the private-branch shape.
+        assert ":" not in title.split("—")[-1], f"no-gist title must carry no slug: {title}"
+        assert "diary_barecase01"[-6:] in title, "the entry-id tail disambiguates same-day multiples"
+
+    def test_writer_declared_digest_method_stamps_projection_and_bares_title(self):
+        """c5270 P2-2 (jointly ruled with memory): machine-worded entries
+        (deterministic close notes) declare their digest_method in the write
+        payload — the projection carries it in attributes so memory's
+        machine-authorship bridge guard reads projections and formed records
+        through ONE key, and the PUBLIC title stays bare template (machine
+        words in titles would re-create clustering-on-form). Absent
+        declaration = absent attribute, slugged title (entity words)."""
+        store = _store()
+        mem = _RecordingMemorySystem()
+        handler = build_diary_effect_handlers(entity_id=ENTITY, diary_store=store, memory_system=mem)[
+            EffectType.DIARY_WRITE
+        ]
+        out = handler(
+            self._Run(),
+            Effect(type=EffectType.DIARY_WRITE, payload={
+                "text": "Session closed (visitor left).",
+                "gist": "Session closed (visitor left)",
+                "turn_id": "t-close",
+                "digest_method": "mechanical-flow-v1",
+            }),
+            None,
+        )
+        assert out.status == "completed"
+        projected = mem.calls[0]["inputs"][0]
+        assert projected.attributes["digest_method"] == "mechanical-flow-v1"
+        assert "Session closed" not in projected.title.split("—")[-1], (
+            f"mechanical entry title carries no content slug (machine words would cluster): {projected.title}"
+        )
+        # But it DOES carry the entry-id tail (adversary C4): mechanical
+        # close notes are the most frequent same-day multiples — a bare
+        # shared title re-amplified duplicate-group maintenance.
+        assert projected.attributes["entry_id"][-6:] in projected.title, (
+            "mechanical titles disambiguate same-day multiples by entry-id tail"
+        )
+
+        # Undeclared entry: no attribute, slugged title (the entity's words).
+        out2 = handler(
+            self._Run(),
+            Effect(type=EffectType.DIARY_WRITE, payload={
+                "text": "prose", "gist": "the tide finally turned", "turn_id": "t-own",
+            }),
+            None,
+        )
+        assert out2.status == "completed"
+        p2 = mem.calls[1]["inputs"][0]
+        assert "digest_method" not in p2.attributes
+        assert "the tide finally turned" in p2.title
+
+        # Malformed declaration refuses loudly (a mangled label would poison
+        # the consent vocabulary silently).
+        bad = handler(
+            self._Run(),
+            Effect(type=EffectType.DIARY_WRITE, payload={
+                "text": "x", "turn_id": "t-bad", "digest_method": "y" * 65,
+            }),
+            None,
+        )
+        assert bad.status == "failed"
+
+    def test_private_titles_differ_without_words(self):
+        """Private same-day projections must ALSO stop reading as copies —
+        the disambiguator is the entry id's opaque tail (already in
+        attributes.entry_id, zero new disclosure), never words."""
+        store = _store()
+        mem = _RecordingMemorySystem()
+        handler = build_diary_effect_handlers(entity_id=ENTITY, diary_store=store, memory_system=mem)[
+            EffectType.DIARY_WRITE
+        ]
+        for turn in ("t1", "t2"):
+            out = handler(
+                self._Run(),
+                Effect(
+                    type=EffectType.DIARY_WRITE,
+                    payload={"text": "secret words never surface", "visibility": "private", "turn_id": turn},
+                ),
+                None,
+            )
+            assert out.status == "completed"
+        p1, p2 = (call["inputs"][0] for call in mem.calls)
+        assert p1.title != p2.title, "same-day private titles must differ"
+        for proj in (p1, p2):
+            assert "secret" not in proj.title and "words" not in proj.title
+            assert proj.title.startswith("Diary entry (private)")
+            tail = proj.attributes["entry_id"][-6:]
+            assert tail in proj.title, "the disambiguator is the entry id tail"
+
     def test_private_entry_projects_act_only_content_free(self):
         """The maintainer's reframe: the memory records everything, whether we
         want it or not — a private entry leaves the involuntary memory of the

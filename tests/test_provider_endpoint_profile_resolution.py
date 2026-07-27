@@ -346,3 +346,39 @@ def test_runtime_applies_voice_music_sound_capability_defaults() -> None:
     )
     assert explicit_tts["provider"] == "openai"
     assert "voice" not in explicit_tts
+
+
+def test_stream_tts_merges_output_voice_capability_default() -> None:
+    """continuum dm 2026-07-22 (operator incident dm#133): a BARE stream_tts
+    spec must inherit the operator's output.voice capability default - the
+    stream lane never traversed resolve_generate_route, so bare requests
+    fell to the voice plugin's env-or-openai fallback and 429'd instead of
+    using the configured engine. Explicit provider still wins."""
+    from abstractruntime.integrations.abstractcore import llm_client as m
+
+    captured = {}
+
+    class _Voice:
+        def tts_stream(self, text, **kw):
+            captured.update(kw)
+            yield {"type": "end", "terminal": True}
+
+    class _LLM:
+        voice = _Voice()
+
+    client = m.LocalAbstractCoreLLMClient.__new__(m.LocalAbstractCoreLLMClient)
+    client._llm = _LLM()
+    client._capability_defaults = {
+        "output.voice": {"provider": "supertonic", "model": "st-1"},
+    }
+    client._artifact_store = None
+
+    # Bare spec: the configured default rides to the voice facade.
+    list(client.stream_tts(text="hello", output={}, params={}))
+    assert captured.get("provider") == "supertonic", f"default merged: {captured!r}"
+    assert captured.get("model") == "st-1"
+
+    # Explicit provider: the caller's choice wins, defaults stay out.
+    captured.clear()
+    list(client.stream_tts(text="hello", output={"provider": "openai", "model": "tts-1"}, params={}))
+    assert captured.get("provider") == "openai" and captured.get("model") == "tts-1"

@@ -203,12 +203,18 @@ def record_personal_usage(home_dir: Path, seconds: float) -> None:
         pass
 
 
-def read_day_gate(home_dir: Path) -> Dict[str, Any]:
+def read_day_gate(home_dir: Path, *, skip_phases: frozenset = frozenset()) -> Dict[str, Any]:
     """One decision per day boundary: {phase, cause, detail, note?}.
 
     phase: "work" | "personal" | "sleep"; cause is the drive-cause TRACE
     (wire shape for loop_status.day_cause, entity's render): work_order |
-    drives | grant_degraded | no_grant | settled_desk. Pure read."""
+    drives | grant_degraded | no_grant | settled_desk. Pure read.
+
+    `skip_phases` (graph-edit build c4837): the caller's graph consult found
+    a landing REMOVED by a blueprint edge op — the gate skips that phase's
+    legs and the chain falls to the next legal landing (sleep is the floor).
+    The gate itself never reads the graph (one consult site per caller, the
+    consult owns the provenance/notes); it only honors the skip."""
     # VISIT-PREEMPTS-THE-GATE (spec v10; laurent dm#94: the four states
     # are mutually exclusive - an entity in visit can NOT be on personal
     # time): a live visit posture yields the whole gate BEFORE any leg -
@@ -222,7 +228,7 @@ def read_day_gate(home_dir: Path) -> Dict[str, Any]:
     except Exception:  # noqa: BLE001 - an unreadable state never blocks a day
         pass
     order = read_work_order(home_dir)
-    if order:
+    if order and PHASE_WORK not in skip_phases:
         return {
             "phase": PHASE_WORK, "cause": "work_order",
             "detail": WORK_ORDER_FILENAME, "work_order": order,
@@ -262,6 +268,13 @@ def read_day_gate(home_dir: Path) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         degraded_note = f"#FALLBACK drive read failed: {e}"
 
+    if PHASE_PERSONAL in skip_phases:
+        # The personal landing was removed by a blueprint edge op (the
+        # caller's consult): the chain falls to the sleep floor, honestly
+        # named — never a fabricated no_grant.
+        return {"phase": PHASE_SLEEP, "cause": "edge_removed",
+                "detail": "the blueprint removed this boundary's personal landing",
+                "need_check_s": _need_check_s}
     if grant_refusal is None:
         if total_open is None:
             # LOUD DEGRADE: pre-drives behavior (armed grant -> day), labeled.
@@ -291,6 +304,141 @@ def read_day_gate(home_dir: Path) -> Dict[str, Any]:
             "grant_cause": personal_grant_end_cause(read_personal_grant(home_dir)),
             "need_check_s": _need_check_s,
             "note": degraded_note}
+
+
+def consult_gate_landing(
+    home_dir: Path,
+    from_phase: str,
+    decision: Dict[str, Any],
+    cause: str,
+    out: Any,
+) -> Tuple[Dict[str, Any], str]:
+    """Graph consult over a gate decision (build order c4837; adversary A
+    §3.2's day-gate row): the gate decides, the EFFECTIVE GRAPH governs.
+
+    - REMOVED edge (legal_to -> None): the leg is skipped and the gate
+      re-reads with that phase excluded — the chain falls to the next legal
+      landing; sleep is the floor (never consulted, never skippable).
+    - REDIRECT: the landing's target substitutes BEFORE any write — with
+      R8's guards-travel rule enforced here (a redirect into personal
+      requires the armed grant; into work requires a standing order;
+      refused redirects fall back to the skip path, loudly).
+    - INSTRUCTION: returned as the provenance-stamped cue line (STEERING,
+      never law) for the caller to ride on the wake reason / day cue.
+
+    Returns (decision, instruction_cue). Sleep/visit decisions pass through
+    untouched (floor / derived). Any consult failure degrades loudly to the
+    gate's own decision — the graph must never wedge a boundary."""
+    instruction = ""
+    try:
+        from .phase_graph import instruction_cue, load_effective_graph
+
+        graph, g_warns = load_effective_graph(home_dir)
+    except Exception as e:  # noqa: BLE001 - a broken graph never blocks a day
+        out(f"#FALLBACK graph consult unavailable ({e}); the gate decision stands")
+        return decision, instruction
+    for w in g_warns:
+        out(f"({w})")
+    skipped: set = set()
+    for _hop in range(3):  # work -> personal -> sleep floor, bounded
+        target = str(decision.get("phase") or "")
+        if target not in (PHASE_WORK, PHASE_PERSONAL):
+            return decision, instruction
+        landing = graph.legal_to(from_phase, target, cause)
+        if landing is None:
+            out(
+                f"(blueprint: {from_phase}->{target}#{cause} is not in the effective "
+                "graph - the leg is skipped)"
+            )
+            skipped.add(target)
+            try:
+                decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
+            except Exception as e:  # noqa: BLE001
+                out(f"#FALLBACK re-gate after skip failed ({e}); sleeping")
+                return {"phase": PHASE_SLEEP, "cause": "edge_removed",
+                        "detail": f"{from_phase}->{target}#{cause} removed"}, instruction
+            continue
+        if landing.to != target:
+            # R8 guards-travel: the substituted target's own invariants hold.
+            if landing.to == PHASE_PERSONAL and personal_grant_refusal(
+                read_personal_grant(home_dir)
+            ) is not None:
+                out(
+                    f"(blueprint redirect {from_phase}->{target}#{cause} -> personal "
+                    "REFUSED: the grant is not armed - the guard travels with the arrow)"
+                )
+                skipped.add(target)
+                try:
+                    decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
+                except Exception:  # noqa: BLE001
+                    return {"phase": PHASE_SLEEP, "cause": "edge_removed",
+                            "detail": "redirect refused; re-gate failed"}, instruction
+                continue
+            if landing.to == PHASE_WORK and not read_work_order(home_dir):
+                out(
+                    f"(blueprint redirect {from_phase}->{target}#{cause} -> work "
+                    "REFUSED: no standing order - a work day needs a desk)"
+                )
+                skipped.add(target)
+                try:
+                    decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
+                except Exception:  # noqa: BLE001
+                    return {"phase": PHASE_SLEEP, "cause": "edge_removed",
+                            "detail": "redirect refused; re-gate failed"}, instruction
+                continue
+            out(
+                f"(blueprint redirect: {from_phase}->{target}#{cause} lands "
+                f"{landing.to} instead - {landing.provenance})"
+            )
+            redirected = dict(decision)
+            redirected["phase"] = landing.to
+            redirected["redirected_from"] = target
+            redirected["cause"] = decision.get("cause") or cause
+            decision = redirected
+        cue_line = instruction_cue(landing)
+        if cue_line:
+            instruction = cue_line
+        return decision, instruction
+    return decision, instruction
+
+
+def append_phase_changed(
+    home_dir: Path,
+    *,
+    from_phase: str,
+    to: str,
+    cause: str,
+    written_by: str,
+    provenance: str = "structural",
+) -> None:
+    """The `phase_changed` marker — SPELLED with the graph-edit build
+    (c4837; it was 'RESERVED AND UNSPELLED' since the v12 marker contract).
+
+    Loop-written transitions land one machine-readable row in the same
+    append-only biography file the state writes ride
+    (<home>/state_history.jsonl), distinguishable by the `marker` key:
+    {marker: phase_changed, from, to, cause, written_by, at, provenance}.
+    `cause` is the spec cause word where one exists (cadence_need_check,
+    personal_cycle, grant_expired...) and the gate's trace word otherwise
+    (settled_desk, work_order — the evaluator internals, honestly named).
+    Best-effort: a marker append must never kill a transition."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    try:
+        rec = {
+            "marker": "phase_changed",
+            "from": str(from_phase),
+            "to": str(to),
+            "cause": str(cause),
+            "written_by": str(written_by),
+            "at": datetime.now(timezone.utc).isoformat(),
+            "provenance": str(provenance),
+        }
+        with (Path(home_dir) / "state_history.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(rec) + "\n")
+    except Exception:  # noqa: BLE001 - biography is best-effort, the transition is the control
+        pass
 
 
 def _standing_drive_rotation(store: Any, journal: Any, entity_id: str, *, k: int = 4) -> List[Dict[str, Any]]:
@@ -739,11 +887,31 @@ def _standing_interest_note(home_dir: Path, entity_id: str, rotation_key: int) -
         # ~2 months — k=2 with rotation reaches the whole set in weeks; the
         # ratio line (P1-4) lets him SEE the number that indicts the days
         # ("0 of 61 explored" as a pull he owns, not operator telemetry).
+        # skill c413 P0: explored derives from the SHARED fold (explores=
+        # stamps live on LATER records - the old attributes read was a
+        # phantom key nothing writes; "0 ever explored" rendered forever).
         explored = 0
-        for a in rows:
-            attrs = a.attributes if isinstance(a.attributes, dict) else {}
-            if attrs.get("explored_count") or attrs.get("last_explored_at"):
-                explored += 1
+        try:
+            from abstractmemory.drive_pressure import unexplored_interests
+
+            store2 = SQLiteTripleStore(db_path)
+            journal2 = SQLiteJournal(db_path)
+            try:
+                # Full ladder: interests live in SELF, but the explores=
+                # stamps live on DIARY/LIFE records - a self-only scan
+                # would never see a discharge (the gate reads all three).
+                open_ids = {
+                    str(getattr(item, "subject", None) or (item.get("subject") if isinstance(item, dict) else ""))
+                    for item in unexplored_interests(
+                        store2, journal2,
+                        [("self", entity_id), ("diary", entity_id), ("life", entity_id)])
+                }
+            finally:
+                store2.close()
+                journal2.close()
+            explored = sum(1 for a in rows if a.subject not in open_ids)
+        except Exception:  # noqa: BLE001 - the ratio is an offer, never a blocker
+            explored = 0
         picks = []
         for i in range(min(2, len(rows))):
             picks.append(rows[(rotation_key + 1 + i) % len(rows)])
@@ -1817,6 +1985,11 @@ def life_sleep_stats(home_dir: Path) -> Dict[str, Any]:
                     rec = json.loads(line)
                 except Exception:  # noqa: BLE001 - one bad line never voids the stat
                     continue
+                if rec.get("marker"):
+                    # phase_changed rows (c4837) are PHASE biography, not
+                    # state transitions — excluded from the sleep-share fold
+                    # or every marker would dilute the denominator.
+                    continue
                 transitions += 1
                 state = str(rec.get("state") or "").strip().lower()
                 if state == "asleep":
@@ -2019,6 +2192,27 @@ class LifeLoop:
         # in memory (the state file is NOT rewritten per check - no marker
         # churn); reset whenever a fresh sleep landing is written.
         self._need_check_at = None
+        # Graph-edit P0 fix (adversary 2, F1): the need-check's consult must
+        # GOVERN the day that opens — the wake returns to the top boundary,
+        # whose bare gate read would otherwise re-decide without the graph.
+        # The wake stashes its cause word here; the top-boundary consult
+        # consumes it (from=sleep) so removal/redirect survive the wake.
+        self._wake_gate_cause: Optional[str] = None
+        # Marker honesty (F7): the phase_changed marker for a day-opening
+        # transition writes when the day actually OPENS (after the operator
+        # gate + belt), never at wake — staged here by the boundary consult.
+        self._pending_day_marker: Optional[Tuple[str, str, str, str]] = None
+        # The from-side of boundary transitions = the last day that actually
+        # OPENED (adversary-2 F7d, live-caught by the full-loop pin: deriving
+        # it from _day_gate recorded decisions the operator gate idled away —
+        # a work decision that never ran became the marker's from-side).
+        # None = the entity slept between (gate landing / operator sleep).
+        self._last_opened_phase: Optional[str] = None
+        # F7d: the from-side of boundary transitions = the last phase that
+        # actually OPENED (self._day_gate is staged before the operator
+        # gate/belt can still preempt — a staged-never-opened day must not
+        # become a marker's from-side). None = the entity was asleep.
+        self._last_opened_phase: Optional[str] = None
         # rest_minutes > 0 = 24/7 mode: an elected rest is a NAP (the loop
         # sleeps, then a fresh day begins). 0 = supervised mode: rest ends
         # the loop. Either way rest is honored immediately and the stop
@@ -2124,7 +2318,9 @@ class LifeLoop:
                 return state
             self.sleep_fn(STATE_POLL_SECONDS)
 
-    def _sleep_window(self, reason: str, *, include_dream: bool = True) -> Optional[Dict[str, Any]]:
+    def _sleep_window(
+        self, reason: str, *, include_dream: bool = True, include_identity: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """Enter a self-elected sleep: mark state=asleep (written_by=self, so
         the navbar and biography show HE chose it), then run consolidation/
         dreams if a hook is wired. Returns the dream result (or None).
@@ -2172,12 +2368,31 @@ class LifeLoop:
         try:
             # CYCLE-WINDOW COMPOSITION (memory c379: include_dream=False =
             # quality passes only, dreams keep their nightly-class cadence).
-            # Hooks that predate the flag get the plain call - the flag is
-            # composition, never a requirement.
+            # include_identity mirrors it exactly (cti#399 ask 2b, gate
+            # ruled satisfied c4779): cycle windows NEVER touch the self —
+            # a 2h maintenance nap must not enact identity; nightly sleeps
+            # OFFER, and the regulated bars (memory's half) mean most
+            # nights enact nothing. Hooks that predate either flag get the
+            # narrower call - the flags are composition, never requirements.
             try:
-                result = self.on_sleep(include_dream=include_dream)
+                result = self.on_sleep(include_dream=include_dream, include_identity=include_identity)
             except TypeError:
-                result = self.on_sleep()
+                try:
+                    result = self.on_sleep(include_dream=include_dream)
+                    if include_identity:
+                        self.out(
+                            "#FALLBACK sleep hook has no include_identity; the identity "
+                            "pass waits for the engine half (proposals hold in the graph)"
+                        )
+                except TypeError:
+                    result = self.on_sleep()
+                    # F5 (adversary): the plain rung loses BOTH flags — the
+                    # identity loss is labeled here too, never silent.
+                    if include_identity:
+                        self.out(
+                            "#FALLBACK sleep hook takes no flags; the identity pass "
+                            "waits for the engine half (proposals hold in the graph)"
+                        )
             if isinstance(result, dict) and result.get("formed"):
                 self.out("(a dream formed - candidate connections for waking evidence)")
             else:
@@ -2288,7 +2503,7 @@ class LifeLoop:
             if self.state_home is None:
                 return True
             writer = str(s.get("written_by") or "")
-            if writer in ("day-gate", "grant-gate"):
+            if writer in ("day-gate", "grant-gate", "operator"):
                 # v13 cadence_need_check (wake_conditions, spec v13): a
                 # ZERO-TOKEN read over the standing sets, landing THROUGH
                 # the day gate. Nothing sanctioned = the SAME sleep
@@ -2300,6 +2515,18 @@ class LifeLoop:
                     self.out(f"#FALLBACK need-check gate read failed: {e}")
                     decision = {"phase": PHASE_SLEEP, "cause": "gate_degraded",
                                 "need_check_s": UNATTENDED_NEED_CHECK_SECONDS}
+                # GRAPH CONSULT (build c4837): the need-check's landings are
+                # the two genuinely operator-editable edges (B census #21/22,
+                # sleep->work / sleep->personal #cadence_need_check) —
+                # removal skips the leg, redirect substitutes (guards
+                # travel), instruction rides the wake reason into the first
+                # cue via the shipped wake-reason seed.
+                edge_cue = ""
+                if decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL):
+                    decision, edge_cue = consult_gate_landing(
+                        self.state_home, PHASE_SLEEP, decision,
+                        "cadence_need_check", self.out,
+                    )
                 if decision["phase"] == PHASE_SLEEP:
                     from datetime import timedelta
 
@@ -2313,15 +2540,29 @@ class LifeLoop:
                     return True
                 # A sanctioned day (or an open visit) lands ONE wake marker.
                 try:
+                    wake_reason = (
+                        f"need-check: {decision['cause']} sanctions a day - waking"
+                        if decision["phase"] != "visit"
+                        else "need-check: a visit is open - waking"
+                    )
+                    if edge_cue:
+                        # The edge's steering prose rides the wake reason —
+                        # the shipped wake-reason seed folds it into the
+                        # first cue (never law, always labeled).
+                        wake_reason = f"{wake_reason}. {edge_cue}"
                     write_entity_state(
                         self.state_home, "awake",
-                        reason=(
-                            f"need-check: {decision['cause']} sanctions a day - waking"
-                            if decision["phase"] != "visit"
-                            else "need-check: a visit is open - waking"
-                        ),
+                        reason=wake_reason,
                         written_by="need-check",
                     )
+                    # P0 fix (adversary 2, F1): the wake's cause carries to
+                    # the top boundary so its consult re-derives the SAME
+                    # skip/redirect and the graph governs the day that
+                    # opens. The phase_changed marker moved there too (F7a:
+                    # a wake-time marker engraved transitions that the
+                    # operator gate could still preempt).
+                    if decision["phase"] in (PHASE_WORK, PHASE_PERSONAL):
+                        self._wake_gate_cause = "cadence_need_check"
                     self.out(f"(need-check: {decision.get('cause') or decision['phase']} - waking)")
                     self._need_check_at = None
                     return False
@@ -2497,12 +2738,92 @@ class LifeLoop:
             # re-sleeps without summoning: ZERO LLM per cycle. paused stays
             # the kill switch (the operator state gate below); STOP always
             # wins. Homes only (state_home=None = harness loops).
+            # Previous OPENED day's phase = the from-side of this boundary's
+            # edges (graph-edit build c4837: the work-close consult + marker
+            # honesty both need it; a decision the operator gate idled away
+            # never counts — only opened days do).
+            _prev_phase = self._last_opened_phase
             self._day_gate = None
+            self._pending_day_marker = None
             if self.state_home is not None:
                 decision = read_day_gate(self.state_home)
                 for note_key in ("note",):
                     if decision.get(note_key):
                         self.out(f"({decision[note_key]})")
+                # NEED-CHECK CARRY (P0 fix, adversary 2 F1): a wake that a
+                # graph consult shaped hands its cause to THIS boundary —
+                # the consult re-runs here (same graph, same skip/redirect)
+                # so the effective graph governs the day that actually
+                # opens, not just the wake's words. Consumed once.
+                _wake_cause = self._wake_gate_cause
+                self._wake_gate_cause = None
+                _carry_cue = ""
+                if _wake_cause and decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL):
+                    decision, _carry_cue = consult_gate_landing(
+                        self.state_home, PHASE_SLEEP, decision, _wake_cause, self.out,
+                    )
+                if _carry_cue and _carry_cue not in (cue or ""):
+                    cue = f"{(cue or '').strip()} {_carry_cue}".strip()
+                # WORK-CLOSE CONSULT (B census rows 10/11, the one consultable
+                # boundary transition here): a redirect on work->sleep
+                # (#task_complete / #no_task) substitutes the landing — e.g.
+                # "after finishing work, take personal time" — with guards
+                # traveling (grant checked inside the consult). Instruction
+                # prose rides the day cue below.
+                _boundary_edge_cue = ""
+                if (
+                    _prev_phase == PHASE_WORK
+                    and decision.get("phase") == PHASE_SLEEP
+                    and decision.get("cause") not in ("no_grant",)
+                ):
+                    _wc_cause = (
+                        "task_complete" if not read_work_order(self.state_home) else "no_task"
+                    )
+                    try:
+                        from .phase_graph import instruction_cue as _icue, load_effective_graph as _leg
+
+                        _g, _gw = _leg(self.state_home)
+                        for w in _gw:
+                            self.out(f"({w})")
+                        _landing = _g.legal_to(PHASE_WORK, PHASE_SLEEP, _wc_cause)
+                        if _landing is not None and _landing.to == PHASE_PERSONAL:
+                            if personal_grant_refusal(read_personal_grant(self.state_home)) is None:
+                                self.out(
+                                    f"(blueprint redirect: work->sleep#{_wc_cause} lands "
+                                    f"personal instead - {_landing.provenance})"
+                                )
+                                decision = {
+                                    "phase": PHASE_PERSONAL, "cause": _wc_cause,
+                                    "detail": f"blueprint redirect of work->sleep#{_wc_cause}",
+                                    "redirected_from": PHASE_SLEEP,
+                                }
+                                # Marker staged for day-open (F7b: writing
+                                # here preceded the operator gate/belt).
+                            else:
+                                self.out(
+                                    "(blueprint redirect to personal refused: the grant "
+                                    "is not armed - the guard travels with the arrow)"
+                                )
+                        if _landing is not None:
+                            _boundary_edge_cue = _icue(_landing)
+                    except Exception as e:  # noqa: BLE001 - consult never blocks a boundary
+                        self.out(f"#FALLBACK work-close graph consult failed: {e}")
+                if _boundary_edge_cue:
+                    cue = f"{(cue or '').strip()} {_boundary_edge_cue}".strip()
+                # MARKER STAGING (F7 honesty cluster): a day-opening
+                # transition's phase_changed writes when the day actually
+                # OPENS (after the operator gate + belt) — staged here,
+                # written at the summon, cleared every boundary iteration.
+                _from_boundary = _prev_phase or PHASE_SLEEP
+                if (
+                    decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL)
+                    and _from_boundary != decision.get("phase")
+                ):
+                    self._pending_day_marker = (
+                        _from_boundary, str(decision["phase"]),
+                        str(_wake_cause or decision.get("cause") or ""),
+                        "blueprint redirect" if decision.get("redirected_from") else "structural",
+                    )
                 if decision["phase"] == "visit":
                     # VISIT-PREEMPTS-THE-GATE: fall through to the operator
                     # state gate below, which idles on the visiting posture
@@ -2539,6 +2860,15 @@ class LifeLoop:
                                 self.state_home, "asleep",
                                 reason=landing_reason, written_by=landing_writer,
                             )
+                            # F7e: biography parity — supervised landings
+                            # mark like 24/7 ones (same honesty condition).
+                            if _prev_phase and _prev_phase != PHASE_SLEEP:
+                                append_phase_changed(
+                                    self.state_home,
+                                    from_phase=_prev_phase, to=PHASE_SLEEP,
+                                    cause=str(decision.get("grant_cause") or decision.get("cause") or "sleep"),
+                                    written_by=landing_writer,
+                                )
                         except Exception as e:  # noqa: BLE001
                             self.out(f"#FALLBACK could not write the sleep landing: {e}")
                         break
@@ -2551,7 +2881,22 @@ class LifeLoop:
                         written_by=landing_writer,
                         wake_at=wake_at,
                     )
+                    # phase_changed marker (spelled with c4837): the gate's
+                    # sleep landing is a loop-written transition; the cause
+                    # is the RULED word where one exists (grant ends), the
+                    # gate trace otherwise (evaluator internals, honest).
+                    # F7d: never fabricate the from-side — no marker when
+                    # the previous phase is unknown (sleep->sleep is not a
+                    # transition; a guessed "personal" is a lie engraved).
+                    if _prev_phase and _prev_phase != PHASE_SLEEP:
+                        append_phase_changed(
+                            self.state_home,
+                            from_phase=_prev_phase, to=PHASE_SLEEP,
+                            cause=str(decision.get("grant_cause") or decision.get("cause") or "sleep"),
+                            written_by=landing_writer,
+                        )
                     self._need_check_at = None  # fresh landing owns the clock
+                    self._last_opened_phase = None  # the entity sleeps; next from-side is sleep
                     self._status("between", day_cause=decision)
                     continue  # the operator-state gate below idles on it
                 self._day_gate = decision
@@ -2563,6 +2908,10 @@ class LifeLoop:
             gate = self._operator_state()
             if gate["state"] in ("asleep", "paused"):
                 self.out(f"({gate['state']} by operator{self._since(gate)} - idling)")
+                # Something ended the running stretch (operator sleep, door
+                # yield): the next boundary's from-side is sleep, never the
+                # day this gate just idled away (marker honesty, F7d).
+                self._last_opened_phase = None
                 woke = self._idle_while(self._bounded_asleep_or_paused, phase="between")
                 if woke["state"] == "stop":
                     report.stopped_by = self.stop_cause or "stop_file"
@@ -2651,6 +3000,19 @@ class LifeLoop:
             # read "between" would let a visit pass the negotiation and
             # collide with the held lease instead — a user-visible 409 the
             # state protocol exists to prevent.
+            # The staged phase_changed writes HERE (F7a/b): the day is truly
+            # opening — operator gate, belt, and lease all passed — so the
+            # biography records transitions that HAPPENED, never intents.
+            if self._pending_day_marker is not None and self.state_home is not None:
+                _pm_from, _pm_to, _pm_cause, _pm_prov = self._pending_day_marker
+                append_phase_changed(
+                    self.state_home, from_phase=_pm_from, to=_pm_to,
+                    cause=_pm_cause, written_by="day-gate", provenance=_pm_prov,
+                )
+            self._pending_day_marker = None
+            # The day OPENS here: it becomes the next boundary's from-side.
+            if isinstance(self._day_gate, dict) and self._day_gate.get("phase"):
+                self._last_opened_phase = str(self._day_gate["phase"])
             self._status("day", day_cause=self._day_gate)
             opened = False
             try:
@@ -3055,6 +3417,48 @@ class LifeLoop:
                             _cycle_ok = False
                     except Exception:  # noqa: BLE001 - unreadable state holds the clock
                         _cycle_ok = False
+                _cycle_instruction = ""
+                if _cycle_ok:
+                    # GRAPH CONSULT (c4837): personal->sleep#personal_cycle
+                    # is a consultable loop edge (B census #18 — removal is
+                    # the edge-shaped twin of personal_cycle.enabled=false;
+                    # one more way to say the same thing, both honest).
+                    # Instruction prose rides the cycle's wake cue. bound_h
+                    # is IGNORED here with a note: sleep_window_h is the
+                    # dial that governs this window (no two knobs).
+                    try:
+                        from .phase_graph import instruction_cue as _icue, load_effective_graph as _leg
+
+                        _g, _gw = _leg(self.state_home)
+                        for w in _gw:
+                            self.out(f"({w})")
+                        _cyc_landing = _g.legal_to(PHASE_PERSONAL, PHASE_SLEEP, "personal_cycle")
+                        if _cyc_landing is None:
+                            self.out(
+                                "(cycle held: the blueprint removed "
+                                "personal->sleep#personal_cycle - maintenance waits)"
+                            )
+                            _cycle_ok = False
+                        elif _cyc_landing.to != PHASE_SLEEP:
+                            # F6 (adversary 2): a redirect on the cycle edge
+                            # is DISOBEYED loudly — the maintenance window IS
+                            # a sleep by design (v19 policy=dial refuses the
+                            # op at the door; this is the belt for hand-made
+                            # files without edit_policy).
+                            self.out(
+                                f"(#NOTE cycle redirect to {_cyc_landing.to!r} ignored - "
+                                "the maintenance window sleeps by design)"
+                            )
+                            _cycle_instruction = _icue(_cyc_landing)
+                        else:
+                            if _cyc_landing.bound_h is not None:
+                                self.out(
+                                    "(#NOTE bound_h on the cycle edge is ignored - "
+                                    "sleep_window_h is the governing dial)"
+                                )
+                            _cycle_instruction = _icue(_cyc_landing)
+                    except Exception as e:  # noqa: BLE001 - consult never blocks the cycle
+                        self.out(f"#FALLBACK cycle graph consult failed: {e}")
                 if _cycle_ok:
                     sleep_s = float(cycle["sleep_window_h"]) * 3600.0
                     self.out(
@@ -3078,10 +3482,20 @@ class LifeLoop:
                             written_by="personal-cycle",
                             wake_at=_cycle_wake_at,
                         )
+                        # F7c: the marker rides the SUCCESSFUL state write —
+                        # a failed write must not engrave a transition.
+                        append_phase_changed(
+                            self.state_home, from_phase=PHASE_PERSONAL, to=PHASE_SLEEP,
+                            cause="personal_cycle", written_by="personal-cycle",
+                        )
                     except Exception as e:  # noqa: BLE001
                         self.out(f"#FALLBACK cycle sleep state write failed: {e}")
                     dreamed_cycle = self._sleep_window(
-                        "personal_cycle graph maintenance", include_dream=False,
+                        "personal_cycle graph maintenance",
+                        # Cycle windows touch NEITHER dreams nor the self
+                        # (cti#399: "a 2h maintenance nap must not touch the
+                        # self"); both flags off, quality passes only.
+                        include_dream=False, include_identity=False,
                     )
                     if self._interruptible_sleep(sleep_s):
                         self._wake_from_self_sleep()
@@ -3097,9 +3511,17 @@ class LifeLoop:
 
                         cycle_note = " the maintenance window formed a dream (waking evidence disposes)"
                         cycle_note += wake_residue(list(dreamed_cycle.get("signals") or []))
+                    # phase_changed markers for the cycle pair (c4837): the
+                    # entry landed before the window; the return lands here.
+                    if self.state_home is not None:
+                        append_phase_changed(
+                            self.state_home, from_phase=PHASE_SLEEP, to=PHASE_PERSONAL,
+                            cause="personal_cycle", written_by="personal-cycle",
+                        )
+                    _instr = f" {_cycle_instruction}" if _cycle_instruction else ""
                     cue = (
                         f"{_today_stamp()}your maintenance sleep is over - personal time "
-                        f"resumes, the grant stands, nothing owed.{cycle_note}"
+                        f"resumes, the grant stands, nothing owed.{cycle_note}{_instr}"
                     )
                     continue
 
@@ -3259,7 +3681,9 @@ def build_consolidator(
                 pass  # unparseable stamp never ends a night early
         return True
 
-    def _consolidate(*, include_dream: bool = True) -> Optional[Dict[str, Any]]:
+    def _consolidate(
+        *, include_dream: bool = True, include_identity: bool = True
+    ) -> Optional[Dict[str, Any]]:
         from .chat import open_home
 
         embedder = None
@@ -3294,21 +3718,34 @@ def build_consolidator(
                         home.ms, scopes=scopes, owner_id=eid,
                         should_continue=_night_should_continue,
                         include_dream=include_dream,
+                        include_identity=include_identity,
                     )
                 except TypeError:
-                    # Version skew: older engines lack include_dream (memory
-                    # c379) and/or should_continue (c1462). Degrade one step
-                    # at a time, labeled — never a blocked sleep.
+                    # Version skew ladder: engines predate include_identity
+                    # (the identity-pass spine, cti#399/c4779 — memory's
+                    # half lands in the same wave), include_dream (memory
+                    # c379), and/or should_continue (c1462). Degrade one
+                    # step at a time, labeled — never a blocked sleep; the
+                    # proposal queue HOLDS in the graph, nothing is lost.
                     try:
                         engine = sleep_pass(
                             home.ms, scopes=scopes, owner_id=eid,
                             should_continue=_night_should_continue,
+                            include_dream=include_dream,
                         )
-                        if not include_dream:
-                            out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
+                        if include_identity:
+                            out("#FALLBACK engine sleep_pass has no include_identity; realizations hold for the engine half")
                     except TypeError:
-                        out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
-                        engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+                        try:
+                            engine = sleep_pass(
+                                home.ms, scopes=scopes, owner_id=eid,
+                                should_continue=_night_should_continue,
+                            )
+                            if not include_dream:
+                                out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
+                        except TypeError:
+                            out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
+                            engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
             if engine.get("cancelled_after"):
                 out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
                     "the next sleep resumes there)")
@@ -3467,6 +3904,12 @@ def build_session_factory(
             "model": day_model,
             "timeout": 120,
             "retry_wall_clock_budget_s": 180,
+            # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
+            # the absolute budget; a stream silent for 60s on an
+            # interactive lane is already dead - abort at the socket, let
+            # the retry budget do its loud work. Older cores ignore the
+            # unknown kwarg via the same TypeError ladder below.
+            "read_idle_timeout_s": 60,
         }
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
@@ -3768,6 +4211,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cl(n_provider, **kwargs)
         except TypeError:
             kwargs.pop("retry_wall_clock_budget_s", None)
+            kwargs.pop("read_idle_timeout_s", None)
             return _cl(n_provider, **kwargs)
 
     consolidator = build_consolidator(

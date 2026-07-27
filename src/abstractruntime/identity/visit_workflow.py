@@ -69,6 +69,7 @@ from .reflection import (
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
+    parse_realize_blocks,
     parse_topic_blocks,
     resolve_feeling_targets,
 )
@@ -643,6 +644,37 @@ def build_visit_workflow(
             marked, feelings, notices = parse_feel_blocks(raw, _sheet_lines)
             marked, interests, i_notes = parse_interest_blocks(marked)
             marked, lessons, l_notes = parse_lesson_blocks(marked)
+            # REALIZATIONS (identity-pass spine, adversary F2: the contract
+            # teaches the fence in every lane, so the durable visit lane
+            # must parse it — an untaught-lane raw fence delivered to the
+            # visitor was the finding). Evidence resolves against the VISIT
+            # SHEET (what he actually saw this visit): full graph ids must
+            # BE sheet rids; #hex-tails match a unique sheet rid tail.
+            marked, realize_elections, r_notes = parse_realize_blocks(marked)
+            _sheet_rids = [str(rid) for rid, _desc in _sheet if rid]
+            _realizations: list = []
+            for _re in realize_elections:
+                _gids: list = []
+                for _tok in _re.evidence:
+                    _bare = str(_tok).strip().lstrip("#")
+                    if not _bare:
+                        continue
+                    if ":" in _bare:
+                        if _bare in _sheet_rids and _bare not in _gids:
+                            _gids.append(_bare)
+                        continue
+                    _tails = [rid for rid in _sheet_rids if rid.endswith(_bare)]
+                    if len(_tails) == 1 and _tails[0] not in _gids:
+                        _gids.append(_tails[0])
+                if _gids:
+                    _realizations.append(
+                        {"text": _re.text, "touches": _re.touches, "gids": _gids}
+                    )
+                else:
+                    r_notes.append(
+                        "#FALLBACK realization refused (no evidence resolved against "
+                        f'this visit\'s sheet): "{_re.text[:60]}"'
+                    )
             # Elected topics (operator directive 2026-07-19): parsed here,
             # stamped as attributes.topics on the summary stage below — the
             # engine's card-evidence seam; no extra APPLY stage needed (the
@@ -656,8 +688,10 @@ def build_visit_workflow(
             refl["lessons"] = list(lessons)
             refl["topics"] = list(topics)
             refl["diary"] = [dataclasses.asdict(e) for e in diary_elections]
+            refl["realizations"] = list(_realizations)
             refl["notices"] = (
-                list(notices) + list(i_notes) + list(l_notes) + list(t_notes) + list(d_notes)
+                list(notices) + list(i_notes) + list(l_notes) + list(r_notes)
+                + list(t_notes) + list(d_notes)
             )
             refl["stage"] = "summary"
             refl["i"] = 0
@@ -766,7 +800,7 @@ def build_visit_workflow(
             lessons = list(refl.get("lessons") or [])
             i = int(refl.get("i") or 0)
             if i >= len(lessons):
-                refl["stage"] = "diary"
+                refl["stage"] = "realize"
                 refl["i"] = 0
                 return StepPlan(node_id="APPLY", next_node="APPLY")
             refl["i"] = i + 1
@@ -801,6 +835,56 @@ def build_visit_workflow(
                         "_absorb_failure": True,
                     },
                     result_key="_reflect.lesson_out",
+                ),
+                next_node="APPLY",
+            )
+
+        if stage == "realize":
+            # REALIZATIONS (identity-pass spine, F2 wiring): PROPOSALS about
+            # the self — kind=realization, SELF scope, derived_from edges to
+            # sheet-resolved evidence; INERT on formation, the sleep pass is
+            # the only enactor. _absorb_failure carries the lane's standing
+            # posture: a gate/engine refusal (kind vocabulary lands with
+            # memory's half; workplace-channel rules are the door's) lands
+            # loudly in the result and the close never dies over an election.
+            realizations = list(refl.get("realizations") or [])
+            i = int(refl.get("i") or 0)
+            if i >= len(realizations):
+                refl["stage"] = "diary"
+                refl["i"] = 0
+                return StepPlan(node_id="APPLY", next_node="APPLY")
+            refl["i"] = i + 1
+            r = realizations[i] if isinstance(realizations[i], dict) else {}
+            r_text = str(r.get("text") or "")
+            r_attrs: Dict[str, Any] = {
+                "session_id": str(run.session_id or ""),
+                "phase": "visit",
+            }
+            if r.get("touches"):
+                r_attrs["touches"] = str(r["touches"])
+            return StepPlan(
+                node_id="APPLY",
+                effect=Effect(
+                    type=EffectType.MEMORY_FORM,
+                    payload={
+                        "records": [{
+                            "kind": "realization",
+                            "title": "realization: " + " ".join(r_text.split()[:8]),
+                            "digest": r_text,
+                            "keywords": [],
+                            "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],
+                            "attributes": r_attrs,
+                            "provenance": {
+                                "source": "entity-visit-run-reflection-v0",
+                                "actor": "entity-reflection",
+                            },
+                        }],
+                        "scope": "self",
+                        "owner_id": home.entity_id,
+                        "turn_id": f"t-reflect-realize-{rid_scope}-{i}",
+                        "_absorb_failure": True,
+                    },
+                    result_key="_reflect.realize_out",
                 ),
                 next_node="APPLY",
             )

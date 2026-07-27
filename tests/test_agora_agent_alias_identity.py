@@ -280,13 +280,16 @@ def test_alias_arg_hidden_from_every_tool_schema() -> None:
         assert "_agora_agent" not in t._tool_definition.parameters, t._tool_definition.name
 
 
-def test_alias_keys_alone_enable_the_toolset(monkeypatch) -> None:
-    """A fleet host may configure ONLY per-alias keys (no global AGORA_API_KEY)."""
-    monkeypatch.delenv("ABSTRACT_ENABLE_AGORA_TOOLS", raising=False)
+def test_alias_keys_satisfy_the_key_half(monkeypatch) -> None:
+    """A fleet host may configure ONLY per-alias keys (no global
+    AGORA_API_KEY) - but the c4218 AND-gate law applies: the explicit
+    intent flag is required too (an inherited alias key alone is exactly
+    as ambient as an inherited global one)."""
+    monkeypatch.setenv("ABSTRACT_ENABLE_AGORA_TOOLS", "1")
     monkeypatch.delenv("AGORA_API_KEY", raising=False)
     monkeypatch.setenv("AGORA_API_KEY__RESIDENT_A", "k")
     from abstractruntime.integrations.abstractcore.default_tools import agora_tools_enabled
 
-    assert agora_tools_enabled() is True
+    assert agora_tools_enabled() is True, "alias key satisfies the key half"
     monkeypatch.delenv("AGORA_API_KEY__RESIDENT_A", raising=False)
-    assert agora_tools_enabled() is False
+    assert agora_tools_enabled() is False, "intent without any key: no toolset"

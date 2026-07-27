@@ -38,11 +38,19 @@ class SubstrateUnset(RuntimeError):
 
 
 def read_home_substrate(home_dir: Path) -> Dict[str, str]:
-    """The entity's persisted substrate choice: {provider, model} or {}.
+    """The entity's persisted substrate choice: {provider, model[, thinking]} or {}.
 
-    Both-or-nothing (a half choice is no choice); a malformed file reads as
-    unset so the resolve site stays works-or-loud — same semantics as the
-    gateway's reader, one contract."""
+    Both-or-nothing applies to the provider+model PAIR (a half choice is no
+    choice); a malformed file reads as unset so the resolve site stays
+    works-or-loud — same semantics as the gateway's reader, one contract.
+
+    `thinking` (reasoning effort) is OPTIONAL and rides along only when the
+    pair is set: one mind = one substrate, and a reasoning knob without a
+    chosen mind is meaningless. Absent means unset — never a refusal. The
+    key is spelled `thinking` at rest (the reasoning plan's one-spelling
+    decision, 2026-07-26); readers that predate this field simply ignore
+    it, and this reader returning it is what lets the gateway's writer
+    store it without the field being silently dropped on read."""
     path = Path(home_dir) / SUBSTRATE_FILENAME
     if not path.exists():
         return {}
@@ -54,7 +62,13 @@ def read_home_substrate(home_dir: Path) -> Dict[str, str]:
             return {}
         p = str(data.get("provider") or "").strip()
         m = str(data.get("model") or "").strip()
-        return {"provider": p, "model": m} if (p and m) else {}
+        if not (p and m):
+            return {}
+        out = {"provider": p, "model": m}
+        t = str(data.get("thinking") or "").strip()
+        if t:
+            out["thinking"] = t
+        return out
     except Exception:  # noqa: BLE001 - unset beats a crashed summon; resolve refuses loudly
         return {}
 

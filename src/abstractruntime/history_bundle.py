@@ -458,8 +458,21 @@ def persist_workflow_snapshot(
     return dict(ref)
 
 
-def _list_descendant_run_ids(*, run_store: Any, root_run_id: str, limit: int = 5000) -> List[str]:
-    """Return descendant run ids (BFS) when the RunStore supports list_children()."""
+def _list_descendant_run_ids(
+    *,
+    run_store: Any,
+    root_run_id: str,
+    limit: int = 5000,
+    warnings_sink: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
+    """Return descendant run ids (BFS) when the RunStore supports list_children().
+
+    Per-node discovery failures are survived (a bad subtree must not kill
+    the export) but REPORTED into `warnings_sink` when the caller supplies
+    one — a silently missing subtree is the class the replay-integrity
+    audit (2026-07-25) named: the bundle looked complete while whole subrun
+    ledgers were absent.
+    """
     out: List[str] = []
     list_children = getattr(run_store, "list_children", None)
     if not callable(list_children):
@@ -473,8 +486,16 @@ def _list_descendant_run_ids(*, run_store: Any, root_run_id: str, limit: int = 5
         seen.add(cur)
         try:
             kids = list_children(parent_run_id=cur) or []
-        except Exception:
+        except Exception as e:
             kids = []
+            if warnings_sink is not None:
+                warnings_sink.append(
+                    {
+                        "code": "subtree_discovery_failed",
+                        "run_id": cur,
+                        "detail": f"list_children failed; descendants of this run are missing from the bundle: {e}",
+                    }
+                )
         for c in kids:
             cid = getattr(c, "run_id", None)
             cid2 = str(cid or "").strip()
@@ -482,6 +503,14 @@ def _list_descendant_run_ids(*, run_store: Any, root_run_id: str, limit: int = 5
                 continue
             out.append(cid2)
             queue.append(cid2)
+    if len(out) >= limit and queue and warnings_sink is not None:
+        warnings_sink.append(
+            {
+                "code": "subtree_truncated",
+                "run_id": str(root_run_id),
+                "detail": f"descendant discovery stopped at the {limit}-run cap; deeper subruns are missing from the bundle",
+            }
+        )
     return out
 
 
@@ -581,6 +610,12 @@ def _list_replay_artifacts_for_runs(
     return out
 
 
+# Bounded answer-resolve cap (c4978 R2): offloaded outputs are >=256KB by
+# construction; the incident doc was 445KB. 4MB covers scratchpad-heavy
+# outputs while keeping the resolve a bounded read, never an artifact walk.
+_OFFLOADED_ANSWER_RESOLVE_MAX_BYTES = 4 * 1024 * 1024
+
+
 def _best_effort_session_turns(
     *,
     run_store: Any,
@@ -624,8 +659,43 @@ def _best_effort_session_turns(
                 return "chat"
         return "run"
 
+    def _resolve_offloaded_output(out: Any) -> Optional[Dict[str, Any]]:
+        """Bounded resolve of a ROOT-REPLACED run output (code-tui c4978 R2,
+        the 401-incident chain's deepest server link): a terminal output that
+        crossed the inline cap was replaced WHOLESALE by an `$artifact` ref,
+        so its turn extracted an empty answer and session replay silently
+        forgot exactly the turns that most need replaying — the client then
+        carried transcripts the server should have owned. Resolution is
+        BOUNDED three ways: only refs the run-output offloader itself minted
+        (tags.source=run_output_offload — handler-authored artifact currency
+        stays refs, the ledger-rehydrate discipline), only up to
+        _OFFLOADED_ANSWER_RESOLVE_MAX_BYTES, and the parsed doc is used for
+        ANSWER extraction only — never stored, never returned whole to
+        callers."""
+        from .storage.artifacts import get_artifact_id, is_artifact_ref
+
+        if artifact_store is None or not is_artifact_ref(out):
+            return None
+        try:
+            aid = get_artifact_id(out)
+            meta = artifact_store.get_metadata(aid)
+            tags = dict(getattr(meta, "tags", None) or {}) if meta is not None else {}
+            if str(tags.get("source") or "") != "run_output_offload":
+                return None
+            size = int(getattr(meta, "size_bytes", 0) or 0)
+            if size > _OFFLOADED_ANSWER_RESOLVE_MAX_BYTES:
+                return None
+            artifact = artifact_store.load(aid)
+            doc = artifact.as_json() if artifact is not None else None
+            return doc if isinstance(doc, dict) else None
+        except Exception:  # noqa: BLE001 - a broken artifact keeps the v1 skip, never raises
+            return None
+
     def _extract_answer_from_run_output(run: Any) -> Tuple[str, Optional[Dict[str, Any]]]:
         out = getattr(run, "output", None)
+        resolved = _resolve_offloaded_output(out)
+        if resolved is not None:
+            out = resolved
         if not isinstance(out, dict):
             return ("", None)
 
@@ -861,6 +931,64 @@ def _best_effort_session_turns(
     return out
 
 
+def _omitted_marker(*, field: str, value: Any) -> Dict[str, Any]:
+    """Structured replacement for a field dropped by a bundle profile.
+
+    Never a silent hole: the marker names the profile, the field, and the
+    dropped byte count so a consumer (and the operator) can see exactly what
+    a projection removed and fetch the full bundle when they need it.
+    """
+    try:
+        nbytes = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except Exception:
+        nbytes = None
+    return {"$omitted": {"profile": "replay", "field": field, "bytes": nbytes}}
+
+
+# Request-side payload fields a transcript fold never reads (replay-integrity
+# audit, 2026-07-25: STARTED payload.messages alone was 4.1MB of a 14.3MB
+# single-turn bundle). The profile DROPS whole fields with markers — never
+# truncates (truncation violates the ADR bar the operator set).
+_REPLAY_DROP_PAYLOAD_FIELDS = ("messages", "system_prompt", "prompt")
+# The two observability metadata paths (5.95MB in the same bundle) — request
+# captures, not transcript content.
+_REPLAY_DROP_METADATA_FIELDS = ("_runtime_observability", "_provider_request")
+
+
+def _project_record_for_replay(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Spine-copy projection of one ledger record for the replay profile.
+
+    Drops request-side payload fields and the observability metadata copies,
+    each replaced by a structured `$omitted` marker. The input record is
+    NEVER mutated (ledger stores may cache and share record objects — a
+    consumer mutation must not poison the store's copy).
+    """
+    out = rec
+    eff = rec.get("effect")
+    payload = eff.get("payload") if isinstance(eff, dict) else None
+    if isinstance(payload, dict) and any(f in payload for f in _REPLAY_DROP_PAYLOAD_FIELDS):
+        new_payload = dict(payload)
+        for f in _REPLAY_DROP_PAYLOAD_FIELDS:
+            if f in new_payload:
+                new_payload[f] = _omitted_marker(field=f"payload.{f}", value=new_payload[f])
+        new_eff = dict(eff)
+        new_eff["payload"] = new_payload
+        out = dict(out) if out is rec else out
+        out["effect"] = new_eff
+    result = rec.get("result")
+    metadata = result.get("metadata") if isinstance(result, dict) else None
+    if isinstance(metadata, dict) and any(f in metadata for f in _REPLAY_DROP_METADATA_FIELDS):
+        new_metadata = dict(metadata)
+        for f in _REPLAY_DROP_METADATA_FIELDS:
+            if f in new_metadata:
+                new_metadata[f] = _omitted_marker(field=f"result.metadata.{f}", value=new_metadata[f])
+        new_result = dict(result)
+        new_result["metadata"] = new_metadata
+        out = dict(out) if out is rec else out
+        out["result"] = new_result
+    return out
+
+
 def export_run_history_bundle(
     *,
     run_id: str,
@@ -872,17 +1000,33 @@ def export_run_history_bundle(
     session_turn_limit: int = 200,
     ledger_mode: str = "tail",  # "tail" | "full"
     ledger_max_items: int = 2000,
+    detail: str = "full",  # "full" | "replay"
 ) -> Dict[str, Any]:
     """Export a versioned RunHistoryBundle dict (v1).
 
     Notes:
     - This function is pure export (no network); gateway hosts should expose it as an endpoint.
     - Payload is JSON-safe; when ArtifactStore is available, very large leaves are offloaded.
+    - `detail="replay"` is a labeled PROJECTION for transcript folds: it drops
+      request-side payload fields and the observability metadata copies (each
+      replaced by a structured `$omitted` marker) and skips the timeline. The
+      exact bundle stays the default; the projection is opt-in per fetch.
+    - `warnings` (in-band): every degradation the export survives — subtree
+      discovery failure, ledger read failure, torn rows, tail-window
+      truncation — is reported in the bundle instead of silently omitted
+      (operator ruling, 2026-07-25: a bundle that cannot be complete must
+      say so).
     """
 
     rid = str(run_id or "").strip()
     if not rid:
         raise ValueError("run_id is required")
+
+    profile = str(detail or "full").strip().lower()
+    if profile not in ("full", "replay"):
+        raise ValueError(f"detail must be 'full' or 'replay', got {detail!r}")
+
+    warnings: List[Dict[str, Any]] = []
 
     run: Optional[RunState]
     try:
@@ -895,7 +1039,18 @@ def export_run_history_bundle(
     # Collect run tree ids (root + descendants).
     run_ids: List[str] = [rid]
     if include_subruns:
-        run_ids.extend(_list_descendant_run_ids(run_store=run_store, root_run_id=rid))
+        try:
+            run_ids.extend(
+                _list_descendant_run_ids(run_store=run_store, root_run_id=rid, warnings_sink=warnings)
+            )
+        except Exception as e:
+            warnings.append(
+                {
+                    "code": "subtree_discovery_failed",
+                    "run_id": rid,
+                    "detail": f"descendant run discovery failed; bundle covers the root run only: {e}",
+                }
+            )
 
     # Snapshot ref (best-effort, stored under run.vars._runtime.workflow_snapshot).
     snapshot_ref = None
@@ -947,10 +1102,27 @@ def export_run_history_bundle(
     for rid2 in run_ids:
         try:
             raw = ledger_store.list(rid2) if hasattr(ledger_store, "list") else []
-        except Exception:
+        except Exception as e:
             raw = []
+            warnings.append(
+                {
+                    "code": "ledger_read_failed",
+                    "run_id": rid2,
+                    "detail": f"ledger read failed; this run's records are missing from the bundle: {e}",
+                }
+            )
         records = [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
         total = len(records)
+        torn = (len(raw) - total) if isinstance(raw, list) else 0
+        if torn > 0:
+            warnings.append(
+                {
+                    "code": "torn_rows_skipped",
+                    "run_id": rid2,
+                    "detail": f"{torn} non-record ledger row(s) skipped (recovered/torn lines)",
+                    "count": torn,
+                }
+            )
 
         mode = str(ledger_mode or "tail").strip().lower()
         max_items_raw = int(ledger_max_items)
@@ -964,6 +1136,20 @@ def export_run_history_bundle(
                 start_idx = total - max_items
                 window = records[start_idx:]
                 cursor_start = start_idx + 1
+                warnings.append(
+                    {
+                        "code": "ledger_tail_window",
+                        "run_id": rid2,
+                        "detail": (
+                            f"tail window: {len(window)} of {total} records included "
+                            f"(cursors {start_idx + 1}..{total}); fetch ledger_mode=full for the rest. "
+                            "NOTE: $slim markers whose STARTED record fell before the window "
+                            "cannot resolve client-side."
+                        ),
+                        "total": total,
+                        "window": len(window),
+                    }
+                )
             else:
                 window = records
                 cursor_start = 1
@@ -973,7 +1159,8 @@ def export_run_history_bundle(
 
         items_with_cursor: List[Dict[str, Any]] = []
         for i, rec in enumerate(window):
-            items_with_cursor.append({"cursor": cursor_start + i, "record": rec})
+            rec_out = _project_record_for_replay(rec) if profile == "replay" else rec
+            items_with_cursor.append({"cursor": cursor_start + i, "record": rec_out})
 
         ledgers[rid2] = {
             "run_id": rid2,
@@ -983,7 +1170,10 @@ def export_run_history_bundle(
             "items": items_with_cursor,
             "artifacts": _list_replay_artifacts_for_run(artifact_store=artifact_store, run_id=rid2, limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT),
         }
-        _append_timeline_items(run_id2=rid2, items_with_cursor=items_with_cursor)
+        if profile != "replay":
+            # The replay profile skips the timeline entirely (audit: 0.45MB
+            # per incident bundle, never read by a transcript fold).
+            _append_timeline_items(run_id2=rid2, items_with_cursor=items_with_cursor)
 
     # Session section (best-effort, bounded).
     session_section = None
@@ -1022,13 +1212,20 @@ def export_run_history_bundle(
                 root_path="input_data",
                 allow_root_replace=False,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(
+                {
+                    "code": "input_data_offload_failed",
+                    "run_id": rid,
+                    "detail": f"oversized input_data leaves could not offload to the artifact store (kept inline): {e}",
+                }
+            )
 
     # Final bundle.
     bundle: Dict[str, Any] = {
         "version": RUN_HISTORY_BUNDLE_VERSION_V1,
         "generated_at": _utc_now_iso(),
+        "detail": profile,
         "root_run_id": rid,
         "run": {
             "run_id": str(getattr(run, "run_id", "") or ""),
@@ -1049,5 +1246,6 @@ def export_run_history_bundle(
         "timeline": timeline,
         "resolved_actions": _collect_resolved_actions(ledgers),
         "session": session_section,
+        "warnings": warnings,
     }
     return bundle

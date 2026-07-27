@@ -191,3 +191,29 @@ def test_multilocal_pool_fans_out_on_token() -> None:
 
     pool.set_on_token(None)
     assert existing._on_token is None
+
+
+def test_streamed_reasoning_last_non_empty_wins() -> None:
+    """Core contract v1 (reasoning-1st-citizen, c5769): streamed
+    metadata.reasoning carries per-chunk snapshots and the TRAILING chunk is
+    the guaranteed complete aggregate. First-non-empty persisted ONE FRAGMENT
+    — the keep-ruling silently violated. Pins: last non-empty wins; blank/
+    absent trailing metadata never erases an earlier aggregate; the
+    display-only reasoning_delta key is never read into the durable fold."""
+    chunks = [
+        {"content": "a", "metadata": {"reasoning": "first fragment", "reasoning_delta": "first fragment"}},
+        {"content": "b", "metadata": {"reasoning_delta": " more"}},
+        {"content": "c", "metadata": {"reasoning": "the complete aggregate thought"}},
+        {"content": "!", "finish_reason": "stop"},
+    ]
+    result = _normalize_local_streaming_response(iter(chunks))
+    assert result["reasoning"] == "the complete aggregate thought"
+    assert result["content"] == "abc!"
+
+    # A stream whose only reasoning arrived mid-way keeps it (trailing chunks
+    # without the key must not erase).
+    chunks2 = [
+        {"content": "x", "metadata": {"reasoning": "only thought"}},
+        {"content": "y", "finish_reason": "stop"},
+    ]
+    assert _normalize_local_streaming_response(iter(chunks2))["reasoning"] == "only thought"

@@ -37,6 +37,12 @@ dependencies = [
   # Required to resolve stable structured-output schema refs like:
   # {"$ref":"abstractsemantics:kg_assertion_schema_v0"}
   "abstractsemantics>=0.0.3",
+  # The visual Code-node sandbox and the pin-expression tier (2026-07-25).
+  # This was always the INTENDED sandbox (code_executor guards import it),
+  # but it was never declared, so deployments silently fell back to the
+  # basic exec lane; pin expressions REFUSE to run without it, which made
+  # the gap loud. Pure-python, no transitive weight.
+  "RestrictedPython>=7.0",
   # Required for the Runtime-owned MEMORY_KG_* effect contract and TripleStore
   # model types. Durable/vector backend dependencies such as LanceDB remain
   # package extras owned by AbstractMemory and selected by hosts such as Gateway.

@@ -286,6 +286,24 @@ class _PromptCacheSessionState:
     message_hashes: List[str]
 
 
+def _fingerprint_projection(value: Any) -> Any:
+    """Deterministic JSON-safe projection for fingerprint hashing (0064
+    adversary P2-1): default=str leaked `id()` through default reprs
+    (`<X object at 0x...>`), so two equal objects built on different turns
+    hashed differently - a silent full-rebuild class. JSON-safe leaves pass
+    through; exotic leaves project to a type-qualified str() with any
+    memory address scrubbed; unsortable dict keys stringify."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_fingerprint_projection(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _fingerprint_projection(v) for k, v in value.items()}
+    text = str(value)
+    text = re.sub(r" at 0x[0-9a-fA-F]+", " at 0x", text)
+    return f"{type(value).__name__}:{text}"
+
+
 def _prompt_cache_message_fingerprint(message: Any) -> str:
     """ROLE + CONTENT + (canonical) TOOL_CALLS fingerprint (0064 fix 1).
 
@@ -315,13 +333,10 @@ def _prompt_cache_message_fingerprint(message: Any) -> str:
         payload = {"role": role, "content": content_norm}
         tool_calls = message.get("tool_calls")
         if tool_calls:
-            try:
-                payload["tool_calls"] = json.dumps(
-                    tool_calls, sort_keys=True, ensure_ascii=False,
-                    separators=(",", ":"), default=str,
-                )
-            except Exception:
-                payload["tool_calls"] = str(tool_calls)
+            payload["tool_calls"] = json.dumps(
+                _fingerprint_projection(tool_calls), sort_keys=True,
+                ensure_ascii=False, separators=(",", ":"),
+            )
 
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -5026,7 +5041,12 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
                     if trace_id is None and raw_trace is not None:
                         trace_id = str(raw_trace)
                     r = meta_json.get("reasoning")
-                    if reasoning is None and isinstance(r, str) and r.strip():
+                    if isinstance(r, str) and r.strip():
+                        # LAST non-empty wins (core contract v1, c5769): the
+                        # trailing chunk carries the guaranteed complete
+                        # aggregate; first-non-empty persisted ONE FRAGMENT.
+                        # Display fragments ride `reasoning_delta`, never
+                        # read here.
                         reasoning = r.strip()
             continue
 
@@ -5061,7 +5081,15 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
                 if trace_id is None and raw_trace is not None:
                     trace_id = str(raw_trace)
                 r = meta_json.get("reasoning")
-                if reasoning is None and isinstance(r, str) and r.strip():
+                if isinstance(r, str) and r.strip():
+                    # LAST non-empty wins (core contract v1, reasoning-1st-
+                    # citizen plan 2026-07-26): streamed metadata.reasoning
+                    # carries per-chunk snapshots and core GUARANTEES the
+                    # trailing chunk is the complete aggregate — first-non-
+                    # empty persisted ONE FRAGMENT and silently violated the
+                    # operator's keep ruling (core audit, c5769). Per-chunk
+                    # display fragments ride `reasoning_delta`, a key this
+                    # fold deliberately never reads.
                     reasoning = r.strip()
 
     gen_time = round((time.perf_counter() - start_perf) * 1000, 1)
@@ -5257,6 +5285,13 @@ class LocalAbstractCoreLLMClient:
         spec = {"modality": "voice", "task": "tts"}
         if isinstance(output, dict):
             spec.update(output)
+        # STREAM-LANE capability-defaults merge (continuum dm 2026-07-22,
+        # operator incident dm#133): the non-stream lane merges via
+        # resolve_generate_route; this lane never traversed it, so a BARE
+        # spec fell to the voice plugin's env-or-openai default instead of
+        # the operator's configured output.voice engine. Explicit
+        # provider/model/base_url still win (the helper is a no-op then).
+        spec = _with_capability_default_route(spec, getattr(self, "_capability_defaults", None))
         fmt = str(spec.get("format") or spec.get("response_format") or "wav").strip().lower() or "wav"
         if fmt == "wave":
             fmt = "wav"
@@ -5701,11 +5736,22 @@ class LocalAbstractCoreLLMClient:
         # Same rule for STRUCTURALLY volatile messages (`volatile: true`, B1): adapter
         # tails change every cycle — fingerprinting them breaks the prefix-extension
         # check and forces a full re-prefill per iteration on local control planes.
-        msg_list: List[Dict[str, Any]] = [
-            m
-            for m in (messages if isinstance(messages, list) and messages else [])
-            if not _is_runtime_grounding_only_user_message(m) and not _is_volatile_message(m)
-        ]
+        msg_list: List[Dict[str, Any]] = []
+        for m in (messages if isinstance(messages, list) and messages else []):
+            if _is_runtime_grounding_only_user_message(m) or _is_volatile_message(m):
+                continue
+            # 0064 P1-1: strip the INLINE grounding envelope from the cached
+            # lane (user messages only - that is the only injection site).
+            # The durable history keeps raw bytes, so stripping here makes
+            # the cached prefix match what next turn's transcript sends.
+            if isinstance(m, dict) and str(m.get("role") or "") == "user":
+                content = m.get("content")
+                if isinstance(content, str) and content.strip():
+                    stripped = _strip_runtime_grounding_prefix(content)
+                    if stripped != content:
+                        m = dict(m)
+                        m["content"] = stripped
+            msg_list.append(m)
         msg_hashes: List[str] = [_prompt_cache_message_fingerprint(m) for m in msg_list]
 
         with self._prompt_cache_state_lock:
@@ -11591,6 +11637,10 @@ class RemoteAbstractCoreLLMClient:
         spec = {"modality": "voice", "task": "tts"}
         if isinstance(output, dict):
             spec.update(output)
+        # STREAM-LANE capability-defaults merge (same incident as the local
+        # client's site): bare remote stream requests inherit the operator's
+        # output.voice default instead of the server's fallback chain.
+        spec = _with_capability_default_route(spec, getattr(self, "_capability_defaults", None))
         return self._remote_tts_stream(
             spec=spec,
             text=str(text or ""),
@@ -11776,6 +11826,17 @@ class RemoteAbstractCoreLLMClient:
         prompt_cache_binding = params.get("prompt_cache_binding")
         if prompt_cache_binding is not None:
             body["prompt_cache_binding"] = _jsonable(prompt_cache_binding)
+
+        # Thinking/reasoning control (reasoning-1st-citizen R-A, 2026-07-26):
+        # the abstractcore server accepts `thinking` on its chat routes, but
+        # this pass-through allowlist silently DROPPED it — any gateway built
+        # on the remote runtime lost reasoning config entirely (found
+        # independently by two adversaries: runtime's plan cycle-2 and
+        # agent's cycle-1 P0). `thinking` was already read above for route
+        # resolution; now it rides the POST body too.
+        thinking = params.get("thinking")
+        if isinstance(thinking, str) and thinking.strip():
+            body["thinking"] = thinking.strip()
 
         # Pass through common OpenAI-compatible parameters.
         for key in (

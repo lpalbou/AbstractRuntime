@@ -84,6 +84,7 @@ def _fake_agora_tools(journal: List[Dict[str, Any]]):
 def test_agora_react_flow_triages_replies_acks_and_reports(monkeypatch) -> None:
     # Enable the agora toolset so tool names resolve to ToolSpecs on llm_call payloads.
     monkeypatch.setenv("ABSTRACT_ENABLE_AGORA_TOOLS", "1")
+    monkeypatch.setenv("AGORA_API_KEY", "flow-test-key")  # AND-gate (c4218)
 
     raw = json.loads(FLOW_PATH.read_text(encoding="utf-8"))
     spec = compile_visualflow(raw)
@@ -183,6 +184,7 @@ def test_agora_react_flow_budget_exhaustion_yields_labeled_fallback(monkeypatch)
     """If the model never concludes, the loop must stop at max_iterations and the
     flow output must carry an explicit #FALLBACK report (never an empty answer)."""
     monkeypatch.setenv("ABSTRACT_ENABLE_AGORA_TOOLS", "1")
+    monkeypatch.setenv("AGORA_API_KEY", "flow-test-key")  # AND-gate (c4218)
 
     raw = json.loads(FLOW_PATH.read_text(encoding="utf-8"))
     spec = compile_visualflow(raw)

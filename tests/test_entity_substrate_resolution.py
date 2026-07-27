@@ -86,3 +86,46 @@ def test_half_or_malformed_substrate_file_reads_as_unset(tmp_path: Path) -> None
     assert read_home_substrate(tmp_path) == {}
     with pytest.raises(SubstrateUnset):
         resolve_home_substrate(None, None, home_dir=tmp_path)
+
+
+def test_thinking_field_rides_the_reader_when_present(tmp_path: Path) -> None:
+    """Reasoning plan R4 (gateway's build is gated on this): the reader
+    returns the optional `thinking` field so the gateway's writer can store
+    it without the field being silently dropped on read. Spelled `thinking`
+    at rest (the plan's one-spelling decision)."""
+    (tmp_path / "substrate.yaml").write_text(
+        yaml.safe_dump({"provider": "p1", "model": "m1", "thinking": "high"}),
+        encoding="utf-8",
+    )
+    assert read_home_substrate(tmp_path) == {"provider": "p1", "model": "m1", "thinking": "high"}
+
+
+def test_thinking_is_optional_and_never_a_half_choice(tmp_path: Path) -> None:
+    # Absent thinking: pair still reads (unchanged pre-field behavior).
+    (tmp_path / "substrate.yaml").write_text(
+        yaml.safe_dump({"provider": "p1", "model": "m1"}), encoding="utf-8"
+    )
+    assert read_home_substrate(tmp_path) == {"provider": "p1", "model": "m1"}
+    # Blank thinking is dropped, not returned as an empty string.
+    (tmp_path / "substrate.yaml").write_text(
+        yaml.safe_dump({"provider": "p1", "model": "m1", "thinking": "  "}),
+        encoding="utf-8",
+    )
+    assert "thinking" not in read_home_substrate(tmp_path)
+    # A thinking knob WITHOUT a chosen mind is meaningless: pair-unset
+    # reads as fully unset, the field never leaks out alone.
+    (tmp_path / "substrate.yaml").write_text(
+        yaml.safe_dump({"thinking": "high"}), encoding="utf-8"
+    )
+    assert read_home_substrate(tmp_path) == {}
+
+
+def test_resolve_tuple_shape_is_unchanged_for_existing_callers(tmp_path: Path) -> None:
+    """The resolver still returns (provider, model) — widening it is the
+    coordinated implementation wave, not this unblock (the gateway and the
+    runtime CLI lanes move together there)."""
+    (tmp_path / "substrate.yaml").write_text(
+        yaml.safe_dump({"provider": "p1", "model": "m1", "thinking": "high"}),
+        encoding="utf-8",
+    )
+    assert resolve_home_substrate(None, None, home_dir=tmp_path) == ("p1", "m1")

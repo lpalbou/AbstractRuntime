@@ -8,6 +8,511 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`substrate.yaml` gains an optional `thinking` field (reasoning plan R4,
+  2026-07-26)**. `read_home_substrate` now returns the reasoning-effort
+  field when the file carries one — spelled `thinking` at rest (the plan's
+  one-spelling decision). The field only rides when provider and model are
+  both set (a reasoning knob without a chosen mind is meaningless); blank
+  values are dropped; files without the field read exactly as before. The
+  resolver keeps its (provider, model) shape — widening it and the
+  consuming lanes is the coordinated implementation wave with the gateway.
+  This unblocks the gateway's substrate-triple build (their writer can
+  store the field without it being silently dropped on read).
+- **Endpoint-profile resolver context around tool execution (Case-1 seam,
+  2026-07-26)**. Gateway-registered `endpoint:*` profiles are per-principal
+  and invisible to core's in-process `create_llm` — session-route tools
+  (`analyze_media`) could not construct them. `MappingToolExecutor.execute`
+  now binds core's `use_provider_endpoint_profile_resolver` context around
+  each batch (ONE wrap site — policy path, approval-resume, and tool_invoke
+  all funnel through it by construction); the resolver getter is late-bound
+  over the run's own llm_client and attached at `build_effect_handlers`
+  through delegate-chain walking (`attach_endpoint_profile_resolver_getter`
+  exported for hosts composing elsewhere). Parallel pool submissions AND
+  the tool-timeout thread run under copied contexts (a bare thread starts
+  context-empty on CPython 3.12 — the timeout lane silently dropped the
+  seam; adversary P1-1). The getter falls back to the public
+  `resolve_provider_endpoint_profile` attribute so the REMOTE client lane
+  lights up too (adversary P1-2). Fable5-adversaried; ten pins in
+  `tests/test_endpoint_profile_route_context.py`.
+- **`_session_route` trust-boundary stamp (vision-capability ruling,
+  2026-07-26)**. Delegated sight must use the session model — fallbacks are
+  solely for vision-less models (operator ruling). The TOOL_CALLS handler
+  now stamps the run's own route (`{"provider", "model"}` from
+  `_runtime.provider/model`) onto declared consumer tools
+  (`_SESSION_ROUTE_TOOL_NAMES`, exact names — currently `analyze_media`),
+  derive-not-claim: any payload-claimed `_session_route` is popped on EVERY
+  call (spoofs die everywhere), and absent route vars stamp nothing (core's
+  fallback path byte-identical). Partial routes stamp what exists so core's
+  degradation fires its labeled `#FALLBACK` warning instead of silence.
+  Fable5-adversaried (no P0/P1); five pins in
+  `tests/test_session_route_stamp.py`.
+- **`abstractruntime.__version__` (2026-07-26)**: canonical version surface
+  for hosts comparing a bundle's `metadata.min_runtime` against the serving
+  runtime (flow's pin-expression enforcement gate). Lazy module
+  `__getattr__` over `importlib.metadata` — the installed dist is the one
+  truth. Consumers must compare with `packaging.version.Version`, never
+  string comparison.
+- **Replay-integrity wave (code-tui incident + fable5 server audit,
+  2026-07-25)**. Three runtime-owned fixes for 10-14MB single-turn history
+  bundles and silent-omission paths:
+  - **Appendix-aware `$slim` dedup (`storage/ledger_slim.py`)**: the layout
+    dedup byte-compared observability/provider-request copies against an
+    exact reconstruction of the STARTED payload — one ~350B message appended
+    by the agent adapter AFTER payload build defeated byte-identity for the
+    whole ~250KB copy on every call (0-of-59 dedup hits measured; 5.95MB of
+    a 14.3MB bundle). Now the reconstruction may match as an ordered
+    SUBSEQUENCE with the few small extras carried verbatim in the marker
+    (positions + items, bounded: <=8 items, <=4KB each, <=half the value);
+    the sha over the full value keeps correctness structural. Match order
+    prefers least-verbatim markers (exact field, exact layout,
+    layout+appendix, field+appendix). Mutated conversations still rest
+    verbatim — dedup drops duplicates, never information.
+  - **Conversation-field floor**: known conversation fields
+    (`messages`/`system_prompt`/`prompt`) now dedup above 512B instead of
+    4096B — the audit measured a 3,918B system prompt (178B under the old
+    gate) duplicating on every one of 32 calls.
+  - **`detail="replay"` bundle profile (`history_bundle.py`)**: a labeled
+    projection for transcript folds — drops request-side payload fields and
+    the two observability metadata paths (each replaced by a structured
+    `$omitted` marker naming profile/field/bytes) and skips the timeline.
+    The exact bundle stays the default; projection is spine-copy only
+    (stored records never mutated).
+  - **In-band bundle `warnings[]`**: subtree discovery failures, ledger
+    read failures, torn-row skips, tail-window truncation (with
+    total-vs-window and the $slim-orphan caveat), subtree caps, and
+    input_data offload failures are now reported IN the bundle instead of
+    silently omitted (operator ruling: a bundle that cannot be complete
+    must say so).
+- **Inline pin expressions (tier 1, 2026-07-25)**. A data input pin on a
+  VisualFlow node may carry a small sandboxed Python expression in
+  `node.data.pinExpressions: {pin_id: "vars.fix_cycles < 3"}` — its OWN
+  field, deliberately never a `pinDefaults` sentinel, so pre-expression
+  compilers skew SAFE (unread key → pin falls back to its default → falsy
+  conditions keep loops bounded; the truthy-dict encoding that would spin
+  while-loops was rejected by design review). Expressions compile ONCE at
+  flow build (RestrictedPython eval mode; an unparseable expression fails
+  the build naming node+pin) and evaluate at input resolution on the
+  consuming node — both resolver lanes (pure + exec) share one
+  `apply_pin_expressions` step, and while-conditions re-read `vars.*` fresh
+  each iteration. Environment: `vars` (read-only run-vars view), `value`
+  (the pin's would-have-been value), `parse_json`/`to_json` + the code-node
+  builtin set (one `sandbox_helper_globals()` source shared with the Code
+  node sandbox, which gains `parse_json`/`to_json` in both lanes). A
+  raising expression fails the consumer's step naming `<node>.<pin>` with
+  an expression preview. Module: `visualflow_compiler/visual/pin_expressions.py`.
+
+### Changed
+- **`RestrictedPython>=7.0` is now a declared dependency (2026-07-25)**. It
+  was always the intended Code-node sandbox (the import guards existed) but
+  was never declared, so plain installs silently ran the weaker basic exec
+  lane. MIGRATION NOTE: code bodies that only ever ran on the basic lane
+  can now refuse under RestrictedPython policy at their first execution —
+  the known case is augmented assignment on subscripts (`d["k"] += 1`
+  → "Augmented assignment of object items and slices is not allowed";
+  rewrite as read/modify/write, the rule documented since 2026-02-20). Pin
+  expressions REFUSE to run without RestrictedPython rather than fall back
+  to bare eval.
+
+### Fixed
+- **A failed diary write no longer throws the entity's reply away
+  (record-everything ruling, 2026-07-26)**. When the book write failed
+  (disk or store error), the turn failed loudly but the whole reply —
+  including the words the entity elected to keep — was lost. Now the raw
+  reply is saved first to `<home>/rescue/reply_<run>_<turn>_<suffix>.json`
+  (with the error, and the write-time anchor context when the caller has
+  it), then the failure stays loud and names the file. Covered lanes: the
+  durable visit capture (`act_only.py`, both failure paths), the chat
+  driver's turn path, AND the session-close reflection path (the review
+  adversary found the reflection lane carried the same hole after the turn
+  path was fixed). Shared runtimes pass a per-run rescue location; a
+  raising resolver degrades to no-rescue with a warning — the safety net
+  must never be what drops the reply. Seven pins across
+  `tests/test_diary_write_rescue.py` and the chat-driver suite.
+- **Streamed reasoning folds keep the COMPLETE thought (core contract v1,
+  2026-07-26)**. Both stream folds (local normalization + remote SSE lane)
+  persisted the FIRST non-empty `metadata.reasoning` — but streamed
+  reasoning arrives as per-chunk snapshots and core guarantees the TRAILING
+  chunk is the complete aggregate, so one fragment rested durably and the
+  operator's keep ruling was silently violated. Now last-non-empty wins;
+  blank/absent trailing metadata never erases; the display-only
+  `reasoning_delta` key is never read into the durable fold. Pinned in
+  `tests/test_llm_streaming_on_token.py`.
+- **Remote LLM client forwards `thinking` (reasoning-1st-citizen R-A,
+  2026-07-26)**. The remote chat-body pass-through allowlist silently
+  dropped the `thinking` param while the abstractcore server accepts it —
+  any gateway built on the remote runtime lost reasoning configuration
+  entirely (found independently by two seats' adversaries). Strings ride
+  trimmed; junk shapes stay off the wire. Three-case pin in
+  `tests/test_remote_llm_client.py`.
+- **Stale `search_files` spec pin**: the integration test asserted the
+  ABSENCE of `output_mode`/`context_lines`/`case_sensitive` params — a
+  snapshot pin that abstractcore's 2026-07 search improvements legitimately
+  invalidated. The test now pins its actual intent (max_hits/head_limit
+  behavior).
+- **`JsonlCommandStore.append` fsyncs before returning (quit-contract
+  thread, 2026-07-25)**. The gateway answers `POST /commands` 2xx only
+  after the append returns, so the durable claim behind pause/cancel
+  delivery must put the record ON DISK, not merely in the OS page cache —
+  a flush alone left a power-loss window between flush and sync. Commands
+  are low-frequency (pause/cancel/resume, never hot-path), so the fsync
+  cost is negligible. Test-pinned (one fsync per accepted append;
+  duplicates never re-write, so they owe no fsync). Honest boundary: the
+  SQLite command store (entity-home inboxes) stays WAL
+  `synchronous=NORMAL` — process-crash durable; widening to power-loss is
+  a per-connection pragma decision, not store-local.
+- **Tend lanes forward the verified reflection channel (cross-package break,
+  memory `tend.py` entity-seat P0, 2026-07-25)**. Memory's
+  `apply_tend_elections` gained a mandatory `channel` that must equal
+  `entity-reflection` — the privileged default was removed (it let a
+  workplace-stamped run tend as the entity's own reflection). Both runtime
+  tend call sites passed no channel, so every tend/dispose silently refused
+  (the entity could no longer dispose dreams on either lane — the exact
+  capability the MEMORY_TEND route restored). Fixed: the home-direct chat
+  driver states `channel="entity-reflection"` (true by construction — the
+  fence fires on the entity's own reply reflecting on its own memory in its
+  own home session, memory's explicit sanction); the `MEMORY_TEND` handler
+  FORWARDS the channel from the payload and NEVER defaults a privileged
+  constant (the door injects the verified channel for stamped runs; absent
+  → the engine refuses loudly, no self-authorization). The `memory_tend`
+  VisualFlow node gained a `channel` pin. Both call sites carry a
+  version-tolerant `TypeError` ladder for engines predating the kwarg.
+- **Private diary verbatim never rests in a ledgered tool result
+  (adversary C2 + gateway c5403)** (2026-07-25). Gateway proved flow-brain
+  runs ledger in the BASE store (shared plane), so `ENTITY_TOOLS_EXECUTE`
+  resting a private `diary_read`'s words was the 2026-07-07 diary-leak
+  class. On the resting lane (`results_rest_durably`) a private entry now
+  serves its act-frame + gist only, never the body — store-independent
+  (a property of the handler, gateway's framing), mirroring the containment
+  every HTTP/observer surface uses. The prompt-ephemeral chat lane is
+  unchanged (results never rest). The effect header + private trailer also
+  dropped the now-false "home's own ledger" claim (flow-brain rests in the
+  base store) for the store-neutral "a durable record".
+- **Entity-lane cleanup pass — four fable5-confirmed fixes (operator-ordered
+  seat-plan wave, 2026-07-25)**. C1: `MEMORY_CONSOLIDATE`'s version-skew
+  ladder never drops `report_only` — an old engine that cannot do a pure
+  read now FAILS honestly instead of silently degrading to an unguarded
+  write pass (the lease + paused/STOP gates are conditioned on
+  `report_only`, so dropping it ran a write the result still labeled a read
+  — read→write inversion); drops now come from a fresh kwargs copy so one
+  rejected kwarg keeps the others. C3: over-cap tool notices name the
+  APPLIED cap, not the raw `MAX_TOOL_BLOCKS_PER_TURN` constant (the effect
+  lane's 6-call batch told the model 14 remained). C4: mechanical/no-gist
+  diary projection titles carry the entry-id tail — the same same-day
+  uniform-title collision the slug fixed for other entries (mechanical
+  close notes are the most frequent same-day multiples). C5: the retired-
+  kwargs path in `wrap_llm_handler_with_act_only` emits the loud warning
+  its docstring promised. Pins for all four + the max_calls ceiling + the
+  C1 old-engine case.
+- **ENTITY_TOOLS_EXECUTE clamp ceiling raised to the ruled turn budget
+  (consolidation sanity-check, flow c5318/c5319)** (2026-07-25). The
+  `max_calls` clamp hard-capped at 6/batch, which would refuse a legitimate
+  8-call round from a caller threading its remaining turn budget — the
+  ruled shape (maintainer 2026-07-11: 20-call TRUE per-turn budget,
+  callers thread the remainder). Ceiling is now
+  `tools.MAX_TOOL_BLOCKS_PER_TURN` (the one declared constant both lanes
+  read); the default stays 6 when unspecified; the degenerate-batch wall
+  (>24) stands above it.
+- **`search_memory` all-words pass for multi-word queries (flow c5311, Mira
+  B1)** (2026-07-25). Her deliberate search reported no hits for records
+  passive recall had just surfaced. Diagnosis with evidence: NOT index lag
+  (the letters arm reads the store live — minutes-old records are visible);
+  the miss class was whole-phrase contiguity — a multi-word query only hit
+  when it appeared as one contiguous substring. When the exact phrase finds
+  nothing, the reader now retries with every word required in any order,
+  LABELED distinctly ("all the words, any order — not the exact phrase"),
+  and the absence warrant names both checks. Exact-phrase keeps first
+  position and its own label; the meaning fill stays the last resort.
+- **Writer-declared `digest_method` rides DIARY_WRITE into the projection
+  (flow's cycle-4 adversary, commons c5270 P2-2 — jointly ruled with
+  memory)** (2026-07-24). Machine-worded diary entries (deterministic close
+  notes) projected without authorship metadata evaded memory's
+  machine-authorship bridge guard — 5/6 dreams kept a close-note endpoint.
+  The WRITER is the only party that knows its words are mechanical, so the
+  stamp is a declared payload field (the digest_method consent-vocabulary
+  pact: name the label, never infer from prose): `DIARY_WRITE
+  payload.digest_method` (validated ≤64 chars) rides entry origin into
+  `attributes.digest_method` on the projection, and a declared-mechanical
+  entry keeps the BARE template title (machine words in title slugs would
+  re-create the clustering-on-form the slug fix killed).
+- **MEMORY_CONSOLIDATE out-fold read keys the engine never returns (wave-4
+  adversary F1, flow-authored fix reviewed and accepted — commons c5228)**
+  (2026-07-24). The fold read `dream.record_id`/`maintenance.candidates`;
+  the engine's real keys are `dream_record_id` and the miner's `created`
+  list — so 10/10 nights reported a FORMED dream as "a quiet night" while
+  the alive_drives cue served the dreams the settlements denied. This is
+  the 2026-07-09 formed/created key class REPEATED, directly under a
+  comment citing that lesson: citing a lesson is not applying it — the only
+  guard that holds is a test asserting against the OTHER PACKAGE'S REAL
+  return shape, which the fix adds
+  (`test_consolidate_fold_reads_the_real_engine_keys`: seeds a life, the
+  real `sleep_pass` forms a dream, asserts fold == engine sub-dicts). Also
+  fixed in passing: the brain-effects test home minted the retired
+  @-suffixed entity-id shape (ruling c2513).
+- **Diary projection titles carry content (flow's long-life adversary,
+  commons c5208 ask 1)** (2026-07-24). Every same-day projection shared one
+  exact templated title ("Diary entry (note) — date"), so dream composition
+  (which reads titles) produced contentless dreams and duplicate-group
+  maintenance self-amplified (droste: 25 identical titles, 6 contentless
+  dreams, flags 8→24). Public titles now fold a digest slug (already
+  public-plane words by the c302 ruling — the title discloses nothing new);
+  the mechanical no-gist fallback stays out of titles (machine words would
+  re-create clustering-on-form); private titles gain the entry id's opaque
+  tail (already in attributes.entry_id — disambiguates without any word
+  leak).
+
+### Added
+- **`wrap_llm_handler_with_conditional_capture` — stamp-conditional G1
+  capture for SHARED runtimes (flow c5342 R1, the Mira diary leak)**
+  (2026-07-25). The flow-brain lane ran LLM_CALL on the base runtime where
+  the G1 capture wrap never existed — elected diary fences passed through
+  unparsed; PRIVATE words rested in ledgers/run files/artifacts and reached
+  the visitor's screen (the 2026-07-07 diary-leak class, live). The new
+  helper lets the gateway COMPOSE the capture boundary per dispatch:
+  `should_capture(run)` (their verified-stamp resolver; unstamped runs get
+  the byte-identical passthrough) + `diary_write_for_run(run)` (the stamped
+  run's HOME book — a shared runtime cannot bind one book at composition).
+  A stamped run whose book cannot be resolved RAISES: failing the effect is
+  strictly better than either leak direction. 3 pins.
+- **`ENTITY_TOOLS_QUERY` / `ENTITY_TOOLS_EXECUTE` — the entity tool surface
+  as effects (flow c5285 ask 3, operator-reported P0: flow-lane entities
+  had ZERO tools)** (2026-07-25). Two home-only effects in
+  `identity/tool_effects.py` keep the tool LOOP in the observable flow
+  graph: QUERY resolves the phase grant + native declaration specs (pure
+  read); EXECUTE runs ONE batch of wire-shape `tool_calls` under the
+  RE-RESOLVED grant through the driver's own fold + executor
+  (`native_tool_elections` + `execute_tool_elections` — one authority, one
+  executor). The single-loop-effect alternative was rejected as WRONG, not
+  just opaque: nesting LLM calls inside a handler bypasses every LLM_CALL
+  invariant (prompt-cache fingerprinting, patience windows, ledger LLM
+  records). Fable5 adversary folded (8 findings): `feelings_about` was
+  granted+declared but unwired (the exact granted-but-unreachable incident
+  class — lifted to `memory_reader.feelings_about_text`, ONE implementation
+  with the chat driver); stamped visit runs force the visit grant (payload
+  phase claims are loud-overridden — door-lane belt; gateway's payload
+  gates stay the wall); lane-honest prose (`results_rest_durably`: the
+  effect lane's header/private-trailer say results rest in the home's own
+  ledger, never "not kept in the record"); degenerate batches (>4× cap)
+  refuse outright; legacy phase spellings stay loud; garbage tool_calls
+  shapes get one counted notice. `ENTITY_HOME_EFFECT_TYPES` grew 11→13
+  (composition-derived pin updated). Known cross-repo debt flagged on the
+  thread: the gateway's shared-router `_home_handlers` does not build the
+  tool pair (honest "no home handler" until they bind it); flow's
+  `enable_workspace` node pin is inert (workspace follows the grant).
+- **`ENTITY_HOME_EFFECT_TYPES` — the canonical entity-brain effect set
+  (flow c5237)** (2026-07-24). The door's `install_entity_routing` was
+  hand-counted at 7 effect types while the brain grew to 11 — summoned runs
+  died one effect downstream per fix ("No effect handler registered for
+  memory_probe"). Exported from `integrations.abstractmemory` so the
+  gateway routes from ONE imported source (the diary_type-clamp drift-class
+  lesson); pinned to EQUAL a real `open_home` composition's handler keys —
+  derived from the composition, never a hand count.
+- **`MEMORY_TEND` — the ONE tend-election effect route (flow c5208 ask 5)**
+  (2026-07-24). Dream disposal (`dispose confirm|reject`) and the other tend
+  verbs reached the engine only through the chat driver's fence; the flow
+  brain had no route. The fourth home-only brain handler takes the fence
+  BODY verbatim and hands it to the engine's own `parse_tend_block` +
+  `apply_tend_elections` (grammar/verbs stay engine-owned — no second
+  vocabulary minted), with the driver's exact #tag resolution semantics
+  (whole-home ladder, refuse-on-ambiguity, full ids pass through). Refusals
+  return as data in the result; home-only registration pinned.
+- **GAP-2 refusal false-positive on compiler-layer node types (flow's c5197
+  find)** (2026-07-24). The unknown-node-type compile refusal used the
+  executor's `_create_handler` branches as its known-set, missing node types
+  whose semantics live in compiler.py adapters dispatched by `_visual_type`
+  (`memact_compose`, `add_message`, `set_var_property`, `set_vars`) — a
+  legitimate bundle carrying any of them was refused at compile. Fixed with
+  `COMPILER_LAYER_NODE_TYPES` (passthrough base, adapter semantics) plus a
+  drift pin that extracts every `visual_type ==` dispatch from compiler.py
+  source and asserts coverage, so a future compiler-layer node type cannot
+  reintroduce the false positive. The memact regression test skips in
+  environments without abstractflow, which is how the false positive rode a
+  green suite.
+- **Seam handlers: three flow-authored folds reviewed and accepted (commons
+  c5173/c5183)** (2026-07-24). (1) Home-bound effort presets seat the self
+  (`self_fraction` setdefault 0.5) — effort shortcuts left it 0.0, so every
+  flow-lane recall ran identity-blind against the "identity is present by
+  right" law; explicit budget dicts stay caller-owned. (2)
+  `entity_scope_owner` threading: bare `self`/`diary`/`life` scope names on a
+  home-bound seam resolve to the home owner (payloads never carry the entity
+  id — the deposit-gate rule applied to scoping); `open_home` passes it.
+  (3) `run_id` joined the ADJUST/APPRAISE event-id basis: two runs sharing a
+  turn_id + record + reason no longer dedup-swallow each other; same-run
+  crash-replays still dedup. Honest upgrade note: a crash-replay resuming
+  across the upgrade boundary mints a different event id and could
+  double-apply one additive salience write, once.
+- **Connected unknown VisualFlow node types refuse at COMPILE
+  (`UnknownNodeTypeError`) instead of running as silent no-ops** (2026-07-24,
+  flow's live incident commons c5166: a stale server compiled newer
+  entity-brain node types as `lambda x: x` passthroughs — sessions
+  "completed" with real-looking answers while ZERO memory formed; a flow
+  that runs and lies). `visual_to_flow` now raises for any unknown node
+  carrying an edge, naming the type and the likely version skew. Boundary
+  choices: parsing (`load_visualflow_json`) stays permissive (bundles still
+  list on older servers); fully disconnected unknown nodes
+  (decoration/comments) compile fine (they can never fire); compile-time —
+  not execution-time — because a raise from a node function propagates out
+  of `Runtime.tick` with the run still RUNNING, which would wedge runs
+  instead of failing them.
+
+### Added
+- **Entity-brain composition effects (flow's build-split ask, commons
+  c5163/c5169)** (2026-07-24). Three new HOME-ONLY EffectTypes wrapping
+  EXISTING facade calls so the entity-life master VisualFlow can animate the
+  night, the deliberate reach, and the day-gate reads as nodes —
+  compose-not-reimplement: `MEMORY_CONSOLIDATE` (one `sleep_pass(...)` call
+  with `report_only`/`include_dream`/`include_identity`; the handler enforces
+  the home lease (holder="dream") and the operator paused kill-switch as
+  honest `{ran: False, reason}` results, never crashes; version-skew ladder
+  for older engines), `MEMORY_PROBE` (op: probe | expand | familiarity;
+  reason mandatory on the reach — the deliberate-reach law), and `LIFE_QUERY`
+  (op: alive_drives | cognition_health | entity_card — the OFFER/GATE reads).
+  Handlers live in `integrations/abstractmemory/brain_handlers.py` and bind
+  ONLY through `open_home`, so workplaces stay structurally handler-less (the
+  DIARY_* deposit-gate law); `open_entity_runtime` inherits them with zero
+  extra wiring. `LIFE_QUERY` is deliberately not `MEMORY_QUERY` (that name is
+  the old workflow memory API; collision avoided at birth).
+- **`read_idle_timeout_s` threaded (0152 face 2 — the no-progress bound,
+  core c5051 base param + runtime c5041 commitment)** (2026-07-24). The
+  factory now seeds `read_idle_timeout_s=300.0`
+  (`DEFAULT_LLM_READ_IDLE_TIMEOUT_S`) beside the absolute `timeout`
+  (7200s backstop): a stream that delivers NOTHING for 5 minutes aborts at
+  the socket instead of pinning a tick worker for the 2-hour total —
+  o1-class thinking pauses stay well under it, and legitimate long
+  generations keep the full total budget. LOUD DEFAULT CHANGE: callers
+  needing the old behavior pass `read_idle_timeout_s: None` in llm_kwargs
+  (core's None = byte-identical pre-fix). Entity patience-window lanes
+  (chat + life) thread the tighter 60s beside their 120s per-attempt,
+  with the TypeError skew ladder popping the kwarg for older cores.
+  Pinned by `tests/test_read_idle_threading.py` (4).
+- **`git_read_only@v1` per-call refiner + the outreach carve-out marker
+  (converged permission contract c5028, asks R2/R4)** (2026-07-23). The
+  abstractcode read-only-git proof ported to the approval point: an
+  `execute_command` call whose command is a PROVEN read-only git invocation
+  (two-stage conservative proof — charset, shlex tokens, no wrappers, no
+  globals-before-verb, read-verb allowlist, write/exec flag screen,
+  unknown-arg-key differential guard) auto-approves; every doubt asks.
+  Registered beside `send_email_recipient@v1`; INERT until core declares
+  `risk_refiner=git_read_only@v1` on execute_command's inventory row (the
+  dm#244 architecture). The annotate fold now also DECLARES the comms
+  carve-out on served rows (`approval_carveout` on static-auto tools with
+  risk_rank >= 3) so facts-trusting clients see why `approval_default`
+  disagrees with the rank band. Pinned by
+  `tests/test_git_read_only_refiner.py` (9).
+- **browser_probe in the grant universe (operator dm#24, core c5005)**
+  (2026-07-23). Core's render-verification tool registers in the `web`
+  toolset beside fetch_url (import-guarded; older cores degrade to the
+  prior set) and is ask-by-default in the approval fold — mcd honored by
+  DERIVATION (the risk-rank ceiling never silences model_controlled_
+  destination tools) with the name entry in `_DEFAULT_REQUIRE_APPROVAL`
+  as the belt beside the fact. Its `target` argument already rides the
+  workspace wall (earlier same-day fix). Pinned in
+  `tests/test_gateway_facades_c4899.py`.
+
+### Fixed
+- **Entity-lane execute_command reaps its whole process TREE on timeout
+  (0152 executor-starvation wedge, gateway c4998/c5021 face 1 — runtime's
+  spawner half)** (2026-07-23). The work-lane runner had the same defect
+  class as core's common_tools twin: `subprocess.run(timeout,
+  capture_output)` kills the child but not its descendants, and the
+  post-kill pipe read waits forever on an EOF an orphaned grandchild never
+  gives (the thread-pinning mechanism). Now: own process group
+  (`start_new_session`, POSIX-guarded), SIGKILL the whole group on
+  timeout, bounded 5s drain (re-setsid escapees cap at seconds, never
+  forever). Live-proven: a shell spawning a 57s grandchild under a 2s
+  timeout returns in 2.0s with zero survivors. Pinned in
+  `tests/test_entity_execute_tool.py`.
+- **The 401-incident chain's two runtime links (code-tui c4978, ledger-
+  verified)** (2026-07-23). (R1) Run-output offload is no longer
+  all-or-nothing at the output root: when a dict crosses the inline cap
+  after the leaf walk, the offloader reduces LARGEST CHILDREN FIRST
+  (size-sorted, authoritative re-check) and whole-subtree replacement is
+  the last resort — a 4KB answer no longer offloads because it shares a
+  dict with a 215KB scratchpad (the incident shape is the pin; the answer
+  survives by SIZE, never by a name list). (R2) Session-history replay now
+  resolves ROOT-REPLACED outputs from the existing corpus boundedly at
+  answer extraction (`history_bundle._resolve_offloaded_output`): only
+  offloader-minted refs (tags.source=run_output_offload), 4MB metadata cap,
+  answer extraction only — server-seed amnesia for offloaded turns is
+  closed. Pinned by `tests/test_offload_answer_chain_c4978.py` (6).
+
+### Added
+- **Effective phase graph — the runtime interpreter half of operator
+  structural editing (build order c4837, adversary-converged; Laurent
+  dm#276: create/remove/redirect edges with per-edge instructions, actually
+  governing behavior)** (2026-07-23). New `identity/phase_graph.py`:
+  `load_effective_graph` (same resolution chain as the dials) parses the
+  resolved doc's transitions and applies `graph.edge_ops` idempotently
+  (add / remove / redirect keyed `from->to#cause`); defense-in-depth at the
+  interpreter — the artifact's per-edge `edit_policy` (spec v19) is the one
+  source (locked/locked-absolute/dial immune; consultable-redirect =
+  redirect-only), with a ruled-cause belt for older artifacts; unknown
+  causes/phases refused naming the legal lists; RESERVED causes block
+  add/redirect per the artifact's own rule; sub-tick `bound_h` refused; a
+  REACHABILITY-aware sleep floor un-removes structural sleep edges only
+  (never resets live redirects). Consults wired: the need-check's two
+  landings (removal skips the leg, redirect substitutes with guards
+  traveling — grant/order checked; instruction prose rides the wake reason
+  into the first cue, defanged + provenance-stamped, steering never law);
+  the wake CARRIES its cause to the top boundary so the consult governs the
+  day that actually opens (adversary P0); the work-close redirect; the
+  personal-cycle edge (removal holds the cycle; redirects disobeyed loudly
+  — the window sleeps by design). `read_day_gate` gained `skip_phases`.
+  The `phase_changed` marker is SPELLED (was reserved-unspelled): one
+  writer helper (`append_phase_changed` → state_history.jsonl), day-open
+  markers write when the day truly opens (never at wake; never a
+  fabricated from-side — `_last_opened_phase` tracks days that opened, not
+  decisions the operator gate idled away); `life_sleep_stats` excludes
+  marker rows. Vendored spec re-synced v17→v19. Pinned by
+  `tests/test_phase_graph_obedience.py` (22, incl. a full-loop pin that a
+  removed edge prevents the work day end-to-end).
+- **Identity-pass spine, runtime slice (cti#399 design adopted cti#400; build
+  gate ruled already satisfied, framework c4779)** (2026-07-23). Waking
+  elects, sleep enacts, the registrar never authors: (1) ```` ```realize ````
+  fenced election (`identity/reflection.py::parse_realize_blocks`) — mid-turn
+  and at the close look-back in the chat lanes, and in the durable visit
+  lane's reflection stage; body = the entity's words, `evidence=` MANDATORY
+  (#tags/ids, 8-token cap, prose words dropped with one collective notice),
+  optional `touches=`; cap 2/session; refusals loud; marker
+  `[realized: "…" - held for sleep]`. (2) Proposal formation
+  (`chat.py::_apply_realizations`; visit lane: a staged APPLY with
+  `_absorb_failure`) — kind=realization, SELF scope, `derived_from` edges to
+  RESOLVED evidence only (colon-shaped ids must exist in the home ladder via
+  `digest_assertion` — fabricated evidence never mints an edge; visit-lane
+  evidence resolves against the visit sheet); INERT on formation, the deposit
+  gate untouched; pending = formed-and-unstamped (the graph is the queue).
+  Engine kind-vocabulary skew degrades loudly (#FALLBACK names memory's
+  half); salvage look-backs stamp the ENDED session's id/phase. (3)
+  `include_identity` threading (`life.py`) mirroring `include_dream`: nightly
+  sleeps offer, cycle windows never, TypeError skew ladder labeled at every
+  rung. (4) The realize contract teaching (honest mechanics: held for sleep,
+  most nights decide nothing, offered never owed). Pinned by
+  `tests/test_realize_election.py` (16).
+- **`_runtime.wait_until_streak` — O(1) spin discriminator for the gateway's
+  idle-poller reaper (gateway c4768; incident c4757: a leaked status poller
+  re-armed wait_until every ~4.5s for two days = an 86,924-record ledger)**
+  (2026-07-23). Each wait_until PARK increments; ANY other effect dispatch
+  resets to 0; resumes leave it untouched (auto-unblock never re-dispatches
+  the effect); runs that never spin never grow the key (deny-safe absent-key
+  posture holds naturally). The mutation rides the same save that lands each
+  step (the effect_seq rule), so the counter can never disagree with the
+  ledger it summarizes. Pinned by `tests/test_wait_until_streak.py` (3).
+- **Camera toolset: installed = registered (drafted by the camera seat in
+  this tree — runtime owner-approved c4130; env gate removed same day by
+  operator ruling, dm:camera--laurent#10 verbatim: "i don't like those
+  stupid variables, remove it! there is a reason why EACH APP can decide
+  which tools run, STOP DUPLICATING gating")** (2026-07-21). The camera
+  toolset registers in `get_default_toolsets()` whenever abstractcamera is
+  importable — no `ABSTRACT_ENABLE_CAMERA_TOOLS` env var (a dead-flag test
+  pins both polarities meaningless). One shared predicate
+  (`_camera_tools_module()`) is the availability answer, the registration
+  gate, AND the approval-fold source (adversary F1: find_spec and
+  try-import disagreed on shadowed/version-skewed installs — a
+  present-but-broken abstractcamera now warns ONCE with `#FALLBACK`
+  instead of vanishing silently; true absence stays silent).
+  `camera_tool_approval_defaults()` still folds into
+  `default_approval_policy_sets()` so every environment-capturing verb
+  asks by default (c3938: a default, not a floor); exposure control lives
+  in the per-app mechanisms (allowed_tools, tool_policy, gateway walls).
 - **`write_chart` effect node + `documents/charts.py` (built by the flow
   seat in this tree — runtime owner review requested)** (2026-07-20,
   operator ruling via flow dm#39: a deterministic workflow must never

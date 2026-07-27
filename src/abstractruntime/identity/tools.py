@@ -512,11 +512,18 @@ def native_tool_elections(
     elections: List[ToolElection] = []
     markers: List[str] = []
     notices: List[str] = []
+    skipped_shapes = 0
     for call in list(tool_calls or []):
         if not isinstance(call, dict):
+            # Diagnostics-honest even for garbage shapes (adversary F8):
+            # count once below rather than one line per entry.
+            skipped_shapes += 1
             continue
         if len(elections) >= cap:
-            notices.append(f"#FALLBACK native tool call ignored (cap {MAX_TOOL_BLOCKS_PER_TURN}/turn)")
+            # Name the APPLIED cap, not the constant (adversary C3): the
+            # effect lane passes max_elections=6 while the model reads
+            # "cap 20/turn" and thinks 14 remain. `cap` is the real bound.
+            notices.append(f"#FALLBACK native tool call ignored (cap {cap} this batch)")
             markers.append("[tool call ignored - too many this turn]")
             continue
         fn = call.get("function") if isinstance(call.get("function"), dict) else {}
@@ -560,6 +567,11 @@ def native_tool_elections(
             continue
         elections.append(ToolElection(name=name, body=body, args=args))
         markers.append(f"[used tool: {name}]")
+    if skipped_shapes:
+        notices.append(
+            f"#FALLBACK {skipped_shapes} tool_calls entr{'y' if skipped_shapes == 1 else 'ies'} "
+            "ignored (not an object; wire shape is a dict per call)"
+        )
     return elections, markers, notices
 
 
@@ -589,7 +601,7 @@ def parse_tool_blocks(
         info = (match.group(1) or "").strip()
         body = (match.group(2) or "").strip()
         if len(elections) >= cap:
-            notices.append(f"#FALLBACK tool block ignored (cap {MAX_TOOL_BLOCKS_PER_TURN}/turn)")
+            notices.append(f"#FALLBACK tool block ignored (cap {cap} this batch)")
             return "[tool call ignored - too many this turn]"
         name = ""
         args: Dict[str, str] = {}
@@ -777,7 +789,8 @@ def _resolve_entry_id(diary_store: Any, requested: str) -> Tuple[Optional[str], 
 
 
 def _run_diary_read(
-    diary_effect: Callable[[str], Dict[str, Any]], body: str, *, diary_store: Any = None
+    diary_effect: Callable[[str], Dict[str, Any]], body: str, *, diary_store: Any = None,
+    results_rest_durably: bool = False,
 ) -> str:
     """Progressive disclosure through DIARY_READ (the designed read path)."""
     requested = body.strip().splitlines()[0].strip()
@@ -798,7 +811,25 @@ def _run_diary_read(
         parts.append(note)
     if gist:
         parts.append(f"gist: {gist}")
-    parts.append(text if text else "(the entry has no body)")
+    # PRIVATE VERBATIM NEVER RESTS IN A LEDGERED RESULT (adversary C2 +
+    # gateway c5403: flow-brain effect results ledger in the BASE store, a
+    # shared/operator plane — private words landing there is the 2026-07-07
+    # diary-leak class). `results_rest_durably` marks the lane where the
+    # tool result becomes durable ledger truth (the effect lane); there a
+    # PRIVATE entry serves its act-frame + gist only, never the body. This
+    # is store-INDEPENDENT (words-never-rest is a property of the handler,
+    # not of which store ledgers the run — gateway's framing) and mirrors
+    # the containment every HTTP/observer surface already uses. The
+    # prompt-ephemeral chat lane (results_rest_durably=False) still serves
+    # the full body: it is never written to any record.
+    if results_rest_durably and vis == "private":
+        parts.append(
+            "(private entry: its verbatim stays in your book and is NOT shown here - "
+            "this lookup is kept in a durable record, and private words never rest outside "
+            "the book; open a home session to read the full entry)"
+        )
+    else:
+        parts.append(text if text else "(the entry has no body)")
     # THE BIRTH TRAIL (diary---verbatims room, 2026-07-19): every entry
     # remembers where it came from — the handler computed the graph trail;
     # render it as #tags so the hop to the original conversation's full
@@ -816,7 +847,13 @@ def _run_diary_read(
     if amid:
         tags = " ".join(f"#{_graph_tag(t)}" for t in amid)
         parts.append(f"written amid: {tags} (what you were attending to)")
-    if vis == "private":
+    if vis == "private" and not results_rest_durably:
+        # The prompt-ephemeral chat lane served the full body above; tell the
+        # entity honestly that those words are not kept unless it speaks them.
+        # (The resting lane already omitted the body with its own note — no
+        # second trailer, and NO "home's own ledger" claim: gateway c5403
+        # proved the flow-brain effect lane rests in the BASE store, so the
+        # F4 trailer's "home's own ledger, nowhere else" was false there.)
         parts.append(
             "(private entry: these words are yours alone - they reach only you here, "
             "and will not be kept in the conversation record unless you speak them)"
@@ -847,6 +884,10 @@ class ToolExecutionContext:
     search_memory_fn: Optional[Callable[[str], str]] = None
     recent_memories_fn: Optional[Callable[[str], str]] = None
     feelings_about_fn: Optional[Callable[[str], str]] = None
+    # Lane honesty (adversary F4): True on lanes where tool results REST
+    # (effect results = ledger truth); the header/private-trailer prose
+    # must match where the words actually live.
+    results_rest_durably: bool = False
     notices: List[str] = field(default_factory=list)
 
 
@@ -863,7 +904,10 @@ def _exec_diary_list(e: ToolElection, ctx: ToolExecutionContext) -> str:
 
 
 def _exec_diary_read(e: ToolElection, ctx: ToolExecutionContext) -> str:
-    return _run_diary_read(ctx.diary_read_effect, e.body, diary_store=ctx.diary_store)
+    return _run_diary_read(
+        ctx.diary_read_effect, e.body, diary_store=ctx.diary_store,
+        results_rest_durably=ctx.results_rest_durably,
+    )
 
 
 def _exec_read_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -1017,18 +1061,55 @@ def _run_execute_command(command_text: str, ws: Any) -> str:
         "LANG": os.environ.get("LANG", "en_US.UTF-8"),
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
     }
+    # TREE-REAP ON TIMEOUT (0152 wedge, gateway c4998/c5021 face 1 — the
+    # runtime-owned spawner's half; core owns the common_tools twin): plain
+    # subprocess.run(timeout=) kills the CHILD but not its descendants, and
+    # with capture_output the post-kill pipe read waits for an EOF an
+    # orphaned grandchild never gives — the calling thread stays pinned
+    # forever (the exact executor-starvation mechanism). The child gets its
+    # OWN process group (start_new_session, POSIX) and timeout SIGKILLs the
+    # whole group, then a BOUNDED drain closes the pipes; a re-setsid'd
+    # escapee (core's chrome-headless finding) is the residual the bounded
+    # drain caps at seconds instead of forever.
+    posix = os.name == "posix"
     try:
-        proc = subprocess.run(
-            argv, cwd=str(ws.root), env=child_env, timeout=_EXEC_TIMEOUT_S,
-            capture_output=True, text=True, errors="replace",
+        proc = subprocess.Popen(
+            argv, cwd=str(ws.root), env=child_env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace",
+            start_new_session=posix,
         )
-    except subprocess.TimeoutExpired:
-        return f"the command ran past {_EXEC_TIMEOUT_S}s and was stopped (no result)"
     except FileNotFoundError:
         return f"refused: {argv[0]!r} is not a program available here"
     except Exception as e:  # noqa: BLE001 - a tool result, never a dead turn
         return f"the command could not run ({e})"
-    out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
+    try:
+        stdout, stderr = proc.communicate(timeout=_EXEC_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        if posix:
+            import signal
+
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:  # noqa: BLE001 - group gone/unreachable: kill the child directly
+                proc.kill()
+        else:
+            proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except Exception:  # noqa: BLE001 - a pipe held by an escapee: abandon the drain, bounded
+            pass
+        return (
+            f"the command ran past {_EXEC_TIMEOUT_S}s and was stopped "
+            "(whole process tree reaped; no result)"
+        )
+    except Exception as e:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        return f"the command could not run ({e})"
+    out = (stdout or "") + (("\n" + stderr) if stderr else "")
     out = out.strip()
     if len(out) > _EXEC_OUTPUT_CAP:
         out = out[:_EXEC_OUTPUT_CAP] + f"\n#TRUNCATION output capped at {_EXEC_OUTPUT_CAP} chars"
@@ -1107,6 +1188,15 @@ class ToolDescriptor:
     capability_class: str = "tier2_world"  # deny-safe default (contract rule)
     remote_write_capable: bool = False
     body_optional: bool = False  # election may carry an empty body (find 6)
+    # RISK FACTS (tool-tiers cycle-3, laurent dm#221/c4559; core schema-v3
+    # vocabulary): facts, never policy - the risk_tier derives via the ONE
+    # versioned mapping. Declared here where the walled row KNOWS the fact;
+    # absence means false for a row that declares its other facts (v2
+    # baseline), while a fully FACTLESS row derives top-tier fail-closed.
+    destructive_capable: bool = False   # rm-class / git-mutable reach
+    comms_send: bool = False            # sends on the operator's identity
+    captures_environment: bool = False  # records the real surroundings
+    standing_effect: bool = False       # persists beyond the call (monitors/triggers)
 
 
 # Canonical registry ORDER IS THE CANONICAL TOOL ORDER (byte-stable member
@@ -1225,7 +1315,11 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             required=("command",), executor=_exec_execute_command,
             # Honesty over optics: an arbitrary program can reach the
             # network (curl POST) — the fetch_url derive rule applied.
+            # destructive_capable: rm/git-mutable are programs INSIDE the
+            # shell (core c4526: grant-time clamp; the name-denylist stays
+            # the per-call refiner, never a grant-time discount).
             capability_class="tier2_world", remote_write_capable=True,
+            destructive_capable=True,
         ),
     )
 }
@@ -1281,6 +1375,10 @@ def walled_tool_rows() -> List[Dict[str, Any]]:
             "owner": "runtime",
             "grant_lane": d.tier,
             "capability_class": d.capability_class,
+            "destructive_capable": d.destructive_capable,
+            "comms_send": d.comms_send,
+            "captures_environment": d.captures_environment,
+            "standing_effect": d.standing_effect,
             "mutating": bool(d.mutating),
             "remote_write_capable": bool(d.remote_write_capable),
             "description": d.description,
@@ -1305,6 +1403,7 @@ def execute_tool_elections(
     search_memory_fn: Optional[Callable[[str], str]] = None,
     recent_memories_fn: Optional[Callable[[str], str]] = None,
     feelings_about_fn: Optional[Callable[[str], str]] = None,
+    results_rest_durably: bool = False,
 ) -> Tuple[str, List[str]]:
     """Run elected tools; return (results_message, notices).
 
@@ -1324,6 +1423,7 @@ def execute_tool_elections(
         search_memory_fn=search_memory_fn,
         recent_memories_fn=recent_memories_fn,
         feelings_about_fn=feelings_about_fn,
+        results_rest_durably=results_rest_durably,
     )
     sections: List[str] = []
     for e in elections:
@@ -1337,8 +1437,19 @@ def execute_tool_elections(
             ctx.notices.append(f"#FALLBACK tool {e.name} failed: {exc}")
         e.result = out  # the election carries what came back (probe surface)
         sections.append(f"[{e.name}]\n{out}")
+    # Header honesty per lane (adversary F4, corrected by gateway c5403):
+    # the effect lane's results REST as durable ledger truth — but NOT
+    # necessarily in the home store (flow-brain runs ledger in the BASE
+    # store), so the header stays store-NEUTRAL ("a durable record"), never
+    # the false "home's own ledger, nowhere else". Only the prompt-ephemeral
+    # driver lane may claim "not kept in the record".
+    header = (
+        "TOOL RESULTS (your lookups - kept in a durable record):"
+        if results_rest_durably
+        else "TOOL RESULTS (your lookups, this turn only - not kept in the record):"
+    )
     message = (
-        "TOOL RESULTS (your lookups, this turn only - not kept in the record):\n\n"
+        header + "\n\n"
         + "\n\n".join(sections)
         + "\n\nTool lookups are done for this turn. Finish your reply to the person now."
     )

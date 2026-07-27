@@ -478,3 +478,274 @@ def test_resume_appends_resume_record_to_ledger() -> None:
 
     records = ledger_store.list(run_id)
     assert any(isinstance(r, dict) and isinstance(r.get("effect"), dict) and r["effect"].get("type") == "resume" for r in records)
+
+
+# ---------------------------------------------------------------------------
+# Replay profile + in-band warnings (replay-integrity audit, 2026-07-25)
+# ---------------------------------------------------------------------------
+
+
+def _mk_run(run_store, run_id: str = "run_rp", session_id: str = "sess_rp") -> None:
+    run_store.save(
+        RunState(
+            run_id=run_id,
+            workflow_id="wf",
+            status=RunStatus.COMPLETED,
+            current_node="done",
+            vars={"prompt": "hi"},
+            output={"response": "ok"},
+            error=None,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+            actor_id="tester",
+            session_id=session_id,
+            parent_run_id=None,
+            waiting=None,
+        )
+    )
+
+
+def _mk_llm_record(run_id: str, step_id: str) -> StepRecord:
+    return StepRecord(
+        run_id=run_id,
+        step_id=step_id,
+        node_id="reason",
+        status=StepStatus.COMPLETED,
+        effect={
+            "type": "llm_call",
+            "payload": {
+                "messages": [{"role": "user", "content": "u" * 500}],
+                "system_prompt": "s" * 400,
+                "prompt": "p" * 100,
+                "temperature": 0.2,
+            },
+            "result_key": None,
+        },
+        result={
+            "content": "the answer",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "metadata": {
+                "_runtime_observability": {"llm_generate_kwargs": {"messages": [{"role": "user", "content": "u" * 500}]}},
+                "_provider_request": {"payload": {"messages": [{"role": "user", "content": "u" * 500}]}},
+                "model": "m1",
+            },
+        },
+        error=None,
+        started_at="2026-01-01T00:00:01+00:00",
+        ended_at="2026-01-01T00:00:02+00:00",
+        actor_id="tester",
+        session_id="sess_rp",
+        attempt=1,
+        idempotency_key=None,
+        prev_hash=None,
+        record_hash=None,
+        signature=None,
+    )
+
+
+def test_replay_profile_drops_request_side_with_omitted_markers() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+    ledger_store.append(_mk_llm_record("run_rp", "s1"))
+
+    bundle = export_run_history_bundle(
+        run_id="run_rp", run_store=run_store, ledger_store=ledger_store, detail="replay"
+    )
+    assert bundle["detail"] == "replay"
+    rec = bundle["ledgers"]["run_rp"]["items"][0]["record"]
+    payload = rec["effect"]["payload"]
+    for f in ("messages", "system_prompt", "prompt"):
+        marker = payload[f]
+        assert isinstance(marker, dict) and "$omitted" in marker, f"payload.{f} must carry an $omitted marker"
+        assert marker["$omitted"]["profile"] == "replay"
+        assert isinstance(marker["$omitted"]["bytes"], int) and marker["$omitted"]["bytes"] > 0
+    # Non-request fields stay.
+    assert payload["temperature"] == 0.2
+    md = rec["result"]["metadata"]
+    assert "$omitted" in md["_runtime_observability"]
+    assert "$omitted" in md["_provider_request"]
+    # Transcript-read fields are untouched.
+    assert rec["result"]["content"] == "the answer"
+    assert rec["result"]["usage"]["input_tokens"] == 10
+    assert md["model"] == "m1"
+    # Timeline skipped in the projection (never read by a transcript fold).
+    assert bundle["timeline"] == []
+
+
+def test_replay_profile_never_mutates_the_stored_records() -> None:
+    """Projection is spine-copy only — the ledger store's objects stay intact.
+
+    InMemoryLedgerStore shares record objects with the caller; a projection
+    that mutated them would poison every LATER full-detail export (the
+    JsonFileRunStore memo-hygiene class).
+    """
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+    ledger_store.append(_mk_llm_record("run_rp", "s1"))
+
+    export_run_history_bundle(run_id="run_rp", run_store=run_store, ledger_store=ledger_store, detail="replay")
+    full = export_run_history_bundle(run_id="run_rp", run_store=run_store, ledger_store=ledger_store)
+    assert full["detail"] == "full"
+    payload = full["ledgers"]["run_rp"]["items"][0]["record"]["effect"]["payload"]
+    assert payload["messages"] == [{"role": "user", "content": "u" * 500}]
+    assert payload["system_prompt"] == "s" * 400
+    md = full["ledgers"]["run_rp"]["items"][0]["record"]["result"]["metadata"]
+    assert "llm_generate_kwargs" in md["_runtime_observability"]
+
+
+def test_replay_profile_rejects_unknown_detail() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+    with pytest.raises(ValueError):
+        export_run_history_bundle(
+            run_id="run_rp", run_store=run_store, ledger_store=ledger_store, detail="compact"
+        )
+
+
+def test_bundle_warnings_are_in_band_never_silent() -> None:
+    """Every degradation the export survives must be visible in the bundle.
+
+    Operator ruling (2026-07-25): silent omission is the class that broke
+    replay — a bundle that cannot be complete must say so in-band.
+    """
+    run_store = InMemoryRunStore()
+
+    class FailingLedgerStore(InMemoryLedgerStore):
+        def list(self, run_id):  # type: ignore[override]
+            raise RuntimeError("disk went away")
+
+    _mk_run(run_store)
+    bundle = export_run_history_bundle(
+        run_id="run_rp", run_store=run_store, ledger_store=FailingLedgerStore()
+    )
+    codes = [w["code"] for w in bundle["warnings"]]
+    assert "ledger_read_failed" in codes
+    w = next(w for w in bundle["warnings"] if w["code"] == "ledger_read_failed")
+    assert w["run_id"] == "run_rp"
+    assert "disk went away" in w["detail"]
+
+
+def test_bundle_tail_window_truncation_is_reported() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+    for i in range(7):
+        ledger_store.append(_mk_llm_record("run_rp", f"s{i}"))
+
+    bundle = export_run_history_bundle(
+        run_id="run_rp",
+        run_store=run_store,
+        ledger_store=ledger_store,
+        ledger_mode="tail",
+        ledger_max_items=3,
+    )
+    codes = [w["code"] for w in bundle["warnings"]]
+    assert "ledger_tail_window" in codes
+    w = next(w for w in bundle["warnings"] if w["code"] == "ledger_tail_window")
+    assert w["total"] == 7 and w["window"] == 3
+    # Untruncated exports carry NO tail warning.
+    bundle_full = export_run_history_bundle(
+        run_id="run_rp", run_store=run_store, ledger_store=ledger_store, ledger_mode="full"
+    )
+    assert all(w["code"] != "ledger_tail_window" for w in bundle_full["warnings"])
+
+
+def test_bundle_subtree_discovery_failure_is_reported() -> None:
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+
+    def _boom(**kwargs):
+        raise RuntimeError("children index corrupt")
+
+    run_store.list_children = _boom  # type: ignore[attr-defined]
+    bundle = export_run_history_bundle(run_id="run_rp", run_store=run_store, ledger_store=ledger_store)
+    codes = [w["code"] for w in bundle["warnings"]]
+    assert "subtree_discovery_failed" in codes
+
+
+def test_replay_profile_preserves_every_field_the_fold_reads() -> None:
+    """Pin detail=replay against code-tui's read-field list (commons c5556).
+
+    The fold reads: envelope (run_id/node_id/status/started_at/step_id),
+    effect.type, payload.tool_calls on tool_calls records, subworkflow
+    binding fields, result.content/reasoning/usage/wait/output/results.
+    Everything on that list must survive the projection VERBATIM.
+    """
+    run_store = InMemoryRunStore()
+    ledger_store = InMemoryLedgerStore()
+    _mk_run(run_store)
+
+    tool_calls = [{"name": "read_file", "call_id": "c1", "arguments": {"path": "a.txt"}}]
+    ledger_store.append(
+        StepRecord(
+            run_id="run_rp",
+            step_id="t1",
+            node_id="act",
+            status=StepStatus.COMPLETED,
+            effect={"type": "tool_calls", "payload": {"tool_calls": tool_calls}, "result_key": None},
+            result={
+                "results": [{"name": "read_file", "call_id": "c1", "success": True, "output": "text"}],
+                "wait": {"reason": "user", "wait_key": "w1", "prompt": "approve?", "details": {"mode": "approval_required"}},
+                "reasoning": "cycle gist",
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            },
+            error=None,
+            started_at="2026-01-01T00:00:03+00:00",
+            ended_at="2026-01-01T00:00:04+00:00",
+            actor_id="tester",
+            session_id="sess_rp",
+            attempt=1,
+            idempotency_key=None,
+            prev_hash=None,
+            record_hash=None,
+            signature=None,
+        )
+    )
+    ledger_store.append(
+        StepRecord(
+            run_id="run_rp",
+            step_id="sw1",
+            node_id="agent",
+            status=StepStatus.COMPLETED,
+            effect={
+                "type": "start_subworkflow",
+                "payload": {"sub_workflow_id": "child-wf", "wrap_as_tool_result": True},
+                "result_key": None,
+            },
+            result={"output": {"answer": "done"}},
+            error=None,
+            started_at="2026-01-01T00:00:05+00:00",
+            ended_at="2026-01-01T00:00:06+00:00",
+            actor_id="tester",
+            session_id="sess_rp",
+            attempt=1,
+            idempotency_key=None,
+            prev_hash=None,
+            record_hash=None,
+            signature=None,
+        )
+    )
+
+    bundle = export_run_history_bundle(
+        run_id="run_rp", run_store=run_store, ledger_store=ledger_store, detail="replay"
+    )
+    items = bundle["ledgers"]["run_rp"]["items"]
+    recs = {it["record"]["step_id"]: it["record"] for it in items}
+
+    tc = recs["t1"]
+    assert tc["effect"]["type"] == "tool_calls"
+    assert tc["effect"]["payload"]["tool_calls"] == tool_calls, "tool cards lose names/args if this drops"
+    assert tc["result"]["results"][0]["output"] == "text"
+    assert tc["result"]["wait"]["prompt"] == "approve?"
+    assert tc["result"]["reasoning"] == "cycle gist"
+    assert tc["result"]["usage"]["input_tokens"] == 3
+    assert tc["node_id"] == "act" and tc["started_at"]
+
+    sw = recs["sw1"]
+    assert sw["effect"]["payload"]["sub_workflow_id"] == "child-wf"
+    assert sw["effect"]["payload"]["wrap_as_tool_result"] is True
+    assert sw["result"]["output"]["answer"] == "done"

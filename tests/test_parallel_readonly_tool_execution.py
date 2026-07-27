@@ -118,3 +118,74 @@ def test_unknown_tool_is_not_parallelized_and_errors_cleanly() -> None:
     results = out["results"]
     assert results[0]["success"] is True and results[0]["output"] == "a"
     assert results[1]["success"] is False and "not found" in results[1]["error"]
+
+
+def test_different_file_writes_batch_safely_in_order() -> None:
+    """The pin behind the prompt-wording fix (batching thread, 2026-07-25).
+
+    The ReAct prompt's blunt rule ('never batch side-effectful tools') is
+    being narrowed to 'never batch two line-anchored edits to the SAME
+    file' — which is only safe if the executor guarantees that multiple
+    writes to DIFFERENT files in one batch run strictly sequentially, in
+    batch order, never concurrently with each other or with neighboring
+    reads, with per-call results in original positions. This test IS that
+    guarantee; the wording rests on it, not on belief (commons c5582).
+    """
+    order: list[str] = []
+    lock = threading.Lock()
+    concurrency = {"current": 0, "max": 0}
+
+    def _track(label: str) -> None:
+        with lock:
+            concurrency["current"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["current"])
+        time.sleep(0.03)
+        with lock:
+            concurrency["current"] -= 1
+            order.append(label)
+
+    @tool
+    def read_file(path: str) -> str:
+        """read-only"""
+        _track(f"read:{path}")
+        return path
+
+    @tool
+    def write_file(file_path: str, content: str = "") -> str:
+        """side-effecting write (stub)"""
+        _track(f"write:{file_path}")
+        return f"wrote {file_path}"
+
+    @tool
+    def edit_file(file_path: str, edits: str = "") -> str:
+        """side-effecting edit (stub)"""
+        _track(f"edit:{file_path}")
+        return f"edited {file_path}"
+
+    ex = MappingToolExecutor.from_tools([read_file, write_file, edit_file])
+    calls = [
+        {"name": "read_file", "arguments": {"path": "r1"}, "call_id": "0"},
+        {"name": "write_file", "arguments": {"file_path": "a.py"}, "call_id": "1"},
+        {"name": "edit_file", "arguments": {"file_path": "b.py"}, "call_id": "2"},
+        {"name": "write_file", "arguments": {"file_path": "c.py"}, "call_id": "3"},
+        {"name": "read_file", "arguments": {"path": "r2"}, "call_id": "4"},
+    ]
+    out = ex.execute(tool_calls=calls)
+    results = out["results"]
+
+    # Per-call results in original positions, all successful.
+    assert [r["call_id"] for r in results] == ["0", "1", "2", "3", "4"]
+    assert all(r["success"] for r in results)
+    assert results[1]["output"] == "wrote a.py"
+    assert results[2]["output"] == "edited b.py"
+    assert results[3]["output"] == "wrote c.py"
+
+    # The three mutations ran in batch order...
+    mutation_order = [o for o in order if not o.startswith("read:")]
+    assert mutation_order == ["write:a.py", "edit:b.py", "write:c.py"]
+    # ...bracketed by the reads exactly as issued.
+    assert order[0] == "read:r1" and order[-1] == "read:r2"
+
+    # And nothing ever overlapped a mutation: max concurrency 1 across the
+    # whole batch (the two reads are singletons here, split by writes).
+    assert concurrency["max"] == 1

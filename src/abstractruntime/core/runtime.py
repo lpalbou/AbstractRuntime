@@ -2096,13 +2096,18 @@ class Runtime:
                 run.status = RunStatus.COMPLETED
                 run.output = plan.complete_output
                 run.updated_at = utc_now_iso()
+                # CRASH-ORDERING INVARIANT (0045, docs/architecture.md):
+                # the completion record appends BEFORE the save that makes
+                # completion true. Save-then-append was inversion 1 - a
+                # crash in between minted a COMPLETED run whose ledger
+                # never terminated (the busy-poller incident shape).
+                # Idempotency-keyed so a crash-replay (append landed, save
+                # did not) re-completes without a duplicate terminal record.
+                self._append_completion_record(
+                    run, node_id=plan.node_id,
+                    result={"completed": True, "output": _jsonable(run.output)},
+                )
                 self._run_store.save(run)
-                # ledger: completion record (no effect)
-                rec = StepRecord.start(run=run, node_id=plan.node_id, effect=None)
-                rec.status = StepStatus.COMPLETED
-                rec.result = {"completed": True, "output": _jsonable(run.output)}
-                rec.ended_at = utc_now_iso()
-                self._ledger_store.append(rec)
                 self._append_terminal_status_event(run)
                 return run
 
@@ -2188,6 +2193,40 @@ class Runtime:
                 )
 
             duration_ms = float((time.perf_counter() - t0) * 1000.0)
+
+            # SPIN DISCRIMINATOR `_runtime.wait_until_streak` (gateway c4768,
+            # from the stale-poller incident c4757: a leaked status poller
+            # re-armed wait_until every ~4.5s for two days = an 86,924-record
+            # ledger). Semantics, exactly as adopted on the thread: each
+            # wait_until PARK increments; ANY other effect dispatch resets —
+            # a run doing real work (llm_call/tool_calls/emit_event/
+            # start_subworkflow/memory/diary...) is effect-sparse, not idle,
+            # and its streak stays 0. A wait_until that RESUMES (completed/
+            # timed-out) leaves the streak untouched: the spinner's cycle is
+            # park->due->pure nodes->park, and a reset on resume would make
+            # the count oscillate 1->0 and never accumulate. The gateway
+            # reaper READS this as its O(1) positive spin proof (deny-safe:
+            # absent key or low streak = never reap); the mutation rides the
+            # SAME save that lands the step, like effect_seq above, so the
+            # counter can never disagree with the ledger it summarizes.
+            try:
+                _etype = getattr(effect.type, "value", None) or str(effect.type)
+                _rt_ns = run.vars.get("_runtime")
+                if _etype == "wait_until":
+                    if outcome.status == "waiting":
+                        _rt_ns = run.vars.setdefault("_runtime", {})
+                        if isinstance(_rt_ns, dict):
+                            try:
+                                _streak = int(_rt_ns.get("wait_until_streak", 0))
+                            except (TypeError, ValueError):
+                                _streak = 0
+                            _rt_ns["wait_until_streak"] = _streak + 1
+                elif isinstance(_rt_ns, dict) and _rt_ns.get("wait_until_streak"):
+                    # Reset only when present-and-nonzero: runs that never
+                    # spun never grow the key (vars stay lean).
+                    _rt_ns["wait_until_streak"] = 0
+            except Exception:
+                pass  # bookkeeping must never kill a tick
 
             # Evidence capture (runtime-owned, durable):
             # After tool execution completes, record provenance-first evidence for a small set of
@@ -2326,6 +2365,13 @@ class Runtime:
                 run.output = {"success": True, "result": outcome.result}
                 run.updated_at = utc_now_iso()
                 _advance_effect_seq()
+                # 0045 invariant: terminal evidence appends before the
+                # commit-point save (the effect's own COMPLETED record
+                # exists already; this is the run-level terminal record).
+                self._append_completion_record(
+                    run, node_id=plan.node_id,
+                    result={"completed": True, "output": _jsonable(run.output)},
+                )
                 self._run_store.save(run)
                 self._append_terminal_status_event(run)
                 return run
@@ -2719,8 +2765,15 @@ class Runtime:
             rec.result = {"resumed": True}
             rec.ended_at = utc_now_iso()
             self._ledger_store.append(rec)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - surfaced, never silent (0045 rule 3)
+            try:
+                self._health.record_error("resume_append", f"{type(e).__name__}: {e}")
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning(
+                "resume record append FAILED for run %s: %s (ledger-only replay "
+                "will not see this resume's input payload)", run.run_id, e,
+            )
 
         # Terminal waiting node: if there is no resume target, treat the resume payload as
         # the final output instead of re-executing the waiting node again (which would
@@ -2743,27 +2796,20 @@ class Runtime:
             run.waiting = None
             run.output = {"success": True, "result": stored_payload}
             run.updated_at = utc_now_iso()
-            self._run_store.save(run)
-
-            # Ledger must remain the source-of-truth for replay/streaming.
-            # When a terminal wait is resumed, there is no follow-up `tick()` to append a
-            # completion record, so we append one here.
-            try:
-                node_id0 = str(getattr(run, "current_node", None) or "")
-                rec = StepRecord.start(run=run, node_id=node_id0 or "unknown", effect=None)
-                rec.status = StepStatus.COMPLETED
-                rec.result = {
+            # 0045 invariant (inversion 3 was save-then-append): the
+            # terminal record appends BEFORE the commit-point save; there
+            # is no follow-up tick() to append one later.
+            self._append_completion_record(
+                run, node_id=str(getattr(run, "current_node", None) or "") or "unknown",
+                result={
                     "completed": True,
                     "via": "resume",
                     "wait_reason": wait_reason,
                     "wait_key": wait_key0,
                     "output": _jsonable(run.output),
-                }
-                rec.ended_at = utc_now_iso()
-                self._ledger_store.append(rec)
-            except Exception:
-                # Observability must never compromise durability/execution.
-                pass
+                },
+            )
+            self._run_store.save(run)
             self._append_terminal_status_event(run)
             return run
 
@@ -2916,6 +2962,43 @@ class Runtime:
         if s == "global":
             return self._ensure_global_memory_run()
         raise ValueError(f"Unknown memory scope: {scope}")
+
+    def _append_completion_record(
+        self, run: RunState, *, node_id: str, result: Dict[str, Any]
+    ) -> None:
+        """Append the run-level TERMINAL record - BEFORE the commit-point
+        save, per the crash-ordering invariant (docs/architecture.md,
+        backlog 0045).
+
+        Idempotency-keyed (`system:completion:<node_id>`): a crash after
+        this append but before the save replays into the same completion,
+        finds the existing record, and skips the duplicate - the harness's
+        terminal-record-exactly-once assertion. Append failures are LOUD
+        (health counter + warning): replay/streaming clients depend on the
+        terminal record to stop following, so losing it silently is the
+        busy-poller class."""
+        key = f"system:completion:{node_id}"
+        try:
+            if self._find_prior_completed_result(run.run_id, key) is not None:
+                return
+        except Exception:  # noqa: BLE001 - a failed probe never blocks completion
+            pass
+        try:
+            rec = StepRecord.start(run=run, node_id=node_id, effect=None, idempotency_key=key)
+            rec.status = StepStatus.COMPLETED
+            rec.result = result
+            rec.ended_at = utc_now_iso()
+            self._ledger_store.append(rec)
+        except Exception as e:  # noqa: BLE001 - loud, never silent (invariant rule 3)
+            try:
+                self._health.record_error("terminal_append", f"{type(e).__name__}: {e}")
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning(
+                "terminal completion record append FAILED for run %s node %s: %s "
+                "(replay clients may not observe termination until the next status probe)",
+                run.run_id, node_id, e,
+            )
 
     def _find_prior_completed_result(
         self, run_id: str, idempotency_key: str
@@ -3591,6 +3674,35 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("skills_block", skills_block)
+            # Per-run TOOL POLICY crosses the hop too (coder-tui c4384 live
+            # find, 2026-07-22 — the skills_block P1-2 class exactly): thin
+            # clients send input_data._runtime.tool_policy on the ROOT run,
+            # but bundle-hosted agents execute tool_calls in CHILD runs
+            # whose fresh vars never carried it — so the run-policy
+            # consumer (_execute_with_run_policy) found nothing and the
+            # approval wait still round-tripped. Same setdefault semantics:
+            # an explicit child policy wins.
+            tool_policy = (parent_rt or {}).get("tool_policy") if isinstance(parent_rt, dict) else None
+            if isinstance(tool_policy, dict) and tool_policy:
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault("tool_policy", dict(tool_policy))
+            # operator_email crosses the hop too (gateway c4702, dm#246 -
+            # the FOURTH rider of the skills_block P1-2 class, exactly as
+            # c4388 predicted): bundle agents run send_email in CHILD runs,
+            # so without this the recipient refiner sees no self-value and
+            # the self-send auto-path is dead (deny-safe but feature-dead).
+            # Same setdefault semantics; an explicit child value wins; the
+            # value is a plain string, copied by assignment.
+            operator_email = (parent_rt or {}).get("operator_email") if isinstance(parent_rt, dict) else None
+            if isinstance(operator_email, str) and operator_email.strip():
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault("operator_email", operator_email)
         except Exception:
             pass
         is_async = bool(effect.payload.get("async", False))

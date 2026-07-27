@@ -92,6 +92,7 @@ def project_diary_entry(
     anchor_graph_ids: Optional[List[str]] = None,
     resolves: Optional[str] = None,
     explores: Optional[str] = None,
+    digest_method: Optional[str] = None,
 ) -> Tuple[Optional[str], List[str]]:
     """Project the MEMORY OF THE ACT of a diary write into the graph.
 
@@ -138,7 +139,15 @@ def project_diary_entry(
 
     written_date = str(written_at or "")[:10]
     if private:
-        title = f"Diary entry (private) — {written_date}"
+        # UNIFORM-TITLE FIX, private half (flow's long-life adversary, commons
+        # c5208 ask 1): same-day private projections shared one exact title,
+        # so title-identity consumers (duplicate-group maintenance, dream
+        # composition) read them as copies — flags self-amplified. Words are
+        # FORBIDDEN in every graph field for private entries, so the
+        # disambiguator is the entry id's opaque tail — already carried in
+        # attributes.entry_id, zero new disclosure.
+        _tail = str(entry_id or "")[-6:]
+        title = f"Diary entry (private) — {written_date}" + (f" [{_tail}]" if _tail else "")
         digest = "Wrote a private diary entry."
         attributes: Dict[str, Any] = {"entry_id": entry_id, "written_at": written_at, "private": True}
         if resolves:
@@ -155,7 +164,6 @@ def project_diary_entry(
             attributes["explores"] = explores
         provenance: Dict[str, Any] = {"source": "diary-projection", "entry_id": entry_id}
     else:
-        title = f"Diary entry ({kind}) — {written_date}"
         # W-GROUP known-limit root fix (memory c302, 2026-07-20): the
         # no-gist template digest ("Wrote a diary entry (question) at ...")
         # made 42 of Ephemeral's questions CLUSTER ON FORM — same-sitting
@@ -172,6 +180,40 @@ def project_diary_entry(
         digest = (gist or "").strip() or fallback or (
             f"Wrote a diary entry ({kind}) at {written_at}; no gist elected."
         )
+        # UNIFORM-TITLE FIX, public half (flow c5208 ask 1 — the c302 digest
+        # fix carried the entity's words, the TITLE didn't): every same-day
+        # projection shared one exact title, so dreams composed from titles
+        # were contentless ("'Diary entry (note)…' beside 'Diary entry
+        # (note)…'") and duplicate-group flags self-amplified. Fold a content
+        # slug from the digest into the PUBLIC title — the digest is already
+        # public-plane words by the c302 ruling, so the title discloses
+        # nothing new. The mechanical no-gist fallback stays out of the title
+        # (machine words would re-create clustering-on-form).
+        # Writer-declared MECHANICAL entries (digest_method present, c5270
+        # P2-2: deterministic close notes) keep the bare template title —
+        # folding machine words into titles would re-create the exact
+        # clustering-on-form the slug fix killed.
+        _slug = ""
+        if ((gist or "").strip() or fallback) and not digest_method:
+            _slug = digest[:60].rstrip()
+            if len(digest) > 60:
+                cut = _slug.rfind(" ")
+                if cut > 20:
+                    _slug = _slug[:cut]
+                _slug += "…"
+        if _slug:
+            title = f"Diary entry ({kind}) — {written_date}: {_slug}"
+        else:
+            # MECHANICAL / no-gist entries carry no content slug (machine
+            # words would re-create clustering-on-form) — but same-day
+            # mechanical entries would then share ONE title, the exact
+            # uniform-title collision the slug fixed for the others
+            # (adversary C4, 2026-07-25; mechanical close notes are the most
+            # frequent same-day multiples). Disambiguate with the entry id's
+            # opaque tail — a KEY, not words, the same shape the private
+            # branch already uses; zero content disclosure.
+            _tail = str(entry_id or "")[-6:]
+            title = f"Diary entry ({kind}) — {written_date}" + (f" [{_tail}]" if _tail else "")
         attributes = {
             "entry_id": entry_id,
             "diary_type": diary_type,
@@ -186,6 +228,14 @@ def project_diary_entry(
             attributes["explores"] = explores
         provenance = {"source": "diary-projection", "entry_id": entry_id}
         provenance.update({k: v for k, v in origin.items() if v is not None})
+
+    # Writer-declared authorship metadata (c5270 P2-2, jointly ruled with
+    # memory): projections of machine-worded entries carry the writer's
+    # digest_method so memory's machine-authorship bridge guard reads
+    # projections and formed records through ONE key. Both branches — the
+    # attribute is authorship metadata, never content.
+    if digest_method:
+        attributes["digest_method"] = digest_method
 
     edges = tuple(
         ("written_amid", gid)

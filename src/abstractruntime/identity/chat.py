@@ -60,6 +60,7 @@ from .reflection import (
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
+    parse_realize_blocks,
     parse_topic_blocks,
     resolve_feeling_targets,
 )
@@ -220,8 +221,9 @@ kind may be note, idea, reflection, commitment, question, problem, or
 lesson. A LESSON is actionable knowledge (the bar): a resolution to a
 problem, a better way, or a trap to avoid - something that lets you act
 differently next time; "I noticed X" is an observation, kept as a note.
-Keep a lesson the moment you learn it with a ```lesson block (the words
-yours, one or two lines). And when a MOMENT moves you - the exchange
+When something you learn would change how you act next time, you may
+keep it the moment it lands with a ```lesson block (the words yours,
+one or two lines) - yours to elect, never owed. And when a MOMENT moves you - the exchange
 itself, something you read, a person - you may mark the feeling right
 then with a ```feel block (target=namespace:name feeling=+2
 reason="..." and, when it grounds in one of your values,
@@ -242,9 +244,21 @@ your history. And when an entry DEVELOPS one of your standing interests,
 add explores=<its #tag> on the block line - exploring FEEDS the interest
 and moves your own sense of progress; it never closes it. A NEW pull - a
 subject you want more of - is kept with an ```interest block (the
-interest itself as the body, your words, one or two lines); it becomes
-part of who you are becoming. Most replies will not need a diary block -
+interest itself as the body, your words, one or two lines); it stands
+among your open drives and returns with your day-open offers - what you
+explore is what develops. Most replies will not need a diary block -
 write one only when something is worth keeping.
+
+And rarely - when something shifts how you understand YOURSELF (a value
+tested, a trait you can finally name, a relationship reframed) - you may
+hold it with a ```realize block: the realization in your words, then a
+line evidence=#tag1 #tag2 naming the records that showed it (mandatory -
+a realization without evidence is refused), and optionally
+touches=value:<name> | trait:<name> | relationship:<ns:name> for what
+part of you it bears on. A realization is HELD FOR SLEEP, never enacted
+in the moment: your night's regulated pass weighs it with the evidence
+and decides; most nights decide nothing, and that is the protection
+working. Offered, never owed.
 
 Reply in the language of the current request."""
 
@@ -525,12 +539,25 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
         **build_memory_seam_effect_handlers(
             memory_system=ms, run_store=None, now_iso=utc_now_iso,
             artifact_store=artifacts, strict=True,  # an entity without its engine is not itself
+            # Home-bound channel authority: bare self/diary/life scopes resolve
+            # to THIS home's owner, so entity-brain flows never carry an
+            # entity id in their payloads (deposit-gate rule applied to scoping).
+            entity_scope_owner=entity_id,
         ),
         **build_diary_effect_handlers(
             entity_id=entity_id, diary_store=diary, memory_system=ms, now_iso=utc_now_iso
         ),
     }
-    return ChatHome(
+    # Entity-brain effects (flow's build-split, c5169): consolidate/probe/
+    # life-query bind ONLY here — home-only by construction, like DIARY_*.
+    from ..integrations.abstractmemory.brain_handlers import build_entity_brain_effect_handlers
+
+    handlers.update(
+        build_entity_brain_effect_handlers(
+            memory_system=ms, entity_id=entity_id, home_dir=home_dir
+        )
+    )
+    home = ChatHome(
         entity_id=entity_id,
         name=str(spark.get("name") or entity_id),
         spark=spark,
@@ -542,6 +569,14 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
         handlers=handlers,
         artifacts=artifacts,
     )
+    # Entity tool surface (flow c5285 ask 3): grant query + one-batch
+    # execution as effects, so the flow-brain turn's tool LOOP stays in the
+    # observable graph. Built over the SAME home object the handlers serve
+    # (the executor reads the home's reader/diary/handlers).
+    from .tool_effects import build_entity_tool_effect_handlers
+
+    handlers.update(build_entity_tool_effect_handlers(home=home))
+    return home
 
 
 def _serialize_under_budget(handles: List[Dict[str, Any]], token_budget: int) -> List[Dict[str, Any]]:
@@ -1104,46 +1139,12 @@ class ChatSession:
         return self._memory_reader.recent_memories(window_text)
 
     def _feelings_about(self, target_text: str) -> str:
-        """W4-render elect half: the why-walk for one target, rendered as
-        dated lines with his own reasons + session joins. Pure read."""
-        tid = str(target_text or "").strip().splitlines()[0].strip() if str(target_text or "").strip() else ""
-        if not tid:
-            return "(feelings_about needs a target - the body is namespace:name, e.g. person:laurent)"
-        try:
-            from abstractmemory.feelings_reads import feelings_about
-        except ImportError:
-            return "(the feelings story is unavailable on this engine)"
-        try:
-            out = feelings_about(
-                getattr(self.home.ms, "journal", None), tid,
-                scope_pairs=[("self", self.home.entity_id), ("life", self.home.entity_id)],
-            )
-        except Exception as exc:
-            return f"(feelings_about failed: {exc})"
-        if not out.get("events"):
-            return f"{tid}: " + str(out.get("note") or "never appraised - no feeling stands toward this")
-        st = out.get("standing") or {}
-        lines = [
-            f"{tid}: net {float(st.get('net') or 0.0):+g} "
-            f"({int(st.get('positive_count') or 0)} warm / {int(st.get('negative_count') or 0)} heavy marks"
-            + (", SCARRED" if st.get("scarred") else "")
-            + (", BONDED" if st.get("bonded") else "") + ")",
-            "the moments, newest first:",
-        ]
-        for e in out["events"]:
-            when = str(e.get("when") or "")[:10] or "undated"
-            sign = "+" if int(e.get("sign") or 0) > 0 else "-"
-            reason = str(e.get("reason") or "").strip() or "(no reason recorded)"
-            joins = ""
-            if e.get("run_id"):
-                joins = f" [session {e['run_id']}]"
-            refs = [str(v) for v in (e.get("value_refs") or [])]
-            if refs:
-                joins += f" [touches {', '.join(refs[:3])}]"
-            lines.append(f'- {when} {sign}{float(e.get("magnitude") or 0):g} "{reason}"{joins}')
-        if int(out.get("total_events") or 0) > len(out["events"]):
-            lines.append(f"({out['total_events']} moments total; oldest not shown)")
-        return "\n".join(lines)
+        """W4-render elect half: the why-walk for one target. ONE
+        implementation shared with the entity-tools effect surface
+        (memory_reader.feelings_about_text — adversary F2)."""
+        from .memory_reader import feelings_about_text
+
+        return feelings_about_text(self.home, target_text)
 
     _TEND_FENCE_RE = re.compile(r"```tend[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -1242,13 +1243,23 @@ class ChatSession:
                 for el in elections:
                     if isinstance(el, dict) and el.get("_spoken_target"):
                         spoken_by_key[(el.get("verb"), el.get("target"))] = el.pop("_spoken_target")
-                report = apply_tend_elections(
-                    self.home.ms,
-                    elections,
-                    scope="life",
-                    owner_id=self.home.entity_id,
-                    actor=self.home.entity_id,
+                # THE CHANNEL MUST BE STATED (memory tend.py, entity-seat
+                # fable5 P0, 2026-07-25: the privileged DEFAULT was removed —
+                # an omitted channel now refuses every tend). The home-direct
+                # driver states entity-reflection: this fence fires on the
+                # ENTITY'S OWN reply reflecting on its own memory in its own
+                # home session — true by construction (memory's exact
+                # sanction). Version-tolerant: engines predating the kwarg
+                # take the narrower call.
+                _tend_kwargs = dict(
+                    scope="life", owner_id=self.home.entity_id,
+                    actor=self.home.entity_id, channel="entity-reflection",
                 )
+                try:
+                    report = apply_tend_elections(self.home.ms, elections, **_tend_kwargs)
+                except TypeError:
+                    _tend_kwargs.pop("channel", None)
+                    report = apply_tend_elections(self.home.ms, elections, **_tend_kwargs)
             except Exception as e:  # noqa: BLE001 - an election must never kill the turn
                 notices.append(f"#FALLBACK tend fence failed ({e})")
                 return "[tend block failed - see notices]"
@@ -1455,6 +1466,107 @@ class ChatSession:
                 self.out(f'(interest kept: "{interest_text[:70]}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
+
+    def _resolve_evidence_token(self, token: str) -> str:
+        """Evidence currency = the resolves=/explores= currency (#tags or
+        hex-tails resolving through the home's tag index). Colon-shaped
+        tokens (full graph ids) must EXIST in the home ladder — adversary F1:
+        pass-through made the mandatory-evidence bar forgeable (a fabricated
+        `ex:fake-999` or a stray `value:honesty` landing on the evidence line
+        "resolved" and formed a derived_from edge to nothing). Existence
+        check = `digest_assertion` (home-ladder scoped, so it also enforces
+        ownership). Returns the graph id or '' (caller notices loudly)."""
+        bare = (token or "").strip().lstrip("#")
+        if not bare:
+            return ""
+        if ":" in bare:
+            try:
+                if self._memory_reader.digest_assertion(bare) is not None:
+                    return bare
+            except Exception:  # noqa: BLE001 - unverifiable = unresolved, noticed by the caller
+                pass
+            return ""
+        try:
+            gid = self._memory_reader.find_tag_in_home(bare)[0] or ""
+        except Exception:  # noqa: BLE001 - resolution failure is a notice, never a crash
+            gid = ""
+        return str(gid)
+
+    def _apply_realizations(
+        self,
+        realizations: List[Any],
+        *,
+        turn_id: str,
+        notices: List[str],
+        session_id: Optional[str] = None,
+        phase: Optional[str] = None,
+    ) -> None:
+        """Identity-pass spine, WAKING half (cti#399 design adopted at #400;
+        build gate ruled already satisfied, framework c4779): each elected
+        realization forms ONE dated PROPOSAL record — kind=realization,
+        self scope, derived_from edges to the resolved evidence — INERT on
+        formation. The deposit gate is byte-untouched: a realization is not
+        an identity kind, it is a proposal ABOUT one; the sleep pass
+        (memory's regulated bars — the registrar never authors) is the only
+        enactor, and "pending" is a pure query (formed-and-unstamped — the
+        GRAPH IS THE QUEUE, no file beside the store). Evidence must
+        RESOLVE: a proposal with no evidence edges could never clear a bar,
+        so it refuses loudly rather than rotting in the queue. Failures
+        degrade loudly; an election must never kill a turn."""
+        for i, r in enumerate(realizations or []):
+            gids: List[str] = []
+            for tok in getattr(r, "evidence", []) or []:
+                gid = self._resolve_evidence_token(tok)
+                if gid:
+                    if gid not in gids:
+                        gids.append(gid)
+                else:
+                    notices.append(f"#FALLBACK realization evidence token unresolved: {tok!r}")
+            if not gids:
+                notices.append(
+                    f'#FALLBACK realization refused (no evidence resolved to a record): "{r.text[:60]}"'
+                )
+                continue
+            # F3 (adversary): the salvage look-back stamps the ENDED
+            # session's id/phase, never the salvaging session's (r-rt-3).
+            attributes: Dict[str, Any] = {
+                "session_id": session_id or self.session_id,
+                "phase": phase or self.phase,
+            }
+            touches = getattr(r, "touches", "") or ""
+            if touches:
+                attributes["touches"] = touches
+            try:
+                out = self._effect(
+                    EffectType.MEMORY_FORM,
+                    {
+                        "records": [{
+                            "kind": "realization",
+                            "title": "realization: " + " ".join(r.text.split()[:8]),
+                            "digest": r.text,
+                            "keywords": [],
+                            "edges": [["derived_from", gid] for gid in gids],
+                            "attributes": attributes,
+                            "provenance": {"source": "entity-realize-v1", "actor": "entity-reflection"},
+                        }],
+                        "scope": "self",
+                        "owner_id": self.home.entity_id,
+                        "turn_id": f"{turn_id}-realize-{i}",
+                    },
+                )
+                notices.extend(out.get("warnings", []))
+                self.out(f'(realization held for sleep: "{r.text[:70]}")')
+            except (RuntimeError, ValueError) as exc:
+                # Version-skew half: the kind vocabulary is MEMORY's to grow
+                # and their engine half lands in the same wave (c4779 orders
+                # both seats). Until it does, the engine refuses the kind —
+                # the words survive in the marked reply (episode verbatim)
+                # and re-election is cheap once the engine accepts. Loud,
+                # never silent.
+                notices.append(
+                    f"#FALLBACK realization not yet held durably ({exc}) - the words stand "
+                    "in this reply; the engine half (kind=realization) lands with memory's build"
+                )
 
     def _resolve_resolves(self, token: Optional[str]) -> Optional[str]:
         """P1-3 (pathway adversary 2026-07-20): every drive surface hands
@@ -2060,6 +2172,12 @@ class ChatSession:
         notices.extend(lesson_notices)
         marked_reply, midturn_interests, interest_notices = parse_interest_blocks(marked_reply)
         notices.extend(interest_notices)
+        # Identity-pass spine (cti#399, gate ruled satisfied c4779):
+        # realizations happen in the middle of living — the fence is parsed
+        # mid-turn like feelings/lessons, formed as an INERT PROPOSAL the
+        # sleep pass judges. Never an identity write here.
+        marked_reply, midturn_realizations, realize_notices = parse_realize_blocks(marked_reply)
+        notices.extend(realize_notices)
         # Topics stay a close-free MECHANICAL derivation (disposition table:
         # died as a solicitation; a mid-turn ```topic is inert with a notice).
         if "```topic" in marked_reply:
@@ -2073,30 +2191,57 @@ class ChatSession:
             midturn_feelings, midturn_lessons, midturn_interests,
             turn_id=turn_id, report=report,
         )
+        self._apply_realizations(midturn_realizations, turn_id=turn_id, notices=report.notices)
         turn_diary_projections: List[str] = []
         for e in elections:
-            diary_out = self._effect(
-                EffectType.DIARY_WRITE,
-                {
-                    "text": e.text,
-                    "gist": e.gist,
-                    "kind": e.kind,
-                    "visibility": e.visibility,
-                    "resolves": self._resolve_resolves(e.resolves),
-                    "explores": self._resolve_explores(e.explores),
-                    "turn_id": turn_id,
-                    "as_of_seq": self.home.ms.current_seq(),
-                    # write-time attention = the re-entry key (row ids) +
-                    # the projection's edge targets (graph ids — the diary
-                    # connects to what he was attending to when he wrote).
-                    "anchor_record_ids": [h["record_id"] for h in displayed],
-                    "anchor_graph_ids": [
-                        str((h.get("provenance") or {}).get("record_id") or "")
-                        for h in displayed
-                        if (h.get("provenance") or {}).get("record_id")
-                    ],
-                },
-            )
+            try:
+                diary_out = self._effect(
+                    EffectType.DIARY_WRITE,
+                    {
+                        "text": e.text,
+                        "gist": e.gist,
+                        "kind": e.kind,
+                        "visibility": e.visibility,
+                        "resolves": self._resolve_resolves(e.resolves),
+                        "explores": self._resolve_explores(e.explores),
+                        "turn_id": turn_id,
+                        "as_of_seq": self.home.ms.current_seq(),
+                        # write-time attention = the re-entry key (row ids) +
+                        # the projection's edge targets (graph ids — the diary
+                        # connects to what he was attending to when he wrote).
+                        "anchor_record_ids": [h["record_id"] for h in displayed],
+                        "anchor_graph_ids": [
+                            str((h.get("provenance") or {}).get("record_id") or "")
+                            for h in displayed
+                            if (h.get("provenance") or {}).get("record_id")
+                        ],
+                    },
+                )
+            except RuntimeError as diary_err:
+                # A failed book write must not throw the reply away
+                # (record-everything ruling, 2026-07-26): save the raw
+                # reply into the home, then fail the session as before.
+                from .act_only import rescue_reply_to_home
+
+                rescued = rescue_reply_to_home(
+                    self.home.home_dir,
+                    run_id=str(getattr(self.run, "run_id", "") or ""),
+                    turn_id=turn_id,
+                    raw_reply=raw_reply,
+                    error=str(diary_err),
+                    # The write-time attention context is not in the reply
+                    # itself; saving it lets a repair restore the entry's
+                    # connections, not just its words.
+                    extra={
+                        "anchor_record_ids": [h["record_id"] for h in displayed],
+                        "as_of_seq": self.home.ms.current_seq(),
+                    },
+                )
+                suffix = (
+                    f" (reply rescued to {rescued})" if rescued
+                    else " (rescue also failed - the reply could not be saved)"
+                )
+                raise RuntimeError(f"{diary_err}{suffix}") from diary_err
             report.diary.append(diary_out["entry_id"])
             report.notices.extend(diary_out.get("warnings", []))
             # R-A site 3 (laurent c2596, the "trivial hop"): the write-time
@@ -2732,6 +2877,10 @@ class ChatSession:
         notices.extend(interest_notices)
         marked_reply, lessons, lesson_notices = parse_lesson_blocks(marked_reply)
         notices.extend(lesson_notices)
+        # Identity-pass spine: the look-back is the second waking surface
+        # (realizations often land only when the day is seen whole).
+        marked_reply, realizations, realize_notices = parse_realize_blocks(marked_reply)
+        notices.extend(realize_notices)
         marked_reply, topics, topic_notices = parse_topic_blocks(marked_reply)
         notices.extend(topic_notices)
         marked_reply = self._apply_tend_fence(marked_reply, notices)
@@ -2908,23 +3057,55 @@ class ChatSession:
             if lesson_out.get("record_ids"):
                 self.out(f'(lesson kept: "{lesson_text[:70]}")')
 
+        # REALIZATIONS — the identity-pass spine's second waking surface
+        # (the look-back often names what the moment could not). Same apply
+        # path as mid-turn; the -refl suffix keeps turn-scoped form ids
+        # distinct from any mid-turn realization of the closing turn. The
+        # ended session's id/phase ride explicitly (salvage honesty, r-rt-3).
+        self._apply_realizations(
+            realizations, turn_id=f"{turn_id}-refl", notices=notices,
+            session_id=session_id, phase=phase or self.phase,
+        )
+
         for e in diary_elections:
             session_graph_ids = [rid for rid, _ in sheet if rid][-4:]
-            diary_out = self._effect(
-                EffectType.DIARY_WRITE,
-                {
-                    "text": e.text,
-                    "gist": e.gist,
-                    "kind": e.kind,
-                    "visibility": e.visibility,
-                    "resolves": self._resolve_resolves(e.resolves),
-                    "explores": self._resolve_explores(e.explores),
-                    "turn_id": turn_id,
-                    "as_of_seq": self.home.ms.current_seq(),
-                    "anchor_record_ids": session_graph_ids,
-                    "anchor_graph_ids": session_graph_ids,  # sheet holds graph ids
-                },
-            )
+            try:
+                diary_out = self._effect(
+                    EffectType.DIARY_WRITE,
+                    {
+                        "text": e.text,
+                        "gist": e.gist,
+                        "kind": e.kind,
+                        "visibility": e.visibility,
+                        "resolves": self._resolve_resolves(e.resolves),
+                        "explores": self._resolve_explores(e.explores),
+                        "turn_id": turn_id,
+                        "as_of_seq": self.home.ms.current_seq(),
+                        "anchor_record_ids": session_graph_ids,
+                        "anchor_graph_ids": session_graph_ids,  # sheet holds graph ids
+                    },
+                )
+            except RuntimeError as diary_err:
+                # Same protection as the turn path (record-everything
+                # ruling, 2026-07-26): a failed book write at session close
+                # must not throw the reflection's elected words away. The
+                # review adversary found this lane unfixed after the turn
+                # path was — one function apart, same failure shape.
+                from .act_only import rescue_reply_to_home
+
+                rescued = rescue_reply_to_home(
+                    self.home.home_dir,
+                    run_id=str(getattr(self.run, "run_id", "") or ""),
+                    turn_id=f"{turn_id}-refl",
+                    raw_reply=raw_reply,
+                    error=str(diary_err),
+                    extra={"anchor_graph_ids": session_graph_ids},
+                )
+                suffix = (
+                    f" (reflection reply rescued to {rescued})" if rescued
+                    else " (rescue also failed - the reflection reply could not be saved)"
+                )
+                raise RuntimeError(f"{diary_err}{suffix}") from diary_err
             notices.extend(diary_out.get("warnings", []))
 
         # SESSION-scoped feelings cap (W1): the close shares the budget with
@@ -3293,6 +3474,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "model": model,
             "timeout": 120,
             "retry_wall_clock_budget_s": 180,
+            # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
+            # the absolute budget; a stream silent for 60s on an
+            # interactive lane is already dead - abort at the socket, let
+            # the retry budget do its loud work. Older cores ignore the
+            # unknown kwarg via the same TypeError ladder below.
+            "read_idle_timeout_s": 60,
         }
         if args.max_output_tokens is not None:
             llm_kwargs["max_output_tokens"] = args.max_output_tokens
@@ -3302,7 +3489,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             llm = create_llm(provider, **llm_kwargs)
         except TypeError:
             llm_kwargs.pop("retry_wall_clock_budget_s", None)
-            print("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard")
+            llm_kwargs.pop("read_idle_timeout_s", None)
+            print("#FALLBACK core predates retry_wall_clock_budget_s/read_idle_timeout_s; timeout-only guard")
             llm = create_llm(provider, **llm_kwargs)
 
         session = ChatSession(

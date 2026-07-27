@@ -136,6 +136,7 @@ def _collect_reachable_flows(
     root_flow: Dict[str, Any],
     root_bytes: bytes,
     flows_dir: Path,
+    extra_root_ids: Optional[List[str]] = None,
 ) -> Tuple[List[Tuple[str, Dict[str, Any], bytes]], List[str]]:
     """Return [(flow_id, flow_dict, raw_bytes)] in discovery order + list of missing subflow ids."""
     ordered: list[Tuple[str, Dict[str, Any], bytes]] = []
@@ -200,6 +201,23 @@ def _collect_reachable_flows(
             _dfs(child[0], child[1])
 
     _dfs(root_flow, root_bytes)
+
+    # Entrypoints are roots too: a declared entrypoint whose flow is not
+    # reachable from the packed root must still ship (and pull its own
+    # subtree), or the manifest points at a flow the bundle does not carry
+    # (the dangling-entrypoint class — multiagent-coder@0.0.1 shipped a
+    # wrapper entrypoint with no flow behind it; entity-life@0.0.1 hit the
+    # same with its chat door).
+    for extra_id in extra_root_ids or ():
+        eid = str(extra_id or "").strip()
+        if not eid or eid in visited:
+            continue
+        extra = _load_by_id(eid)
+        if extra is None:
+            missing.append(eid)
+            continue
+        _dfs(extra[0], extra[1])
+
     return ordered, missing
 
 
@@ -225,7 +243,11 @@ def pack_workflow_bundle(
     if not flows_base.exists() or not flows_base.is_dir():
         raise FileNotFoundError(f"flows_dir does not exist: {flows_base}")
 
-    ordered, missing = _collect_reachable_flows(root_flow=root_flow, root_bytes=root_bytes, flows_dir=flows_base)
+    _extra_roots = [str(x).strip() for x in (entrypoints or []) if isinstance(x, str) and str(x).strip()]
+    ordered, missing = _collect_reachable_flows(
+        root_flow=root_flow, root_bytes=root_bytes, flows_dir=flows_base,
+        extra_root_ids=_extra_roots,
+    )
     if missing:
         uniq = sorted(set(missing))
         raise WorkflowBundleError(f"Missing referenced subflows in flows_dir: {uniq}")

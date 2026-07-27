@@ -452,3 +452,105 @@ def test_window_dials_resolve_from_the_blueprint(tmp_path, monkeypatch) -> None:
     t, warns = load_phase_tunables()
     assert t["window_limit"] == 16384 and t["drive_window_limit"] == 512
     assert not any("NOT YET WIRED" in w for w in warns), "runtime half is wired"
+
+
+def test_explored_ratio_derives_from_the_shared_fold(tmp_path) -> None:
+    """skill c413 P0: the day-open ratio's explored count derives from
+    unexplored_interests (the explores= stamp lane), never from phantom
+    attributes keys nothing writes. An interest DISCHARGED by a believed
+    explores= stamp counts as explored."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_entity_life_loop import _make_home
+
+    from abstractmemory import (
+        MemoryRecordInput,
+        MemorySystem,
+        SQLiteJournal,
+        SQLiteTripleStore,
+    )
+
+    from abstractruntime.identity.life import _standing_interest_note
+
+    home_dir = _make_home(tmp_path)
+    entity_id = "entity:liveling@home-test"
+    db = home_dir / "memory.sqlite3"
+    store = SQLiteTripleStore(db)
+    journal = SQLiteJournal(db)
+    ms = MemorySystem(store=store, journal=journal)
+
+    def _interest(title: str, digest: str) -> MemoryRecordInput:
+        return MemoryRecordInput(
+            kind="interest", title=title, digest=digest, keywords=(),
+            payload_ref=None, attributes={}, provenance={"source": "entity-reflection-v1"},
+            edges=(),
+        )
+
+    out1 = ms.remember_many(
+        [_interest("interest: tidal pools", "the taste of tidal pools")],
+        scope="self", owner_id=entity_id, turn_id="t-i1", idempotency_key="t-i1-k",
+    )
+    ms.remember_many(
+        [_interest("interest: bridges", "how bridges remember load")],
+        scope="self", owner_id=entity_id, turn_id="t-i2", idempotency_key="t-i2-k",
+    )
+    explored_gid = str((out1.record_ids if hasattr(out1, "record_ids") else out1)[0])
+    # A believed diary-plane record stamping explores= on interest 1 (his act).
+    ms.remember_many(
+        [MemoryRecordInput(
+            kind="diary", title="walked the pools",
+            digest="today I walked the pools and wrote what held",
+            keywords=(), payload_ref=None,
+            attributes={"explores": explored_gid, "entry_id": "diary_pools01"},
+            provenance={"source": "diary-projection"}, edges=(),
+        )],
+        scope="diary", owner_id=entity_id, turn_id="t-exp", idempotency_key="t-exp-k",
+    )
+    store.close()
+    journal.close()
+    note, _ids = _standing_interest_note(home_dir, entity_id, rotation_key=0)
+    assert "1 ever explored" in note, f"the stamp discharges into the ratio: {note!r}"
+
+
+def test_operator_sleep_is_absolute_through_the_need_check(tmp_path) -> None:
+    """spec v17 (laurent dm#127): an operator-written sleep on a BARE desk
+    (no grant, no order - the composite act's aftermath) never wakes into
+    a day: the need-check runs quietly (no marker churn) and the same
+    sleep continues. Arming the desk later sanctions a day - two facts,
+    one law."""
+    import sys
+    from datetime import datetime, timedelta, timezone
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_entity_life_loop import _ScriptedLLM, _factory_for, _make_home
+
+    from abstractruntime.identity.life import (
+        PHASES_FILENAME, LifeLoop, read_entity_state, write_entity_state,
+    )
+
+    home_dir = _make_home(tmp_path)
+    (home_dir / PHASES_FILENAME).unlink()  # grant disarmed (composite act)
+    llm = _ScriptedLLM(["One."] * 2)
+    loop = LifeLoop(
+        _factory_for(home_dir, llm),
+        tick_seconds=1, ticks_per_day=1, max_ticks=1,
+        stop_file=home_dir / "STOP", state_home=home_dir,
+        rest_minutes=0.001, sleep_fn=lambda s: None, out=lambda s: None,
+    )
+    # The operator's click (past its bound - the dangerous instant).
+    write_entity_state(
+        home_dir, "asleep", reason="operator sleep - composite act",
+        written_by="operator",
+        wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    before = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
+    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
+    assert still is True, "bare desk: the operator's sleep CONTINUES"
+    after = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
+    assert after == before, "no marker churn - his one act stays one moment"
+    # He drops a work order later: the need-check sanctions a day.
+    (home_dir / "work_order.md").write_text("desk", encoding="utf-8")
+    loop._need_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
+    assert still is False and read_entity_state(home_dir)["written_by"] == "need-check"

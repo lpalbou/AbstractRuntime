@@ -14,6 +14,16 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
+class UnknownNodeTypeError(ValueError):
+    """A VisualFlow node type this runtime's compiler cannot execute.
+
+    Raised at EXECUTION (never load/compile) by the unknown-type refusal
+    handler, and deliberately re-raised past the plain-step soft-error
+    absorption so the RUN fails loudly (flow's live incident, commons c5166:
+    a stale server compiled newer entity-brain node types as silent no-ops —
+    sessions "completed" while zero memory formed)."""
+
+
 class NodeType(str, Enum):
     # Event/Trigger nodes (entry points)
     ON_FLOW_START = "on_flow_start"
@@ -54,6 +64,11 @@ class VisualFlow:
     nodes: List[VisualNode] = field(default_factory=list)
     edges: List[VisualEdge] = field(default_factory=list)
     entryNode: Optional[str] = None
+    # Flow-level named helper functions (tier 2 of the expression redesign).
+    # Raw dict entries ({name, code, kind?, description?}); validation and
+    # compilation live in visual/function_library.py. Older runtimes never
+    # read this field (permissive parser) — skew-safe like pinExpressions.
+    functions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _coerce_type(value: Any) -> str:
@@ -200,6 +215,13 @@ def load_visualflow_json(raw: Any) -> VisualFlow:
     entry = raw.get("entryNode")
     entry_node = str(entry).strip() if isinstance(entry, str) and entry.strip() else None
 
+    functions_raw = raw.get("functions")
+    functions: list[Dict[str, Any]] = []
+    if isinstance(functions_raw, list):
+        for f in functions_raw:
+            if isinstance(f, dict):
+                functions.append(dict(f))
+
     return VisualFlow(
         id=fid,
         name=name,
@@ -208,4 +230,5 @@ def load_visualflow_json(raw: Any) -> VisualFlow:
         nodes=nodes,
         edges=edges,
         entryNode=entry_node,
+        functions=functions,
     )

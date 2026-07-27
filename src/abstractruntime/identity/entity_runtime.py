@@ -118,6 +118,7 @@ def open_entity_runtime(
     embedder: Any = None,
     attention_window: Optional[int] = None,
     extra_handlers: Optional[dict] = None,
+    workflow_registry: Any = None,
 ) -> EntityRuntime:
     """Open an existing home and bind its own Runtime to it.
 
@@ -173,6 +174,10 @@ def open_entity_runtime(
         handlers[_ET.LLM_CALL] = wrap_llm_handler_with_act_only(
             handlers[_ET.LLM_CALL],
             diary_write_handler=handlers.get(_ET.DIARY_WRITE),
+            # A failed book write saves the reply here before failing the
+            # turn (record-everything ruling, 2026-07-26) — the words stay
+            # in the life even when the store misbehaves.
+            rescue_dir=home_dir,
         )
 
     # Durable-write discipline (0067-M): oversized effect/result leaves in
@@ -183,11 +188,18 @@ def open_entity_runtime(
     # for direct consumers); the Runtime writes through the offloading wrap.
     from ..storage.offloading import OffloadingLedgerStore
 
+    # Optional workflow registry: composed (subflow-calling) workflows — the
+    # entity-life master and its brain subflows — need START_SUBWORKFLOW to
+    # resolve child specs. Absent registry keeps single-spec behavior.
+    _rt_kwargs: dict = {}
+    if workflow_registry is not None:
+        _rt_kwargs["workflow_registry"] = workflow_registry
     runtime = Runtime(
         run_store=run_store,
         ledger_store=OffloadingLedgerStore(ledger_store, artifact_store=home.artifacts),
         effect_handlers=handlers,
         artifact_store=home.artifacts,
+        **_rt_kwargs,
     )
     return EntityRuntime(
         home=home,

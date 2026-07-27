@@ -23,9 +23,14 @@ Contract (agora channel `durable-sessions`, v1):
   so what a replayed model sees is exactly what thin clients already
   display as session history.
 
-Known v1 limits (documented, not silent): answers offloaded to `$artifact`
-refs (>256KB terminal outputs) extract as empty and their turn is skipped;
-turns are dropped whole, never split.
+Known v1 limits (documented, not silent): turns are dropped whole, never
+split. The original limit here — "$artifact-offloaded answers extract as
+empty and their turn is skipped" — was the deepest server link in the
+2026-07-23 401-incident chain (code-tui c4978 R2) and is CLOSED two ways:
+the offloader now reduces largest-children-first so answers stay inline by
+size (R1), and root-replaced outputs from the existing corpus resolve
+boundedly at extraction (history_bundle._resolve_offloaded_output — offload-
+minted refs only, size-capped, answer extraction only).
 """
 
 from __future__ import annotations

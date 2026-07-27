@@ -164,18 +164,34 @@ def _default_scope(run: RunState) -> str:
     return "session" if isinstance(sid, str) and sid.strip() else "run"
 
 
+# Entity-plane scope names: on a home-bound seam (open_home passes the home's
+# entity id), BARE names resolve to the home owner — the channel fills
+# authorship so callers (notably entity-brain VisualFlows) never carry an
+# entity id in their payloads (the deposit-gate rule applied to scoping).
+_ENTITY_SCOPES = ("self", "diary", "life")
+
+
 def _resolve_scope_pairs(
-    run: RunState, raw_scopes: Any, *, run_store: RunStore
+    run: RunState, raw_scopes: Any, *, run_store: RunStore,
+    entity_scope_owner: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Turn a JSON scope spec into concrete (scope, owner_id) pairs.
 
     Accepts either scope names (["run", "session"]) whose owner_id the runtime
     resolves from the run, or explicit [scope, owner_id] pairs (used for
-    cross-run recall). Defaults to the current run scope.
+    cross-run recall). Bare ENTITY scope names (self/diary/life) resolve to
+    `entity_scope_owner` when the seam is home-bound. Defaults to the current
+    run scope.
     """
+
+    def _owner_for(scope: str) -> str:
+        if entity_scope_owner and scope in _ENTITY_SCOPES:
+            return entity_scope_owner
+        return resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+
     if not raw_scopes:
         default = _default_scope(run)
-        return [(default, resolve_scope_owner_id(run, scope=default, run_store=run_store))]
+        return [(default, _owner_for(default))]
     pairs: List[Tuple[str, str]] = []
     for entry in raw_scopes:
         if isinstance(entry, (list, tuple)) and len(entry) == 2:
@@ -185,14 +201,16 @@ def _resolve_scope_pairs(
                 pairs.append((scope, owner))
         elif isinstance(entry, str) and entry.strip():
             scope = entry.strip().lower()
-            pairs.append((scope, resolve_scope_owner_id(run, scope=scope, run_store=run_store)))
+            pairs.append((scope, _owner_for(scope)))
     if not pairs:
         default = _default_scope(run)
-        return [(default, resolve_scope_owner_id(run, scope=default, run_store=run_store))]
+        return [(default, _owner_for(default))]
     return pairs
 
 
-def _build_budget(RecallBudget: Any, payload: Dict[str, Any]) -> Tuple[Any, List[str]]:
+def _build_budget(
+    RecallBudget: Any, payload: Dict[str, Any], *, entity_scope_owner: Optional[str] = None
+) -> Tuple[Any, List[str]]:
     """RecallBudget from an explicit `budget` dict, else an `effort` shortcut,
     else the seam default. Returns (budget, warnings).
 
@@ -208,6 +226,12 @@ def _build_budget(RecallBudget: Any, payload: Dict[str, Any]) -> Tuple[Any, List
     else:
         effort = str(payload.get("effort") or "standard").strip().lower()
         fields = dict(_EFFORT_BUDGET.get(effort, _EFFORT_BUDGET["standard"]))
+        if entity_scope_owner:
+            # Identity present by right (maintainer law): a home-bound recall
+            # without an explicit budget seats the self core at the summon
+            # posture — effort presets alone left self_fraction at 0.0, so
+            # every flow-lane recall ran identity-blind (adversary-2 P0-1).
+            fields.setdefault("self_fraction", 0.5)
 
     warnings: List[str] = []
     allowed = getattr(RecallBudget, "__dataclass_fields__", {})
@@ -246,6 +270,7 @@ def build_memory_seam_effect_handlers(
     now_iso: Callable[[], str],
     artifact_store: Any = None,
     strict: bool = True,
+    entity_scope_owner: Optional[str] = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Build `MEMORY_RECALL` / `MEMORY_ACCESS` / `MEMORY_FORM` / `MEMORY_ADJUST`
     handlers over a `MemorySystem`.
@@ -277,12 +302,21 @@ def build_memory_seam_effect_handlers(
 
     Stimulus, RecallBudget = _import_seam()
 
+    def _scope_owner(run: RunState, scope: str) -> str:
+        # Home-bound seams resolve bare entity scopes to the home owner
+        # (channel authority: payloads never carry the entity id).
+        if entity_scope_owner and scope in _ENTITY_SCOPES:
+            return entity_scope_owner
+        return resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+
     def _handle_recall(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         del default_next_node
         payload = dict(effect.payload or {})
 
         try:
-            budget, budget_warnings = _build_budget(RecallBudget, payload)
+            budget, budget_warnings = _build_budget(
+                RecallBudget, payload, entity_scope_owner=entity_scope_owner
+            )
         except ValueError as e:
             return EffectOutcome.failed(f"MEMORY_RECALL: {e}")
 
@@ -315,7 +349,7 @@ def build_memory_seam_effect_handlers(
             as_of=int(as_of) if isinstance(as_of, int) else None,
             turn_id=str(turn_id).strip() if isinstance(turn_id, str) and turn_id.strip() else None,
         )
-        scope_pairs = _resolve_scope_pairs(run, payload.get("scopes"), run_store=run_store)
+        scope_pairs = _resolve_scope_pairs(run, payload.get("scopes"), run_store=run_store, entity_scope_owner=entity_scope_owner)
         escalation_reason = payload.get("escalation_reason")
         journal = payload.get("journal", True)
 
@@ -397,7 +431,7 @@ def build_memory_seam_effect_handlers(
             owner_id = owner_override.strip()
         else:
             try:
-                owner_id = resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+                owner_id = _scope_owner(run, scope)
             except Exception as e:
                 return EffectOutcome.failed(f"MEMORY_FORM could not resolve owner for scope {scope!r}: {e}")
 
@@ -531,7 +565,7 @@ def build_memory_seam_effect_handlers(
             owner_id = owner_override.strip()
         else:
             try:
-                owner_id = resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+                owner_id = _scope_owner(run, scope)
             except Exception as e:
                 return EffectOutcome.failed(f"MEMORY_ADJUST could not resolve owner for scope {scope!r}: {e}")
 
@@ -563,7 +597,7 @@ def build_memory_seam_effect_handlers(
         # derive the same event_id and the second would be silently swallowed.
         # close_record ignores event_id (its closure ids are deterministic).
         event_id = hashlib.sha256(
-            f"{op}|{scope}|{owner_id}|{record_id}|{turn_id}|{reason}".encode("utf-8")
+            f"{op}|{scope}|{owner_id}|{record_id}|{run_id}|{turn_id}|{reason}".encode("utf-8")
         ).hexdigest()
 
         try:
@@ -621,7 +655,7 @@ def build_memory_seam_effect_handlers(
             owner_id = owner_override.strip()
         else:
             try:
-                owner_id = resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+                owner_id = _scope_owner(run, scope)
             except Exception as e:
                 return EffectOutcome.failed(f"MEMORY_APPRAISE could not resolve owner for scope {scope!r}: {e}")
 
@@ -715,7 +749,7 @@ def build_memory_seam_effect_handlers(
         # supplied-id dedup is global, so scope+owner participate). Memory
         # derives the paired marker id as "{event_id}:scar"/":bond" itself.
         event_id = hashlib.sha256(
-            f"appraise|{scope}|{owner_id}|{target_id}|{turn_id}|{reason}".encode("utf-8")
+            f"appraise|{scope}|{owner_id}|{target_id}|{run_id}|{turn_id}|{reason}".encode("utf-8")
         ).hexdigest()
 
         try:

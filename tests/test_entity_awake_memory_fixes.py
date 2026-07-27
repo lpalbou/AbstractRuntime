@@ -236,6 +236,53 @@ def test_search_memory_hits_carry_the_reread_command() -> None:
     assert "reread: diary_read diary_ae005852f00112233445566" in out2
 
 
+def test_search_memory_all_words_pass_rescues_noncontiguous_queries() -> None:
+    """Flow c5311 (Mira B1): her deliberate search missed records passive
+    recall had just surfaced — NOT lag (the letters arm reads the store
+    live), but whole-phrase contiguity: "persistence traces" never appears
+    as one substring. The all-words pass now rescues multi-word queries in
+    any order, LABELED distinctly ("all the words, any order"), and the
+    absence warrant names both checks when nothing matches either."""
+    from abstractruntime.identity.memory_reader import HomeMemoryReader
+
+    class _Assertion:
+        subject = "ex:memory-abc"
+        object = "wrote about persistence through traces"
+        observed_at = "2026-07-15T20:00:00+00:00"
+        attributes = {"record_kind": "episode"}
+        provenance = {"source": "entity-chat-v1"}
+
+    class _Diary:
+        @staticmethod
+        def list_entries():
+            return []
+
+    class _Home:
+        diary = _Diary()
+        store = None
+        name = "testee"
+        entity_id = "entity:testee"
+
+    reader = object.__new__(HomeMemoryReader)
+    reader.home = _Home()
+    reader.ladder = [["life", "entity:testee"]]
+    reader.tag_map = {}
+    reader.digest_assertions_all = lambda: [_Assertion()]
+
+    # Non-contiguous multi-word query: phrase-substring misses, words hit.
+    out = reader.search_memory("persistence traces")
+    assert "1 match(es)" in out
+    assert "all the words, any order" in out, "the word-pass is labeled, never silent"
+
+    # Exact-phrase still wins first and keeps its own label.
+    exact = reader.search_memory("persistence through traces")
+    assert "matching exact letters" in exact
+
+    # Nothing matches either pass: the absence warrant names BOTH checks.
+    miss = reader.search_memory("harbor lighthouse")
+    assert "as a phrase OR all of its words together" in miss
+
+
 # ---------------------------------------------------------------------------
 # R-B + R-D (laurent c2596/c2705, 20mn round): investigation posture in the
 # own-time contract; the day-open cue offers back standing open questions.

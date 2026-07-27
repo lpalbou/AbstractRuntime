@@ -58,6 +58,65 @@ def _is_parallel_safe_tool(name: str) -> bool:
     return str(name or "").strip() in _PARALLEL_SAFE_TOOL_NAMES
 
 
+def _endpoint_profile_route_context(getter: Optional[Callable[[], Any]]):
+    """Context manager installing the host's endpoint-profile resolver for
+    the duration of one tool batch (Case-1 seam, converged 2026-07-26).
+
+    The resolver lets core's session-route path construct gateway-registered
+    `endpoint:*` providers that are invisible to ~/.abstractcore config
+    (per-principal profiles). Degradations are structural no-ops: no getter,
+    getter returns None, or an abstractcore too old to ship the seam — all
+    yield a null context and behavior is byte-identical to pre-seam.
+    """
+    import contextlib
+
+    resolver = None
+    if callable(getter):
+        try:
+            resolver = getter()
+        except Exception:
+            resolver = None
+    if resolver is None:
+        return contextlib.nullcontext()
+    try:
+        from abstractcore.providers import use_provider_endpoint_profile_resolver
+    except Exception:
+        return contextlib.nullcontext()
+    return use_provider_endpoint_profile_resolver(resolver)
+
+
+def attach_endpoint_profile_resolver_getter(executor: Any, getter: Optional[Callable[[], Any]]) -> bool:
+    """Attach a resolver getter to an executor, walking delegate chains.
+
+    Hosts compose executors in layers (ApprovalToolExecutor -> Mapping,
+    delegating MCP views, pre-approved views); the wrap lives on the inner
+    MappingToolExecutor, so the attach must reach it through whatever
+    wrapper the host built. Returns True when at least one executor in the
+    chain accepted the getter (a False return means the composition has no
+    in-process executor — attach elsewhere or the seam stays dark).
+    """
+    attached = False
+    seen: set[int] = set()
+    stack = [executor]
+    while stack:
+        obj = stack.pop()
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        setter = getattr(obj, "set_endpoint_profile_resolver_getter", None)
+        if callable(setter):
+            try:
+                setter(getter)
+                attached = True
+            except Exception:
+                pass
+        for attr in ("_delegate", "_inner", "_executor", "_fallback"):
+            child = getattr(obj, attr, None)
+            if child is not None:
+                stack.append(child)
+    return attached
+
+
 class ToolExecutor(Protocol):
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]: ...
 
@@ -89,9 +148,19 @@ def _call_with_timeout(func: Callable[[], Any], *, timeout_s: Optional[float]) -
 
     result: Dict[str, Any] = {"done": False, "ok": False, "value": None, "error": None}
 
+    # A bare Thread starts with an EMPTY contextvars context on CPython 3.12
+    # — the ambient endpoint-profile resolver (and any other ContextVar) was
+    # silently dropped on every lane that configures a tool timeout (route-
+    # context adversary P1-1, 2026-07-26: gateway's local tool mode sets a
+    # 7200s timeout on the bare executor, killing the seam). Capture the
+    # calling thread's context and run the tool under it.
+    import contextvars
+
+    ctx = contextvars.copy_context()
+
     def _runner() -> None:
         try:
-            result["value"] = func()
+            result["value"] = ctx.run(func)
             result["ok"] = True
         except Exception as e:
             result["error"] = str(e)
@@ -120,6 +189,16 @@ class MappingToolExecutor:
     def __init__(self, tool_map: Dict[str, Callable[..., Any]], *, timeout_s: Optional[float] = None):
         self._tool_map = dict(tool_map)
         self._timeout_s = _normalize_timeout_s(timeout_s)
+        # Endpoint-profile resolver getter (Case-1 seam, 2026-07-26): a
+        # LATE-BOUND callable returning the per-principal resolver the host
+        # installed on this runtime's llm_client (gateway sets it per built
+        # runtime — identity rides the closure, so this executor never sees
+        # principals). Late-bound because the host may set the resolver
+        # AFTER construction (def-time capture would freeze None forever).
+        self._endpoint_profile_resolver_getter: Optional[Callable[[], Any]] = None
+
+    def set_endpoint_profile_resolver_getter(self, getter: Optional[Callable[[], Any]]) -> None:
+        self._endpoint_profile_resolver_getter = getter if callable(getter) else None
 
     @classmethod
     def from_tools(cls, tools: Sequence[Callable[..., Any]], *, timeout_s: Optional[float] = None) -> "MappingToolExecutor":
@@ -148,6 +227,17 @@ class MappingToolExecutor:
         self._timeout_s = _normalize_timeout_s(timeout_s)
 
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # ONE wrap site covers every execution path by construction: the
+        # policy path, approval-resume (ApprovalToolExecutor.execute_approved
+        # delegates here), and tool_invoke's pre-approved view all funnel
+        # into this method. Core's context manager is the ONLY install path
+        # for the resolver (identity-by-closure is structural, c5759); an
+        # absent resolver or an older core without the seam degrades to a
+        # no-op context — byte-identical behavior.
+        with _endpoint_profile_route_context(self._endpoint_profile_resolver_getter):
+            return self._execute_inner(tool_calls=tool_calls)
+
+    def _execute_inner(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         results: List[Dict[str, Any]] = []
 
         def _loads_dict_like(value: Any) -> Optional[Dict[str, Any]]:
@@ -454,11 +544,21 @@ class MappingToolExecutor:
                     idx, tc = group[0]
                     results[idx] = _build_result(tc)
                 else:
+                    import contextvars
                     from concurrent.futures import ThreadPoolExecutor
 
                     workers = min(len(group), _PARALLEL_TOOL_MAX_WORKERS)
                     with ThreadPoolExecutor(max_workers=workers) as pool:
-                        futures = {pool.submit(_build_result, tc): idx for idx, tc in group}
+                        # copy_context per submission: ContextVars (the
+                        # endpoint-profile resolver context, trace state)
+                        # do not cross thread boundaries on their own —
+                        # a parallel-safe tool must see the same ambient
+                        # context the sequential path sees (core's
+                        # same-thread rule, c5783).
+                        futures = {
+                            pool.submit(contextvars.copy_context().run, _build_result, tc): idx
+                            for idx, tc in group
+                        }
                         for fut, idx in futures.items():
                             try:
                                 results[idx] = fut.result()
@@ -778,11 +878,18 @@ _DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
     "read_file",
     "skim_files",
     "search_files",
-    # Network read-only
+    # Network read-only (fixed destinations: search engines / the model's
+    # query text rides to a FIXED endpoint - egress accepted visibly per
+    # laurent's tier-1 placement)
     "web_search",
     "skim_websearch",
     "skim_url",
-    "fetch_url",
+    # fetch_url REMOVED from auto (core adversary P1, c4586): its
+    # destination is MODEL-CHOSEN and core's row declares
+    # remote_write_capable=True - auto-approving it made the exfiltration
+    # chain silent (read a secret via observe-auto, POST it to a
+    # model-chosen webhook via this entry, no outreach grant, no prompt).
+    # The 2026-07-12 ruling stands: fetch_url is never read-only-safe.
     # Comms (required for bridge-owned delivery flows like Telegram)
     "send_telegram_message",
     "send_telegram_artifact",
@@ -803,6 +910,16 @@ _DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
 
 
 _DEFAULT_REQUIRE_APPROVAL: Set[str] = {
+    # Model-chosen network destination (core adversary P1, c4586): the
+    # model picks URL+method+body - the approval prompt IS the
+    # exfiltration defense the band-neutral model_controlled_destination
+    # decision assumes exists.
+    "fetch_url",
+    # fetch_url's peer (operator dm#24, core c5005): renders a MODEL-CHOSEN
+    # target in a headless browser AND executes the page's JS (which may
+    # issue its own outbound requests) - mcd by declared fact, broker/ask
+    # by derivation; this name entry is the belt beside the fact.
+    "browser_probe",
     # Side effects
     "write_file",
     "edit_file",

@@ -17,11 +17,13 @@ def test_default_tool_executor_search_files_respects_max_hits_and_head_limit(tmp
     assert isinstance(search, dict)
     params = search.get("parameters") or {}
     assert isinstance(params, dict)
+    # The spec comes from the INSTALLED abstractcore inventory — asserting the
+    # absence of params was a snapshot pin that core's search improvements
+    # legitimately invalidated (output_mode/context_lines/case_sensitive
+    # shipped 2026-07). This test's intent is the BEHAVIOR below: max_hits and
+    # head_limit are respected by the executor.
     assert "max_hits" in params
-    assert "output_mode" not in params
-    assert "context_lines" not in params
-    assert "case_sensitive" not in params
-    assert "ignore_dirs" not in params
+    assert "head_limit" in params
 
     a = tmp_path / "a.txt"
     b = tmp_path / "b.txt"

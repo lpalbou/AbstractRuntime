@@ -10,12 +10,14 @@ This module is the runtime's READ SIDE of that ruling: machine numbers
 blueprint edit changes behavior with zero code change. Resolution order:
 
 1. explicit path argument (tests, harnesses),
-2. `ABSTRACTRUNTIME_PHASE_SPEC` env (operator override),
-3. the GATEWAY'S OPERATOR COPY, `<data_dir>/config/entity_phases.json`,
+2. the GATEWAY'S OPERATOR COPY, `<data_dir>/config/entity_phases.json`,
    located from the home dir (`<data_dir>/entities/<slug>` -> ../../config)
    — the PUT edit lane's persistence (gateway c-t-i 350): laurent's
    modulation reaches DETACHED loops as a plain file read, no HTTP, no
    env setup,
+3. `ABSTRACTRUNTIME_PHASE_SPEC` env (test/harness convenience — BELOW the
+   operator copy per the dm#177 ruling: behavior env never out-ranks
+   console config),
 4. the packaged vendored artifact (identity/spec/entity_phases.vendored.json).
 
 Failure posture: an unreadable override falls to the vendored artifact
@@ -105,15 +107,20 @@ def load_phase_tunables(
     candidates: list = []
     if spec_path is not None:
         candidates.append((Path(spec_path), "explicit path"))
-    env_path = os.environ.get(PHASE_SPEC_ENV, "").strip()
-    if env_path:
-        candidates.append((Path(env_path), f"env {PHASE_SPEC_ENV}"))
     if home_dir is not None:
         op_copy = operator_copy_path(home_dir)
         if op_copy.is_file():
             # Present = laurent edited the blueprint; absent is the normal
             # un-edited state (never a warning).
             candidates.append((op_copy, "gateway operator copy"))
+    # ENV BELOW CONFIG (operator ruling 2026-07-21 dm#177: behavior env
+    # vars must never out-rank console config): the env override is a
+    # test/harness convenience and sits UNDER the gateway operator copy -
+    # an exported shell var can no longer silently beat laurent's console
+    # blueprint edit. It out-ranks only the packaged vendored artifact.
+    env_path = os.environ.get(PHASE_SPEC_ENV, "").strip()
+    if env_path:
+        candidates.append((Path(env_path), f"env {PHASE_SPEC_ENV}"))
     candidates.append((vendored_spec_path(), "vendored artifact"))
 
     raw: Optional[Dict[str, Any]] = None

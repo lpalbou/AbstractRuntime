@@ -14,6 +14,12 @@ executes AbstractCore-backed effects (LLM calls and tool calls).
 # - Local inference can be slow for large contexts.
 # - In an orchestrator, timeouts are policy and should be explicit + consistent.
 DEFAULT_LLM_TIMEOUT_S: float = 7200.0
+# The NO-PROGRESS bound (0152 face 2, core c5051 + runtime c5041): httpx's
+# READ timeout separated from the absolute total above — a stream that
+# delivers nothing for this long dies at the socket instead of pinning a
+# tick worker for the 2h backstop. None disables (core's byte-identical
+# pre-fix behavior); entity lanes thread tighter numbers.
+DEFAULT_LLM_READ_IDLE_TIMEOUT_S: float = 300.0
 DEFAULT_TOOL_TIMEOUT_S: float = 7200.0
 
 

@@ -256,6 +256,81 @@ def _apply(func: Any, *args: Any, **kwargs: Any) -> Any:
     return func(*args, **kwargs)
 
 
+def _sandbox_parse_json(text: Any) -> Any:
+    """``parse_json(text)`` — the sandbox's JSON reader.
+
+    The sandbox has no imports, so JSON parsing was impossible in code nodes
+    and would have been impossible in pin expressions (the design verdict's
+    amendment 4: "parser" helpers were unbuildable inline). Errors stay in
+    the CodeExecutionError family so they surface loudly with attribution.
+    """
+    import json
+
+    if isinstance(text, (dict, list)):
+        # Already-parsed payloads pass through: upstream nodes frequently
+        # hand structured data to bodies written for the string case.
+        return text
+    try:
+        return json.loads(str(text))
+    except Exception as e:
+        head = str(text)[:80]
+        raise CodeExecutionError(f"parse_json: invalid JSON ({e}) — input head: {head!r}") from e
+
+
+def _sandbox_to_json(obj: Any, *, indent: Any = None) -> str:
+    """``to_json(obj)`` — the sandbox's JSON writer.
+
+    ``default=str`` is a DELIBERATE, documented trade-off (cycle-2 decision,
+    kept): the writer is TOTAL — it never raises on an exotic value (datetime,
+    a domain object), stringifying it instead. A raising ``to_json`` inside a
+    pin expression would fail the consumer's step with a confusing error over
+    what is usually a best-effort "render this as text" call; a total writer is
+    the right posture for a one-liner helper shared by both sandboxes. The cost
+    is that exotic values are LOSSY (their ``str()``, not a structured form) —
+    authors needing an exact round-trip must hand JSON-native types. No
+    security angle: the object is the author's own run data, ``str()`` leaks
+    nothing the author could not already read.
+    """
+    import json
+
+    return json.dumps(obj, default=str, indent=indent if isinstance(indent, int) else None)
+
+
+def sandbox_helper_globals() -> Dict[str, Any]:
+    """The convenience names granted to BOTH code-node bodies and pin
+    expressions — one source so the two sandboxes can never drift (the
+    four-copy-contract lesson applied preemptively).
+    """
+    return {
+        "len": len,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
+        "tuple": tuple,
+        "set": set,
+        "range": range,
+        "enumerate": enumerate,
+        "zip": zip,
+        "map": map,
+        "filter": filter,
+        "sorted": sorted,
+        "reversed": reversed,
+        "min": min,
+        "max": max,
+        "sum": sum,
+        "abs": abs,
+        "round": round,
+        "isinstance": isinstance,
+        "type": type,
+        "parse_json": _sandbox_parse_json,
+        "to_json": _sandbox_to_json,
+        "print": lambda *args, **kwargs: None,  # Silent print
+    }
+
+
 def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any], Any]:
     """Create handler using RestrictedPython for sandboxed execution."""
     try:
@@ -284,31 +359,9 @@ def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any],
             "_write_": full_write_guard,
             "_inplacevar_": _inplacevar,
             "_apply_": _apply,
-            # Allow some safe built-ins
-            "len": len,
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "set": set,
-            "range": range,
-            "enumerate": enumerate,
-            "zip": zip,
-            "map": map,
-            "filter": filter,
-            "sorted": sorted,
-            "reversed": reversed,
-            "min": min,
-            "max": max,
-            "sum": sum,
-            "abs": abs,
-            "round": round,
-            "isinstance": isinstance,
-            "type": type,
-            "print": lambda *args, **kwargs: None,  # Silent print
+            # Convenience builtins + parse_json/to_json — shared with the pin
+            # expression sandbox (one source, see sandbox_helper_globals).
+            **sandbox_helper_globals(),
         }
 
         local_vars: Dict[str, Any] = {}
@@ -357,30 +410,9 @@ def _create_basic_handler(code: str, function_name: str) -> Callable[[Any], Any]
     def handler(input_data: Any) -> Any:
         limited_globals = {
             "__builtins__": {
-                "len": len,
-                "str": str,
-                "int": int,
-                "float": float,
-                "bool": bool,
-                "list": list,
-                "dict": dict,
-                "tuple": tuple,
-                "set": set,
-                "range": range,
-                "enumerate": enumerate,
-                "zip": zip,
-                "map": map,
-                "filter": filter,
-                "sorted": sorted,
-                "reversed": reversed,
-                "min": min,
-                "max": max,
-                "sum": sum,
-                "abs": abs,
-                "round": round,
-                "isinstance": isinstance,
-                "type": type,
-                "print": lambda *args, **kwargs: None,
+                # Same convenience set as the restricted lane (one source),
+                # plus the literal names bare exec needs.
+                **sandbox_helper_globals(),
                 "True": True,
                 "False": False,
                 "None": None,

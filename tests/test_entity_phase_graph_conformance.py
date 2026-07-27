@@ -127,21 +127,23 @@ def test_transition_causes_are_a_closed_set_runtime_never_widens() -> None:
         assert r.startswith("<") and r.endswith(">")
 
 
-def test_runtime_writes_no_phase_markers_sibling_free() -> None:
-    """Marker contract, enforced sibling-free (adversary P1-1/P1-2: the
-    old pin lived in a module skipped without the abstractentity repo —
-    CI never ran it). ONE kind phase_changed, ONE named writer (gateway's
-    door half): no runtime identity module may write it."""
+def test_runtime_phase_marker_single_writer_sibling_free() -> None:
+    """Marker contract, enforced sibling-free — as AMENDED by the graph-edit
+    build order (c4837): the loop-written transitions land phase_changed via
+    exactly ONE runtime helper (life.append_phase_changed); no other
+    identity module may spell the marker (the door half stays gateway's)."""
     from pathlib import Path
 
     import abstractruntime.identity as identity_pkg
+    from abstractruntime.identity.life import append_phase_changed
 
+    assert callable(append_phase_changed)
     root = Path(identity_pkg.__file__).parent
     offenders = [
         p.name for p in root.glob("*.py")
-        if "phase_changed" in p.read_text(encoding="utf-8")
+        if "phase_changed" in p.read_text(encoding="utf-8") and p.name != "life.py"
     ]
-    assert offenders == [], f"runtime must never write phase markers: {offenders}"
+    assert offenders == [], f"one module writes phase markers (life.py): {offenders}"
 
 
 def test_salvage_marker_phase_canonicalizes_never_engraves_raw() -> None:

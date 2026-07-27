@@ -111,3 +111,38 @@ def test_sqlite_command_store_idempotency_and_restart_cursor(tmp_path: Path) -> 
     assert [x.command_id for x in items] == ["c1", "c2"]
     assert cur == items[-1].seq
 
+
+def test_jsonl_append_fsyncs_before_returning(monkeypatch) -> None:
+    """The durable claim behind "write before 2xx" must cover power loss.
+
+    Quit-contract thread (2026-07-25): the gateway answers POST /commands
+    only after JsonlCommandStore.append returns, so the record must be
+    fsynced to disk — a flush alone leaves it in the OS page cache where
+    a kernel panic / power loss between flush and sync would lose it.
+    This pin asserts append calls os.fsync on the command file's fd
+    BEFORE returning an accepted result (duplicates never re-write, so
+    they owe no fsync).
+    """
+    import os as _os
+
+    import abstractruntime.storage.commands as commands_mod
+
+    synced: list[int] = []
+    real_fsync = _os.fsync
+
+    def _spy(fd: int) -> None:
+        synced.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(commands_mod.os, "fsync", _spy)
+
+    with tempfile.TemporaryDirectory() as td:
+        store = JsonlCommandStore(td)
+        r1 = store.append(CommandRecord(command_id="c1", run_id="run_1", type="pause", payload={}, ts="t", seq=0))
+        assert r1.accepted is True
+        assert len(synced) == 1
+
+        # Duplicate: no second row, no second fsync.
+        r1b = store.append(CommandRecord(command_id="c1", run_id="run_1", type="pause", payload={}, ts="t", seq=0))
+        assert r1b.duplicate is True
+        assert len(synced) == 1

@@ -116,9 +116,49 @@ def offload_large_values(
                         changed = True
                     out[key] = new_v
 
-                # If still large, optionally offload the whole subtree (shape changes).
+                # If still large, reduce LARGEST CHILDREN FIRST before any
+                # whole-subtree replacement (code-tui c4978 R1, the
+                # 401-incident chain's root): all-or-nothing at the output
+                # root offloaded a 4KB answer because it shared a dict with
+                # a 215KB scratchpad — no single leaf crossed the cap, so
+                # the leaf walk changed nothing and the subtree check
+                # replaced EVERYTHING. Offloading the biggest children one
+                # at a time keeps small load-bearing fields (answer,
+                # response) inline by SIZE, never by a name list; the
+                # whole-subtree replacement remains only as the last resort
+                # when child reduction cannot get under the cap.
                 if _can_offload(path, out) and (allow_root_replace or not root):
                     payload = _json_dumps_bytes(out)
+                    if payload is not None and len(payload) > max_inline_bytes:
+                        remaining = len(payload)
+                        sized_children: List[Tuple[int, str]] = []
+                        for k, v in out.items():
+                            if is_artifact_ref(v):
+                                continue
+                            b = _json_dumps_bytes(v)
+                            if b is not None:
+                                sized_children.append((len(b), str(k)))
+                        sized_children.sort(reverse=True)
+                        for child_size, k in sized_children:
+                            if remaining <= max_inline_bytes:
+                                break
+                            child_path = f"{path}.{k}" if path else k
+                            if not _can_offload(child_path, out[k]):
+                                continue
+                            child_payload = _json_dumps_bytes(out[k])
+                            if child_payload is None:
+                                continue
+                            out[k] = _offload_bytes(
+                                content=child_payload,
+                                content_type="application/json",
+                                path=child_path,
+                                kind="json",
+                            )
+                            changed = True
+                            # A ref is ~60 bytes; the estimate only guides
+                            # the loop — the authoritative re-check follows.
+                            remaining = remaining - child_size + 64
+                        payload = _json_dumps_bytes(out)
                     if payload is not None and len(payload) > max_inline_bytes:
                         ref = _offload_bytes(
                             content=payload,

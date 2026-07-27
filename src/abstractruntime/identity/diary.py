@@ -355,6 +355,7 @@ def build_diary_effect_handlers(
             anchor_graph_ids=list(entry.anchor_graph_ids),
             resolves=entry.resolves,
             explores=entry.explores,
+            digest_method=str(entry.origin.get("digest_method") or "") or None,
         )
 
     def _handle_diary_write(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
@@ -457,6 +458,22 @@ def build_diary_effect_handlers(
             except Exception as e:  # noqa: BLE001 - a read hiccup never blocks the write
                 resolves_status = "unverified"
 
+        # WRITER-DECLARED digest_method (flow c5270 P2-2, jointly ruled):
+        # machine-worded diary entries (deterministic close notes) projected
+        # WITHOUT authorship metadata evade memory's machine-authorship
+        # bridge guard — dreams kept bridging close-note boilerplate. The
+        # WRITER is the only party that knows its words are mechanical, so
+        # the stamp is a declared payload field (the digest_method consent-
+        # vocabulary pact: name the label, never infer it from prose).
+        digest_method_raw = payload.get("digest_method")
+        digest_method: Optional[str] = None
+        if digest_method_raw is not None:
+            digest_method = str(digest_method_raw).strip()
+            if not digest_method or len(digest_method) > 64:
+                return EffectOutcome.failed(
+                    f"DIARY_WRITE digest_method must be a short label (<=64 chars), got {digest_method_raw!r}"
+                )
+
         run_id = str(getattr(run, "run_id", "") or "")
         entry = DiaryEntry(
             entry_id=derive_entry_id(run_id=run_id, turn_id=turn_id, text=text),
@@ -479,6 +496,7 @@ def build_diary_effect_handlers(
                 "turn_id": turn_id,
                 "session_id": getattr(run, "session_id", None),
                 "actor_id": getattr(run, "actor_id", None),
+                **({"digest_method": digest_method} if digest_method else {}),
             },
         )
 

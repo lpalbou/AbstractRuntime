@@ -152,3 +152,95 @@ def test_start_subworkflow_does_not_override_explicit_child_workspace(tmp_path) 
     assert child_run is not None
     assert child_run.vars.get("workspace_root") == explicit
 
+
+
+def test_start_subworkflow_inherits_tool_policy(tmp_path) -> None:
+    """coder-tui c4384 live find (2026-07-22, the skills_block P1-2 class
+    exactly): thin clients send `_runtime.tool_policy` on the ROOT run, but
+    bundle-hosted agents execute tool_calls in CHILD runs whose fresh vars
+    never carried it - the run-policy consumer found nothing and the
+    approval wait still round-tripped despite the client's accepted-tier
+    policy. Same setdefault semantics; an explicit child policy wins."""
+
+    def child_node(run: RunState, ctx) -> StepPlan:
+        return StepPlan(node_id="child", complete_output={"ok": True})
+
+    child = WorkflowSpec(workflow_id="child_wf", entry_node="child", nodes={"child": child_node})
+
+    def parent_node(run: RunState, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="parent",
+            effect=Effect(
+                type=EffectType.START_SUBWORKFLOW,
+                payload={"workflow_id": "child_wf", "vars": {}, "async": True, "wait": True},
+                result_key="sub_result",
+            ),
+            next_node="after",
+        )
+
+    parent = WorkflowSpec(workflow_id="parent_wf", entry_node="parent", nodes={"parent": parent_node})
+
+    reg = WorkflowRegistry()
+    reg.register(child)
+    reg.register(parent)
+
+    policy = {"auto_approve_tools": ["write_file", "edit_file"], "require_approval_tools": []}
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=reg)
+    run_id = rt.start(workflow=parent, vars={"_runtime": {"tool_policy": policy}})
+
+    st = rt.tick(workflow=parent, run_id=run_id, max_steps=1)
+    assert st.status == RunStatus.WAITING
+    sub_run_id = str(st.waiting.wait_key or "").split(":", 1)[1]
+    child_run = rt.run_store.load(sub_run_id)
+    assert child_run is not None
+    child_rt = child_run.vars.get("_runtime") or {}
+    assert child_rt.get("tool_policy") == policy, (
+        "the per-run tool policy must cross the subflow hop or server-side "
+        "auto-approve never fires on bundle-hosted agents"
+    )
+    # A COPY crosses, never the parent's aliased dict (a child mutation
+    # must not rewrite the parent's policy).
+    assert child_rt["tool_policy"] is not policy
+
+
+def test_start_subworkflow_inherits_operator_email(tmp_path) -> None:
+    """gateway c4702 / dm#246 (the FOURTH rider of the skills_block P1-2
+    class): operator_email must cross the START_SUBWORKFLOW hop or the
+    send_email recipient refiner in a bundle agent's CHILD run sees no
+    self-value and the self-send auto-path is dead. setdefault; a string
+    copied by assignment; explicit child value wins."""
+
+    def child_node(run: RunState, ctx) -> StepPlan:
+        return StepPlan(node_id="child", complete_output={"ok": True})
+
+    child = WorkflowSpec(workflow_id="child_wf", entry_node="child", nodes={"child": child_node})
+
+    def parent_node(run: RunState, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="parent",
+            effect=Effect(
+                type=EffectType.START_SUBWORKFLOW,
+                payload={"workflow_id": "child_wf", "vars": {}, "async": True, "wait": True},
+                result_key="sub_result",
+            ),
+            next_node="after",
+        )
+
+    parent = WorkflowSpec(workflow_id="parent_wf", entry_node="parent", nodes={"parent": parent_node})
+
+    reg = WorkflowRegistry()
+    reg.register(child)
+    reg.register(parent)
+
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=reg)
+    run_id = rt.start(workflow=parent, vars={"_runtime": {"operator_email": "op@self.com"}})
+
+    st = rt.tick(workflow=parent, run_id=run_id, max_steps=1)
+    assert st.status == RunStatus.WAITING
+    sub_run_id = str(st.waiting.wait_key or "").split(":", 1)[1]
+    child_run = rt.run_store.load(sub_run_id)
+    assert child_run is not None
+    child_rt = child_run.vars.get("_runtime") or {}
+    assert child_rt.get("operator_email") == "op@self.com", (
+        "the self-value must cross the hop or the refiner is dead in child runs"
+    )

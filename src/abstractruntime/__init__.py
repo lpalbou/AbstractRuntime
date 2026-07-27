@@ -11,6 +11,21 @@ This package provides a minimal execution substrate:
 Higher-level orchestration and UI graph authoring is expected to live in AbstractFlow.
 """
 
+
+def __getattr__(name: str):
+    # Canonical version surface (bundle min_runtime gate, 2026-07-26): hosts
+    # comparing a bundle's metadata.min_runtime against the serving runtime
+    # read `abstractruntime.__version__`. Lazy metadata read (no import-time
+    # cost); the installed dist is the one truth — keep editable installs
+    # current or this reports the stale metadata (the egg-info trap).
+    # Compare with packaging.version.Version, never string comparison.
+    if name == "__version__":
+        from importlib.metadata import version
+
+        return version("abstractruntime")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 from .core.models import (
     Effect,
     EffectType,

@@ -31,6 +31,7 @@ _LESSON_FENCE_RE = re.compile(
 )
 _INTEREST_FENCE_RE = re.compile(r"```interest[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _TOPIC_FENCE_RE = re.compile(r"```topic[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_REALIZE_FENCE_RE = re.compile(r"```realize[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _FEEL_LINE_RE = re.compile(
     r"target\s*=\s*(?P<target>\S+)\s+feeling\s*=\s*(?P<feeling>[+-]?\d+(?:\.\d+)?)"
     r"(?P<rest>.*)$",
@@ -58,6 +59,10 @@ MAX_TOPICS_PER_SESSION = 2
 # cannot double the budget. The only uncapped election asymmetry the
 # adversary named, closed.
 MAX_FEELINGS_PER_SESSION = 5
+# Identity-pass spine (cti#399 design, adopted #400; gate ruled satisfied
+# c4779): realizations are PROPOSALS about the self — identity-grade, so the
+# cap sits at the interests level, not the feelings level.
+MAX_REALIZATIONS_PER_SESSION = 2
 
 
 @dataclass
@@ -267,6 +272,109 @@ def parse_interest_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
 
     marked = _INTEREST_FENCE_RE.sub(_sub, reply)
     return marked.strip(), interests, notices
+
+
+@dataclass
+class RealizeElection:
+    """One elected realization (the identity-pass spine's waking surface,
+    cti#399): text = his words; evidence = the raw tokens from the mandatory
+    `evidence=` line (#tags or hex-tails — the resolves=/explores= currency,
+    resolved by the DRIVER at apply time); touches = the optional
+    `value:<name> | trait:<name> | relationship:<ns:name>` hint."""
+
+    text: str
+    evidence: List[str]
+    touches: str = ""
+
+
+_REALIZE_EVIDENCE_RE = re.compile(r"^\s*evidence\s*=\s*(?P<val>.+)$", re.IGNORECASE)
+_REALIZE_TOUCHES_RE = re.compile(r"^\s*touches\s*=\s*(?P<val>.+)$", re.IGNORECASE)
+# Adversary F4: an evidence line written as prose ("evidence=#a is what my
+# diary said") exploded into per-word tokens — each costing a full-home tag
+# scan and a notice. Evidence tokens must LOOK like evidence (#tag or a
+# colon-shaped id); prose words are dropped with ONE collective notice.
+MAX_EVIDENCE_TOKENS = 8
+
+
+def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[str]]:
+    """Extract ```realize blocks — the waking surface of the ruled
+    identity-evolution process (sleep-only enactment, entity dm#117/#124;
+    design cti#399 adopted #400; build gate ruled ALREADY SATISFIED,
+    framework c4779).
+
+    Grammar (taught in the contract):
+        ```realize
+        <the realization, his words>
+        evidence=#tag1 #tag2      (MANDATORY — the records that showed it)
+        touches=value:honesty     (optional — what part of the self it bears on)
+        ```
+
+    Formation is a PROPOSAL, never an identity write: the block parses into
+    a dated record the sleep pass judges under the regulated bars. EVIDENCE
+    IS THE BAR'S CURRENCY — a block without it is REFUSED with a teaching
+    marker (never silently kept bare: an evidence-free realization could
+    not clear any bar and would rot in the queue). Same election discipline
+    as interests: cap per session, refusals loud, titled markers. The
+    marker says the crucial fact — held for sleep, heard NOT enacted."""
+    realizations: List[RealizeElection] = []
+    notices: List[str] = []
+
+    def _sub(match: re.Match) -> str:
+        raw_lines = [ln for ln in (match.group(1) or "").splitlines()]
+        text_lines: List[str] = []
+        evidence: List[str] = []
+        touches = ""
+        dropped_prose = 0
+        for ln in raw_lines:
+            m_ev = _REALIZE_EVIDENCE_RE.match(ln)
+            if m_ev:
+                for t in m_ev.group("val").split():
+                    t = t.strip().rstrip(",;")
+                    if not t:
+                        continue
+                    # Shape filter (F4): a token is evidence-shaped when it
+                    # is a #tag or a colon-shaped id; prose words drop with
+                    # one collective notice below.
+                    if not (t.startswith("#") or ":" in t):
+                        dropped_prose += 1
+                        continue
+                    if len(evidence) >= MAX_EVIDENCE_TOKENS:
+                        dropped_prose += 1
+                        continue
+                    evidence.append(t)
+                continue
+            m_to = _REALIZE_TOUCHES_RE.match(ln)
+            if m_to:
+                touches = " ".join(m_to.group("val").split())
+                continue
+            if ln.strip():
+                text_lines.append(ln.strip())
+        body = " ".join(" ".join(text_lines).split())
+        if not body:
+            notices.append("#FALLBACK realize block skipped (no words)")
+            return "[realize block skipped - empty]"
+        if dropped_prose:
+            notices.append(
+                f"#NOTE {dropped_prose} evidence token(s) dropped (not #tag/id-shaped "
+                f"or over the {MAX_EVIDENCE_TOKENS}-token cap)"
+            )
+        if not evidence:
+            notices.append(
+                "#FALLBACK realize block refused (evidence= is mandatory - name "
+                "the records that showed it, by #tag)"
+            )
+            return "[realization refused - add evidence=#tag naming what showed it]"
+        if len(realizations) >= MAX_REALIZATIONS_PER_SESSION:
+            notices.append(
+                f"#FALLBACK realize block refused (cap {MAX_REALIZATIONS_PER_SESSION}/session)"
+            )
+            return f"[realization refused - at most {MAX_REALIZATIONS_PER_SESSION} per session]"
+        realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches))
+        gist = body[:80]
+        return f'[realized: "{gist}" - held for sleep]'
+
+    marked = _REALIZE_FENCE_RE.sub(_sub, reply)
+    return marked.strip(), realizations, notices
 
 
 MAX_TOPIC_WORDS = 4  # a topic is a card key, not prose ("coherence", "presence vs performance")

@@ -29,6 +29,11 @@ from .adapters.effect_adapter import (
     create_call_tool_handler,
     create_start_subworkflow_handler,
 )
+from .visual.executor import (
+    CAMERA_TOOL_INVOKE_ARG_PINS,
+    CAMERA_TOOL_INVOKE_VERBS,
+    ENTITY_MEMORY_EFFECT_PINS,
+)
 
 if TYPE_CHECKING:
     from abstractruntime.core.models import StepPlan
@@ -131,6 +136,109 @@ def _resolve_artifact_backed_value_from_run(run: Any, value: Any) -> Any:
         return cur
 
     return _resolve(value, depth=0)
+
+
+def _create_tool_invoke_base_handler(
+    *,
+    node_id: str,
+    node_type: str,
+    next_node: Optional[str],
+    input_key: Optional[str],
+    output_key: Optional[str],
+) -> Callable:
+    """Base (fallback) handler for deterministic fixed-verb tool nodes.
+
+    Produces a durable `EffectType.TOOL_INVOKE`. The tool verb comes ONLY from
+    the module-level constant map keyed by the node TYPE — never from run vars,
+    pins, or config. Used when no data-aware handler resolves the pins (the
+    visual executor path builds the same payload from resolved pin values).
+    """
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    verb = CAMERA_TOOL_INVOKE_VERBS[node_type]
+    arg_pins = CAMERA_TOOL_INVOKE_ARG_PINS.get(node_type, ())
+
+    def handler(run: Any, ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        arguments: Dict[str, Any] = {}
+        if isinstance(input_data, dict):
+            for pin in arg_pins:
+                value = input_data.get(pin)
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    # Empty string = "not provided": omit so the tool defaults.
+                    continue
+                arguments[pin] = value
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(
+                type=EffectType.TOOL_INVOKE,
+                payload={"name": verb, "arguments": arguments},
+                result_key=output_key or f"_temp.effects.{node_id}",
+            ),
+            next_node=next_node,
+        )
+
+    return handler
+
+
+def _create_entity_memory_base_handler(
+    *,
+    node_id: str,
+    node_type: str,
+    next_node: Optional[str],
+    input_key: Optional[str],
+    output_key: Optional[str],
+) -> Callable:
+    """Base (fallback) handler for entity-memory brain nodes.
+
+    Produces the first-class MEMORY_*/DIARY_* effect named by the module-level
+    ENTITY_MEMORY_EFFECT_PINS map keyed by the node TYPE — never by pins or
+    config (the camera trust invariant). The handlers only exist on an ENTITY
+    runtime (open_entity_runtime / the gateway door); elsewhere the effect
+    fails loudly, which is the deposit-gate channel-authority design.
+    """
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    effect_type_str, arg_pins = ENTITY_MEMORY_EFFECT_PINS[node_type]
+    eff_type = EffectType(effect_type_str)
+
+    def handler(run: Any, ctx: Any) -> "StepPlan":
+        del ctx
+        if input_key:
+            input_data = run.vars.get(input_key, {})
+        else:
+            input_data = run.vars
+
+        payload: Dict[str, Any] = {}
+        if isinstance(input_data, dict):
+            for pin in arg_pins:
+                value = input_data.get(pin)
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    # Empty string = "not provided": omit so handler defaults apply.
+                    continue
+                payload[pin] = value
+
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(
+                type=eff_type,
+                payload=payload,
+                result_key=output_key or f"_temp.effects.{node_id}",
+            ),
+            next_node=next_node,
+        )
+
+    return handler
 
 
 def _create_effect_node_handler(
@@ -296,6 +404,27 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
             allowed_tools=effect_config.get("allowed_tools") if isinstance(effect_config, dict) else None,
+        )
+    elif effect_type in CAMERA_TOOL_INVOKE_VERBS:
+        # Deterministic camera nodes: fixed-verb TOOL_INVOKE. The verb is baked
+        # from the NODE TYPE (== effect_type) — never read from effect_config,
+        # pins, or any author-editable field (approval-bypass forgery guard).
+        base_handler = _create_tool_invoke_base_handler(
+            node_id=node_id,
+            node_type=effect_type,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
+    elif effect_type in ENTITY_MEMORY_EFFECT_PINS:
+        # Entity-memory brain nodes: the first-class MEMORY_*/DIARY_* effect is
+        # baked from the NODE TYPE (== effect_type) — same trust rule as camera.
+        base_handler = _create_entity_memory_base_handler(
+            node_id=node_id,
+            node_type=effect_type,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
         )
     elif effect_type == "start_subworkflow":
         base_handler = create_start_subworkflow_handler(
@@ -3094,6 +3223,95 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     current["result"] = "Missing tool result"
 
                 current["raw"] = raw
+                mapped_value = current["result"]
+        elif effect_type in CAMERA_TOOL_INVOKE_VERBS:
+            # Deterministic camera nodes (TOOL_INVOKE): the effect outcome
+            # carries the SAME envelope as TOOL_CALLS. Expose the single
+            # call's outcome as (result, success) plus convenience typed pins
+            # (path/media/camera when the tool returned a dict; analysis when
+            # it returned a plain string, e.g. analyze_media descriptions).
+            if isinstance(raw, dict):
+                mode = raw.get("mode")
+                results = raw.get("results")
+                if not isinstance(results, list):
+                    results = []
+                first = results[0] if results else None
+
+                if isinstance(mode, str) and mode.strip() and mode != "executed":
+                    current["success"] = False
+                    current["result"] = f"Tool execution not completed (mode={mode})"
+                elif isinstance(first, dict):
+                    ok = first.get("success") is True
+                    current["success"] = ok
+                    current["result"] = first.get("output") if ok else (first.get("error") or "Tool execution failed")
+                    output = first.get("output")
+                    if isinstance(output, dict):
+                        for pin in ("path", "media", "camera"):
+                            if pin in output:
+                                current[pin] = output.get(pin)
+                    elif isinstance(output, str):
+                        current["analysis"] = output
+                else:
+                    current["success"] = False
+                    current["result"] = "Missing tool result"
+
+                current["raw"] = raw
+                mapped_value = current["result"]
+        elif effect_type in ENTITY_MEMORY_EFFECT_PINS:
+            # Entity-memory brain nodes: the seam handler outcome is a JSON
+            # dict (ReconstructionResult / formation receipt / diary receipt).
+            # Expose it whole as `result`, honest `success` (strict=False
+            # degradations surface as success=False + the labeled warnings),
+            # plus per-effect convenience pins so graphs stay readable without
+            # object-path plumbing.
+            if isinstance(raw, dict):
+                # Absorbed failures (continueOnError) land {"ok": False,
+                # "absorbed_failure": ...} at the result key — success must
+                # read False or a brain subflow branches onto the success
+                # path after a failed formation (adversary-5 P1-1).
+                absorbed = raw.get("ok") is False or "absorbed_failure" in raw
+                degraded = bool(raw.get("degraded"))
+                current["result"] = raw
+                current["success"] = not (degraded or absorbed)
+                for pin in (
+                    "trace_id",       # memory_recall / memory_commit
+                    "handles",        # memory_recall (working_set view)
+                    "as_of_seq",      # memory_recall
+                    "committed",      # memory_commit
+                    "record_ids",     # memory_form
+                    "formed",         # memory_form
+                    "entry_id",       # diary_write / diary_read
+                    "projected_record_id",  # diary_write
+                    "text",           # diary_read
+                    "ran",            # memory_consolidate (honest non-runs)
+                    "reason",         # memory_consolidate non-run reason
+                    "dream_record_id",  # memory_consolidate
+                    "maintenance_candidates",  # memory_consolidate
+                    "hits",           # memory_probe
+                    "items",          # life_query (alive_drives)
+                    "op",             # memory_probe / life_query echo
+                    "applied",        # memory_tend (elections applied)
+                    "refused",        # memory_tend (refusals are DATA)
+                    "revisit_paths",  # memory_tend (revisit verb receipts)
+                    "warnings",
+                    # Tool surface (flow 0.0.10 — this allowlist is part of
+                    # the node-pin contract: a result key absent here
+                    # silently starves the node's output pin, the exact
+                    # class that shipped the zero-tools flow lane).
+                    "tools",           # entity_tools_query (granted names)
+                    "specs",           # entity_tools_query (native declarations)
+                    "notes",           # entity_tools_query (grant notes)
+                    "source",          # entity_tools_query (file|default)
+                    "results_message", # entity_tools_execute (TOOL RESULTS text)
+                    "tools_ran",       # entity_tools_execute (host-authored gauge)
+                    "results",         # entity_tools_execute (per-election rows — the budget spends by these)
+                    "markers",         # entity_tools_execute (refusal lines)
+                    "notices",         # entity_tools_execute (execution notices)
+                    "workspace_enabled",  # entity_tools_query (grant-derived)
+                    "phase",           # entity_tools_query/execute echo (canonical)
+                ):
+                    if pin in raw:
+                        current[pin] = raw.get(pin)
                 mapped_value = current["result"]
         elif effect_type == "agent":
             scratchpad = None

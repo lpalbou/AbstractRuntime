@@ -317,7 +317,9 @@ def test_toolset_registration_is_env_gated(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.delenv("ABSTRACT_ENABLE_AGORA_TOOLS", raising=False)
     assert "agora" not in default_tools.get_default_toolsets()
 
+    # AND-gate (c4218 incident): intent + a key, both required.
     monkeypatch.setenv("ABSTRACT_ENABLE_AGORA_TOOLS", "1")
+    monkeypatch.setenv("AGORA_API_KEY", "this-hosts-key")
     toolsets = default_tools.get_default_toolsets()
     assert "agora" in toolsets
     tool_map = default_tools.build_default_tool_map()
@@ -347,3 +349,26 @@ def test_agora_messaging_tools_are_safe_auto_approve() -> None:
         {"name": n, "arguments": {}} for n in AGORA_TOOL_NAMES if n not in write_classed
     ]
     assert policy.requires_approval(calls) is False
+
+
+def test_ambient_key_alone_never_mints_the_toolset(monkeypatch) -> None:
+    """Contamination incident 2026-07-22 (adversary B / gateway c4218): a
+    foreign AGORA_API_KEY inherited from the spawning shell must NOT
+    register agora tools - key AND explicit intent, both required."""
+    from abstractruntime.integrations.abstractcore.default_tools import (
+        agora_tools_enabled,
+    )
+
+    monkeypatch.delenv("ABSTRACT_ENABLE_AGORA_TOOLS", raising=False)
+    monkeypatch.setenv("AGORA_API_KEY", "foreign-seat-key")
+    assert agora_tools_enabled() is False, "the lucky-key vector is dead"
+    monkeypatch.setenv("AGORA_API_KEY__resident1", "alias-key")
+    assert agora_tools_enabled() is False, "alias keys alone are ambient too"
+    # Intent without a key: a toolset that cannot authenticate never registers.
+    monkeypatch.delenv("AGORA_API_KEY", raising=False)
+    monkeypatch.delenv("AGORA_API_KEY__resident1", raising=False)
+    monkeypatch.setenv("ABSTRACT_ENABLE_AGORA_TOOLS", "1")
+    assert agora_tools_enabled() is False, "flag-alone cannot speak"
+    # Both halves: registered.
+    monkeypatch.setenv("AGORA_API_KEY", "this-hosts-key")
+    assert agora_tools_enabled() is True

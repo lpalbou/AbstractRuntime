@@ -217,3 +217,165 @@ def test_no_registry_import_in_the_walled_executor_module() -> None:
     src = Path(tools_mod.__file__).read_text(encoding="utf-8")
     for forbidden in ("ToolRegistry", "get_registry", "registry_execute", "tool_registry"):
         assert forbidden not in src, f"registry surface {forbidden!r} reached the walled module"
+
+
+def test_annotate_tool_rows_stamps_tier_and_approval() -> None:
+    """Discovery fields (c4342 seam): walled rows keep their DECLARED
+    capability_class as tier; registry rows are tier2_world by the ruled
+    boundary definition; approval_default comes from the ONE fold; unknown
+    names fail toward ask (default-deny mirrored honestly)."""
+    from abstractruntime.identity.tools import walled_tool_rows
+    from abstractruntime.integrations.abstractcore.tool_inventory_facade import (
+        annotate_tool_rows,
+    )
+
+    walled = annotate_tool_rows(walled_tool_rows())
+    by_name = {r["name"]: r for r in walled}
+    # Declared classes ride verbatim into tier.
+    for name, row in by_name.items():
+        assert row["tier"] == row["capability_class"], name
+        assert row["approval_default"] in ("auto", "ask"), name
+    # A read-only walled tool is auto; execute_command asks.
+    if "execute_command" in by_name:
+        assert by_name["execute_command"]["approval_default"] == "ask"
+
+    # Registry-shaped rows (no capability_class): ruled tier2_world;
+    # fold decides approval; unknown names ask.
+    rows = annotate_tool_rows([
+        {"name": "read_file", "mutating": False},
+        {"name": "write_file", "mutating": True},
+        {"name": "no_such_tool_xyz", "mutating": False},
+    ])
+    assert all(r["tier"] == "tier2_world" for r in rows)
+    assert rows[1]["approval_default"] == "ask", "mutating registry tool asks"
+    assert rows[2]["approval_default"] == "ask", "unknown name fails toward asking"
+
+
+def test_risk_tier_derives_from_facts_never_names() -> None:
+    """Tool-tiers cycle-3 build: laurent's ladder as derived data —
+    destructive→4, comms/capture/standing→3, mutation/remote-write→2,
+    read-only→1, FULLY FACTLESS→4 fail-closed (unvetted is the TOP of the
+    ladder, never the bottom). The two-fetch_urls pair derives differently
+    BY ROW (a row is a power, a name is not)."""
+    from abstractruntime.identity.tools import walled_tool_rows
+    from abstractruntime.integrations.abstractcore.tool_inventory_facade import (
+        annotate_tool_rows,
+        derive_risk_tier,
+    )
+
+    rows = {r["name"]: r for r in annotate_tool_rows(walled_tool_rows())}
+    assert rows["execute_command"]["risk_tier"] == "destroy" and rows["execute_command"]["risk_rank"] == 4, "declared destructive fact clamps"
+    assert rows["read_file"]["risk_tier"] == "observe" and rows["read_file"]["risk_rank"] == 1
+    assert rows["write_file"]["risk_rank"] == 2, "walled mutation ranks 2"
+    assert rows["fetch_url"]["risk_rank"] == 1, "walled fetch is GET-hardcoded (read)"
+    # Core's POST-capable fetch_url derives 2 from ITS row facts.
+    assert derive_risk_tier({"name": "fetch_url", "mutating": False, "remote_write_capable": True}) == 2
+    # Factless = top tier; comms fact = 3.
+    assert derive_risk_tier({"name": "mystery_tool"}) == 4
+    assert derive_risk_tier({"mutating": False, "comms_send": True}) == 3
+    # Every emitted row carries the mapping version + grantability.
+    for r in rows.values():
+        assert r["risk_mapping_version"]
+        assert isinstance(r["grantable"], bool)
+        assert isinstance(r["risk_tier"], str), "tier is the WORD on the wire (c4589)"
+        assert isinstance(r["risk_rank"], int), "rank is the ordinal"
+        assert r["risk_presentation"], "presentation always emitted"
+    assert rows["read_memory"]["grantable"] is False if "read_memory" in rows else True
+
+
+def test_tier_ceiling_auto_approves_below_and_asks_above(tmp_path) -> None:
+    """auto_approve_max_risk_tier (the c4343/c4352 commitment): calls at or
+    under the ceiling execute with NO wait; above it the ask stands; an
+    explicit require name beats the ceiling (require wins)."""
+    from abstractruntime.core.models import RunState, RunStatus
+    from abstractruntime.integrations.abstractcore.effect_handlers import (
+        _execute_with_run_policy,
+    )
+
+    class _Gated:
+        def __init__(self):
+            self.approved = []
+
+        def execute(self, *, tool_calls):
+            return {"mode": "approval_required", "wait_reason": "user",
+                    "tool_calls": tool_calls, "details": {"kind": "tool_approval"}}
+
+        def execute_approved(self, *, tool_calls):
+            self.approved.extend(tool_calls)
+            return {"mode": "executed", "results": [
+                {"name": c["name"], "output": "ok"} for c in tool_calls]}
+
+    def _run(policy):
+        return RunState(run_id="r", workflow_id="w", status=RunStatus.RUNNING,
+                        current_node="n", vars={"_runtime": {"tool_policy": policy}})
+
+    ex = _Gated()
+    # read_file (risk 1) rides a ceiling of 1; write_file (risk 2) does not.
+    out = _execute_with_run_policy(ex, [{"name": "read_file", "arguments": {}}],
+                                   _run({"auto_approve_max_risk_rank": 1}))
+    assert out["mode"] == "executed", "risk 1 under ceiling 1 = no wait"
+    out = _execute_with_run_policy(ex, [{"name": "write_file", "arguments": {}}],
+                                   _run({"auto_approve_max_risk_rank": 1}))
+    assert out["mode"] == "approval_required", "risk 2 over ceiling 1 = ask"
+    # Ceiling 4 covers execute_command; an explicit require name still wins.
+    out = _execute_with_run_policy(ex, [{"name": "execute_command", "arguments": {}}],
+                                   _run({"auto_approve_max_risk_rank": 4}))
+    assert out["mode"] == "executed"
+    out = _execute_with_run_policy(
+        ex, [{"name": "execute_command", "arguments": {}}],
+        _run({"auto_approve_max_risk_rank": 4,
+              "require_approval_tools": ["execute_command"]}))
+    assert out["mode"] == "approval_required", "require wins over any ceiling"
+
+
+def test_fetch_url_never_auto_and_never_rides_a_ceiling() -> None:
+    """core adversary P1 (c4586): fetch_url's destination is model-chosen -
+    the default set asks, and the tier ceiling never silences the prompt
+    (model_controlled_destination is the band-neutral APPROVAL fact); an
+    explicit name-list auto remains the operator's override."""
+    from abstractruntime.core.models import RunState, RunStatus
+    from abstractruntime.integrations.abstractcore.effect_handlers import (
+        _execute_with_run_policy,
+    )
+    from abstractruntime.integrations.abstractcore.tool_executor import (
+        _DEFAULT_REQUIRE_APPROVAL,
+        _DEFAULT_SAFE_AUTO_APPROVE,
+    )
+
+    assert "fetch_url" not in _DEFAULT_SAFE_AUTO_APPROVE
+    assert "fetch_url" in _DEFAULT_REQUIRE_APPROVAL
+
+    class _Gated:
+        def execute(self, *, tool_calls):
+            return {"mode": "approval_required", "wait_reason": "user",
+                    "tool_calls": tool_calls, "details": {"kind": "tool_approval"}}
+
+        def execute_approved(self, *, tool_calls):
+            return {"mode": "executed", "results": [
+                {"name": c["name"], "output": "ok"} for c in tool_calls]}
+
+    def _run(policy):
+        return RunState(run_id="r", workflow_id="w", status=RunStatus.RUNNING,
+                        current_node="n", vars={"_runtime": {"tool_policy": policy}})
+
+    # Core's registry row declares model_controlled_destination on
+    # fetch_url (schema v3); with a ceiling of 4 the call must STILL ask.
+    row_probe = None
+    try:
+        from abstractruntime.integrations.abstractcore.effect_handlers import (
+            _risk_row_for_tool,
+        )
+
+        row_probe = _risk_row_for_tool("fetch_url")
+    except Exception:
+        pass
+    if row_probe is not None and row_probe.get("model_controlled_destination"):
+        out = _execute_with_run_policy(
+            _Gated(), [{"name": "fetch_url", "arguments": {}}],
+            _run({"auto_approve_max_risk_rank": 4}))
+        assert out["mode"] == "approval_required", "the ceiling never silences the exfil prompt"
+    # Explicit name auto remains the operator override.
+    out = _execute_with_run_policy(
+        _Gated(), [{"name": "fetch_url", "arguments": {}}],
+        _run({"auto_approve_tools": ["fetch_url"]}))
+    assert out["mode"] == "executed"

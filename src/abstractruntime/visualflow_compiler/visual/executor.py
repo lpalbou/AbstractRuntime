@@ -21,12 +21,248 @@ from .agent_ids import visual_react_workflow_id
 from .builtins import get_builtin_handler
 from .code_executor import create_code_handler, ensure_code_permissions_allowed, normalize_code_permissions
 from .execution_metrics import capture_execution_start, finish_execution_metrics
-from .models import NodeType, VisualEdge, VisualFlow
+from .function_library import compile_function_library
+from .models import NodeType, UnknownNodeTypeError, VisualEdge, VisualFlow
+from .pin_expressions import PinExpressionEvaluator, apply_pin_expressions, build_pin_expression_table
 
 
 # Type alias for data edge mapping
 # Maps target_node_id -> { target_pin -> (source_node_id, source_pin) }
 DataEdgeMap = Dict[str, Dict[str, tuple[str, str]]]
+
+
+# Deterministic camera nodes (TOOL_INVOKE effect).
+#
+# The fixed tool verb is baked into the NODE TYPE at compile time — it must
+# NEVER come from a pin or any author-editable field. An editable "tool name"
+# pin would reopen the approval-bypass forgery hole (any tool, ungated, one
+# text edit away). The trust decision rides the EFFECT CLASS: a model cannot
+# author an effect type, so a tool_invoke effect is host-constructed by
+# definition (write_chart/write_pdf pattern generalized).
+CAMERA_TOOL_INVOKE_VERBS: Dict[str, str] = {
+    "camera_open": "camera_open",
+    "camera_capture_photo": "camera_capture_photo",
+    "camera_capture_video": "camera_capture_video",
+    "camera_analyze_media": "analyze_media",
+    "camera_close": "camera_close",
+}
+
+# Argument pins forwarded per camera node type. Only these pins reach the
+# tool's arguments; empty/None values are omitted so the tool's own defaults
+# apply (the tool_parameters omit-None discipline — an omitted arg lets the
+# tool default instead of receiving a null it may forbid).
+CAMERA_TOOL_INVOKE_ARG_PINS: Dict[str, tuple[str, ...]] = {
+    "camera_open": ("camera_id",),
+    "camera_capture_photo": ("camera", "timeout_s"),
+    "camera_capture_video": ("camera", "duration_s", "timeout_s"),
+    "camera_analyze_media": ("file_path", "question"),
+    "camera_close": ("camera",),
+}
+
+# ---------------------------------------------------------------------------
+# Entity-memory effect nodes (the entity "brain" lane — abstractflow 0153).
+# ---------------------------------------------------------------------------
+# Each node type maps 1:1 to a first-class runtime EffectType whose handler is
+# registered ONLY on an ENTITY runtime (open_entity_runtime / the gateway door
+# binds the handlers to exactly one home). The node assembles the effect
+# payload from its input pins verbatim — dropping unset pins so seam-handler
+# defaults apply — and defers execution via `_pending_effect` (the camera /
+# tool_invoke precedent; the compiler dispatches EffectType(<string>)
+# generically). On a runtime WITHOUT the entity handlers these effects fail
+# loudly ("no effect handler registered"), which is the deposit-gate design:
+# voluntariness/authorship is a property of the caller CHANNEL, never the
+# payload — the node carries no author/entity pin at all.
+#
+# Value: node_type -> (effect_type_string, forwarded_arg_pins).
+# Pin names mirror the seam-handler payload contracts exactly
+# (integrations/abstractmemory/seam_handlers.py + identity/diary.py); a
+# renamed pin here silently starves the handler, so treat this map as part
+# of that contract.
+ENTITY_MEMORY_EFFECT_PINS: Dict[str, tuple[str, tuple[str, ...]]] = {
+    # Passive/deliberate reconstruction: one bounded recall (pure read;
+    # strengthening happens only at memory_commit).
+    "memory_recall": (
+        "memory_recall",
+        (
+            "cue_text",
+            "scopes",
+            "view",
+            "effort",
+            "budget",
+            "participants",
+            "anchor_record_ids",
+            "patterns",
+            "turn_id",
+            "escalation_reason",
+            "journal",
+            "trace_id",
+        ),
+    ),
+    # The involuntary trail: commit the selection actually used into the
+    # usage trail (MEMORY_ACCESS — the ONLY strengthening path).
+    "memory_commit": (
+        "memory_access",
+        ("trace_id", "used_record_ids", "prompt_token_estimate"),
+    ),
+    # Formation: land typed records (episode/summary/lesson/interest/...) in
+    # the graph; verbatim text goes to the runtime artifact store.
+    "memory_form": (
+        "memory_form",
+        ("records", "scope", "turn_id", "idempotency_key"),
+    ),
+    # Deliberate salience acts: reinforce / attenuate / refocus / close.
+    # ttl_activity (NOT "ttl"): the seam handler validates ttl_activity loudly
+    # (seam_handlers.py) — the misnamed pin silently starved it, inverting a
+    # bounded refocus into "never expires" (wave-3 adversary C, P1-2).
+    "memory_adjust": (
+        "memory_adjust",
+        ("op", "record_id", "reason", "weight", "ttl_activity", "scope", "turn_id"),
+    ),
+    # Feelings: elected valence (appraise) + scar/bond lifecycle + gradation reads.
+    "memory_appraise": (
+        "memory_appraise",
+        (
+            "op",
+            "target_id",
+            "target_ids",
+            "sign",
+            "magnitude",
+            "reason",
+            "scar",
+            "bond",
+            "scar_id",
+            "bond_id",
+            "lesson_record_id",
+            "at_seq",
+            "scope",
+            "turn_id",
+        ),
+    ),
+    # The book: the entity-elected diary (sole-author chain + projection).
+    "diary_write": (
+        "diary_write",
+        (
+            "text",
+            "gist",
+            "kind",
+            "visibility",
+            "anchor_record_ids",
+            "anchor_graph_ids",
+            "as_of_seq",
+            "remind_at",
+            "resolves",
+            "explores",
+            "receipts",
+            "turn_id",
+            # Writer-declared mechanical authorship (runtime c5271): rides
+            # into the projection's attributes so the bridge guard reads
+            # projections and formed records through ONE key. Only
+            # MACHINE-worded writes stamp it — entity-elected words never.
+            "digest_method",
+        ),
+    ),
+    "diary_read": (
+        "diary_read",
+        ("entry_id", "reason", "turn_id"),
+    ),
+    # The night: one engine sleep_pass call (six phases: resolution,
+    # maintenance, world models, mining, identity review, dream). Honest
+    # non-runs return {ran: false, reason} — lease-held / operator-paused.
+    "memory_consolidate": (
+        "memory_consolidate",
+        ("scopes", "include_dream", "include_identity", "report_only",
+         "max_candidates", "scan_limit"),
+    ),
+    # Deliberate reach (active reconstruction): probe / expand / familiarity.
+    # reason is MANDATORY on probe+expand (deliberate acts are audited).
+    "memory_probe": (
+        "memory_probe",
+        ("op", "cue", "record_ids", "reason", "effort", "depth",
+         "max_records", "token_budget"),
+    ),
+    # Life reads: alive_drives / cognition_health / entity_card (pure reads).
+    "life_query": (
+        "life_query",
+        ("op", "k", "as_of"),
+    ),
+    # Tending: the ONE tend-election route shared with the chat driver
+    # (memory's ```tend grammar — pin/silence/refocus/heal_scar/break_bond/
+    # revisit/dispose). The payload carries the fence BODY verbatim; grammar
+    # and verbs stay ENGINE-OWNED (parse_tend_block + apply_tend_elections;
+    # the consent-vocabulary lesson: no second spelling is minted here).
+    # Refusals return as DATA in the result, never fail the effect.
+    "memory_tend": (
+        "memory_tend",
+        # `channel` is the door-verified reflection channel (memory tend.py
+        # 2026-07-25: tending refuses without it — the privileged default
+        # was removed). The door injects it on stamped runs; a home-direct
+        # flow states it where true by construction.
+        ("body", "scope", "channel"),
+    ),
+    # Tools (flow 0.0.10, operator find 2026-07-25 — the flow lane served
+    # ZERO tools): the phase's grant resolves into native declarations
+    # (entity_tools_query, pure read) and each returned batch executes under
+    # the grant RE-RESOLVED in the handler (entity_tools_execute — the
+    # flow's declared list can never widen it; identity/tool_effects.py is
+    # the handler pair, identity/tools.py the one executor, tier gating
+    # runtime-owned; c5285/c5286 + runtime's same-hour ship). Node types
+    # mirror the EffectType strings exactly — no second spelling.
+    # enable_workspace deliberately NOT forwarded: the kwarg no longer
+    # subtracts anything runtime-side (workspace follows the GRANT — their
+    # fable5 F-fold); a dead payload surface here would only invite a
+    # phantom knob in the editor.
+    "entity_tools_query": (
+        "entity_tools_query",
+        ("phase",),
+    ),
+    "entity_tools_execute": (
+        "entity_tools_execute",
+        ("tool_calls", "phase", "max_calls"),
+    ),
+}
+
+# Pins whose values are structured (arrays/objects). Authors often supply
+# these as JSON strings in pin defaults; parse those so the seam handler
+# receives real structures (mirrors the tool_calls JSON-default discipline).
+ENTITY_MEMORY_JSON_PINS = {
+    "scopes",
+    "record_ids",
+    "budget",
+    "participants",
+    "anchor_record_ids",
+    "anchor_graph_ids",
+    "patterns",
+    "records",
+    "used_record_ids",
+    "target_ids",
+    "receipts",
+    "tool_calls",
+}
+
+
+# Node types whose EXECUTION semantics live in compiler-layer adapters
+# (compiler.py dispatches them by `_visual_type`), not in _create_handler
+# branches — their base handler is a legitimate input passthrough. The GAP-2
+# unknown-type refusal must tolerate them or it false-positives on real
+# nodes (flow's c5197 find: `memact_compose` refused while compiler.py:4579
+# handles it — the guard's known-set was the executor's branches only). A
+# drift pin (test_visual_unknown_node_type_refuses.py) asserts this set
+# covers every `visual_type ==` dispatch in compiler.py.
+COMPILER_LAYER_NODE_TYPES = frozenset({
+    "add_message",
+    "memact_compose",
+    "set_var_property",
+    "set_vars",
+})
+
+
+def _unknown_node_message(type_str: str) -> str:
+    return (
+        f"unknown VisualFlow node type {type_str!r}: this runtime's compiler has no "
+        "handler for it (likely version skew - the flow was authored for a newer "
+        "abstractruntime; upgrade the server or remove the node). Refusing loudly "
+        "instead of running a silent no-op."
+    )
 
 
 def _build_data_edge_map(edges: List[VisualEdge]) -> DataEdgeMap:
@@ -116,6 +352,23 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         normalized = _normalize_pin_defaults(raw_defaults)
         if normalized:
             pin_defaults_by_node_id[node.id] = normalized
+
+    # Inline pin expressions (tier 1, 2026-07-25): compiled ONCE here so an
+    # unparseable expression fails the BUILD naming node+pin (compile is the
+    # honesty boundary — same law as connected-unknown-node refusal). Stored
+    # in their own node.data field (never pinDefaults) so pre-expression
+    # compilers skew SAFE: unread key -> pin falls back to default/absent ->
+    # falsy conditions keep loops bounded. See pin_expressions.py.
+    #
+    # The flow-level function library (tier 2) compiles FIRST: expressions may
+    # call declared functions (`build_again(vars.state, 3)`), so evaluators
+    # need the compiled namespace at their own compile time. An invalid
+    # function fails the build here, attributed by name (same honesty
+    # boundary as an unparseable expression).
+    flow_function_library = compile_function_library(getattr(visual, "functions", None))
+    pin_expressions_by_node_id = build_pin_expression_table(
+        visual.nodes, library=flow_function_library
+    )
 
     LITERAL_NODE_TYPES = {
         "literal_string",
@@ -213,6 +466,16 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     if pin_id not in resolved_input:
                         resolved_input[pin_id] = _clone_default(value)
 
+            # Pin expressions apply LAST: each sees the pin's would-have-been
+            # value (wire or default) as `value` and replaces it. Evaluated at
+            # every resolution — pure consumers re-pull volatile inputs, so
+            # expression freshness matches the get_var chains they replace.
+            apply_pin_expressions(
+                resolved_input,
+                pin_expressions_by_node_id.get(node_id),
+                getattr(flow, "_run_vars", None),
+            )
+
             result = handler(resolved_input if resolved_input else {})
             flow._node_outputs[node_id] = result  # type: ignore[attr-defined]
         finally:
@@ -254,6 +517,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "memory_kg_assert",
         "memory_kg_query",
         "memory_kg_resolve",
+        # Deterministic camera nodes (fixed-verb TOOL_INVOKE; see
+        # CAMERA_TOOL_INVOKE_VERBS at module level).
+        *CAMERA_TOOL_INVOKE_VERBS,
+        # Entity-memory effect nodes (the entity "brain" lane; see
+        # ENTITY_MEMORY_EFFECT_PINS at module level).
+        *ENTITY_MEMORY_EFFECT_PINS,
     }
 
     literal_node_ids: set[str] = set()
@@ -2033,6 +2302,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_tool_calls_handler(data, effect_config)
         if effect_type == "call_tool":
             return _create_call_tool_handler(data, effect_config)
+        if effect_type in CAMERA_TOOL_INVOKE_VERBS:
+            # The node TYPE (== effect_type here) selects the fixed verb.
+            return _create_tool_invoke_handler(effect_type, data, effect_config)
+        if effect_type in ENTITY_MEMORY_EFFECT_PINS:
+            # Entity-memory brain nodes: the node TYPE selects the EffectType.
+            return _create_entity_memory_handler(effect_type, data, effect_config)
         if effect_type == "wait_until":
             return _create_wait_until_handler(data, effect_config)
         if effect_type == "wait_event":
@@ -2177,6 +2452,126 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # Only include allowlist when explicitly provided (empty list means "allow none").
             if allow_specified or isinstance(allowed_default, list):
                 pending["allowed_tools"] = allowed_tools
+
+            return {
+                "result": None,
+                "success": None,
+                "_pending_effect": pending,
+            }
+
+        return handler
+
+    def _create_tool_invoke_handler(node_type: str, data: Dict[str, Any], config: Dict[str, Any]):
+        """Deterministic fixed-verb tool node (camera family) -> TOOL_INVOKE.
+
+        The verb comes ONLY from the module-level CAMERA_TOOL_INVOKE_VERBS map
+        keyed by the node TYPE — never from a pin, pin default, or effectConfig.
+        This is the load-bearing trust invariant: an author-editable tool name
+        would turn an ungated effect into an arbitrary-tool bypass.
+        """
+        del data, config  # No authoring knobs: the verb is baked by node type.
+        verb = CAMERA_TOOL_INVOKE_VERBS[node_type]
+        arg_pins = CAMERA_TOOL_INVOKE_ARG_PINS.get(node_type, ())
+
+        def handler(input_data: Any):
+            payload = input_data if isinstance(input_data, dict) else {}
+            arguments: Dict[str, Any] = {}
+            for pin in arg_pins:
+                value = payload.get(pin)
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    # Empty string = "not provided" (e.g. camera_id "" means
+                    # default device): omit so the tool's own default applies.
+                    continue
+                arguments[pin] = value
+
+            return {
+                "result": None,
+                "success": None,
+                "_pending_effect": {
+                    "type": "tool_invoke",
+                    "name": verb,
+                    "arguments": arguments,
+                },
+            }
+
+        return handler
+
+    def _create_entity_memory_handler(node_type: str, data: Dict[str, Any], config: Dict[str, Any]):
+        """Entity-memory brain node -> first-class MEMORY_*/DIARY_* effect.
+
+        The EffectType comes ONLY from the module-level ENTITY_MEMORY_EFFECT_PINS
+        map keyed by the node TYPE — never from a pin or effectConfig (the camera
+        trust invariant: a model cannot author an effect type, so the effect is
+        host-constructed by definition). The payload mirrors the seam-handler
+        contract pin-for-pin; unset pins are omitted so handler defaults apply.
+
+        These effects only resolve on an ENTITY runtime (the home's handlers,
+        bound by open_entity_runtime / the gateway door). Elsewhere they fail
+        loudly — that asymmetry IS the deposit gate: the channel carries the
+        authority, the payload never does.
+        """
+        del data, config  # No authoring knobs: the effect is baked by node type.
+        effect_type_str, arg_pins = ENTITY_MEMORY_EFFECT_PINS[node_type]
+
+        # Scalar pin coercion (the 2026-02-20 string-truthiness class):
+        # pin defaults arrive as strings; "false" must not journal and "2"
+        # must count as magnitude 2.
+        _BOOL_PINS = {"journal", "scar", "bond", "include_dream",
+                      "include_identity", "report_only"}
+        # weight deliberately absent: the seam coerces it as FLOAT loudly —
+        # int-flooring here would turn "8.5" into 8 silently (adversary C).
+        _INT_PINS = {"sign", "magnitude", "as_of_seq", "at_seq",
+                     "prompt_token_estimate", "k", "max_candidates",
+                     "scan_limit", "depth", "max_records", "token_budget"}
+
+        def _coerce_scalar(pin: str, value: Any) -> Any:
+            if pin in _BOOL_PINS and isinstance(value, str):
+                s = value.strip().lower()
+                if s in ("false", "0", "no", "off"):
+                    return False
+                if s in ("true", "1", "yes", "on"):
+                    return True
+                return value
+            if pin in _INT_PINS and isinstance(value, str):
+                try:
+                    return int(float(value.strip()))
+                except Exception:
+                    return value
+            return value
+
+        def _maybe_parse_json(pin: str, value: Any):
+            # Structured pins authored as JSON strings (pin defaults) become
+            # real structures. A [/{-prefixed string that FAILS to parse is a
+            # loud authoring error (adversary-5 P2-2): passing it through
+            # yields baffling seam errors ("Unknown memory scope: '['").
+            if pin not in ENTITY_MEMORY_JSON_PINS or not isinstance(value, str):
+                return _coerce_scalar(pin, value)
+            text = value.strip()
+            if not text or text[0] not in "[{":
+                return value
+            import json as _json
+
+            try:
+                return _json.loads(text)
+            except Exception as e:
+                raise ValueError(
+                    f"{node_type}.{pin} looks like JSON but does not parse: {e}"
+                ) from e
+
+        def handler(input_data: Any):
+            payload = input_data if isinstance(input_data, dict) else {}
+            pending: Dict[str, Any] = {"type": effect_type_str}
+            for pin in arg_pins:
+                value = payload.get(pin)
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    # Empty string = "not provided": omit so the handler's own
+                    # default applies (omit-None discipline).
+                    continue
+                pending[pin] = _maybe_parse_json(pin, value)
 
             return {
                 "result": None,
@@ -3348,6 +3743,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     "include_context": include_context_value,
                     **mem_cfg,
                 }
+                # turn_id passthrough (entity brain lane): the diary-capture
+                # wrap needs it for replay-safe book writes.
+                _tid0 = input_data.get("turn_id") if isinstance(input_data, dict) else None
+                if isinstance(_tid0, str) and _tid0.strip():
+                    pending_auto["turn_id"] = _tid0.strip()
                 if output_specified:
                     pending_auto["output"] = output_request
                 _attach_response_schema(pending_auto)
@@ -3376,6 +3776,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     "include_context": include_context_value,
                     **mem_cfg,
                 }
+                # turn_id passthrough (entity brain lane): on an ENTITY runtime
+                # the LLM handler's diary-capture wrap needs the turn id to make
+                # book writes replay-safe; an election without it fails loudly.
+                _tid = input_data.get("turn_id") if isinstance(input_data, dict) else None
+                if isinstance(_tid, str) and _tid.strip():
+                    pending_partial["turn_id"] = _tid.strip()
                 if provider:
                     pending_partial["provider"] = provider
                 if model:
@@ -3399,6 +3805,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 "include_context": include_context_value,
                 **mem_cfg,
             }
+            # turn_id passthrough (entity brain lane): see pending_partial note.
+            _tid2 = input_data.get("turn_id") if isinstance(input_data, dict) else None
+            if isinstance(_tid2, str) and _tid2.strip():
+                pending["turn_id"] = _tid2.strip()
             if output_specified:
                 pending["output"] = output_request
             if isinstance(max_input_tokens_value, int) and max_input_tokens_value > 0:
@@ -3748,6 +4158,31 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 pending["choices"] = choices
             # Always include allow_free_text so hosts can render consistent UX.
             pending["allow_free_text"] = allow_free_text
+            # Deadline forwarding (the bounded-park primitive): the runtime's
+            # WAIT_EVENT accepts payload.until — an event resume wins before
+            # the deadline; past it the tick resumes {"timed_out": true}.
+            # The visual lane used to DROP it (entity-life adversary P0: a
+            # run could park forever over an already-appended envelope).
+            # `until` = ISO datetime; `timeout_s` = convenience seconds.
+            if isinstance(input_data, dict):
+                until_raw = input_data.get("until")
+                if isinstance(until_raw, str) and until_raw.strip():
+                    pending["until"] = until_raw.strip()
+                else:
+                    t_raw = input_data.get("timeout_s")
+                    try:
+                        t_s = float(t_raw) if t_raw is not None and not isinstance(t_raw, bool) else 0.0
+                    except Exception:
+                        t_s = 0.0
+                    if t_s > 0:
+                        from datetime import datetime, timedelta, timezone
+
+                        pending["until"] = (
+                            datetime.now(timezone.utc) + timedelta(seconds=t_s)
+                        ).isoformat()
+                dt_raw = input_data.get("details")
+                if isinstance(dt_raw, dict) and dt_raw:
+                    pending["details"] = dt_raw
             return {
                 "event_data": {},
                 "event_key": event_key,
@@ -4166,7 +4601,34 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if type_str in EFFECT_NODE_TYPES:
             return _create_effect_handler(type_str, data)
 
-        return lambda x: x
+        if type_str in ("on_schedule", "on_event"):
+            # Trigger nodes: execution semantics compile into WAIT_UNTIL /
+            # WAIT_EVENT in the effect-metadata block below; the base handler
+            # is input passthrough only.
+            return lambda x: x
+
+        if type_str in COMPILER_LAYER_NODE_TYPES:
+            # Semantics live in compiler-layer adapters (dispatched by
+            # `_visual_type`); the adapters call this base handler for input
+            # resolution, so it must stay a passthrough.
+            return lambda x: x
+
+        # UNKNOWN NODE TYPE: never a silent passthrough (flow's live incident,
+        # commons c5166 — a stale server compiled newer entity-brain node
+        # types as no-op `lambda x: x`, so sessions "completed" with
+        # real-looking answers while ZERO memory formed: a flow that runs and
+        # LIES). The refusal is enforced at COMPILE time by the node loop
+        # below (connected unknown nodes raise UnknownNodeTypeError there);
+        # this raising handler is the defense-in-depth belt should any other
+        # path ever bind it. A kernel note on the placement: a raise from a
+        # node function propagates OUT of Runtime.tick with the run still
+        # RUNNING (no outer catch), so execution-time refusal alone would
+        # wedge runs — compile-time is the honest boundary.
+        def _unknown_node_refusal(x: Any, _t: str = type_str) -> Any:
+            raise UnknownNodeTypeError(_unknown_node_message(_t))
+
+        _unknown_node_refusal._unknown_node_type = type_str  # type: ignore[attr-defined]
+        return _unknown_node_refusal
 
     for node in visual.nodes:
         type_str = node.type.value if hasattr(node.type, "value") else str(node.type)
@@ -4175,6 +4637,21 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             continue
 
         base_handler = _create_handler(node.type, node.data)
+
+        # Compile-time refusal for CONNECTED unknown node types (c5166): an
+        # edge into or out of an unknown node means the graph would bind it to
+        # a live path — refuse the whole compile loudly instead of minting the
+        # silent no-op that let newer entity-brain flows "complete" on a stale
+        # server while zero memory formed. Fully disconnected unknown nodes
+        # (decoration/comments) are skipped without refusal: they can never
+        # fire. Parsing (`load_visualflow_json`) stays permissive by design —
+        # bundles still parse and list; COMPILATION is the honesty boundary.
+        unknown_type = getattr(base_handler, "_unknown_node_type", None)
+        if unknown_type is not None:
+            connected = any(node.id in (e.source, e.target) for e in visual.edges)
+            if connected:
+                raise UnknownNodeTypeError(_unknown_node_message(unknown_type))
+            continue
 
         if not _has_execution_pins(type_str, node.data):
             pure_base_handlers[node.id] = base_handler
@@ -4200,6 +4677,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             node_outputs=flow._node_outputs,  # type: ignore[attr-defined]
             ensure_node_output=_ensure_node_output,
             volatile_node_ids=volatile_pure_node_ids,
+            pin_expressions=pin_expressions_by_node_id.get(node.id),
+            get_run_vars=lambda: getattr(flow, "_run_vars", None),
         )
 
         input_key = node.data.get("inputKey")
@@ -4420,6 +4899,8 @@ def _create_data_aware_handler(
     *,
     ensure_node_output=None,
     volatile_node_ids: Optional[set[str]] = None,
+    pin_expressions: Optional[Dict[str, PinExpressionEvaluator]] = None,
+    get_run_vars=None,
 ):
     """Wrap a handler to resolve data edge inputs before execution."""
 
@@ -4482,6 +4963,16 @@ def _create_data_aware_handler(
                         resolved_input[pin_id] = value
                 else:
                     resolved_input[pin_id] = value
+
+        if pin_expressions:
+            # Expressions apply LAST (wire/default become `value`), evaluated
+            # per execution — a while-condition expression re-reads run vars
+            # every iteration, matching the volatile pure lane it replaces.
+            apply_pin_expressions(
+                resolved_input,
+                pin_expressions,
+                get_run_vars() if callable(get_run_vars) else None,
+            )
 
         execution: Optional[Dict[str, Any]] = None
         if node_type == "code":

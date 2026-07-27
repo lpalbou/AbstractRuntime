@@ -50,6 +50,16 @@ _JSON_SCHEMA_PRIMITIVE_TYPES: Set[str] = {"string", "integer", "number", "boolea
 
 _AGORA_TOOL_NAMES_CACHE: Optional[frozenset] = None
 
+# Tools that receive the schema-hidden `_session_route` stamp (the run's own
+# provider/model, derived from `_runtime.*` — never payload-claimed). This is
+# a DELIBERATE manual allowlist (exact names): tighter than deriving from
+# tool signatures, which would auto-stamp any host tool that declares the
+# param. The cost is manual sync — core announces new consumers on the
+# thread (core owns the param's consumption contract) and this set widens
+# with a matching pin; a consumer missing from this set degrades to core's
+# configured fallback, never to a trust hole.
+_SESSION_ROUTE_TOOL_NAMES = frozenset({"analyze_media"})
+
 
 def _agora_tool_names() -> frozenset:
     """Exact names of the runtime's agora toolset (H8 identity stamping targets).
@@ -2212,6 +2222,184 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     return True
 
 
+_RISK_ROW_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _risk_row_for_tool(name: str) -> Optional[Dict[str, Any]]:
+    """The tool's inventory row (walled + core registry), for risk
+    derivation. Cached per process (the registries are import-stable);
+    unknown names return None and derive top-tier at the caller."""
+    global _RISK_ROW_CACHE
+    if _RISK_ROW_CACHE is None:
+        rows: Dict[str, Dict[str, Any]] = {}
+        try:
+            from ...identity.tools import walled_tool_rows
+
+            for r in walled_tool_rows():
+                rows[str(r.get("name") or "")] = r
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .tool_inventory_facade import core_registry_tool_rows
+
+            for r in core_registry_tool_rows():
+                rows.setdefault(str(r.get("name") or ""), r)
+        except Exception:  # noqa: BLE001
+            pass
+        _RISK_ROW_CACHE = rows
+    return _RISK_ROW_CACHE.get(str(name or "").strip())
+
+
+def _refiner_operator_email(run: "RunState") -> Optional[str]:
+    """The gateway-injected operator-self address (send_email refiner seam,
+    gateway c4692): a MODEL-UNWRITABLE `_runtime.operator_email` key that
+    the door sets from config at run start (payload values popped first -
+    a model-supplied operator_email never survives). Absent/blank/non-str
+    -> None (the refiner then holds the ceiling: everything asks)."""
+    if not isinstance(getattr(run, "vars", None), dict):
+        return None
+    rt = run.vars.get("_runtime")
+    if not isinstance(rt, dict):
+        return None
+    val = rt.get("operator_email")
+    if not isinstance(val, str) or not val.strip():
+        return None
+    return _norm_email(val)
+
+
+def _norm_email(value: str) -> str:
+    """Conservative normalization (fable5 c4691 P1-5): strip + NFC +
+    lowercase ONLY. NO NFKC, NO confusable folding, NO IDN/punycode
+    collapse - a homoglyph domain must NEVER compare equal to the real
+    address (loose matching is the hole; strict is the defense)."""
+    import unicodedata
+
+    return unicodedata.normalize("NFC", str(value)).strip().lower()
+
+
+def _send_email_recipient_refiner(call: Dict[str, Any], run: "RunState") -> str:
+    """send_email_recipient@v1 (laurent dm#244): recipient == the registered
+    operator address -> "auto"; ANY other recipient anywhere -> "ask".
+
+    DENY-SAFE at every gap (fable5 c4691): empty/unresolved recipients ->
+    ask (never vacuous-true all()); a WRAPPER-nested args shape -> ask (the
+    P0-2 parser differential: the executor might unwrap to different
+    recipients, so any wrapper presence forbids auto); display-name/group
+    tokens compared VERBATIM (no bracket-address extraction - that is the
+    readonly_git positional-spoof class); self-value absent -> ask; any
+    exception -> ask. The refiner may only return "auto" (a downgrade);
+    the caller adds nothing on "ask"."""
+    try:
+        self_addr = _refiner_operator_email(run)
+        if not self_addr:
+            return "ask"  # no self-value: the ceiling stands
+        args = (call or {}).get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                return "ask"  # unparseable args: cannot prove self
+        if not isinstance(args, dict):
+            return "ask"
+        # P0-2 differential guard: a wrapper-nested shape ("arguments" key)
+        # may be unwrapped differently by the executor - never auto on it.
+        if "arguments" in args:
+            return "ask"
+        from abstractcore.tools.comms_tools import _coerce_str_list
+
+        recipients: List[str] = []
+        for field in ("to", "cc", "bcc"):
+            recipients.extend(_coerce_str_list(args.get(field)))
+        if not recipients:
+            return "ask"  # P0-1: no proven recipient -> never vacuous auto
+        return "auto" if all(_norm_email(r) == self_addr for r in recipients) else "ask"
+    except Exception:  # noqa: BLE001 - any refiner failure holds the ceiling
+        return "ask"
+
+
+# Per-call refiners keyed by the core-declared refiner-id (risk_facts.py
+# KNOWN_REFINER_IDS). A refiner may only LOWER a call to auto; absence of
+# a registered fn for a declared id is deny-safe (no downgrade -> ask).
+_GIT_READ_VERBS = frozenset({"status", "log", "diff", "show", "ls-files"})
+_GIT_SHELL_TOKENS = ("&&", "||", ";", "|", ">", ">>", "<", "<<", "&")
+_EXEC_KNOWN_ARG_KEYS = frozenset({"command", "working_directory", "timeout", "capture_output"})
+
+
+def _git_read_only_refiner(call: Dict[str, Any], run: "RunState") -> str:
+    """git_read_only@v1 (converged contract c5028 R2; the abstractcode
+    read-only-git PROOF ported to the approval point so the client's
+    330-line shell twin can die): an execute_command call whose command is
+    a PROVEN read-only git invocation -> "auto"; everything else -> "ask".
+
+    Maximally conservative two-stage proof (deny-safe at every gap — the
+    send_email refiner's discipline):
+    - raw charset: shell substitution (`, $(, ${) or a second line -> ask;
+    - shlex tokens: any shell operator -> ask; NO wrapper peeling (env/nohup
+      -wrapped git is UNPROVEN -> ask; a wrong 'unproven' costs one prompt,
+      never a silent mutation);
+    - argv[0] basename must be exactly `git`; any global option BEFORE the
+      verb (-C/-c/--git-dir...) -> ask;
+    - verb in the read allowlist ({status,log,diff,show,ls-files} — the
+      allowlist covers the positional-verb P0 class structurally: `git
+      remote set-url`/`reflog expire` refuse because remote/reflog are not
+      read verbs);
+    - write/exec FLAGS on allowed verbs (--output*, --ext-diff, -o) -> ask
+      (the corpus cases: `git log --output=<path>` writes, `git diff
+      --ext-diff` executes);
+    - unknown argument keys on the call -> ask (the wrapper-differential
+      guard: an executor might interpret keys this proof did not see).
+    Returns only "auto" (a downgrade) or "ask" (adds nothing)."""
+    import shlex
+
+    try:
+        args = (call or {}).get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:  # noqa: BLE001
+                return "ask"
+        if not isinstance(args, dict):
+            return "ask"
+        if set(str(k) for k in args.keys()) - _EXEC_KNOWN_ARG_KEYS:
+            return "ask"
+        raw = str(args.get("command") or "").strip()
+        if not raw or "\n" in raw or "\r" in raw:
+            return "ask"
+        if "`" in raw or "$(" in raw or "${" in raw:
+            return "ask"
+        try:
+            argv = shlex.split(raw)
+        except ValueError:
+            return "ask"
+        if not argv or any(tok in _GIT_SHELL_TOKENS for tok in argv):
+            return "ask"
+        if argv[0].rsplit("/", 1)[-1].lower() != "git":
+            return "ask"
+        rest = argv[1:]
+        if not rest or rest[0].startswith("-"):
+            return "ask"  # bare git / global options before the verb
+        verb = rest[0].lower()
+        if verb not in _GIT_READ_VERBS:
+            return "ask"
+        for a in rest[1:]:
+            low = a.lower()
+            if low.startswith("--output") or low == "--ext-diff" or low == "-o":
+                return "ask"
+        return "auto"
+    except Exception:  # noqa: BLE001 - any doubt asks
+        return "ask"
+
+
+_TOOL_REFINERS: Dict[str, Any] = {
+    "send_email_recipient@v1": _send_email_recipient_refiner,
+    # Registered ahead of core's row declaration (dm#244 architecture: core
+    # hosts the refiner-id on the tool row, runtime implements at the
+    # approval point) — INERT until execute_command's inventory row carries
+    # risk_refiner=git_read_only@v1 (asked of core with the c5028 fold).
+    "git_read_only@v1": _git_read_only_refiner,
+}
+
+
 def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
     """Per-run tool-policy consumer (restores the 2026-02-21 feature that
     regressed; two independent confirmations it was consumer-less — the
@@ -2232,11 +2420,75 @@ def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunS
             pol = rt.get("tool_policy")
     if (
         isinstance(pol, dict)
-        and (pol.get("auto_approve_tools") or pol.get("require_approval_tools"))
+        and (pol.get("auto_approve_tools") or pol.get("require_approval_tools")
+             or pol.get("auto_approve_max_risk_rank") is not None)
         and callable(getattr(tools, "execute_approved", None))
     ):
         auto = {str(t).strip() for t in (pol.get("auto_approve_tools") or []) if str(t).strip()}
         req = {str(t).strip() for t in (pol.get("require_approval_tools") or []) if str(t).strip()}
+        # TIER CEILING (tool-tiers cycle-3; the c4343/c4352 commitment):
+        # auto_approve_max_risk_tier=N auto-approves calls whose tool's
+        # DERIVED risk_tier <= N. Names stay the finest grain: an explicit
+        # require_approval_tools name forces the ask even under the
+        # ceiling (require wins - the executor's standing contract).
+        # Resolution is registry-side (derive_risk_tier over the served
+        # row facts) - never a name heuristic; unknown tools derive 4
+        # (fail-closed) and thus never ride a ceiling below 4.
+        # RANK semantics (semantics c4589: tier = the WORD on the wire;
+        # the ceiling compares INTEGERS = rank). ONE spelling: the _tier
+        # alias was dropped SAME-DAY on code-tui's own release (c4614:
+        # "this client consumes NO risk_* key today") - zero consumers
+        # ever held it, so the alias died before it could become a
+        # migration (the annotate-tier-field lesson, third application).
+        ceiling = pol.get("auto_approve_max_risk_rank")
+        if ceiling is not None:
+            try:
+                ceiling_n = int(ceiling)
+            except (TypeError, ValueError):
+                ceiling_n = None
+            if ceiling_n is not None:
+                try:
+                    from .tool_inventory_facade import annotate_tool_rows, derive_risk_tier
+                    from ..abstractcore.default_tools import get_default_toolsets  # type: ignore
+
+                    for call in calls:
+                        cname = str((call or {}).get("name") or "").strip()
+                        if not cname or cname in req or cname in auto:
+                            continue
+                        row = _risk_row_for_tool(cname)
+                        if row is not None and row.get("model_controlled_destination"):
+                            # Band-neutral APPROVAL fact (core c4586 P1's
+                            # law): the model chooses where output goes, so
+                            # the prompt IS the exfiltration defense - a
+                            # tier ceiling never silences it. Explicit
+                            # name-list auto (above) remains the operator's
+                            # override.
+                            continue
+                        tier_val = derive_risk_tier(row) if row is not None else 4
+                        if tier_val <= ceiling_n:
+                            auto.add(cname)
+                except Exception:  # noqa: BLE001 - a failed derivation fails toward asking
+                    pass
+        # PER-CALL REFINERS (laurent dm#244, send_email_recipient@v1): a
+        # tool whose served row declares risk_refiner may be LOWERED to
+        # auto for THIS call when the refiner proves it safe (recipient ==
+        # the operator's own address). Runs AFTER the ceiling and can
+        # downgrade even a model_controlled_destination tool - that is the
+        # designed per-argument exception (the model is not choosing a
+        # dangerous destination when the destination is provably self).
+        # require always wins; a missing/failed refiner adds nothing (ask).
+        try:
+            for call in calls:
+                cname = str((call or {}).get("name") or "").strip()
+                if not cname or cname in req or cname in auto:
+                    continue
+                row = _risk_row_for_tool(cname)
+                refiner_id = str((row or {}).get("risk_refiner") or "").strip()
+                fn = _TOOL_REFINERS.get(refiner_id) if refiner_id else None
+                if fn is not None and fn(call, run) == "auto":
+                    auto.add(cname)
+        except Exception:  # noqa: BLE001 - a refiner-pass failure fails toward asking
+            pass
         run_policy = ToolApprovalPolicy(auto_approve_tools=auto, require_approval_tools=req)
         try:
             requires = run_policy.requires_approval(calls)
@@ -3095,6 +3347,26 @@ def make_tool_calls_handler(
                     # never silently fall back to the global identity).
                     arguments["_agora_agent"] = str(raw_alias)
 
+            # Session-route stamp (vision-capability ruling, 2026-07-26): tools
+            # that delegate sight (analyze_media) resolve the RUN's own route
+            # FIRST — fallback config is solely for vision-less models. The
+            # route is a TRUST BOUNDARY argument: always popped (a payload-
+            # claimed route must never survive — derive-not-claim, the door
+            # rule generalized), then injected from the run's own
+            # `_runtime.provider/model` for the declared consumer tools only.
+            # Absent route vars stamp NOTHING (core's graceful degradation:
+            # unstamped = pre-ruling fallback behavior, byte-identical).
+            arguments.pop("_session_route", None)
+            if name in _SESSION_ROUTE_TOOL_NAMES:
+                rv = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+                provider = str(rv.get("provider") or "").strip() if isinstance(rv, dict) else ""
+                model = str(rv.get("model") or "").strip() if isinstance(rv, dict) else ""
+                if provider or model:
+                    arguments["_session_route"] = {
+                        "provider": provider or None,
+                        "model": model or None,
+                    }
+
             if name == "open_attachment":
                 tool_calls_for_evidence.append(
                     {
@@ -3931,6 +4203,79 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
     return _handler
 
 
+class _PreApprovedExecutorView:
+    """Executor view for AUTHORED deterministic invocations (TOOL_INVOKE).
+
+    Exposes ONLY `execute`, which routes to the inner executor's
+    `execute_approved` when present (the post-approval path: same tools,
+    same limits, no gate) and plain `execute` otherwise. Deliberately does
+    NOT expose `execute_approved` itself, so the shared handler machinery
+    sees a plain executor and its approval logic never engages - the trust
+    decision rides the EFFECT CLASS (host-constructed from node types),
+    never a payload field a model could stamp (commons c4204 ruling)."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        approved = getattr(self._inner, "execute_approved", None)
+        if callable(approved):
+            return approved(tool_calls=tool_calls)
+        return self._inner.execute(tool_calls=tool_calls)
+
+
+def make_tool_invoke_handler(
+    *,
+    tools: Optional[ToolExecutor] = None,
+    artifact_store: Optional[ArtifactStore] = None,
+    run_store: Optional[RunStore] = None,
+) -> EffectHandler:
+    """TOOL_INVOKE: one AUTHORED tool call, executed without the approval
+    gate (flow's deterministic fixed-verb nodes, laurent dm#49).
+
+    Payload contract (flow c4206): {name, arguments, result_key?} - ONE
+    call per effect (a fixed-verb node binds exactly one verb; batches are
+    the agent lane's shape). Everything else is the TOOL_CALLS machinery
+    verbatim by delegation: workspace walls, argument rewriting, artifact
+    offload, idempotency - the ONLY delta is the executor view above, so
+    wall/rewrite fixes land on both lanes automatically. The result under
+    result_key carries the SAME envelope as TOOL_CALLS (results[0].output
+    = the tool's raw output, verbatim) so flow's existing first.output ->
+    pin mapping works unchanged."""
+    if tools is None:
+        delegate = make_tool_calls_handler(
+            tools=None, artifact_store=artifact_store, run_store=run_store)
+    else:
+        delegate = make_tool_calls_handler(
+            tools=_PreApprovedExecutorView(tools),
+            artifact_store=artifact_store, run_store=run_store)
+
+    def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        payload = dict(effect.payload or {})
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return EffectOutcome.failed("tool_invoke requires payload.name (the fixed verb)")
+        arguments = payload.get("arguments")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return EffectOutcome.failed("tool_invoke payload.arguments must be an object")
+        inner_payload: Dict[str, Any] = {
+            "tool_calls": [{"name": name, "arguments": arguments}],
+        }
+        for key in ("result_key", "allowed_tools"):
+            if payload.get(key) is not None:
+                inner_payload[key] = payload[key]
+        inner_effect = Effect(
+            type=EffectType.TOOL_CALLS,
+            payload=inner_payload,
+            result_key=effect.result_key,
+        )
+        return delegate(run, inner_effect, default_next_node)
+
+    return _handler
+
+
 def build_effect_handlers(
     *,
     llm: AbstractCoreLLMClient,
@@ -3938,8 +4283,31 @@ def build_effect_handlers(
     artifact_store: Optional[ArtifactStore] = None,
     run_store: Optional[RunStore] = None,
 ) -> Dict[EffectType, Any]:
+    # Case-1 seam (converged 2026-07-26): thread the llm_client's
+    # endpoint-profile resolver into tool execution so core's session-route
+    # path can construct gateway-registered endpoint:* providers. The getter
+    # is LATE-BOUND over the client (gateway calls
+    # set_provider_endpoint_profile_resolver after construction); the attach
+    # walks delegate chains so wrapped executors (approval views, MCP
+    # delegation) reach the inner MappingToolExecutor.
+    if tools is not None:
+        from .tool_executor import attach_endpoint_profile_resolver_getter
+
+        def _resolver_from_llm() -> Any:
+            # Private attribute on Local/MultiLocal clients; the REMOTE
+            # client carries only the PUBLIC `resolve_provider_endpoint_profile`
+            # (gateway's fallback attach sets it, bundle_host.py:90-100) —
+            # reading only the private name left the whole remote lane dark
+            # (route-context adversary P1-2, 2026-07-26).
+            r = getattr(llm, "_provider_endpoint_profile_resolver", None)
+            if r is None:
+                r = getattr(llm, "resolve_provider_endpoint_profile", None)
+            return r
+
+        attach_endpoint_profile_resolver_getter(tools, _resolver_from_llm)
     return {
         EffectType.LLM_CALL: make_llm_call_handler(llm=llm, artifact_store=artifact_store),
         EffectType.MODEL_RESIDENCY: make_model_residency_handler(control=llm),
         EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools, artifact_store=artifact_store, run_store=run_store),
+        EffectType.TOOL_INVOKE: make_tool_invoke_handler(tools=tools, artifact_store=artifact_store, run_store=run_store),
     }

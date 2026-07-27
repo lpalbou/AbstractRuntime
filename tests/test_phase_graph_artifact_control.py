@@ -161,16 +161,23 @@ def test_newborn_shape_is_the_artifacts_answer() -> None:
         assert read_entity_state(home)["state"] == "asleep"
 
 
-def test_runtime_writes_no_phase_markers() -> None:
-    """Artifact marker contract: ONE kind phase_changed, ONE named writer
-    (the gateway's door half). Runtime must not write phase markers —
-    source-level pin over the identity lane."""
+def test_runtime_phase_marker_single_writer() -> None:
+    """Artifact marker contract, as amended by the graph-edit build order
+    (c4837): phase_changed was 'reserved-unspelled' with the gateway door as
+    the only anticipated writer; the order SPELLED it and assigned the
+    LOOP-written transitions to runtime ('land it with this build'). The
+    single-writer discipline survives the amendment: within the runtime
+    identity lane the marker is written by exactly ONE helper
+    (life.append_phase_changed) in exactly ONE module — no scattered
+    writers, no second spelling."""
     import abstractruntime.identity as identity_pkg
+    from abstractruntime.identity.life import append_phase_changed  # spelled
 
+    assert callable(append_phase_changed)
     root = Path(identity_pkg.__file__).parent
     offenders = [
         p.name
         for p in root.glob("*.py")
-        if "phase_changed" in p.read_text(encoding="utf-8")
+        if "phase_changed" in p.read_text(encoding="utf-8") and p.name != "life.py"
     ]
-    assert offenders == [], f"runtime must never write phase markers: {offenders}"
+    assert offenders == [], f"one module writes phase markers (life.py): {offenders}"

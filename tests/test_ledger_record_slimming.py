@@ -512,3 +512,182 @@ def test_entity_runtime_writes_through_offloading(tmp_path) -> None:
         assert ert.runtime._ledger_store.inner is ert.ledger_store
     finally:
         ert.close()
+
+
+# ---------------------------------------------------------------------------
+# Appendix-aware dedup (replay-integrity audit, 2026-07-25)
+# ---------------------------------------------------------------------------
+#
+# The incident: the agent adapter appends one ~350B "Stored session
+# attachments" system message AFTER the payload is built, so the byte-identity
+# check missed 0-of-59 times and every ~250KB observability copy rested
+# verbatim (5.95MB of a 14.3MB single-turn bundle). The appendix-aware dedup
+# matches the STARTED reconstruction as an ordered subsequence and carries the
+# few small extras verbatim in the marker.
+
+
+def _conversation_payload() -> Dict[str, Any]:
+    return {
+        "messages": [
+            {"role": "user", "content": "u" * 3000},
+            {"role": "assistant", "content": "a" * 3000},
+        ],
+        "system_prompt": "s" * 3900,  # 178B under the old 4096 gate — the audit's exact class
+    }
+
+
+def _appended_extra() -> Dict[str, Any]:
+    return {"role": "system", "content": "Stored session attachments: " + "x" * 300}
+
+
+def test_appendix_dedup_observability_messages_appended_after_build() -> None:
+    from abstractruntime.storage.ledger_slim import (
+        build_started_payload_index,
+        capture_started_payload_digests,
+        is_slim_marker,
+        resolve_slim_value,
+        slim_result_metadata,
+    )
+
+    payload = _conversation_payload()
+    effect = {"type": "llm_call", "payload": payload}
+    digests = capture_started_payload_digests(effect)
+
+    # Adapter appends ONE small message to the kwargs copy after payload build.
+    obs_copy = [dict(m) for m in payload["messages"]] + [_appended_extra()]
+    result = {
+        "content": "ok",
+        "metadata": {"_runtime_observability": {"llm_generate_kwargs": {"messages": obs_copy}}},
+    }
+    slimmed = slim_result_metadata(result, effect_payload=payload, step_id="st-1", started_digests=digests)
+    marker = slimmed["metadata"]["_runtime_observability"]["llm_generate_kwargs"]["messages"]
+    assert is_slim_marker(marker), "appendix dedup must catch the appended-copy shape"
+    assert marker["$slim"].get("appendix"), "the extra message rides the marker verbatim"
+
+    # Roundtrip: byte-exact against the STARTED index.
+    idx = build_started_payload_index(
+        [{"status": "started", "step_id": "st-1", "effect": {"type": "llm_call", "payload": payload}}]
+    )
+    assert resolve_slim_value(marker, idx) == obs_copy
+
+
+def test_appendix_dedup_provider_request_with_mid_insertion() -> None:
+    from abstractruntime.storage.ledger_slim import (
+        build_started_payload_index,
+        capture_started_payload_digests,
+        is_slim_marker,
+        resolve_slim_value,
+        slim_result_metadata,
+    )
+
+    payload = _conversation_payload()
+    effect = {"type": "llm_call", "payload": payload}
+    digests = capture_started_payload_digests(effect)
+
+    # Provider request = [system] + [inserted extra] + messages (mid insertion).
+    preq_copy = (
+        [{"role": "system", "content": payload["system_prompt"]}, _appended_extra()]
+        + [dict(m) for m in payload["messages"]]
+    )
+    result = {
+        "content": "ok",
+        "metadata": {"_provider_request": {"payload": {"messages": preq_copy}}},
+    }
+    slimmed = slim_result_metadata(result, effect_payload=payload, step_id="st-2", started_digests=digests)
+    marker = slimmed["metadata"]["_provider_request"]["payload"]["messages"]
+    assert is_slim_marker(marker)
+    assert marker["$slim"].get("layout") == ["system", "messages"]
+    idx = build_started_payload_index(
+        [{"status": "started", "step_id": "st-2", "effect": {"type": "llm_call", "payload": payload}}]
+    )
+    assert resolve_slim_value(marker, idx) == preq_copy
+
+
+def test_appendix_never_dedups_a_mutated_conversation() -> None:
+    """A copy whose SHARED elements differ from STARTED keeps verbatim bytes.
+
+    Dedup drops duplicates, never information: if the adapter MUTATED a
+    message (not just inserted new ones), the subsequence match fails and the
+    copy rests verbatim — the pre-slimming truth.
+    """
+    from abstractruntime.storage.ledger_slim import (
+        capture_started_payload_digests,
+        is_slim_marker,
+        slim_result_metadata,
+    )
+
+    payload = _conversation_payload()
+    digests = capture_started_payload_digests({"type": "llm_call", "payload": payload})
+    mutated = [dict(m) for m in payload["messages"]]
+    mutated[0] = {"role": "user", "content": "REWRITTEN " + "u" * 3000}
+    result = {
+        "content": "ok",
+        "metadata": {"_runtime_observability": {"llm_generate_kwargs": {"messages": mutated}}},
+    }
+    slimmed = slim_result_metadata(result, effect_payload=payload, step_id="st-3", started_digests=digests)
+    out = slimmed["metadata"]["_runtime_observability"]["llm_generate_kwargs"]["messages"]
+    assert not is_slim_marker(out)
+    assert out == mutated
+
+
+def test_conversation_field_floor_dedups_sub_4096_system_prompt() -> None:
+    """The audit's 3,918B system prompt (178B under the old gate) now dedups."""
+    from abstractruntime.storage.ledger_slim import (
+        build_started_payload_index,
+        capture_started_payload_digests,
+        is_slim_marker,
+        resolve_slim_value,
+        slim_result_metadata,
+    )
+
+    payload = _conversation_payload()
+    assert len(json.dumps(payload["system_prompt"]).encode()) < SLIM_FIELD_THRESHOLD_BYTES
+    digests = capture_started_payload_digests({"type": "llm_call", "payload": payload})
+    result = {
+        "content": "ok",
+        "metadata": {
+            "_runtime_observability": {"llm_generate_kwargs": {"system_prompt": payload["system_prompt"]}}
+        },
+    }
+    slimmed = slim_result_metadata(result, effect_payload=payload, step_id="st-4", started_digests=digests)
+    marker = slimmed["metadata"]["_runtime_observability"]["llm_generate_kwargs"]["system_prompt"]
+    assert is_slim_marker(marker)
+    idx = build_started_payload_index(
+        [{"status": "started", "step_id": "st-4", "effect": {"type": "llm_call", "payload": payload}}]
+    )
+    assert resolve_slim_value(marker, idx) == payload["system_prompt"]
+
+
+def test_appendix_bounds_refuse_large_or_many_extras() -> None:
+    """Extras rest inline in the marker, so they must stay few and small."""
+    from abstractruntime.storage.ledger_slim import (
+        capture_started_payload_digests,
+        is_slim_marker,
+        slim_result_metadata,
+    )
+
+    payload = _conversation_payload()
+    digests = capture_started_payload_digests({"type": "llm_call", "payload": payload})
+
+    # One HUGE extra (> per-item bound): must stay verbatim.
+    big_extra = {"role": "system", "content": "b" * 8000}
+    copy_big = [dict(m) for m in payload["messages"]] + [big_extra]
+    result = {
+        "content": "ok",
+        "metadata": {"_runtime_observability": {"llm_generate_kwargs": {"messages": copy_big}}},
+    }
+    slimmed = slim_result_metadata(result, effect_payload=payload, step_id="st-5", started_digests=digests)
+    out = slimmed["metadata"]["_runtime_observability"]["llm_generate_kwargs"]["messages"]
+    assert not is_slim_marker(out)
+
+    # Too many extras: must stay verbatim.
+    many = [dict(m) for m in payload["messages"]] + [
+        {"role": "system", "content": f"note {i}"} for i in range(9)
+    ]
+    result2 = {
+        "content": "ok",
+        "metadata": {"_runtime_observability": {"llm_generate_kwargs": {"messages": many}}},
+    }
+    slimmed2 = slim_result_metadata(result2, effect_payload=payload, step_id="st-6", started_digests=digests)
+    out2 = slimmed2["metadata"]["_runtime_observability"]["llm_generate_kwargs"]["messages"]
+    assert not is_slim_marker(out2)

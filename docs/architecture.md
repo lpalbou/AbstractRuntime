@@ -113,6 +113,32 @@ flowchart TB
 
 **Invariant:** values stored in `RunState.vars` must be JSON-serializable. Use artifact references for large values (`src/abstractruntime/storage/artifacts.py`) or wrap stores with `OffloadingRunStore` / `OffloadingLedgerStore` (`src/abstractruntime/storage/offloading.py`).
 
+### Crash-ordering invariant (reliability)
+
+The run store is truth; the ledger is evidence. Every state transition obeys
+ONE ordering law (backlog 0045; every durable feature is a consumer):
+
+1. **State save is the commit point.** A transition is true when — and only
+   when — `RunStore.save(run)` returns. Everything before the save must be
+   safe to repeat; everything after must be pure observation.
+2. **Ledger records for a transition append BEFORE the save that makes the
+   transition true.** A crash between append and save leaves the ledger
+   *ahead* of the state — the recoverable direction: replay re-executes from
+   the last saved state and idempotency keys (`_runtime.effect_seq`-scoped)
+   deduplicate both effect results and terminal records. The reverse order
+   (save-then-append) leaves a truth the evidence never recorded — e.g. a
+   COMPLETED run whose ledger never terminates, which stalls ledger-following
+   clients forever.
+3. **Terminal-path append failures are never silent.** A failed append on a
+   completion/resume path increments `RuntimeHealth` (`record_error`) and
+   logs a warning. Best-effort observability records (progress events,
+   status events) may stay quiet; records that replay depends on may not.
+
+Kill-and-replay coverage for this law lives in the crash harness
+(`tests/harness.py`, backlog 0045): for every persistence point, kill →
+restart → assert terminal-output equivalence, ledger convergence (terminal
+record exactly once), and no doubled side effects.
+
 ## Runtime loop (start / tick / resume)
 
 Implemented in `src/abstractruntime/core/runtime.py`:

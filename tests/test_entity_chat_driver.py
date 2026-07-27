@@ -310,3 +310,37 @@ class TestReSummon:
         assert "Tolstoy" in prompt, "the first life's memory must surface in the second summon"
         assert report.displayed >= 1
         s2.home.close()
+
+
+def test_failed_book_write_rescues_the_reply_in_the_turn_path(castor_home: Path) -> None:
+    """Record-everything ruling (2026-07-26): a failed diary write must not
+    throw the entity's reply away. The turn still fails loudly, but the raw
+    reply - fences included - is saved to <home>/rescue/ first, and the
+    error message says where."""
+    reply = "I will keep this.\n```diary\nkind: note\nthe words I chose\n```\nDone."
+    llm = _ScriptedLLM([reply])
+    s = _session(castor_home, llm)
+
+    # Break the book: the diary write handler starts refusing.
+    real_handler = s.home.handlers[__import__("abstractruntime").EffectType.DIARY_WRITE]
+
+    def _broken(run, effect, nxt):
+        from abstractruntime.core.runtime import EffectOutcome
+        return EffectOutcome.failed("disk full: cannot append to the book")
+
+    from abstractruntime import EffectType as _ET
+    s.home.handlers[_ET.DIARY_WRITE] = _broken
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            s.turn("please remember this")
+    finally:
+        s.home.handlers[_ET.DIARY_WRITE] = real_handler
+
+    assert "rescued to" in str(exc.value)
+    rescue_files = list((castor_home / "rescue").glob("reply_*.json"))
+    assert len(rescue_files) == 1
+    saved = json.loads(rescue_files[0].read_text(encoding="utf-8"))
+    assert "the words I chose" in saved["raw_reply"]
+    assert "disk full" in saved["error"]
+    # The attention context rides along so a repair can restore connections.
+    assert "extra" in saved and "as_of_seq" in saved["extra"]

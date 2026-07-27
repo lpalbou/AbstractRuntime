@@ -212,3 +212,44 @@ def test_remote_llm_client_normalizes_expected_prompt_cache_binding_alias() -> N
     assert call["json"]["prompt_cache_binding"] == binding
     assert call["json"]["prompt_cache_key"] == "bloc:alias"
     assert "expected_prompt_cache_binding" not in call["json"]
+
+
+def test_remote_llm_client_forwards_thinking_to_chat_completions():
+    """R-A (reasoning-1st-citizen, 2026-07-26): the pass-through allowlist
+    silently DROPPED `thinking` while the core server accepts it — any
+    gateway on the remote runtime lost reasoning config entirely (found
+    independently by two seats' adversaries). Pins: a thinking param rides
+    the POST body; junk shapes (non-string/blank) stay off the wire."""
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:8080",
+        model="openai-compatible/default",
+        request_sender=sender,
+    )
+
+    client.generate(
+        prompt="hello",
+        messages=None,
+        system_prompt=None,
+        tools=None,
+        params={"thinking": "high"},
+    )
+    assert sender.calls[0]["json"]["thinking"] == "high"
+
+    client.generate(
+        prompt="hello",
+        messages=None,
+        system_prompt=None,
+        tools=None,
+        params={"thinking": "  "},
+    )
+    assert "thinking" not in sender.calls[1]["json"]
+
+    client.generate(
+        prompt="hello",
+        messages=None,
+        system_prompt=None,
+        tools=None,
+        params={},
+    )
+    assert "thinking" not in sender.calls[2]["json"]

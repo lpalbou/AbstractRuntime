@@ -17,6 +17,7 @@ Design constraints:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -308,6 +309,15 @@ class JsonlCommandStore(CommandStore):
             with self._path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec.to_json(), ensure_ascii=False))
                 f.write("\n")
+                # fsync so "durable before 2xx" covers power loss, not just
+                # client disconnect / process death (quit-contract thread,
+                # 2026-07-25: gateway answers the /commands POST only after
+                # this append returns, so the record must be ON DISK, not
+                # merely in the OS page cache). Commands are low-frequency
+                # (pause/cancel/resume — never hot-path), so the fsync cost
+                # is negligible against the durability claim it buys.
+                f.flush()
+                os.fsync(f.fileno())
             self._by_id[cid] = seq
             return CommandAppendResult(accepted=True, duplicate=False, seq=seq)
 

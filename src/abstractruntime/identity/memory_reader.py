@@ -228,6 +228,30 @@ class HomeMemoryReader:
             if needle in str(e.get("gist") or "").lower() or needle in str(e.get("text") or "").lower()
         ]
 
+        # ---- all-words pass (flow c5311, Mira B1: her deliberate search
+        # missed records passive recall had JUST surfaced — not lag, the
+        # letters arm reads the store live; the miss class was whole-phrase
+        # contiguity: a multi-word query only hit when it appeared as ONE
+        # contiguous substring. When the exact phrase finds nothing, retry
+        # with every word required in ANY order — labeled distinctly so the
+        # absence warrant stays exact about what was checked.)
+        tokens = [t for t in needle.split() if t]
+        word_matched = False
+        if not graph_hits and not book_hits and len(tokens) > 1:
+            graph_hits = [
+                a for a in digests
+                if all(self.assertion_matches(a, t) for t in tokens)
+            ]
+            graph_hits.sort(key=lambda a: str(a.observed_at or ""), reverse=True)
+            book_hits = [
+                e for e in entries
+                if all(
+                    t in str(e.get("gist") or "").lower() or t in str(e.get("text") or "").lower()
+                    for t in tokens
+                )
+            ]
+            word_matched = bool(graph_hits or book_hits)
+
         # ---- grouped-by-origin header (repetition is not corroboration)
         by_origin: Dict[str, int] = {}
         for a in graph_hits:
@@ -237,19 +261,31 @@ class HomeMemoryReader:
 
         lines: List[str] = [f'Searched your memory and your book for: "{sanitize_tool_surface(query, 80)}"']
         if not graph_hits and not book_hits:
+            absence_how = (
+                f'contains the text "{sanitize_tool_surface(query, 60)}" (exact letters, '
+                "case-insensitive)"
+                if len(tokens) <= 1
+                else f'contains "{sanitize_tool_surface(query, 60)}" as a phrase OR all of its '
+                "words together (case-insensitive)"
+            )
             lines.append(
                 f"Nothing in your memory graph ({len(digests)} records) or your book "
                 f"({len(entries)} entries, append-only and complete - if you had written it, "
-                f'this search would find it) contains the text "{sanitize_tool_surface(query, 60)}" '
-                "(exact letters, case-insensitive). Memories can also arrive without writing: "
-                "dreams and reflections write directly into your graph; this search covered those too."
+                f"this search would find it) {absence_how}. Memories can also arrive without "
+                "writing: dreams and reflections write directly into your graph; this search "
+                "covered those too."
             )
         else:
+            match_how = (
+                "matching all the words, any order - not the exact phrase"
+                if word_matched
+                else "matching exact letters, case-insensitive"
+            )
             lines.append(
                 f"Your graph: {len(graph_hits)} match(es)"
                 + (f" - {origin_bits}" if origin_bits else "")
                 + f". Your book: {len(book_hits)} of {len(entries)} entries. "
-                "(matching exact letters, case-insensitive; several records you yourself "
+                f"({match_how}; several records you yourself "
                 "wrote about the same thing count as one origin, not many)"
             )
         if book_error:
@@ -694,3 +730,51 @@ class HomeMemoryReader:
                 f"the rest exists; ask again for the tail):\n{text[:cap]}" + footer_text
             )
         return f"Full words of memory #{tag}:\n{text}{footer_text}"
+
+
+def feelings_about_text(home: Any, target_text: str) -> str:
+    """The feelings_about tool body over ONE home — the why-walk for one
+    target rendered as dated lines with the entity's own reasons + session
+    joins. Pure read. ONE implementation for the chat driver AND the
+    entity-tools effect surface (adversary F2, 2026-07-25: the effect lane
+    granted + declared feelings_about but never wired its fn, so the tool
+    answered "not enabled in this session" — the exact granted-but-
+    unreachable class the tool surface exists to close)."""
+    tid = str(target_text or "").strip().splitlines()[0].strip() if str(target_text or "").strip() else ""
+    if not tid:
+        return "(feelings_about needs a target - the body is namespace:name, e.g. person:laurent)"
+    try:
+        from abstractmemory.feelings_reads import feelings_about
+    except ImportError:
+        return "(the feelings story is unavailable on this engine)"
+    try:
+        out = feelings_about(
+            getattr(home.ms, "journal", None), tid,
+            scope_pairs=[("self", home.entity_id), ("life", home.entity_id)],
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed read is information
+        return f"(feelings_about failed: {exc})"
+    if not out.get("events"):
+        return f"{tid}: " + str(out.get("note") or "never appraised - no feeling stands toward this")
+    st = out.get("standing") or {}
+    lines = [
+        f"{tid}: net {float(st.get('net') or 0.0):+g} "
+        f"({int(st.get('positive_count') or 0)} warm / {int(st.get('negative_count') or 0)} heavy marks"
+        + (", SCARRED" if st.get("scarred") else "")
+        + (", BONDED" if st.get("bonded") else "") + ")",
+        "the moments, newest first:",
+    ]
+    for e in out["events"]:
+        when = str(e.get("when") or "")[:10] or "undated"
+        sign = "+" if int(e.get("sign") or 0) > 0 else "-"
+        reason = str(e.get("reason") or "").strip() or "(no reason recorded)"
+        joins = ""
+        if e.get("run_id"):
+            joins = f" [session {e['run_id']}]"
+        refs = [str(v) for v in (e.get("value_refs") or [])]
+        if refs:
+            joins += f" [touches {', '.join(refs[:3])}]"
+        lines.append(f'- {when} {sign}{float(e.get("magnitude") or 0):g} "{reason}"{joins}')
+    if int(out.get("total_events") or 0) > len(out["events"]):
+        lines.append(f"({out['total_events']} moments total; oldest not shown)")
+    return "\n".join(lines)

@@ -135,3 +135,29 @@ def test_git_positional_verbs_and_write_flags_refused() -> None:
     for cmd in ("git log --output=/tmp/x", "git diff --ext-diff"):
         out = _run_execute_command(cmd, ws)
         assert "refused" in out, (cmd, out)
+
+
+def test_timeout_reaps_the_whole_process_tree(monkeypatch) -> None:
+    """0152 wedge face 1, runtime's spawner half (gateway c4998/c5021): a
+    timed-out command must SIGKILL its whole process GROUP — an orphaned
+    grandchild (the headless-Chrome class) must neither survive nor pin
+    the calling thread on the post-kill pipe wait. Bounded return time is
+    the load-bearing assertion: the pre-fix shape waited on pipe EOF that
+    an orphan held open forever."""
+    import subprocess
+    import time
+
+    import abstractruntime.identity.tools as tools_mod
+    from abstractruntime.identity.tools import _run_execute_command
+
+    monkeypatch.setattr(tools_mod, "_EXEC_TIMEOUT_S", 2)
+    ws = _ws(Path(tempfile.mkdtemp()))
+    start = time.time()
+    out = _run_execute_command("sh -c 'sleep 57 & sleep 57'", ws)
+    elapsed = time.time() - start
+    assert "stopped" in out and "reaped" in out
+    assert elapsed < 12, f"post-timeout pipe wait pinned the thread: {elapsed:.1f}s"
+    survivors = subprocess.run(
+        ["pgrep", "-f", "sleep 57"], capture_output=True, text=True
+    )
+    assert not survivors.stdout.strip(), f"orphans survived: {survivors.stdout}"

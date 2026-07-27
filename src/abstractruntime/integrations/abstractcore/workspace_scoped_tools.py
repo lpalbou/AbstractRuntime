@@ -657,6 +657,26 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         if "paths" not in out:
             raise ValueError("skim_folders requires paths")
         return out
+    if tool_name == "browser_probe":
+        # Core's render-verification tool (c4872 note 1): the arg is named
+        # `target` and carries EITHER a URL or a local file path — a new
+        # spelling this rewriter did not cover, so local-file probes
+        # bypassed the workspace wall. URLs pass through untouched (egress
+        # policy is the approval lane's, not the wall's); file:// URLs and
+        # bare paths wall exactly like read_file's file_path.
+        raw_target = out.get("target")
+        if isinstance(raw_target, str) and raw_target.strip():
+            t = raw_target.strip()
+            lowered = t.lower()
+            if lowered.startswith(("http://", "https://")):
+                pass  # network target: not the wall's jurisdiction
+            elif lowered.startswith("file://"):
+                inner = t[len("file://"):]
+                resolved = resolve_user_path(scope=scope, user_path=inner)
+                out["target"] = f"file://{resolved}"
+            else:
+                out["target"] = str(resolve_user_path(scope=scope, user_path=t))
+        return out
 
     return out
 

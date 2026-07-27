@@ -55,6 +55,14 @@ class EffectType(str, Enum):
     LLM_CALL = "llm_call"
     MODEL_RESIDENCY = "model_residency"
     TOOL_CALLS = "tool_calls"
+    # Deterministic AUTHORED tool invocation (flow c4206 / laurent dm#49):
+    # a fixed-verb node the AUTHOR wired compiles to this effect - same
+    # executor, same workspace walls and argument rewriting as TOOL_CALLS,
+    # NO approval gate. Forge-proof by construction: effects are host-
+    # constructed from node types, so no model-output lane can mint one
+    # (the write_chart "the node IS the user's intent" ruling, generalized
+    # to the tool lane).
+    TOOL_INVOKE = "tool_invoke"
     MEMORY_QUERY = "memory_query"
     MEMORY_TAG = "memory_tag"
     MEMORY_COMPACT = "memory_compact"
@@ -97,6 +105,30 @@ class EffectType(str, Enum):
     # again?" — entry_id -> the book's verbatim entry into context.
     DIARY_WRITE = "diary_write"
     DIARY_READ = "diary_read"
+
+    # Entity-brain composition effects (flow's build-split, commons c5163/
+    # c5169): home-only handlers wrapping EXISTING facade calls so the
+    # entity-life master flow can animate the night, the deliberate reach,
+    # and the day-gate reads as VisualFlow nodes. Registered ONLY through
+    # `open_home` — workplaces have no handler, the DIARY_* structural law.
+    # LIFE_QUERY is deliberately not MEMORY_QUERY (that name is the old
+    # workflow memory API below; collision avoided at birth).
+    MEMORY_CONSOLIDATE = "memory_consolidate"
+    MEMORY_PROBE = "memory_probe"
+    LIFE_QUERY = "life_query"
+    # The ONE tend-election route (flow c5208 ask 5): payload carries the
+    # ```tend fence BODY verbatim; grammar/verbs stay engine-owned
+    # (parse_tend_block + apply_tend_elections) so the chat driver and the
+    # flow brain speak identical vocabulary — dream disposal included.
+    MEMORY_TEND = "memory_tend"
+    # Entity tool surface as effects (flow c5285 ask 3, the P0 tools gap):
+    # the flow-brain turn keeps its tool LOOP in the graph — QUERY serves
+    # the phase grant + native specs (pure read), EXECUTE runs ONE batch of
+    # wire-shape tool_calls under the re-resolved grant (the grant is the
+    # single authority; a loop-owning effect was rejected because nesting
+    # LLM calls inside a handler bypasses every LLM_CALL invariant).
+    ENTITY_TOOLS_QUERY = "entity_tools_query"
+    ENTITY_TOOLS_EXECUTE = "entity_tools_execute"
 
     # Debug / inspection (schema-only tools -> runtime effects)
     VARS_QUERY = "vars_query"

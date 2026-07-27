@@ -65,11 +65,45 @@ def test_plain_messages_keep_the_pre_fix_shape() -> None:
     assert fp(dict(msg, tool_calls=[])) == legacy
 
 
-def test_unserializable_tool_calls_degrade_deterministically() -> None:
+def test_exotic_tool_calls_are_process_stable() -> None:
+    """P2-1 fold: the projection scrubs memory addresses, so two equal
+    exotic objects - INCLUDING default-repr ones - hash identically across
+    turns and restarts (the id() leak the adversary named)."""
+
     class Weird:
         def __str__(self) -> str:
             return "weird-call"
 
+    class NoStr:  # default repr carries `at 0x...` - the leak case
+        pass
+
     a = {"role": "assistant", "content": "", "tool_calls": [Weird()]}
     b = {"role": "assistant", "content": "", "tool_calls": [Weird()]}
-    assert fp(a) == fp(b), "default=str keeps exotic shapes stable"
+    assert fp(a) == fp(b), "__str__ shapes stable"
+    c = {"role": "assistant", "content": "", "tool_calls": [NoStr()]}
+    d = {"role": "assistant", "content": "", "tool_calls": [NoStr()]}
+    assert fp(c) == fp(d), "default-repr shapes stable (address scrubbed)"
+    # Mixed-type dict keys must not raise (sort_keys over stringified keys).
+    e = {"role": "assistant", "content": "", "tool_calls": [{1: "a", "b": 2}]}
+    assert fp(e) == fp({"role": "assistant", "content": "", "tool_calls": [{1: "a", "b": 2}]})
+
+
+def test_cached_lane_strips_the_inline_grounding_envelope() -> None:
+    """P1-1 fold: the msg_list build strips the inline runtime-grounding
+    envelope from user messages, so a decorated turn-head and its raw
+    durable twin fingerprint the SAME - the every-turn full-rebuild class
+    dies at the source. (Pinned at the strip helper level: the msg_list
+    build applies _strip_runtime_grounding_prefix to user content.)"""
+    from abstractruntime.integrations.abstractcore.llm_client import (
+        _strip_runtime_grounding_prefix as strip_env,
+    )
+
+    raw = "What is the plan for today?"
+    decorated = (
+        "<runtime_metadata>\nlocal_datetime: 2026-07-21T21:20:00+02:00\n"
+        "</runtime_metadata>\n\n" + raw
+    )
+    assert strip_env(decorated) == raw, "the envelope strips clean"
+    assert fp({"role": "user", "content": strip_env(decorated)}) == fp(
+        {"role": "user", "content": raw}
+    )

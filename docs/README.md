@@ -30,6 +30,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - run history bundle replay now also exports `resolved_actions` summaries for cross-client capability replay; see `api.md` and `integrations/abstractcore.md`
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
+- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` self-recipient rule)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 
 ## Features (reference)

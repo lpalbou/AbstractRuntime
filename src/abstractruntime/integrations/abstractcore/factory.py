@@ -28,7 +28,7 @@ from .effect_handlers import build_effect_handlers
 from .llm_client import MultiLocalAbstractCoreLLMClient, RemoteAbstractCoreLLMClient
 from .tool_executor import AbstractCoreToolExecutor, PassthroughToolExecutor, ToolExecutor
 from .summarizer import AbstractCoreChatSummarizer
-from .constants import DEFAULT_LLM_TIMEOUT_S, DEFAULT_TOOL_TIMEOUT_S
+from .constants import DEFAULT_LLM_READ_IDLE_TIMEOUT_S, DEFAULT_LLM_TIMEOUT_S, DEFAULT_TOOL_TIMEOUT_S
 
 
 def _default_in_memory_stores() -> tuple[RunStore, LedgerStore]:
@@ -183,6 +183,17 @@ def create_local_runtime(
 
     effective_llm_kwargs: Dict[str, Any] = dict(llm_kwargs or {})
     effective_llm_kwargs.setdefault("timeout", float(default_llm_timeout_s))
+    # READ-IDLE BOUND (0152 wedge face 2; core c5051 shipped the base param
+    # runtime confirmed at c5041): the total `timeout` above is the ABSOLUTE
+    # budget (7200s backstop for legitimate long generations); read_idle is
+    # the NO-PROGRESS bound — a stream that produces nothing for this long
+    # aborts at the socket instead of holding a tick worker for the total.
+    # 300s default (loud, CHANGELOG'd): o1-class thinking pauses stay well
+    # under it, a 5-minute silent stream is already pathological. Callers
+    # opt out with read_idle_timeout_s=None in llm_kwargs (core: None =
+    # byte-identical pre-fix behavior); entity lanes pass their own tighter
+    # patience numbers.
+    effective_llm_kwargs.setdefault("read_idle_timeout_s", float(DEFAULT_LLM_READ_IDLE_TIMEOUT_S))
 
     llm_client = MultiLocalAbstractCoreLLMClient(
         provider=provider,

@@ -67,6 +67,28 @@ SLIM_MARKER_VERSION = 1
 # term) are far above it; tool args / flags / small prompts stay inline.
 SLIM_FIELD_THRESHOLD_BYTES = 4096
 
+# Lower gate for the KNOWN conversation-shaped fields. The replay-integrity
+# audit (2026-07-25, code-tui incident) measured a 3,918-byte system prompt —
+# 178B UNDER the general threshold — duplicating on every one of 32 calls in
+# a session. A marker costs ~250B, so deduplicating these named fields is
+# profitable well below 4096; arbitrary fields keep the conservative gate.
+SLIM_CONVERSATION_FIELD_FLOOR_BYTES = 512
+_CONVERSATION_FIELDS = frozenset({"messages", "system_prompt", "prompt"})
+
+
+def _field_threshold(field: Optional[str]) -> int:
+    if field is not None and str(field) in _CONVERSATION_FIELDS:
+        return SLIM_CONVERSATION_FIELD_FLOOR_BYTES
+    return SLIM_FIELD_THRESHOLD_BYTES
+
+
+# Appendix bounds (appendix-aware dedup, 2026-07-25): extras rest VERBATIM
+# inside the marker, so they must stay few and small — the measured case is
+# ONE ~350B system message appended after payload build. The dedup must also
+# stay profitable: total appendix bytes may never exceed half the value.
+SLIM_APPENDIX_MAX_ITEMS = 8
+SLIM_APPENDIX_MAX_ITEM_BYTES = 4096
+
 # Marker kinds:
 # - "started_payload_field": value is byte-identical to
 #   `started.effect.payload[<field>]` of the record named by `step_id`.
@@ -98,7 +120,15 @@ def is_slim_marker(value: Any) -> bool:
     return isinstance(value, dict) and isinstance(value.get(SLIM_MARKER_KEY), dict)
 
 
-def _make_marker(*, kind: str, step_id: str, compact_text: str, field: Optional[str] = None, layout: Optional[List[str]] = None) -> Dict[str, Any]:
+def _make_marker(
+    *,
+    kind: str,
+    step_id: str,
+    compact_text: str,
+    field: Optional[str] = None,
+    layout: Optional[List[str]] = None,
+    appendix: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "v": SLIM_MARKER_VERSION,
         "kind": kind,
@@ -110,7 +140,50 @@ def _make_marker(*, kind: str, step_id: str, compact_text: str, field: Optional[
         body["field"] = str(field)
     if layout is not None:
         body["layout"] = list(layout)
+    if appendix:
+        # Extras carried VERBATIM (positions + items): the reconstruction is
+        # base-from-STARTED with each item inserted at its recorded index.
+        # The sha over the FULL value keeps correctness structural — a bad
+        # appendix can only fail resolution, never fabricate bytes.
+        body["appendix"] = [dict(a) for a in appendix]
     return {SLIM_MARKER_KEY: body}
+
+
+def _subsequence_extras(value: List[Any], base: List[Any]) -> Optional[List[Dict[str, Any]]]:
+    """Match `base` as an ordered subsequence of `value`; return the extras.
+
+    Returns [{"at": <index in value>, "item": <verbatim element>}] for every
+    element of `value` that is not part of the match, or None when `base` is
+    not a subsequence. Elements compare by compact-JSON bytes. Greedy
+    first-match is sufficient: any successful alignment reconstructs to the
+    same byte sequence, and the marker's sha over the full value verifies
+    the reconstruction regardless of which alignment was recorded.
+
+    This is the appendix-aware dedup core (replay-integrity audit,
+    2026-07-25): an adapter appending ONE ~350B message AFTER the payload is
+    built used to defeat byte-identity for the whole ~250KB metadata copy —
+    0-of-59 dedup hits on the incident bundles.
+    """
+    base_compact = [_compact(b) for b in base]
+    if any(c is None for c in base_compact):
+        return None
+    extras: List[Dict[str, Any]] = []
+    bi = 0
+    for vi, item in enumerate(value):
+        item_compact = _compact(item)
+        if item_compact is None:
+            return None
+        if bi < len(base_compact) and item_compact == base_compact[bi]:
+            bi += 1
+            continue
+        if len(extras) >= SLIM_APPENDIX_MAX_ITEMS:
+            return None
+        if len(item_compact.encode("utf-8")) > SLIM_APPENDIX_MAX_ITEM_BYTES:
+            return None
+        extras.append({"at": vi, "item": item})
+    if bi != len(base_compact):
+        return None
+    return extras
 
 
 def capture_started_payload_digests(effect: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -192,7 +265,7 @@ def slim_terminal_effect(
         if expected_sha is None:
             continue
         compact_text = _compact(value)
-        if compact_text is None or len(compact_text.encode("utf-8")) <= SLIM_FIELD_THRESHOLD_BYTES:
+        if compact_text is None or len(compact_text.encode("utf-8")) <= _field_threshold(str(key)):
             continue
         if _sha256(compact_text) != expected_sha:
             # Mutated between the appends: the terminal record is the only
@@ -259,16 +332,41 @@ def _try_dedup_value(
     — an in-place payload mutation during execution otherwise made a marker
     whose sha can never match the STARTED reconstruction, losing the
     result's copy (adversary P1-1, metadata half).
+
+    Appendix-aware (2026-07-25): when exact byte-identity fails but the
+    reference is an ordered SUBSEQUENCE of the value (an adapter inserted a
+    few small messages after the payload was built), the marker carries the
+    extras verbatim with their positions — dedup still drops only the bytes
+    the STARTED record provably holds.
     """
     compact_text = _compact(value)
-    if compact_text is None or len(compact_text.encode("utf-8")) <= SLIM_FIELD_THRESHOLD_BYTES:
+    if compact_text is None or len(compact_text.encode("utf-8")) <= _field_threshold(same_name_field):
         return None
+    value_bytes = len(compact_text.encode("utf-8"))
 
+    def _appendix_ok(extras: List[Dict[str, Any]]) -> bool:
+        if not extras:
+            return True
+        appendix_compact = _compact(extras)
+        if appendix_compact is None:
+            return False
+        # Profitability floor: never mint a marker that mostly re-carries
+        # the value it claims to dedup.
+        return len(appendix_compact.encode("utf-8")) <= value_bytes // 2
+
+    # Match order prefers reconstructions that carry the FEWEST verbatim
+    # bytes in the marker: exact same-name, exact layout, layout+appendix,
+    # same-name+appendix last (a provider list is [system?]+messages+[prompt?]
+    # — the layout kind rebuilds system/prompt from STARTED for free, so the
+    # same-name path must never pre-empt it by carrying them as appendix).
+    same_name_ref: Any = None
     if same_name_field is not None and _payload_field_unchanged(payload, same_name_field, started_digests):
-        ref_text = _compact(payload.get(same_name_field))
+        same_name_ref = payload.get(same_name_field)
+        ref_text = _compact(same_name_ref)
         if ref_text is not None and ref_text == compact_text:
             return _make_marker(kind=_KIND_FIELD, step_id=step_id, compact_text=compact_text, field=same_name_field)
 
+    layout_appendix: Optional[Dict[str, Any]] = None
     if allow_layout and isinstance(value, list):
         for layout in (["system", "messages", "prompt"], ["system", "messages"], ["messages", "prompt"], ["messages"], ["system", "prompt"], ["prompt"]):
             parts_fresh = all(
@@ -283,6 +381,31 @@ def _try_dedup_value(
             rebuilt_text = _compact(rebuilt)
             if rebuilt_text is not None and rebuilt_text == compact_text:
                 return _make_marker(kind=_KIND_LAYOUT, step_id=step_id, compact_text=compact_text, layout=layout)
+            # Exact miss: remember the FIRST (longest-layout) appendix match,
+            # but keep scanning — an exact match on a later layout wins.
+            if layout_appendix is None and rebuilt:
+                extras = _subsequence_extras(value, rebuilt)
+                if extras is not None and extras and _appendix_ok(extras):
+                    layout_appendix = _make_marker(
+                        kind=_KIND_LAYOUT,
+                        step_id=step_id,
+                        compact_text=compact_text,
+                        layout=layout,
+                        appendix=extras,
+                    )
+    if layout_appendix is not None:
+        return layout_appendix
+
+    if same_name_ref is not None and isinstance(value, list) and isinstance(same_name_ref, list) and same_name_ref:
+        extras = _subsequence_extras(value, same_name_ref)
+        if extras is not None and extras and _appendix_ok(extras):
+            return _make_marker(
+                kind=_KIND_FIELD,
+                step_id=step_id,
+                compact_text=compact_text,
+                field=same_name_field,
+                appendix=extras,
+            )
     return None
 
 
@@ -434,6 +557,24 @@ def resolve_slim_value(value: Any, index: Dict[str, Dict[str, Any]]) -> Any:
             return value
     else:
         return value
+
+    appendix = body.get("appendix")
+    if appendix:
+        # Appendix-aware markers: insert the verbatim extras at their
+        # recorded positions (ascending — each `at` is the index in the
+        # FINAL list, so in-order insertion lands every item exactly).
+        if not isinstance(appendix, list) or not isinstance(rebuilt, list):
+            return value
+        merged = [dict(m) if isinstance(m, dict) else m for m in rebuilt]
+        try:
+            for entry in sorted(appendix, key=lambda e: int(e.get("at", -1))):
+                at = int(entry.get("at"))
+                if at < 0 or at > len(merged):
+                    return value
+                merged.insert(at, entry.get("item"))
+        except Exception:
+            return value
+        rebuilt = merged
 
     compact_text = _compact(rebuilt)
     if compact_text is None or _sha256(compact_text) != str(body.get("sha256") or ""):

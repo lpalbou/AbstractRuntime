@@ -3811,6 +3811,7 @@ def build_session_factory(
     max_output_tokens: Optional[int] = None,
     session_prefix: str = "owntime",
     shelf_size: Optional[int] = None,
+    thinking: Optional[str] = None,
     out: Callable[[str], None] = print,
 ) -> Callable[[], ChatSession]:
     """Production factory: one fresh summon (home + LLM + session) per day.
@@ -3828,16 +3829,18 @@ def build_session_factory(
     # is HONORED at the next summon and made VISIBLE, never silent drift.
     _spawn_substrate = (provider, model)
 
-    def _resolve_current_substrate() -> Tuple[str, str]:
+    def _resolve_current_substrate() -> Tuple[str, str, Optional[str]]:
         """Re-resolve the home's substrate at day-open (each fresh summon =
         the visit lane's per-open resolution, applied to the loop). A change
         since spawn heals a loop whose mind went away and honors the
         operator's deliberate choice; the change is logged loudly. Resolution
-        failure falls back to the spawn substrate (never a phase-less day)."""
+        failure falls back to the spawn substrate (never a phase-less day).
+        The reasoning effort re-resolves the same way, so an operator change
+        to the stored dial reaches the next day without a loop restart."""
         try:
             from .substrate import resolve_home_substrate
 
-            cur_p, cur_m = resolve_home_substrate(None, None, home_dir=home_dir)
+            cur_p, cur_m, cur_t = resolve_home_substrate(None, None, home_dir=home_dir)
             cur_p = str(cur_p or "").strip().lower()
             cur_m = str(cur_m or "").strip()
             if (cur_p, cur_m) != _spawn_substrate and cur_p and cur_m:
@@ -3845,13 +3848,18 @@ def build_session_factory(
                     f"(mind re-resolved at day-open: {_spawn_substrate[0]}/{_spawn_substrate[1]} "
                     f"-> {cur_p}/{cur_m} - the operator changed this home's substrate)"
                 )
-            return (cur_p or provider, cur_m or model)
+            if (cur_t or None) != (thinking or None):
+                out(
+                    f"(reasoning effort re-resolved at day-open: {thinking or '(unset)'} "
+                    f"-> {cur_t or '(unset)'})"
+                )
+            return (cur_p or provider, cur_m or model, cur_t)
         except Exception as e:  # noqa: BLE001 - a resolution hiccup never phase-less a day
             out(f"#FALLBACK substrate re-resolution failed ({e}); this day keeps the spawn mind")
-            return (provider, model)
+            return (provider, model, thinking)
 
     def _factory() -> ChatSession:
-        day_provider, day_model = _resolve_current_substrate()
+        day_provider, day_model, day_thinking = _resolve_current_substrate()
         # Record the mind this day runs on so an observer's staleness cue
         # compares the operator's change against what is ACTUALLY in use
         # (entity c78), not just pid_started_at (which a heal/day-open swap
@@ -3939,7 +3947,11 @@ def build_session_factory(
             enable_tools=True,
             enable_workspace=True,
             phase=day_phase,
-            model_info={"provider": day_provider, "model": day_model},
+            thinking=day_thinking,
+            model_info=(
+                {"provider": day_provider, "model": day_model, "thinking": day_thinking}
+                if day_thinking else {"provider": day_provider, "model": day_model}
+            ),
             out=out,
         )
         # The operator overlay may rewrite the own-time contract (loaded at
@@ -3991,6 +4003,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="mind substrate provider (unset: <home>/substrate.yaml, then operator env)")
     parser.add_argument("--model", default=None,
                         help="mind substrate model (unset: <home>/substrate.yaml, then operator env)")
+    parser.add_argument("--thinking", default=None,
+                        help="reasoning effort at loop START only (none/minimal/low/medium/high/xhigh). "
+                             "Each day re-reads <home>/substrate.yaml, and the file outvotes this flag - "
+                             "to change the dial durably, write the thinking field there "
+                             "(the gateway's substrate endpoint does this)")
     parser.add_argument("--base-url", default="http://127.0.0.1:1234/v1")
     parser.add_argument("--embedding-model", default="text-embedding-qwen3-embedding-0.6b")
     parser.add_argument(
@@ -4166,7 +4183,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     try:
-        provider, model = resolve_home_substrate(args.provider, args.model, home_dir=home_dir)
+        provider, model, thinking = resolve_home_substrate(
+            args.provider, args.model, home_dir=home_dir,
+            thinking=getattr(args, "thinking", None),
+        )
     except SubstrateUnset as e:
         print(str(e))
         return 2
@@ -4183,6 +4203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         home_dir,
         provider=provider.strip().lower(),
         model=model,
+        thinking=thinking,
         base_url=args.base_url,
         embedding_model=args.embedding_model,
         embedding_base_url=args.embedding_base_url,
@@ -4199,7 +4220,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # a substrate heal reaches the next night too.
         from .substrate import resolve_home_substrate as _rhs
 
-        n_provider, n_model = _rhs(args.provider, args.model, home_dir=home_dir)
+        # The night narrator runs on the same resolved mind; the reasoning
+        # dial is deliberately NOT applied to the dream voice (its calls
+        # live in the consolidation engine - wiring the dial there is a
+        # separate decision if the operator wants it).
+        n_provider, n_model, _ = _rhs(args.provider, args.model, home_dir=home_dir)
         from abstractcore import create_llm as _cl
 
         kwargs: Dict[str, Any] = {"model": n_model}
@@ -4229,7 +4254,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             from .substrate import resolve_home_substrate
 
-            cur_p, cur_m = resolve_home_substrate(None, None, home_dir=home_dir)
+            # The heal check compares the MIND (provider+model) only: a
+            # changed reasoning dial is not a substrate heal.
+            cur_p, cur_m, _ = resolve_home_substrate(None, None, home_dir=home_dir)
             return (str(cur_p or "").strip().lower(), str(cur_m or "")) != _spawn_pm
         except Exception:
             return False  # a resolution hiccup is not a heal signal

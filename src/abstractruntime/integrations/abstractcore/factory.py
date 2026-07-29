@@ -12,8 +12,11 @@ The caller supplies storage backends (in-memory or file-based).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from ...core.config import RuntimeConfig
 from ...core.policy import RetryPolicy
@@ -217,8 +220,25 @@ def create_local_runtime(
     if extra_effect_handlers:
         handlers.update(dict(extra_effect_handlers))
 
-    # Query model capabilities and merge into config
-    capabilities = llm_client.get_model_capabilities()
+    # Query model capabilities and merge into config. Fresh-install guard
+    # (release gap 1, second site — gateway c5898): with no provider
+    # configured anywhere the pooled client has no default, and this eager
+    # probe raised the configuration error AT CONSTRUCTION — the factory
+    # died before the runtime existed, so the catalog still could not load.
+    # Skip the probe when there is nothing to probe; capabilities resolve
+    # per call once a provider arrives, same as generation.
+    _has_default_pair = bool(
+        (str(provider).strip() if isinstance(provider, str) else "")
+        or (str(model).strip() if isinstance(model, str) else "")
+    )
+    capabilities: Dict[str, Any] = {}
+    if _has_default_pair:
+        capabilities = llm_client.get_model_capabilities()
+    else:
+        logger.warning(
+            "#FALLBACK: no default provider/model - skipping the construction-time "
+            "capability probe; capabilities resolve per call once a provider is chosen"
+        )
     if config is None:
         config = RuntimeConfig(
             provider=str(provider).strip() if isinstance(provider, str) and str(provider).strip() else None,

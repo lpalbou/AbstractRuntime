@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The CLI lanes honor a stored reasoning effort (reasoning plan, CLI
+  half, 2026-07-27)**. `resolve_home_substrate` now returns
+  (provider, model, thinking); the chain for the dial is explicit
+  `--thinking` flag > the home's `substrate.yaml` > unset (absent is a
+  fine answer, never a refusal). The interactive chat CLI and the
+  own-time life loop both gained the flag and thread the value into every
+  model call; the life loop re-reads the file at each day-open so an
+  operator change reaches the next day without a restart (the file
+  outvotes the start flag — the help text says so). Guard rails, each
+  tested: invalid values are dropped with a labeled warning instead of
+  failing every call (validated against core's own parser, zero drift);
+  YAML booleans (`thinking: off` parses as False) map to the words core
+  understands instead of being silently swallowed and inverting the
+  operator's intent; a model client without the thinking parameter turns
+  the dial off for the session with a labeled warning, and the episode
+  stamp stops claiming it. The night narrator and the substrate-heal
+  check deliberately ignore the dial (it is not the mind's identity).
+  Adversary-reviewed; eleven pins across the substrate and chat-driver
+  suites.
 - **`substrate.yaml` gains an optional `thinking` field (reasoning plan R4,
   2026-07-26)**. `read_home_substrate` now returns the reasoning-effort
   field when the file carries one — spelled `thinking` at rest (the plan's
@@ -114,6 +133,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to bare eval.
 
 ### Fixed
+- **Durable visit lane parses identity elections mid-turn (Veya deep check,
+  2026-07-28)**. A well-formed ```realize fence on a real visit formed
+  nothing — no record, no notice, no error — because the visit workflow
+  parsed election fences only at close reflection while the chat lane
+  parses them every turn. The ELECT node now parses feel/interest/lesson/
+  realize/topic fences mid-turn, resolves realization evidence against
+  what the entity saw that turn, stages on durable `_visit.pending_elections`
+  (crash-safe), and the close APPLY merges staged elections into formation;
+  notices are never silent. Speaker attribution is derive-not-claim: a
+  payload label matching no verified participant is stored as
+  `attributes.speaker_label_claimed`, never engraved into digest prose.
+  Pinned: `tests/test_visit_midturn_elections.py` (3) plus the visit
+  resume/A-B fixture bundle.
+- **Fresh installs construct without a provider (release gap 1,
+  2026-07-27)**. A brand-new install has no provider configured anywhere;
+  the pooled LLM client used to crash at construction ("Unknown
+  provider: "), so the shipped workflow catalog could never load and
+  first-run users saw an empty gateway. Now: with provider and model both
+  blank the default client is skipped (loud warning); calls that bring
+  their own provider work immediately; calls with none — and the twelve
+  capability lookups that route through the default client — fail at call
+  time with a message naming exactly what to configure. Second site, same
+  day (gateway's end-to-end run caught it): `create_local_runtime`'s eager
+  capability probe died on that same configuration error one line
+  downstream — the probe is now skipped when the pair is blank (loud log;
+  capabilities resolve per call once a provider arrives), so the factory
+  constructs and the catalog loads. Five pins in
+  `tests/test_fresh_install_no_provider.py`; the gateway's load-time half
+  shipped in their tree the same day.
 - **A failed diary write no longer throws the entity's reply away
   (record-everything ruling, 2026-07-26)**. When the book write failed
   (disk or store error), the turn failed loudly but the whole reply —

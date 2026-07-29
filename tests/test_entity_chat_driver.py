@@ -344,3 +344,41 @@ def test_failed_book_write_rescues_the_reply_in_the_turn_path(castor_home: Path)
     assert "disk full" in saved["error"]
     # The attention context rides along so a repair can restore connections.
     assert "extra" in saved and "as_of_seq" in saved["extra"]
+
+
+def test_session_thinking_rides_every_model_call(castor_home: Path) -> None:
+    """Reasoning wave, CLI half: a session opened with a thinking value
+    passes it to the model client on every call; a session without one
+    calls exactly as before (no new keyword, doubles untouched)."""
+
+    class _KwargLLM:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.calls = []
+
+        def generate(self, *, messages, system_prompt, thinking=None, **kw):
+            self.calls.append({"thinking": thinking})
+            return _FakeResponse(self.replies.pop(0))
+
+    llm = _KwargLLM(["Hello."])
+    s = _session(castor_home, llm, thinking="high")
+    s.turn("hi")
+    assert llm.calls and all(c["thinking"] == "high" for c in llm.calls)
+
+    # Unset dial: the plain double (no thinking kwarg) works untouched.
+    llm2 = _ScriptedLLM(["Hello again."])
+    s2 = _session(castor_home, llm2, session_id="s2")
+    s2.turn("hi again")
+    assert llm2.calls  # no TypeError - the kwarg was never sent
+
+
+def test_client_without_thinking_kwarg_degrades_with_a_warning(castor_home: Path) -> None:
+    """An older client that rejects the thinking keyword turns the dial off
+    for the session with a labeled warning - the conversation continues."""
+    notes: List[str] = []
+    llm = _ScriptedLLM(["Still talking."])  # generate() has no thinking kwarg
+    s = _session(castor_home, llm, thinking="high", out=notes.append)
+    reply, _ = s.turn("hi")
+    assert "Still talking." in reply
+    assert s.thinking is None
+    assert any("#FALLBACK" in n and "thinking" in n for n in notes)

@@ -426,11 +426,101 @@ def build_visit_workflow(
     def elect_node(run: RunState, ctx: Any) -> StepPlan:
         """Fold the wrapper-captured elections (pure node): the book was
         already written at the result boundary; only word-free metadata and
-        the MARKED reply arrive here."""
+        the MARKED reply arrive here.
+
+        Mid-turn identity elections (Veya deep check, 2026-07-27): the
+        contract teaches feel/interest/lesson/realize in every lane, but
+        this lane parsed them only in the CLOSE reflection — a fence
+        written during a turn formed nothing, silently, and its raw text
+        reached the visitor. Now every fence kind is parsed here, staged on
+        the visit (run vars are durable — staging survives crashes on this
+        lane), and the existing close APPLY stages form them. Realization
+        evidence resolves against what she saw THIS turn (this turn's
+        recall plus the session sheet so far), because the close-time sheet
+        is not what she was looking at when she wrote the fence."""
         turn = _ns(run, "_turn")
+        visit = _ns(run, "_visit")
         llm = turn.get("llm") or {}
         marked = clean_model_reply(str(llm.get("content") or ""))
         notices = list(llm.get("act_only_warnings") or [])
+        if marked:
+            sheet_now = [(str(r), str(d)) for r, d in (visit.get("sheet") or [])]
+            sheet_lines = [f"{i}. {d}" for i, (_r, d) in enumerate(sheet_now, start=1)]
+            marked, feelings, f_notes = parse_feel_blocks(marked, sheet_lines)
+            marked, interests, i_notes = parse_interest_blocks(marked)
+            marked, lessons, l_notes = parse_lesson_blocks(marked)
+            marked, realize_elections, r_notes = parse_realize_blocks(marked)
+            marked, topics, t_notes = parse_topic_blocks(marked)
+            notices.extend(f_notes + i_notes + l_notes + r_notes + t_notes)
+
+            pending = visit.setdefault(
+                "pending_elections",
+                {"feelings": [], "interests": [], "lessons": [], "realizations": [], "topics": []},
+            )
+            if feelings:
+                # Resolve targets NOW: numbered targets index the sheet the
+                # entity saw this turn, and those numbers shift as the visit
+                # grows — close-time resolution would point at the wrong
+                # records. "session" targets wait for the close (the summary
+                # record does not exist yet).
+                now_feelings = [f for f in feelings if str(f.target_token).strip().lower() != "session"]
+                later_feelings = [f for f in feelings if str(f.target_token).strip().lower() == "session"]
+                resolved_now, res_notes = resolve_feeling_targets(
+                    now_feelings,
+                    sheet_record_ids=[r for r, _ in sheet_now],
+                    session_record_id=None,
+                    self_id=home.entity_id,
+                )
+                notices.extend(res_notes)
+                pending["feelings"].extend(
+                    {**dataclasses.asdict(f), "record_id": rid} for f, rid in resolved_now
+                )
+                pending.setdefault("session_feelings", []).extend(
+                    dataclasses.asdict(f) for f in later_feelings
+                )
+            if interests:
+                pending["interests"].extend(str(x) for x in interests)
+            if lessons:
+                pending["lessons"].extend(str(x) for x in lessons)
+            if topics:
+                pending["topics"].extend(str(x) for x in topics)
+            if realize_elections:
+                # Evidence space = this turn's recalled records + the sheet
+                # so far (both genuinely in front of her when she wrote).
+                seen_rids = [r for r, _ in sheet_now]
+                for h in list(turn.get("displayed") or []):
+                    rid = str((h or {}).get("record_id") or "")
+                    if rid and rid not in seen_rids:
+                        seen_rids.append(rid)
+                for _re in realize_elections:
+                    gids: List[str] = []
+                    for tok in _re.evidence:
+                        bare = str(tok).strip().lstrip("#")
+                        if not bare:
+                            continue
+                        if ":" in bare:
+                            if bare in seen_rids and bare not in gids:
+                                gids.append(bare)
+                            continue
+                        tails = [r for r in seen_rids if r.endswith(bare)]
+                        if len(tails) == 1 and tails[0] not in gids:
+                            gids.append(tails[0])
+                    if gids:
+                        pending["realizations"].append(
+                            {"text": _re.text, "touches": _re.touches, "gids": gids}
+                        )
+                    else:
+                        notices.append(
+                            "#FALLBACK realization refused (no evidence resolved against "
+                            f'what you saw this turn): "{_re.text[:60]}"'
+                        )
+            staged_count = (
+                len(pending["feelings"]) + len(pending.get("session_feelings") or [])
+                + len(pending["interests"]) + len(pending["lessons"])
+                + len(pending["realizations"]) + len(pending["topics"])
+            )
+            if staged_count and (feelings or interests or lessons or realize_elections or topics):
+                notices.append("[elections noted - they form at visit close]")
         if not marked:
             marked = "…"  # an empty reply still closes the turn honestly
             notices.append("#FALLBACK the model returned no words this turn")
@@ -465,7 +555,21 @@ def build_visit_workflow(
     def form_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
         turn = _ns(run, "_turn")
-        speaker = str(turn.get("speaker") or visit["participants"][0])
+        # Speaker attribution in permanent prose (Veya deep check P2):
+        # payload-claims-dropped held for stamps but not for digest text — a
+        # visitor could engrave any name into the record. The prose label
+        # now derives from the VERIFIED participants; a claimed label that
+        # matches nobody verified is kept as a claim in attributes, never
+        # written as fact.
+        verified = [str(p) for p in (visit.get("participants") or []) if str(p).strip()]
+        claimed = str(turn.get("speaker") or "").strip()
+        speaker_claimed_label: Optional[str] = None
+        if claimed and claimed in verified:
+            speaker = claimed
+        else:
+            speaker = verified[0] if verified else home.entity_id
+            if claimed:
+                speaker_claimed_label = claimed
         title, digest, keywords = mechanical_digest_v2(
             turn["text"], turn["marked_reply"], home.name, speaker=speaker
         )
@@ -486,6 +590,10 @@ def build_visit_workflow(
             # r-rt-3: awake-phase provenance for the origin labels.
             "phase": "visit",
         }
+        if speaker_claimed_label:
+            # The claim is recorded AS a claim (honesty both directions:
+            # not engraved as fact, not silently thrown away).
+            attributes["speaker_label_claimed"] = speaker_claimed_label
         if visit_id:
             attributes["visit_id"] = str(visit_id)  # item-14 correlation key
         if visit.get("model_info"):
@@ -683,12 +791,23 @@ def build_visit_workflow(
             marked, topics, t_notes = parse_topic_blocks(marked)
             marked, diary_elections, d_notes = parse_diary_blocks(marked)
             refl["marked_reply"] = marked
-            refl["feelings"] = [dataclasses.asdict(f) for f in feelings]
-            refl["interests"] = list(interests)
-            refl["lessons"] = list(lessons)
-            refl["topics"] = list(topics)
+            # MERGE the mid-turn staged elections (Veya deep check): turns
+            # parsed and resolved them as they happened; the close stages
+            # form them alongside the reflection's own. Turn-time items go
+            # first (they were elected first).
+            pending = dict(visit.get("pending_elections") or {})
+            refl["feelings"] = (
+                [dict(f) for f in (pending.get("session_feelings") or [])]
+                + [dataclasses.asdict(f) for f in feelings]
+            )
+            refl["pending_resolved_feelings"] = [dict(f) for f in (pending.get("feelings") or [])]
+            refl["interests"] = [str(x) for x in (pending.get("interests") or [])] + list(interests)
+            refl["lessons"] = [str(x) for x in (pending.get("lessons") or [])] + list(lessons)
+            refl["topics"] = [str(x) for x in (pending.get("topics") or [])] + list(topics)
             refl["diary"] = [dataclasses.asdict(e) for e in diary_elections]
-            refl["realizations"] = list(_realizations)
+            refl["realizations"] = (
+                [dict(r) for r in (pending.get("realizations") or [])] + list(_realizations)
+            )
             refl["notices"] = (
                 list(notices) + list(i_notes) + list(l_notes) + list(r_notes)
                 + list(t_notes) + list(d_notes)
@@ -932,9 +1051,21 @@ def build_visit_workflow(
                 session_record_id=str(session_record_id) if session_record_id else None,
                 self_id=home.entity_id,
             )
-            refl["resolved_feelings"] = [
+            # Turn-time feelings were resolved when they were elected (their
+            # numbered targets meant THAT turn's sheet); they apply first.
+            # One session cap across both sources, refused loudly.
+            from .reflection import MAX_FEELINGS_PER_SESSION
+
+            merged = [dict(f) for f in (refl.get("pending_resolved_feelings") or [])] + [
                 {**dataclasses.asdict(f), "record_id": rid} for f, rid in resolved
             ]
+            if len(merged) > MAX_FEELINGS_PER_SESSION:
+                notes = list(notes) + [
+                    f"#FALLBACK {len(merged) - MAX_FEELINGS_PER_SESSION} feeling(s) refused "
+                    f"(cap {MAX_FEELINGS_PER_SESSION}/session across the visit)"
+                ]
+                merged = merged[:MAX_FEELINGS_PER_SESSION]
+            refl["resolved_feelings"] = merged
             refl["notices"] = list(refl.get("notices") or []) + list(notes)
             refl["i"] = 0
         resolved = list(refl.get("resolved_feelings") or [])

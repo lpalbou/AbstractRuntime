@@ -952,6 +952,7 @@ class ChatSession:
         phase: str = "visit",
         web_search_fn: Optional[Callable[[str], str]] = None,
         model_info: Optional[Dict[str, str]] = None,
+        thinking: Optional[str] = None,
         out: Callable[[str], None] = print,
     ) -> None:
         from abstractmemory import ENTITY_CONTEXT_FLOOR, entity_recall_budget
@@ -977,6 +978,11 @@ class ChatSession:
         # this" is a legitimate question for him AND for the operator's
         # observer badge). Stamped into episode attributes.
         self.model_info = {k: str(v) for k, v in (model_info or {}).items() if v}
+        # Reasoning effort for every model call this session (reasoning
+        # plan, 2026-07-26): resolved once at session open (explicit flag >
+        # substrate.yaml > unset), passed per call ONLY when set — an unset
+        # dial keeps the wire and every test double byte-identical.
+        self.thinking = (str(thinking).strip() or None) if thinking else None
         # PER-PHASE TOOL GRANT (maintainer's two-tier ruling, 2026-07-08;
         # defaults re-ruled 2026-07-11 + Q1 c684): the home's
         # tool_policy.yaml is the operator's word on which tools this phase
@@ -1643,10 +1649,29 @@ class ChatSession:
         kwargs: Dict[str, Any] = {}
         if declare_tools and self._native_tool_specs and self._llm_accepts_tools:
             kwargs["tools"] = [dict(s) for s in self._native_tool_specs]
+        if self.thinking:
+            # The session's reasoning effort rides every model call when the
+            # operator (or the home's substrate file) set one. Only when set:
+            # clients and test doubles without the kwarg stay untouched.
+            kwargs["thinking"] = self.thinking
         last_error: Optional[Exception] = None
         for attempt in range(1 + self._HARMONY_RETRIES):
             try:
-                resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+                try:
+                    resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+                except TypeError as te:
+                    # A client predating the thinking kwarg: drop the dial
+                    # for this session with a labeled warning, keep talking.
+                    if "thinking" not in kwargs or "thinking" not in str(te):
+                        raise
+                    kwargs.pop("thinking", None)
+                    self.thinking = None
+                    # The episode stamp must not keep claiming a dial that is
+                    # off (adversary P2: the stamp exists to answer "which
+                    # mind produced this" — after the fallback it would lie).
+                    self.model_info.pop("thinking", None)
+                    self.out("#FALLBACK this model client has no thinking parameter; the reasoning dial is off for this session")
+                    resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
             except Exception as e:  # noqa: BLE001 - only the known race retries
                 if self._HARMONY_HEADER_400 not in str(e):
                     raise
@@ -3256,6 +3281,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # local embedder and lmstudio-class endpoints only) and keeps a default.
     parser.add_argument("--model", default=None,
                         help="mind substrate model (unset: <home>/substrate.yaml, then operator env)")
+    parser.add_argument("--thinking", default=None,
+                        help="reasoning effort for this session (none/minimal/low/medium/high/xhigh; "
+                             "unset: <home>/substrate.yaml thinking field, else the model's own default)")
     parser.add_argument("--base-url", default="http://127.0.0.1:1234/v1", help="LMStudio-compatible endpoint (embeddings; lmstudio-class LLMs)")
     parser.add_argument(
         "--participant", action="append", default=None,
@@ -3338,7 +3366,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     from .substrate import SubstrateUnset, resolve_home_substrate
 
     try:
-        provider, model = resolve_home_substrate(args.provider, args.model, home_dir=home_dir)
+        provider, model, thinking = resolve_home_substrate(
+            args.provider, args.model, home_dir=home_dir,
+            thinking=getattr(args, "thinking", None),
+        )
     except SubstrateUnset as e:
         print(str(e))
         return 2
@@ -3503,7 +3534,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             prelude_budget=args.prelude_budget,
             enable_tools=not args.no_tools,
             enable_workspace=bool(args.workspace),
-            model_info={"provider": provider, "model": model},
+            thinking=thinking,
+            model_info=(
+                {"provider": provider, "model": model, "thinking": thinking}
+                if thinking else {"provider": provider, "model": model}
+            ),
         )
     except BaseException:
         if home is not None:

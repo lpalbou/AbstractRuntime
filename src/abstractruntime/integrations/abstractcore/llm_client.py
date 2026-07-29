@@ -7166,13 +7166,40 @@ class MultiLocalAbstractCoreLLMClient:
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
-        self._default_client = self._get_client(self._default_provider, self._default_model)
+        # Fresh-install guard (release gap 1, gateway c5878, 2026-07-27): a
+        # brand-new install has NO provider configured anywhere. Eagerly
+        # building the default client here crashed the whole runtime at
+        # construction ("Unknown provider: "), so the shipped catalog could
+        # never even load. With both fields blank we skip the eager build;
+        # calls that arrive WITH a provider (payload override, run vars)
+        # work immediately, and calls with none fail at call time with a
+        # message that says what to configure.
+        if self._default_provider or self._default_model:
+            self._default_client = self._get_client(self._default_provider, self._default_model)
+        else:
+            self._default_client = None
+            logger.warning(
+                "#FALLBACK: no default provider/model configured - the runtime serves "
+                "per-call provider choices only; calls without one will ask for configuration"
+            )
 
         # Provide a stable underlying LLM for components that need one (e.g. summarizer).
         self._llm = getattr(self._default_client, "_llm", None)
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._default_provider, self._default_model
+
+    def _require_default_client(self) -> "LocalAbstractCoreLLMClient":
+        """Capability lookups route through the default client; a fresh
+        install has none until the operator chooses. Ask for configuration
+        instead of crashing on None (release gap 1, 2026-07-27)."""
+        client = getattr(self, "_default_client", None)
+        if client is None:
+            raise ValueError(
+                "no provider configured - set one in the request, the workflow, "
+                "or the gateway defaults (a fresh install has none until you choose)"
+            )
+        return client
 
     def _create_client(
         self,
@@ -7270,6 +7297,14 @@ class MultiLocalAbstractCoreLLMClient:
         *,
         llm_kwargs_override: Optional[Dict[str, Any]] = None,
     ) -> LocalAbstractCoreLLMClient:
+        if not str(provider or "").strip():
+            # Fresh-install path: no default was configured and this call
+            # brought no provider of its own. Say what to configure instead
+            # of crashing with core's bare "Unknown provider: ".
+            raise ValueError(
+                "no provider configured - set one in the request, the workflow, "
+                "or the gateway defaults (a fresh install has none until you choose)"
+            )
         key = (provider.strip().lower(), model.strip())
         if llm_kwargs_override:
             base_url = str(llm_kwargs_override.get("base_url") or "").strip()
@@ -7768,10 +7803,10 @@ class MultiLocalAbstractCoreLLMClient:
 
     def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         # Best-effort: use requested model name or the default client model.
-        return self._default_client.get_model_capabilities(model_name=model_name)
+        return self._require_default_client().get_model_capabilities(model_name=model_name)
 
     def lookup_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
-        return self._default_client.lookup_model_capabilities(model_name=model_name)
+        return self._require_default_client().lookup_model_capabilities(model_name=model_name)
 
     def list_providers(
         self,
@@ -7793,7 +7828,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider_name: str,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_provider_models(provider_name, **kwargs)
+        return self._require_default_client().list_provider_models(provider_name, **kwargs)
 
     def list_embedding_models(
         self,
@@ -7804,7 +7839,7 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_embedding_models(
+        return self._require_default_client().list_embedding_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -7822,7 +7857,7 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.get_voice_catalog(
+        return self._require_default_client().get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -7839,7 +7874,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_tts_models(
+        return self._require_default_client().list_tts_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -7854,7 +7889,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_stt_models(
+        return self._require_default_client().list_stt_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
@@ -7869,7 +7904,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_music_providers(
+        return self._require_default_client().list_music_providers(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
@@ -7885,7 +7920,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_music_models(
+        return self._require_default_client().list_music_models(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
@@ -7903,7 +7938,7 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_vision_provider_models(
+        return self._require_default_client().list_vision_provider_models(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
@@ -7921,7 +7956,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_cached_vision_models(
+        return self._require_default_client().list_cached_vision_models(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
@@ -7939,7 +7974,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._default_client.list_vision_adapters(
+        return self._require_default_client().list_vision_adapters(
             model=model,
             task=task,
             base_url=base_url,

@@ -65,7 +65,18 @@ def read_home_substrate(home_dir: Path) -> Dict[str, str]:
         if not (p and m):
             return {}
         out = {"provider": p, "model": m}
-        t = str(data.get("thinking") or "").strip()
+        raw_t = data.get("thinking")
+        # YAML 1.1 gotcha (adversary P1): a hand-written `thinking: off`
+        # (or on/true/false/no/yes) parses as a BOOLEAN, and str(False or "")
+        # would silently swallow it — inverting the operator's intent (they
+        # said "reasoning off"; the model would run its own default). Map
+        # booleans to the words core understands.
+        if raw_t is True:
+            t = "on"
+        elif raw_t is False:
+            t = "off"
+        else:
+            t = str(raw_t or "").strip()
         if t:
             out["thinking"] = t
         return out
@@ -73,20 +84,68 @@ def read_home_substrate(home_dir: Path) -> Dict[str, str]:
         return {}
 
 
+def normalize_thinking_or_drop(value: Optional[str], *, source: str) -> Optional[str]:
+    """Check a reasoning-effort value against core's own vocabulary.
+
+    A bad value stored in a file would otherwise fail EVERY model call in
+    the session (core refuses unknown values loudly). At this edge we drop
+    the bad value with a labeled warning instead — the session runs without
+    the dial, and the warning names what to fix. The check calls core's own
+    parser so the vocabulary can never drift; if that parser is missing
+    (older core), the value passes through and core's own guard decides.
+    """
+    v = (value or "").strip()
+    if not v:
+        return None
+    try:
+        from abstractcore.providers.base import BaseProvider
+
+        checker = getattr(BaseProvider, "_normalize_thinking_request", None)
+        if callable(checker):
+            checker(v)  # raises ValueError on junk
+    except ValueError:
+        print(
+            f"#FALLBACK ignoring invalid thinking value {v!r} from {source} "
+            "(valid: none, minimal, low, medium, high, xhigh, auto, on, off); "
+            "this session runs without the reasoning dial"
+        )
+        return None
+    except Exception:
+        # Core absent or its private parser moved: pass through; core's own
+        # loud guard at the call site stays the final check.
+        pass
+    return v
+
+
 def resolve_home_substrate(
-    provider: Optional[str], model: Optional[str], *, home_dir: Path
-) -> Tuple[str, str]:
+    provider: Optional[str],
+    model: Optional[str],
+    *,
+    home_dir: Path,
+    thinking: Optional[str] = None,
+) -> Tuple[str, str, Optional[str]]:
     """Explicit > substrate.yaml > operator env > SubstrateUnset (loud).
 
     Each field fills independently from successive rungs (the gateway's
     approved semantics); an incomplete pair after all rungs refuses with
-    every fix named — the operator decides, the code never does."""
+    every fix named — the operator decides, the code never does.
+
+    Returns (provider, model, thinking). The third field is the OPTIONAL
+    reasoning effort (reasoning plan, 2026-07-26): explicit argument wins,
+    else the home's stored choice, else None — absent is a fine answer,
+    never a refusal (the dial is optional; the mind is not). There is no
+    env rung for thinking today; adding one is an operator-knob decision
+    to coordinate with the gateway, not a runtime default."""
     p = (provider or "").strip()
     m = (model or "").strip()
-    if not (p and m):
+    t = (thinking or "").strip()
+    stored: Dict[str, str] = {}
+    if not (p and m) or not t:
         stored = read_home_substrate(home_dir)
+    if not (p and m):
         p = p or stored.get("provider", "")
         m = m or stored.get("model", "")
+    t = t or stored.get("thinking", "")
     p = p or (os.getenv(SUBSTRATE_ENV_PROVIDER) or "").strip()
     m = m or (os.getenv(SUBSTRATE_ENV_MODEL) or "").strip()
     if not p or not m:
@@ -97,4 +156,4 @@ def resolve_home_substrate(
             "PUT /api/gateway/entities/{name}/substrate or the UI's mind picker "
             f"writes it); or export {SUBSTRATE_ENV_PROVIDER} + {SUBSTRATE_ENV_MODEL}."
         )
-    return p, m
+    return p, m, normalize_thinking_or_drop(t, source=f"{Path(home_dir) / SUBSTRATE_FILENAME} or flags")

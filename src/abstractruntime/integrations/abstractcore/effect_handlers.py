@@ -21,11 +21,12 @@ import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
+from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
 from ...core.runtime import EffectOutcome, EffectHandler
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
-from .llm_client import AbstractCoreLLMClient
+from .llm_client import AbstractCoreLLMClient, _models_agree
 from .output_specs import (
     is_abstractcore_output_request,
     output_request_has_generated_media,
@@ -304,6 +305,48 @@ def _apply_provider_endpoint_profile_resolution(*, llm: AbstractCoreLLMClient, p
         "api_key_set": bool(isinstance(api_key, str) and api_key.strip()),
     }
     params["_provider_endpoint_profile"] = {k: v for k, v in metadata.items() if v not in ("", None)}
+
+
+def _stamp_declared_route(
+    result: Any,
+    *,
+    declared_provider: Any,
+    declared_model: Any,
+    endpoint_profile: Any = None,
+) -> None:
+    """Put the DECLARED route on the record next to the served one.
+
+    A ledger record used to declare the request (`provider: openai, model:
+    gpt-5.6-sol`) while the response came from a different endpoint entirely, so
+    the observability layer reported the request and not the service. The client
+    stamps `result["route"]` from the constructed provider instance; here we add
+    what the flow asked for and raise `route["mismatch"]` when the two disagree.
+    Best-effort and never fatal: an unstamped result still gets a declared-only
+    route so the record never silently implies a route it cannot vouch for.
+    """
+
+    if not isinstance(result, dict):
+        return
+    declared_p = str(declared_provider or "").strip() or None
+    declared_m = str(declared_model or "").strip() or None
+    route = result.get("route")
+    if not isinstance(route, dict):
+        route = {"source": "declared", "provider": None, "base_url": None, "served_model": result.get("model")}
+        result["route"] = route
+    route["declared_provider"] = declared_p
+    route["declared_model"] = declared_m
+    if isinstance(endpoint_profile, dict):
+        vp = str(endpoint_profile.get("virtual_provider") or "").strip()
+        if vp:
+            route["endpoint_profile"] = vp
+    served = route.get("served_model") or result.get("model")
+    if declared_m and served and not _models_agree(declared_m, served):
+        route["mismatch"] = True
+        route.setdefault(
+            "mismatch_reason",
+            f"declared model {declared_m!r} was served by {str(served)!r}",
+        )
+    route.setdefault("mismatch", False)
 
 
 def _resolved_generate_route_outputs(summary: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -1330,7 +1373,9 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             params["output"] = _augment_output_request_for_runtime(params.get("output"), run=run)
 
         if artifact_store is None and output_request_has_generated_media(params.get("output")):
-            return EffectOutcome.failed("llm_call generated media outputs require an ArtifactStore")
+            return EffectOutcome.failed(
+                "llm_call generated media outputs require an ArtifactStore", retryable=False
+            )
 
         def _nonempty_str(value: Any) -> Optional[str]:
             if not isinstance(value, str):
@@ -1346,12 +1391,27 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         has_media_input = isinstance(media, list) and len(media) > 0
         has_output_request = "output" in params and is_abstractcore_output_request(params.get("output"))
         if not has_prompt and not has_messages and not has_text_input and not (has_media_input and has_output_request):
+            # A PAYLOAD-SHAPE refusal is deterministic: the identical payload
+            # meets the identical refusal on every attempt, so retrying only
+            # multiplies the wait before the caller reads it. Name the node and
+            # the usual cause -- an unset flow input on the run -- because the
+            # caller who hits this is usually a person who left the Run dialog's
+            # prompt field empty, not a flow author.
+            node_hint = str(getattr(run, "current_node", "") or "").strip()
+            where = f" (node {node_hint})" if node_hint else ""
+            fix = (
+                " Supply the flow's prompt input when starting the run "
+                "(input_data.<prompt pin>), or connect/pin it in the flow."
+            )
             if has_media_input or "output" in params:
                 return EffectOutcome.failed(
-                    "llm_call requires payload.prompt, payload.messages, payload.text, or media with payload.output"
+                    f"llm_call{where} requires payload.prompt, payload.messages, payload.text, "
+                    f"or media with payload.output; all were empty.{fix}",
+                    retryable=False,
                 )
             return EffectOutcome.failed(
-                "llm_call requires payload.prompt or payload.messages"
+                f"llm_call{where} requires payload.prompt or payload.messages; both were empty.{fix}",
+                retryable=False,
             )
 
         # Some agent loops (notably ReAct) require a strict "no in-loop truncation" policy for
@@ -2082,6 +2142,17 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 resolved_action = _runtime_resolved_action_from_generate_metadata(meta)
                 if resolved_action is not None:
                     meta["_runtime_resolved_action"] = _jsonable(resolved_action)
+                # The ledger must report the SERVICE, not the request: pair the
+                # declared route with the served one and flag a disagreement.
+                try:
+                    _stamp_declared_route(
+                        result,
+                        declared_provider=provider,
+                        declared_model=model,
+                        endpoint_profile=params.get("_provider_endpoint_profile"),
+                    )
+                except Exception:  # noqa: BLE001 - observability must never fail a call
+                    logger.debug("route disclosure stamping failed", exc_info=True)
 
             # VisualFlow "Use context" UX: when requested, persist the turn into the run's
             # active context (`vars.context.messages`) so subsequent LLM/Agent/Subflow nodes
@@ -2176,6 +2247,30 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     # check precedes the status-code rule because these arrive as 400.
     if _HARMONY_ARTIFACT_RE.search(str(exc or "")):
         return True
+
+    # CONFIGURATION refusals are deterministic. "No default provider/model is
+    # configured" cannot become true between attempts, so retrying it triples
+    # the wait a NEW USER endures before seeing the message that tells them
+    # what to configure. Never retryable.
+    try:
+        from .llm_client import DefaultRouteProviderError, NoDefaultProviderConfigured
+
+        if isinstance(exc, NoDefaultProviderConfigured):
+            return False
+        if isinstance(exc, DefaultRouteProviderError):
+            # A pure attribution wrapper: it adds "and this came from your
+            # config" to somebody else's failure, so it must not change that
+            # failure's retryability. Classify the cause.
+            cause = exc.__cause__
+            return _llm_error_is_retryable(cause) if isinstance(cause, Exception) else True
+    except ImportError:  # pragma: no cover - the module is a hard dependency here
+        pass
+
+    # An unresolvable provider NAME is deterministic for the same reason: the
+    # registry does not gain a provider between attempts. Our own registry text
+    # (`abstractcore/providers/registry.py`), matched conservatively.
+    if str(exc or "").startswith("Unknown provider:"):
+        return False
 
     # Structured prompt-cache failures (2026-07-13 bloc-seam adversary A-2):
     # binding verification errors (missing/mismatch/invalid/bare-string) and
@@ -2400,6 +2495,44 @@ _TOOL_REFINERS: Dict[str, Any] = {
 }
 
 
+def _run_effect_seq(run: "RunState") -> int:
+    """The run's effect-issuance counter (`_runtime.effect_seq`).
+
+    Mirrors `abstractruntime.core.policy._effect_seq`: it advances in the same
+    save that lands a step, so a crash-replay reads the SAME value while a
+    genuine later issuance reads a higher one. That is precisely the
+    unique-but-replay-stable property a tool-approval wait_key needs.
+    """
+    try:
+        rt = run.vars.get("_runtime") if isinstance(getattr(run, "vars", None), dict) else None
+        return int(rt.get("effect_seq", 0)) if isinstance(rt, dict) else 0
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def _effect_idempotency_key_from_tool_calls(tool_calls: Any) -> Optional[str]:
+    """Recover the effect's idempotency key from the runtime-stamped call ids.
+
+    `Runtime._ensure_tool_calls_have_runtime_ids` writes
+    `runtime_call_id = "rtcall_{idempotency_key}_{index}"` onto every TOOL_CALLS
+    entry, so the effect's own at-most-once identity is already on the payload
+    the handler receives -- no new plumbing, and it is the exact identity the
+    runtime uses to decide whether a replay is the same issuance.
+    """
+    prefix = "rtcall_"
+    for tc in tool_calls or []:
+        if not isinstance(tc, dict):
+            continue
+        raw = tc.get("runtime_call_id")
+        text = str(raw).strip() if raw is not None else ""
+        if not text.startswith(prefix) or "_" not in text[len(prefix) :]:
+            continue
+        candidate = text[len(prefix) :].rsplit("_", 1)[0].strip()
+        if candidate:
+            return candidate
+    return None
+
+
 def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
     """Per-run tool-policy consumer (restores the 2026-02-21 feature that
     regressed; two independent confirmations it was consumer-less — the
@@ -2524,7 +2657,7 @@ def make_tool_calls_handler(
         payload = dict(effect.payload or {})
         tool_calls = payload.get("tool_calls")
         if not isinstance(tool_calls, list):
-            return EffectOutcome.failed("tool_calls requires payload.tool_calls (list)")
+            return EffectOutcome.failed("tool_calls requires payload.tool_calls (list)", retryable=False)
         allowed_tools_raw = payload.get("allowed_tools")
         allowlist_enabled = isinstance(allowed_tools_raw, list)
         allowed_tools: Set[str] = set()
@@ -2534,7 +2667,8 @@ def make_tool_calls_handler(
         if tools is None:
             return EffectOutcome.failed(
                 "TOOL_CALLS requires a ToolExecutor; configure Runtime with "
-                "MappingToolExecutor/AbstractCoreToolExecutor/PassthroughToolExecutor."
+                "MappingToolExecutor/AbstractCoreToolExecutor/PassthroughToolExecutor.",
+                retryable=False,
             )
 
         original_call_count = len(tool_calls)
@@ -3587,7 +3721,26 @@ def make_tool_calls_handler(
 
             mode = result.get("mode")
             if mode and mode != "executed":
-                wait_key = payload.get("wait_key") or result.get("wait_key") or f"tool_calls:{run.run_id}:{run.current_node}"
+                # ONE KEY PER APPROVAL INSTANCE. The old fallback was
+                # `tool_calls:{run_id}:{node_id}` -- constant for every
+                # approval round of an agent node (an agent loops on the same
+                # node), so a driver that deduplicates by key answered the
+                # first approval and parked the run forever on the second
+                # (live 2026-07-31, multiagent/bugfix). An explicit
+                # payload/executor key still wins; the derived key is the
+                # default for BOTH the run-policy branch (which supplies none)
+                # and the plain approval branch.
+                wait_key = (
+                    payload.get("wait_key")
+                    or result.get("wait_key")
+                    or build_tool_approval_wait_key(
+                        run_id=run.run_id,
+                        node_id=run.current_node,
+                        effect_idempotency_key=_effect_idempotency_key_from_tool_calls(tool_calls),
+                        effect_seq=_run_effect_seq(run),
+                        tool_calls=host_tool_calls,
+                    )
+                )
                 raw_wait_reason = result.get("wait_reason")
                 wait_reason = WaitReason.EVENT
                 if isinstance(raw_wait_reason, str) and raw_wait_reason.strip():
@@ -4254,12 +4407,12 @@ def make_tool_invoke_handler(
         payload = dict(effect.payload or {})
         name = str(payload.get("name") or "").strip()
         if not name:
-            return EffectOutcome.failed("tool_invoke requires payload.name (the fixed verb)")
+            return EffectOutcome.failed("tool_invoke requires payload.name (the fixed verb)", retryable=False)
         arguments = payload.get("arguments")
         if arguments is None:
             arguments = {}
         if not isinstance(arguments, dict):
-            return EffectOutcome.failed("tool_invoke payload.arguments must be an object")
+            return EffectOutcome.failed("tool_invoke payload.arguments must be an object", retryable=False)
         inner_payload: Dict[str, Any] = {
             "tool_calls": [{"name": name, "arguments": arguments}],
         }

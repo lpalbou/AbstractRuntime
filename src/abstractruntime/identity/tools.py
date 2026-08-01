@@ -68,10 +68,28 @@ WORKSPACE_TOOL_NAMES = ("write_file", "read_file", "list_files")
 # 20mb, actually accept the default of runtime, it's not up to you to
 # decide what size is accepted or not." ACCEPTANCE cap = 20MB (writes +
 # storage). READING PHYSICS is separate and stays honest: read_file
-# returns at most WORKSPACE_READ_SLICE_BYTES per call with an explicit
+# serves at most WORKSPACE_TEXT_READ_CAP_CHARS per call with an explicit
 # #TRUNCATION label (a 20MB file cannot enter a bounded prompt raw).
 WORKSPACE_FILE_CAP_BYTES = 20 * 1024 * 1024  # per file acceptance; loud refusal past it
-WORKSPACE_READ_SLICE_BYTES = 512 * 1024  # per read_file call; labeled truncation
+# THE READ SLICE, resized (operator 2026-08-01: a 5MB screenshot read as
+# text poisoned a live visit — the old 512KiB byte slice decoded the PNG's
+# first half-megabyte with errors="replace" into a 494,932-char tool
+# message that rode session history into every later LLM call until the
+# upstream rejected the whole request over its context window). 512KiB is
+# ~131k tokens at the repo's 4-chars/token heuristic
+# (abstractruntime/memory/token_budget.py) — over 2.6x the ENTIRE
+# recommended working context for entity sessions
+# (abstractmemory.seam.ENTITY_CONTEXT_RECOMMENDED — 50k since the same
+# day's re-ruling; the slice was sized against the then-40k target, where
+# it was 3.3x): a slice that cannot fit the context it feeds was never
+# honest reading physics. New cap: 24,000 CHARS (chars, not bytes — a
+# slice must never split a multibyte character), the SAME number as
+# _EXEC_OUTPUT_CAP below (one bound for the class "one workspace payload
+# entering one turn"), ~6k tokens = 12% of the 50k recommended working
+# context (15% of the 40k it was derived against), and level with the
+# gateway's DEFAULT whole-history session-seeding budget (bundle_host:
+# 24k chars for an entire replayed session, 200k hard ceiling).
+WORKSPACE_TEXT_READ_CAP_CHARS = 24_000
 
 TOOLS_CONTRACT_PARAGRAPH = """You can also use a few tools, read-only, by putting a fenced block in your
 reply (the results come back to you before your reply is delivered):
@@ -211,6 +229,76 @@ def sanitize_tool_surface(text: str, cap: int = 120) -> str:
     if cap and len(t) > cap:
         t = t[:cap] + "…"
     return t
+
+
+# BINARY HONESTY (operator 2026-08-01: a 5MB screenshot read as text
+# poisoned the session — 495k chars of PNG bytes rode every later turn
+# into a context-window rejection). Bytes that are not text must never
+# enter a prompt as text; read_file refuses them with a LABELED, metadata-
+# honest message instead (name, size, detected type, what the entity can
+# still honestly do). The DETECTOR is content-based; the magic table below
+# only supplies the human-readable label once content is already judged
+# binary — so an innocent text file that happens to START with "ID3" or
+# "RIFF" can never be refused by a name-table false positive.
+_BINARY_SNIFF_WINDOW = 8000  # bytes; provenance: git's buffer_is_binary window
+# Invalid-UTF-8 density that reads as binary entropy rather than a text
+# file with a legacy encoding. Measured shape of the two populations:
+# JPEG/zip/encrypted streams decode to ~40-60% replacement points, while
+# latin-1 prose (accented European text mis-saved) sits in single digits —
+# 30% separates them with wide margin in both directions. Below the bar
+# the file is SERVED as text with U+FFFD marks: refusing someone's
+# accented notes over an encoding slip would be the wrong wall.
+_BINARY_REPLACEMENT_RATIO = 0.30
+_BINARY_MAGIC_LABELS: Tuple[Tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "a PNG image"),
+    (b"\xff\xd8\xff", "a JPEG image"),
+    (b"GIF87a", "a GIF image"),
+    (b"GIF89a", "a GIF image"),
+    (b"%PDF-", "a PDF document"),
+    (b"PK\x03\x04", "a ZIP-family archive (zip/docx/xlsx/pptx/jar)"),
+    (b"\x1f\x8b", "a gzip archive"),
+    (b"SQLite format 3\x00", "an SQLite database"),
+    (b"\x7fELF", "an ELF executable"),
+    (b"\xcf\xfa\xed\xfe", "a Mach-O executable"),
+    (b"\xca\xfe\xba\xbe", "a Mach-O universal/Java class binary"),
+    (b"OggS", "an Ogg media container"),
+    (b"fLaC", "a FLAC audio file"),
+    (b"RIFF", "a RIFF media container (wav/avi/webp)"),
+    (b"\xff\xfe", "UTF-16 little-endian text (re-save as UTF-8 to read it here)"),
+    (b"\xfe\xff", "UTF-16 big-endian text (re-save as UTF-8 to read it here)"),
+)
+
+
+def sniff_binary(data: bytes) -> Optional[str]:
+    """Detect non-text content; return an honest type label, or None for text.
+
+    Two content-based rules over the first 8000 bytes (the window git's own
+    buffer_is_binary uses for exactly this judgment):
+    1. any NUL byte -> binary. Every common binary container trips this
+       (PNG chunk lengths, ELF/Mach-O headers, sqlite pages, UTF-16 text);
+       real UTF-8 text never legitimately contains NUL.
+    2. otherwise, strict-UTF-8 decode the window; on failure the density
+       of replacement points decides (see _BINARY_REPLACEMENT_RATIO). A
+       lone truncated multibyte sequence at the window edge yields a
+       near-zero ratio and stays text — no special-casing needed.
+    """
+    window = bytes(data[:_BINARY_SNIFF_WINDOW])
+    if not window:
+        return None
+    is_binary = b"\x00" in window
+    if not is_binary:
+        try:
+            window.decode("utf-8")
+            return None
+        except UnicodeDecodeError:
+            replaced = window.decode("utf-8", errors="replace").count("�")
+            is_binary = (replaced / len(window)) >= _BINARY_REPLACEMENT_RATIO
+    if not is_binary:
+        return None
+    for magic, label in _BINARY_MAGIC_LABELS:
+        if window.startswith(magic):
+            return label
+    return "binary data of an unrecognized format"
 
 
 MOUNTS_FILENAME = "workspace_mounts.json"
@@ -383,18 +471,41 @@ class WorkspaceRoot:
         data = path.read_bytes()
         if len(data) > WORKSPACE_FILE_CAP_BYTES:
             raise ValueError(f"{relative!r} is larger than the {WORKSPACE_FILE_CAP_BYTES}-byte cap")
-        if len(data) > WORKSPACE_READ_SLICE_BYTES:
+        # BINARY HONESTY (operator 2026-08-01, entity ephemeral: read_file on
+        # a 5,104,148-byte attached screenshot returned half a megabyte of
+        # PNG bytes decoded as text; the 494,932-char tool message rode the
+        # durable visit transcript into every subsequent LLM call until the
+        # upstream refused the request over its context window). Binary
+        # content is refused with metadata, never decoded: name, size, and
+        # detected type reach the entity; the noise never does. The pointer
+        # is honest about capability — the walled tool surface
+        # (TOOL_DESCRIPTORS) carries no image- or binary-viewing tool, so
+        # none is named; inventing one would bait a dead call.
+        binary_label = sniff_binary(data)
+        if binary_label is not None:
+            return (
+                f"--- {self._display(relative)} ({len(data)} bytes) ---\n"
+                f"[#BINARY: this file is {binary_label} - binary bytes, not readable "
+                "text. Decoding it as text would fill your working context with noise, "
+                "so none of its bytes were loaded. The file itself is stored intact at "
+                "this path in your workspace. You have no tool that can view images or "
+                "other binary content - if you need what is inside, say so honestly and "
+                "ask the person with you to describe it or provide a text version.]"
+            )
+        text = data.decode("utf-8", errors="replace")
+        if len(text) > WORKSPACE_TEXT_READ_CAP_CHARS:
             # Labeled truncation, never refusal (the ruling changed
             # acceptance; the prompt window did not grow): the head slice
-            # returns with an honest label naming the remainder.
-            head = data[:WORKSPACE_READ_SLICE_BYTES].decode("utf-8", errors="replace")
+            # returns with an honest label naming the remainder. Sliced in
+            # CHARS after decoding so a multibyte character is never split.
+            #[WARNING:TRUNCATION] bounded head slice; the file stays whole on disk
+            head = text[:WORKSPACE_TEXT_READ_CAP_CHARS]
             return (
                 f"--- {self._display(relative)} ({len(data)} bytes; truncated view) ---\n"
                 + head
-                + f"\n\n[#TRUNCATION: showing the first {WORKSPACE_READ_SLICE_BYTES} of "
-                f"{len(data)} bytes - the file is stored whole]"
+                + f"\n\n[#TRUNCATION: showing the first {len(head)} of {len(text)} chars "
+                f"({len(data)} bytes on disk) - the file is stored whole]"
             )
-        text = data.decode("utf-8", errors="replace")
         return f"--- {self._display(relative)} ({len(text)} chars) ---\n{text}"
 
     def _listing(self, base: Any, prefix: str, cap: int = 400) -> List[str]:

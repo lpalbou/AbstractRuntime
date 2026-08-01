@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-_MIN_ABSTRACTCORE_VERSION = (2, 13, 37)
-_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.38"
-
-
 def _version_tuple(value: str) -> tuple[int, int, int]:
     parts: list[int] = []
     for raw in str(value or "").split(".")[:3]:
@@ -22,8 +18,19 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
     return parts[0], parts[1], parts[2]
 
 
+# ONE floor, and it is the one `pyproject.toml` declares. The comparison tuple
+# is DERIVED from the text rather than written beside it: the two had drifted a
+# patch apart, so the guard admitted a version its own message called too old.
+_MIN_ABSTRACTCORE_VERSION_TEXT = "2.13.38"
+_MIN_ABSTRACTCORE_VERSION = _version_tuple(_MIN_ABSTRACTCORE_VERSION_TEXT)
+
+
 try:
     from abstractcore.utils.version import __version__ as _abstractcore_version
+    from abstractcore.config.capability_defaults import (
+        capability_default_reasoning as _capability_default_reasoning,
+        capability_route_keys_for_output,
+    )
     from abstractcore.core.output_specs import (
         is_output_request,
         normalize_output_spec,
@@ -44,6 +51,55 @@ if _version_tuple(_abstractcore_version) < _MIN_ABSTRACTCORE_VERSION:  # pragma:
         f"for the current server-auth, provider-key, generated-media, and capability-catalog contracts; "
         f"found abstractcore {_abstractcore_version}."
     )
+
+
+def capability_default_route_keys_for_spec(
+    spec: Any,
+    *,
+    has_source_image: bool = False,
+) -> tuple[Optional[str], Optional[str]]:
+    """The (exact, broad-fallback) capability-default route keys for an output spec.
+
+    ONE STORE, ONE TABLE. The mapping from the generation-task vocabulary to
+    capability route keys lives in AbstractCore
+    (`config/capability_defaults.py::_OUTPUT_ROUTE_TABLE`) because AbstractCore
+    owns the store those keys address. The Runtime used to keep a second copy of
+    that mapping, and it had drifted: it minted `output.voice.tts`,
+    `input.voice.stt`, `output.music.text_to_music` and `output.sound.text_to_sound`
+    -- keys the store can NEVER hold, because none of those task names are in
+    `CAPABILITY_ROUTE_TASKS`. Every one of them silently fell through to the broad
+    modality key, so the table was correct only by accident, and it had no
+    `scene3d` row at all. This adapter is the single import point.
+    """
+
+    if not isinstance(spec, dict):
+        return None, None
+    return capability_route_keys_for_output(
+        spec.get("modality"),
+        spec.get("task"),
+        has_source_image=has_source_image,
+    )
+
+
+def capability_default_reasoning_for_text(capability_defaults: Any) -> Optional[str]:
+    """The execution host's configured reasoning effort for text generation.
+
+    ONE STORE, ONE DEFINITION. The route keys that carry a reasoning default and
+    their precedence live in AbstractCore
+    (`config/capability_defaults.py::capability_default_reasoning`) because
+    AbstractCore owns the store. This adapter is the single import point, so the
+    Runtime never re-derives the key order.
+
+    Returns ``None`` when no reasoning default is configured, which means "send
+    nothing and let the model behave as it does by default".
+    """
+
+    if not isinstance(capability_defaults, dict):
+        return None
+    try:
+        return _capability_default_reasoning(capability_defaults)
+    except Exception:  # pragma: no cover - a malformed row must not break a call
+        return None
 
 
 def is_abstractcore_output_request(output: Any) -> bool:

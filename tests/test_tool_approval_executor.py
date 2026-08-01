@@ -51,8 +51,18 @@ def test_approval_tool_executor_pauses_dangerous_batch() -> None:
     out = ex.execute(tool_calls=[{"name": "write_file", "arguments": {"file_path": "x", "content": "y"}}])
     assert out.get("mode") == "approval_required"
     assert str(out.get("wait_reason") or "").strip().lower() == "user"
-    assert isinstance(out.get("wait_key"), str) and str(out.get("wait_key") or "").strip()
+    # The executor no longer mints the wait_key. Its old default was a fresh
+    # uuid4 per call -- distinct, but re-randomised on a crash-replay of the
+    # SAME approval. The runtime derives a durable key instead
+    # (build_tool_approval_wait_key), so the executor stays silent by default.
+    assert "wait_key" not in out
     assert delegate.calls == []
+
+    # An explicit factory still owns the key.
+    pinned = ApprovalToolExecutor(
+        delegate=DummyExec(), policy=ToolApprovalPolicy(), wait_key_factory=lambda: "host-owned-key"
+    ).execute(tool_calls=[{"name": "write_file", "arguments": {"file_path": "x", "content": "y"}}])
+    assert pinned.get("wait_key") == "host-owned-key"
 
 
 def test_approval_tool_executor_pauses_unknown_tool() -> None:

@@ -233,7 +233,26 @@ def create_local_runtime(
     )
     capabilities: Dict[str, Any] = {}
     if _has_default_pair:
-        capabilities = llm_client.get_model_capabilities()
+        try:
+            capabilities = llm_client.get_model_capabilities()
+        except Exception as exc:
+            # SAME GUARD AS THE BLANK PAIR, SECOND SHAPE (2026-08-01). "Nothing
+            # configured" stopped being the only fresh install once the
+            # recommended seed began writing a default: a new machine boots
+            # with a provider/model set and those WEIGHTS not downloaded, so
+            # the pair is present and the probe still cannot run. Raising here
+            # killed the factory before the runtime existed -- the catalog
+            # could not load, which is the release gap this guard exists to
+            # prevent, reopened wearing a different error.
+            #
+            # Capabilities are an optimization: they resolve per call anyway.
+            # An unusable default is reported when a call actually needs it,
+            # with the route that configured it and how to fix it.
+            logger.warning(
+                f"#FALLBACK: the configured default {provider}/{model} could not be probed for "
+                f"capabilities at construction ({exc}) - capabilities resolve per call; a call that "
+                "uses this default will report the problem with the route that configured it"
+            )
     else:
         logger.warning(
             "#FALLBACK: no default provider/model - skipping the construction-time "

@@ -54,4 +54,7 @@ def test_llm_call_rejects_request_alias_when_prompt_missing() -> None:
     outcome = handler(run, effect, None)
     assert outcome.status == "failed"
     assert isinstance(outcome.error, str)
-    assert outcome.error == "llm_call requires payload.prompt or payload.messages"
+    # The refusal names the node and the run input that fills it, and is not
+    # retried (2026-08-01): see tests/test_llm_call_payload_shape_refusal.py.
+    assert "requires payload.prompt or payload.messages" in outcome.error
+    assert outcome.retryable is False

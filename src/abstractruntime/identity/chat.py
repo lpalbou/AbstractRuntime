@@ -1038,7 +1038,7 @@ class ChatSession:
         if context_window is None:
             self.out(
                 f"#FALLBACK no --context-window declared; using the {ENTITY_CONTEXT_FLOOR}-token "
-                "floor profile (the floor is the operator's to guarantee)"
+                "recommended-target profile (operator 2026-08-01: a recommendation, not a wall)"
             )
             context_window = int(ENTITY_CONTEXT_FLOOR)
         # shelf_size is DECLARED TUNABLE (seam docstring, round-9 width ruling)
@@ -1049,7 +1049,7 @@ class ChatSession:
         budget_kwargs: Dict[str, Any] = {}
         if shelf_size is not None:
             budget_kwargs["shelf_size"] = int(shelf_size)
-        budget = entity_recall_budget(int(context_window), **budget_kwargs)  # raises below the 20k floor, loudly
+        budget = entity_recall_budget(int(context_window), **budget_kwargs)  # raises only on a non-positive window (soft-recommendation era)
         profile = dataclasses.asdict(budget) if dataclasses.is_dataclass(budget) else dict(budget)
         profile["self_fraction"] = SUMMON_POSTURE_SELF_FRACTION
         self.profile = profile
@@ -3291,11 +3291,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--session-id", default=None)
     parser.add_argument(
-        "--context-window", type=int, default=40960,
-        help="declared context window. Default ~40k (maintainer 2026-07-13: "
-        "'optimize the context of an entity so it can run fast... up to 40k "
-        "tokens roughly - NOT a hardcap'); explicit values win in either "
-        "direction; <20000 refuses loudly (the entity floor)",
+        "--context-window", type=int, default=51200,
+        help="declared context window. Default ~50k (operator 2026-08-01: "
+        "'it is acceptable to go to 200k context, but ideally, let's have a "
+        "(soft) recommended target of 50k tokens'); explicit values win in "
+        "either direction — soft bounds, labeled warnings only, never a "
+        "refusal (only a non-positive window is arithmetic nonsense)",
     )
     parser.add_argument(
         "--shelf-size", type=int, default=36,

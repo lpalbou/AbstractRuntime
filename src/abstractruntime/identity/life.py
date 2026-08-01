@@ -1731,13 +1731,26 @@ def spawn_loop_process(
     # 36 seats (maintainer, 2026-07-09): the 12% token budget still seats 36
     # rich digests — seats fill, tokens hold.
     shelf_size: int = 36,
-    # ~40k DEFAULT (maintainer ruling 2026-07-13 15:20: "we want to optimize
-    # the context of an entity so it can run fast, which means up to 40k
-    # tokens roughly. this is NOT a hardcap, more like an optimization when
-    # possible"). The default is the OPTIMIZATION; an explicit operator
-    # value always wins in either direction (floor 20k refuses loudly —
-    # never a silent cap, per the no-silent-fallback ADR discipline).
-    context_window: int = 40960,
+    # ~50k DEFAULT (operator re-ruling 2026-08-01: "it is acceptable to go
+    # to 200k context, but ideally, let's have a (soft) recommended target
+    # of 50k tokens" — superseding the 2026-07-13 "up to 40k tokens
+    # roughly" figure; the NOT-a-hardcap spirit carries over). 51200 =
+    # 50 × 1024, the same power-of-two convention the old 40960 = 40 × 1024
+    # used, so the default start sits AT the recommendation instead of
+    # warning against itself. An explicit operator value always wins in
+    # either direction (soft warnings only — never a silent cap, per the
+    # no-silent-fallback ADR discipline).
+    context_window: int = 51200,
+    # HOST-RESOLVED ENDPOINT PROFILE (operator 2026-08-01: own time NEVER
+    # started on an endpoint:* substrate — the spawned child has no
+    # ~/.abstractcore profile for a gateway-scoped endpoint, so create_llm
+    # raised "Unknown provider: endpoint:airelay" at day-open while visits,
+    # resolved in-process by the host's ambient resolver, worked fine). The
+    # host passes its PRIVATE resolution here (private_resolution() shape:
+    # provider/provider_family, base_url, api_key, ...); it rides the child
+    # env and becomes the child's ambient resolver (core's 2026-07-26
+    # cross-package channel). May carry secrets — the child never logs it.
+    endpoint_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -1840,6 +1853,13 @@ def spawn_loop_process(
         if own_tree not in abs_parts:
             abs_parts.insert(0, own_tree)
         env["PYTHONPATH"] = os.pathsep.join(abs_parts)
+
+        # The host-resolved endpoint profile rides the child env keyed to the
+        # exact provider spec — main() installs it as the ambient resolver.
+        if endpoint_profile:
+            env["ABSTRACTRUNTIME_ENDPOINT_PROFILE_JSON"] = json.dumps(
+                {"spec": str(provider or "").strip().lower(), "profile": dict(endpoint_profile)}
+            )
 
         log_path = home_dir / LOOP_LOG_FILENAME
         with open(log_path, "ab") as log:
@@ -4015,11 +4035,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="embeddings endpoint (stays local even when the mind runs remote)",
     )
     parser.add_argument(
-        "--context-window", type=int, default=40960,
-        help="declared context window. Default ~40k (maintainer 2026-07-13: "
-        "'optimize the context of an entity so it can run fast... up to 40k "
-        "tokens roughly - NOT a hardcap'); any explicit value wins in either "
-        "direction (the 20k entity floor refuses loudly below it)",
+        "--context-window", type=int, default=51200,
+        help="declared context window. Default ~50k (operator 2026-08-01: "
+        "'it is acceptable to go to 200k context, but ideally, let's have a "
+        "(soft) recommended target of 50k tokens'); any explicit value wins "
+        "in either direction — both bounds are soft, labeled warnings only, "
+        "never a refusal",
     )
     parser.add_argument(
         "--shelf-size", type=int, default=36,
@@ -4137,23 +4158,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"no personal time: {start_refusal}")
         return 3
 
-    # CONTEXT FLOOR at the start door (production drive find, 2026-07-13:
-    # the 20k floor ruling is enforced deep in the summon path, so a small
-    # --context-window crashed the CLI with a raw traceback AFTER the day
-    # phase opened — correct refusal, operator-hostile surface). Check what
-    # we can see up front; version skew (no floor constant) skips the
-    # pre-check and the summon-path enforcement still stands.
+    # CONTEXT RECOMMENDATION at the start door (operator re-ruling
+    # 2026-08-01: 50k recommended target, "acceptable to go to 200k" — and
+    # the first pass's "a recommendation, not a wall — if it needs to grow,
+    # it needs to grow" still governs; supersedes the 20k never-less ruling
+    # this gate enforced hard since the 2026-07-13 production drive find).
+    # The gateway's loop-start door went soft the same day (ge=1 +
+    # #RECOMMENDED warning) — a hard return-2 here would refuse loops the
+    # door just accepted. Warn, never block; version skew (no constant)
+    # skips the note. The two imports degrade INDEPENDENTLY: an older
+    # abstractmemory that has the recommendation but not yet the acceptable
+    # ceiling keeps the below-recommendation note alive.
     try:
         from abstractmemory import ENTITY_CONTEXT_FLOOR
     except ImportError:
         ENTITY_CONTEXT_FLOOR = None
+    try:
+        from abstractmemory import ENTITY_CONTEXT_ACCEPTABLE
+    except ImportError:
+        ENTITY_CONTEXT_ACCEPTABLE = None
     if ENTITY_CONTEXT_FLOOR is not None and int(args.context_window) < int(ENTITY_CONTEXT_FLOOR):
         print(
-            f"context window {args.context_window} is below the entity floor "
-            f"({ENTITY_CONTEXT_FLOOR}): the maintainer ruled summoned-entity sessions "
-            "never run below 20k - raise --context-window."
+            f"#RECOMMENDED context window {args.context_window} is below the recommended "
+            f"working size ({ENTITY_CONTEXT_FLOOR}): the entity runs more efficiently "
+            "around the recommendation — proceeding as configured."
         )
-        return 2
+    if ENTITY_CONTEXT_ACCEPTABLE is not None and int(args.context_window) > int(ENTITY_CONTEXT_ACCEPTABLE):
+        print(
+            f"#RECOMMENDED context window {args.context_window} is above the acceptable "
+            f"ceiling ({ENTITY_CONTEXT_ACCEPTABLE}): 'it is acceptable to go to 200k "
+            "context' — beyond that is guidance, not a wall; growth is never blocked — "
+            "proceeding as configured."
+        )
 
     # Resolve the mind substrate before anything else changes state: flags >
     # <home>/substrate.yaml > operator env > loud refusal (04:26 no-fallback
@@ -4198,6 +4234,37 @@ def main(argv: Optional[List[str]] = None) -> int:
         skipped = fast_forward_loop_commands(home_dir)
         if skipped:
             print(f"(skipped {skipped} stale loop command(s) from before this start)")
+
+    # HOST-RESOLVED ENDPOINT PROFILE (operator 2026-08-01: an endpoint:*
+    # substrate spawned a child that died at day-open with "Unknown
+    # provider: endpoint:airelay" — the profile lives in the HOST's store,
+    # not ~/.abstractcore, and only in-process lanes had the host's ambient
+    # resolver). spawn_loop_process serializes the host's private
+    # resolution into our env; installing it as the ambient resolver here
+    # reuses core's 2026-07-26 cross-package channel unchanged — local
+    # config still wins, the payload is never logged (it may carry an
+    # api_key), and version skew degrades to the old refusal, labeled.
+    import json as _ep_json
+    import os as _ep_os
+
+    _endpoint_resolver_cm = None  # kept referenced for the loop's lifetime
+    _raw_endpoint_profile = _ep_os.environ.get("ABSTRACTRUNTIME_ENDPOINT_PROFILE_JSON", "").strip()
+    if _raw_endpoint_profile:
+        try:
+            _packed = _ep_json.loads(_raw_endpoint_profile)
+            _spec = str(_packed.get("spec") or "").strip().lower()
+            _payload = dict(_packed.get("profile") or {})
+            from abstractcore.providers.endpoint_context import use_provider_endpoint_profile_resolver
+
+            def _spawned_profile_resolver(spec: str, _s: str = _spec, _p: Dict[str, Any] = _payload) -> Optional[Dict[str, Any]]:
+                return dict(_p) if str(spec or "").strip().lower() == _s else None
+
+            _endpoint_resolver_cm = use_provider_endpoint_profile_resolver(_spawned_profile_resolver)
+            _endpoint_resolver_cm.__enter__()  # process-lifetime; exits with the process
+        except ImportError:
+            print("#FALLBACK this core predates the endpoint-profile context - endpoint:* substrates resolve from local config only")
+        except Exception as e:
+            print(f"#FALLBACK spawn-provided endpoint profile unusable ({type(e).__name__}) - resolving from local config only")
 
     factory = build_session_factory(
         home_dir,

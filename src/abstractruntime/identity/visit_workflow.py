@@ -80,6 +80,51 @@ DEFAULT_IDLE_SECONDS = 30 * 60  # a visit left silent this long closes with refl
 DEFAULT_HISTORY_TURNS = 10
 HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
 
+# HISTORY REPLAY DISCIPLINE (operator incident 2026-08-01, this very lane:
+# entity ephemeral ran read_file on a 5MB attached screenshot; the tool
+# result entered the durable react transcript as a 494,932-char role="tool"
+# message and rode EVERY subsequent LLM call — final request 48 messages /
+# 722,453 chars, refused upstream over the model's context window; the
+# session was permanently wedged because context.messages is durable and
+# was replayed whole, unbounded). These caps bound what a single HISTORY
+# message may contribute when RE-SENT: the react adapter's payload hook
+# (abstractagent adapters/react_runtime._sanitize_llm_messages) reads them
+# from `_limits` and elides overages to a labeled stub — durable history is
+# never mutated (ADR-0026 marked, payload boundary only), which is exactly
+# why an already-poisoned STORED session recovers on its next packing pass
+# with no manual surgery.
+#
+# Derivation, from the seam arithmetic (abstractmemory/seam.py; chars<->
+# tokens at the repo's own 4-chars/token heuristic, memory/token_budget.py).
+# SIZED AGAINST THE 40k-ERA RECOMMENDATION and deliberately KEPT at those
+# values when the same day's re-ruling moved the target to 50k
+# (ENTITY_CONTEXT_RECOMMENDED = 50_000 ~= 200_000 chars; operator: "it is
+# acceptable to go to 200k context, but ideally, let's have a (soft)
+# recommended target of 50k tokens") — these are poison guards from the
+# ephemeral incident, not attention sizing; loosening them was no part of
+# the re-ruling, and both still satisfy their governing bounds at 50k:
+# - TOOL RESULTS (the aimed-at class — the poison was a tool message):
+#   32_000 chars = 8k tokens (20% of the 40k target it was derived
+#   against; 16% at 50k). Chosen as the smallest round bound that still
+#   admits every honestly-capped walled tool result WHOLE with framing to
+#   spare (the largest are execute_command output and a read_file text
+#   slice, both 24_000 chars — identity/tools.py), so the clamp never
+#   touches honest work; it exists for the monster class (pre-fix
+#   poisoned transcripts, defective tools). That admit-honest-work-whole
+#   basis is window-independent — the cap stands.
+# - ENTITY PROSE / VISITOR WORDS are never sliced except at the EXTREME
+#   bound, by the seam's own starvation arithmetic (RecallBudget validates
+#   token_fraction <= 0.5: "a recall payload beyond half the context
+#   starves generation — an ARITHMETIC bound, not a fear one"): 80_000
+#   chars was half of the 40k-era 160_000-char working context, and at
+#   the 50k target sits BELOW the 100_000-char half — still on the safe
+#   side of the starvation bound. The largest honest message in the
+#   poisoned session was 28,925 chars (a MEMORIES-decorated visitor
+#   turn) — 2.8x headroom; a message past half the recommended context
+#   is starvation by one voice, whoever speaks it.
+VISIT_HISTORY_TOOL_RESULT_CAP_CHARS = 32_000
+VISIT_HISTORY_MESSAGE_CAP_CHARS = 80_000
+
 
 @dataclasses.dataclass
 class ReactMiddle:
@@ -168,6 +213,14 @@ def build_visit_workflow(
     if budget_profile is None:
         from abstractmemory import ENTITY_CONTEXT_FLOOR, entity_recall_budget
 
+        # Home-direct fallback sized at the RECOMMENDATION itself
+        # (ENTITY_CONTEXT_FLOOR aliases ENTITY_CONTEXT_RECOMMENDED — 50k
+        # since the 2026-08-01 re-ruling), which keeps it consistent with
+        # the door's derivation by construction: the gateway now budgets
+        # from min(window, recommendation), and min(x, rec) == rec for
+        # every window at/above the target — the recommendation sizes
+        # ATTENTION; the window sizes growth. One derivation, two doors,
+        # same number.
         budget = entity_recall_budget(int(ENTITY_CONTEXT_FLOOR))
         budget_profile = (
             dataclasses.asdict(budget) if dataclasses.is_dataclass(budget) else dict(budget)
@@ -356,6 +409,20 @@ def build_visit_workflow(
             ],
         }
         limits.setdefault("max_iterations", int(react_middle.max_iterations))
+        # r-rt-4 (ephemeral 2026-08-01): the entity lane DECLARES its replay
+        # caps here — BRIDGE is the one place that knows this cycle is an
+        # entity visit (the suppress_loop_tail precedent, c2447/c2453). The
+        # adapter's payload hook honors the same `_limits` knobs CodeAct
+        # documents; seeding is soft (a door/operator-configured int wins,
+        # including an explicit <= 0 "unbounded by choice" — the adapter's
+        # shared monster guard still floors every lane at 200k).
+        for _key, _cap in (
+            ("max_tool_message_chars", VISIT_HISTORY_TOOL_RESULT_CAP_CHARS),
+            ("max_message_chars", VISIT_HISTORY_MESSAGE_CAP_CHARS),
+        ):
+            _existing = limits.get(_key)
+            if not isinstance(_existing, int) or isinstance(_existing, bool):
+                limits[_key] = int(_cap)
         # Fresh per-turn adapter state; append the decorated turn message to
         # the durable transcript (the ONE source of truth under the merge).
         if callable(react_middle.reset_turn):

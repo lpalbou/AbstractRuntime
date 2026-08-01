@@ -1030,22 +1030,38 @@ class ApprovalToolExecutor:
     ) -> None:
         self._delegate = delegate
         self._policy = policy or ToolApprovalPolicy()
-        self._wait_key_factory = wait_key_factory or (lambda: f"tool_approval:{uuid.uuid4().hex}")
+        # NO DEFAULT FACTORY. The old default minted `tool_approval:{uuid4}`
+        # per call: distinct, but re-randomised on every crash-replay of the
+        # SAME approval, so the key a host handed out could never be
+        # recomputed. Emitting nothing lets the runtime derive the durable key
+        # (`build_tool_approval_wait_key`: run + node + the effect's own
+        # idempotency identity) for this branch AND for the run-policy branch,
+        # which never supplied one. A host that wants to own the key still
+        # passes an explicit factory and still wins.
+        self._wait_key_factory = wait_key_factory
 
     @property
     def policy(self) -> ToolApprovalPolicy:
         return self._policy
 
+    def _approval_wait(self, calls: List[Dict[str, Any]], details: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "mode": "approval_required",
+            "wait_reason": "user",
+            "tool_calls": _jsonable(calls),
+            "details": details,
+        }
+        factory = self._wait_key_factory
+        if callable(factory):
+            key = factory()
+            if isinstance(key, str) and key.strip():
+                out["wait_key"] = key.strip()
+        return out
+
     def execute(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         calls = list(tool_calls or [])
         if not calls:
-            return {
-                "mode": "approval_required",
-                "wait_reason": "user",
-                "wait_key": self._wait_key_factory(),
-                "tool_calls": _jsonable(calls),
-                "details": {"kind": "tool_approval"},
-            }
+            return self._approval_wait(calls, {"kind": "tool_approval"})
 
         try:
             requires = self._policy.requires_approval(calls)
@@ -1055,13 +1071,7 @@ class ApprovalToolExecutor:
         if not requires:
             return self._delegate.execute(tool_calls=calls)
 
-        return {
-            "mode": "approval_required",
-            "wait_reason": "user",
-            "wait_key": self._wait_key_factory(),
-            "tool_calls": _jsonable(calls),
-            "details": {"kind": "tool_approval", "policy": self._policy.describe()},
-        }
+        return self._approval_wait(calls, {"kind": "tool_approval", "policy": self._policy.describe()})
 
     def execute_approved(self, *, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Execute a previously-approved tool batch, bypassing the approval policy."""

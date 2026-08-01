@@ -18,7 +18,7 @@ We keep the design explicitly modular:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, is_dataclass
+from dataclasses import dataclass, asdict, is_dataclass, replace as dataclasses_replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, List
 import copy
@@ -1151,6 +1151,48 @@ class Runtime:
     def config(self) -> RuntimeConfig:
         """Access the runtime configuration."""
         return self._config
+
+    def set_default_provider_model(
+        self,
+        *,
+        provider: Optional[str],
+        model: Optional[str],
+        model_capabilities: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Re-point the Runtime's DEFAULT provider/model metadata. True if changed.
+
+        `start()` seeds `_runtime.provider|model` (and the tool-support bits)
+        from this config, and every VisualFlow Agent node reads that namespace
+        when its own provider/model is Auto. A host whose operator changed the
+        execution-host default must therefore update BOTH its LLM client and
+        this config -- updating only the client left Agent nodes routing to the
+        previous model while plain llm_call nodes followed the new one, i.e. two
+        different truths inside one host.
+
+        `model_capabilities` travels with the pair on purpose: the tool_support
+        bits are DERIVED from the default model, and carrying stale bits across
+        a model change is the native-vs-prompted-tools misroute that
+        `tool_support_model` exists to make detectable.
+
+        Only the DEFAULT is touched. Runs already started keep the values
+        stamped into their own durable vars, and per-call pins are unaffected.
+        """
+        provider_s = str(provider or "").strip().lower() or None
+        model_s = str(model or "").strip() or None
+        caps = dict(model_capabilities) if isinstance(model_capabilities, dict) else None
+
+        current = self._config
+        if (
+            provider_s == getattr(current, "provider", None)
+            and model_s == getattr(current, "model", None)
+            and (caps is None or caps == (getattr(current, "model_capabilities", None) or {}))
+        ):
+            return False
+        replacements: Dict[str, Any] = {"provider": provider_s, "model": model_s}
+        if caps is not None:
+            replacements["model_capabilities"] = caps
+        self._config = dataclasses_replace(current, **replacements)
+        return True
 
     def start(
         self,

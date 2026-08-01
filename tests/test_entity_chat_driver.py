@@ -151,19 +151,27 @@ class TestSessionStart:
         """The seam declares shelf_size TUNABLE (round-9 width ruling) but no
         summon path exposed it: at the default 12 the posture arithmetic pins
         every turn to 6 self + 3 STM + 3 stimulus (Castor's observed 'only 6
-        memories, ever'). The knob must reach the budget profile."""
+        memories, ever'). The knob must reach the budget profile. The POOL,
+        though, is capped since the operator's 2026-08-01 within-turn audit
+        ("the true pools were 321-463 candidates ... let's make it at most a
+        100") — shelf 24 used to derive 192; seats still widen, the gather
+        does not run past the cap."""
         llm = _ScriptedLLM([])
         s = _session(castor_home, llm, shelf_size=24)
         assert s.profile["shelf_size"] == 24
-        assert s.profile["max_candidates"] == 192  # scales with the shelf (seats × 8)
+        assert s.profile["max_candidates"] == 100  # capped pool (was seats × 8 = 192)
         assert s.profile["self_fraction"] == 0.5  # posture never lowered by widening
         s.home.close()
 
-    def test_below_floor_context_refuses(self, castor_home):
+    def test_below_recommendation_context_accepted(self, castor_home):
+        # SUPERSEDED RULING (operator 2026-08-01: "40k is a recommendation,
+        # not a wall — if it needs to grow, it needs to grow"): the old 20k
+        # hard refusal became soft acceptance; any positive window opens a
+        # session (only window < 1 raises, as arithmetic not policy).
         llm = _ScriptedLLM([])
-        with pytest.raises(Exception) as e:
-            _session(castor_home, llm, context_window=10_000)
-        assert "20" in str(e.value)  # the 20k ruling, loud
+        s = _session(castor_home, llm, context_window=10_000)
+        assert s.profile is not None  # a budget profile exists for the small window
+        s.home.close()
 
     def test_virgin_home_refuses_summon(self, tmp_path):
         import yaml

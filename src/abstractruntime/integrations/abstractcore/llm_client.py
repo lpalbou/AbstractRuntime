@@ -38,6 +38,8 @@ from urllib.parse import quote, urlencode
 
 from .logging import get_logger
 from .output_specs import (
+    capability_default_reasoning_for_text as _capability_default_reasoning_for_text,
+    capability_default_route_keys_for_spec as _capability_default_route_keys_for_spec,
     is_abstractcore_output_request as _is_abstractcore_output_request,
     normalize_output_specs_for_runtime as _normalize_output_specs_for_runtime,
     output_request_has_generated_media as _output_request_has_generated_media,
@@ -56,7 +58,16 @@ _LOCAL_GENERATE_LOCKS_WARNED_LOCK = threading.Lock()
 _LOCAL_IMAGE_SUBPROCESS_LOCK = threading.Lock()
 
 
-def _configured_capability_default_row(row: Any) -> Optional[Dict[str, Any]]:
+def _capability_default_route_target(row: Any) -> Optional[Dict[str, Any]]:
+    """A route row that names somewhere to SEND a call, or `None`.
+
+    This is a narrower question than the grid's `configured` flag, which asks
+    whether an operator has set anything at all on a route and counts the
+    reasoning effort. A row carrying only a reasoning effort is configured and
+    is honoured -- by `_with_capability_default_reasoning`, which reads it
+    directly -- but it names no provider, model, base URL or plugin option, so
+    it contributes nothing to the routing merge and is not a target.
+    """
     if not isinstance(row, dict):
         return None
     if row.get("source") == "not_configured":
@@ -66,40 +77,27 @@ def _configured_capability_default_row(row: Any) -> Optional[Dict[str, Any]]:
     return dict(row)
 
 
-def _output_default_route_keys(spec: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    modality = str(spec.get("modality") or "").strip().lower()
-    task = str(spec.get("task") or "").strip().lower().replace("-", "_")
-    if modality == "image":
-        if task in {"image_edit", "image_to_image", "i2i", "edit_image"}:
-            return "output.image.image_to_image", "output.image"
-        if task in {"image_upscale", "image_upscaling", "upscale", "upscale_image"}:
-            return "output.image.image_upscale", "output.image"
-        if task in {"", "image_generation", "text_to_image", "t2i"}:
-            return "output.image.text_to_image", "output.image"
-    if modality == "video":
-        if task in {"image_to_video", "i2v", "video_from_image", "video_edit"}:
-            return "output.video.image_to_video", "output.video"
-        if task in {"", "video_generation", "text_to_video", "t2v"}:
-            return "output.video.text_to_video", "output.video"
-    # Voice/music/sound joined 2026-07-17 (assistant's finding while tracing
-    # the offline-TTS outage: a bare TTS spec never received the gateway's
-    # configured output.voice route at THIS layer, so abstractcore's facade
-    # resolved from ITS OWN config — two different truths, and the ledgered
-    # spec showed no merge. One resolution layer: the runtime merge is what
-    # the ledger records and what executes; the facade stays the fallback
-    # only when no route is configured.)
-    if modality == "voice":
-        if task in {"stt", "transcribe", "transcription", "speech_to_text", "asr"}:
-            return "input.voice.stt", "input.voice"
-        if task in {"", "tts", "text_to_speech", "speech", "speak"}:
-            return "output.voice.tts", "output.voice"
-    if modality == "music":
-        if task in {"", "music_generation", "text_to_music", "t2m"}:
-            return "output.music.text_to_music", "output.music"
-    if modality == "sound":
-        if task in {"", "sound_generation", "text_to_sound", "sfx", "sound_effect"}:
-            return "output.sound.text_to_sound", "output.sound"
-    return None, None
+def _output_default_route_keys(
+    spec: Dict[str, Any],
+    *,
+    has_source_image: bool = False,
+) -> Tuple[Optional[str], Optional[str]]:
+    """(exact, broad) capability-default route keys for a media output spec.
+
+    Voice/music/sound joined this merge 2026-07-17 (tracing the offline-TTS
+    outage: a bare TTS spec never received the gateway's configured
+    `output.voice` route at THIS layer, so abstractcore's facade resolved from
+    ITS OWN config -- two different truths, and the ledgered spec showed no
+    merge). One resolution layer: the runtime merge is what the ledger records
+    and what executes; the facade stays the fallback only when no route is
+    configured.
+
+    The mapping itself now comes from THE ONE TABLE in AbstractCore -- see
+    `capability_default_route_keys_for_spec`. The copy that used to live here
+    had drifted from core's and minted store-impossible keys.
+    """
+
+    return _capability_default_route_keys_for_spec(spec, has_source_image=has_source_image)
 
 
 def _with_capability_default_route(
@@ -117,9 +115,9 @@ def _with_capability_default_route(
     primary_key, fallback_key = _output_default_route_keys(routed)
     if not primary_key:
         return routed
-    route = _configured_capability_default_row(capability_defaults.get(primary_key))
+    route = _capability_default_route_target(capability_defaults.get(primary_key))
     if route is None and fallback_key:
-        route = _configured_capability_default_row(capability_defaults.get(fallback_key))
+        route = _capability_default_route_target(capability_defaults.get(fallback_key))
     if route is None:
         return routed
     for key in ("provider", "model", "base_url"):
@@ -132,6 +130,40 @@ def _with_capability_default_route(
             if isinstance(key, str) and key.strip() and key not in routed and value is not None:
                 routed[key.strip()] = value
     return routed
+
+
+def _with_capability_default_reasoning(
+    params: Dict[str, Any],
+    capability_defaults: Optional[Dict[str, Dict[str, Any]]],
+) -> Any:
+    """Resolve `thinking` for one call and return the effective value.
+
+    THE REASONING DIAL FOLLOWS THE SAME CASCADE AS PROVIDER/MODEL. AbstractCore
+    stores a reasoning effort on the text-generation capability route; when a
+    call names none, that stored effort is what the execution host applies.
+
+    Precedence, highest first:
+
+      1. EXPLICIT PIN -- any `thinking` the caller set, INCLUDING ``False``.
+         ``False`` means "reasoning off for this call" and is a decision, not an
+         absence, so it outranks the default exactly as a pinned provider does.
+      2. HOST DEFAULT -- the configured reasoning on the text route.
+      3. NOTHING -- `thinking` stays absent and the model behaves as it does
+         without the parameter.
+
+    `params` is mutated in place because it is the per-call kwargs dict that is
+    about to be forwarded to the provider.
+    """
+
+    pinned = params.get("thinking")
+    if pinned is not None and not (isinstance(pinned, str) and not pinned.strip()):
+        return pinned
+    configured = _capability_default_reasoning_for_text(capability_defaults)
+    if configured:
+        params["thinking"] = configured
+        return configured
+    params.pop("thinking", None)
+    return None
 
 
 def _with_output_progress_callback(spec: Dict[str, Any], progress_callback: Optional[Any]) -> Dict[str, Any]:
@@ -350,6 +382,112 @@ def _pop_provider_api_key(values: Dict[str, Any]) -> Optional[str]:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
     return None
+
+
+# Construction kwargs that describe WHERE a provider is reached and WITH WHAT
+# credential. They are bound to the exact provider identity they were configured
+# for and MUST NOT be inherited by a client built for a different provider.
+#
+# Routing defect 2026-07-31 (36-run benchmark wave): the pool's construction
+# kwargs carry the gateway default endpoint profile's base_url + api_key. Every
+# per-call provider override (`lmstudio`, `ollama`, `openai`, ...) inherited them,
+# so `create_llm("lmstudio", base_url="<airelay>/v1", api_key="<airelay key>")`
+# built an LM Studio client that actually talked to the default relay. Pins were
+# silently served by the default endpoint's models — the exact symptom measured.
+_CONNECTION_SCOPED_LLM_KWARGS: Tuple[str, ...] = ("base_url", "api_key", "api_base", "organization", "project")
+
+
+class _Unset:
+    """Sentinel distinguishing "not supplied" from an explicit None."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<unset>"
+
+
+_UNSET = _Unset()
+
+
+def _split_connection_scoped_llm_kwargs(
+    llm_kwargs: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Split construction kwargs into (shared, connection-scoped).
+
+    `shared` are provider-agnostic knobs (enable_tracing, max_traces, timeouts…)
+    that any pooled client may inherit. `connection` names the endpoint and the
+    credential, and only travels with the identity it was configured for.
+    """
+
+    kwargs = dict(llm_kwargs or {})
+    connection: Dict[str, Any] = {}
+    for key in _CONNECTION_SCOPED_LLM_KWARGS:
+        if key in kwargs:
+            value = kwargs.pop(key)
+            if value is not None and str(value).strip() != "":
+                connection[key] = value
+    return kwargs, connection
+
+
+def _models_agree(requested: Any, served: Any) -> bool:
+    """True when a served model id is the requested one.
+
+    Providers legitimately answer with a pinned snapshot of what was asked
+    (`gpt-5.4-mini` -> `gpt-5.4-mini-2026-03-17`) or a namespaced form
+    (`qwen/qwen3.6-27b` -> `qwen3.6-27b`). Those are the SAME model and must not
+    be flagged. A different model id is a routing lie and must be.
+    """
+
+    req = str(requested or "").strip().lower()
+    srv = str(served or "").strip().lower()
+    if not req or not srv:
+        return True
+    if req == srv:
+        return True
+    req_tail = req.rsplit("/", 1)[-1]
+    srv_tail = srv.rsplit("/", 1)[-1]
+    if req_tail == srv_tail:
+        return True
+    return srv_tail.startswith(req_tail) or req_tail.startswith(srv_tail)
+
+
+def _stamp_effective_route(
+    result: Any,
+    *,
+    requested_provider: Any,
+    requested_model: Any,
+    client: Any,
+) -> Any:
+    """Record WHERE the call was actually served, next to what it asked for.
+
+    Observability defect 2026-07-31: a ledger record declared the REQUEST
+    (`provider: openai, model: gpt-5.6-sol`) while the response came from an
+    entirely different endpoint. Reporting the request as if it were the service
+    is what let a silent misroute survive a 36-run benchmark wave. `result.route`
+    is sourced from the constructed provider instance, so it cannot repeat the
+    request back; `route.mismatch` is set when the served model disagrees.
+    """
+
+    if not isinstance(result, dict):
+        return result
+    llm = getattr(client, "_llm", None)
+    effective_provider = str(getattr(llm, "provider", "") or getattr(client, "_provider", "") or "").strip()
+    effective_model = str(getattr(llm, "model", "") or getattr(client, "_model", "") or "").strip()
+    served_model = result.get("model")
+    if not (isinstance(served_model, str) and served_model.strip()):
+        raw = result.get("raw_response")
+        served_model = raw.get("model") if isinstance(raw, dict) else None
+    route: Dict[str, Any] = {
+        "requested_provider": str(requested_provider or "").strip() or None,
+        "requested_model": str(requested_model or "").strip() or None,
+        "provider": effective_provider or None,
+        "model": effective_model or None,
+        "base_url": str(getattr(llm, "base_url", "") or "").strip() or None,
+        "served_model": str(served_model or "").strip() or None,
+    }
+    route["mismatch"] = not _models_agree(route["requested_model"] or route["model"], route["served_model"])
+    result["route"] = route
+    return result
 
 
 def _core_server_root_url(server_base_url: str) -> str:
@@ -5174,6 +5312,145 @@ def _coerce_core_config_file(path: Optional[str | Path]) -> Optional[str]:
     return text or None
 
 
+# THE ROUTE THAT ANSWERS "what model does this host use for text". Named here
+# so the refusal below can say it out loud; AbstractCore canonicalizes it to
+# the storage key `input.text`.
+TEXT_CAPABILITY_ROUTE_KEY = "output.text"
+
+
+class NoDefaultProviderConfigured(ValueError):
+    """No text default is configured and the call named no provider.
+
+    A CONFIGURATION refusal, not a provider failure: it fails identically on
+    every attempt, so `_llm_error_is_retryable` classifies it non-retryable and
+    the message is the whole UX. It names the exact commands that fix it --
+    an error a new user can act on without leaving the terminal.
+    """
+
+
+def no_default_provider_configured_error(
+    *,
+    core_config_file: Optional[str] = None,
+    what: str = "text generation",
+) -> NoDefaultProviderConfigured:
+    """Build the fresh-install refusal, naming every way out of it.
+
+    THE ERROR IS THE UX. A new user meets this before they meet any document,
+    so it states the route by name, the AbstractCore CLI command, the Gateway
+    route, the per-call pin, and the store that was actually consulted.
+    """
+
+    lines = [
+        f"no provider/model is configured for {what} and this call named none.",
+        "Fix it with either entry point:",
+        "  - AbstractCore CLI:  abstractcore config set-default "
+        f"{TEXT_CAPABILITY_ROUTE_KEY} --provider <provider> --model <model>",
+        "  - Gateway:           PUT /api/gateway/config/capability-defaults/output/text "
+        '{"provider": "<provider>", "model": "<model>"}  (console: Capability defaults)',
+        "Or pin this call: provider/model on the node, or "
+        "input_data._runtime.provider / _runtime.model on the run.",
+        "Inspect what is set with: abstractcore config defaults",
+    ]
+    # Name the scoped store ONLY when it exists. A host may hand down a scoped
+    # path that was never created (the AbstractCore manager then resolves its
+    # own store), and printing that path as "the store" would send the operator
+    # to edit a file nobody reads -- a worse dead end than saying nothing.
+    if core_config_file:
+        try:
+            if Path(core_config_file).is_file():
+                lines.append(f"Store consulted: {core_config_file}")
+        except Exception:
+            pass
+    return NoDefaultProviderConfigured("\n".join(lines))
+
+
+class DefaultRouteProviderError(ValueError):
+    """A client for the host's CONFIGURED DEFAULT provider/model failed to build.
+
+    The bare provider error ("Unknown provider: notaprovider") is true and
+    useless: it never says that this provider is not something the caller
+    typed, it is what the OPERATOR configured as the host default, nor where
+    that setting lives. Wrapping it turns a mystery into an edit.
+    """
+
+
+def _missing_weights_hint(provider: str, model: str) -> str:
+    """`abstractcore models download <provider> <artifact>`, when that helps.
+
+    Returns "" unless the weights really are the problem: a provider AbstractCore
+    can fetch for, and a probe that says the model is not on this machine. On a
+    relay provider, or when the weights ARE present (so the failure is something
+    else entirely), a download instruction would be noise pointing the operator
+    away from the real cause.
+
+    Best-effort by construction -- this runs while building an error message,
+    so a probe that is slow, broken or unavailable simply adds no line.
+    """
+
+    try:
+        from .config_facade import (
+            probe_model_presence,
+            recommended_model_downloads,
+            split_model_artifact,
+        )
+
+        # The route stores the SERVED id; the recommendation names the exact
+        # weights, quantization included. Fetching the served id would ask
+        # LM Studio for whatever quant it prefers, which is not what the
+        # execution host was configured with.
+        artifact = model
+        for item in recommended_model_downloads():
+            if str(item.get("provider", "")).strip().lower() == str(provider).strip().lower():
+                candidate = str(item.get("artifact") or "").strip()
+                base, _quant = split_model_artifact(candidate)
+                if base.lower() == str(model).strip().lower():
+                    artifact = candidate
+                    break
+        presence = probe_model_presence(provider, artifact)
+        if presence.get("status") != "absent" or not presence.get("downloadable"):
+            return ""
+        return f"abstractcore models download {provider} {artifact}"
+    except Exception:
+        return ""
+
+
+def default_route_provider_error(
+    exc: Exception,
+    *,
+    provider: str,
+    model: str,
+    core_config_file: Optional[str] = None,
+) -> DefaultRouteProviderError:
+    lines = [
+        str(exc),
+        "",
+        f"This provider/model ({provider}/{model}) is the execution host's configured "
+        f"default for text generation (capability route {TEXT_CAPABILITY_ROUTE_KEY}), "
+        "not a value this call supplied. Change it with:",
+        f"  abstractcore config set-default {TEXT_CAPABILITY_ROUTE_KEY} "
+        "--provider <provider> --model <model>",
+        '  PUT /api/gateway/config/capability-defaults/output/text {"provider": "...", "model": "..."}',
+    ]
+    # CHANGING THE DEFAULT IS THE WRONG ADVICE WHEN THE DEFAULT IS RIGHT. On a
+    # fresh install this pair is the RECOMMENDED default and the only thing
+    # wrong with it is that nobody has fetched the weights yet -- so name the
+    # command that fetches them, and the exact artifact, which is not the
+    # served id whenever a quantization is pinned.
+    download_line = _missing_weights_hint(provider, model)
+    if download_line:
+        lines.append("Or download the weights this default needs:")
+        lines.append(f"  {download_line}")
+    if core_config_file:
+        try:
+            if Path(core_config_file).is_file():
+                lines.append(f"Store: {core_config_file}")
+        except Exception:
+            pass
+    wrapped = DefaultRouteProviderError("\n".join(lines))
+    wrapped.__cause__ = exc
+    return wrapped
+
+
 def _attach_core_execution_context_to_client(
     client: Any,
     *,
@@ -5958,7 +6235,9 @@ class LocalAbstractCoreLLMClient:
             requested_base_url = params.get("base_url")
             requested_provider = params.get("_provider")
             requested_model = params.get("_model")
-            requested_thinking = params.get("thinking")
+            requested_thinking = _with_capability_default_reasoning(
+                params, getattr(self, "_capability_defaults", None)
+            )
 
             # `base_url` is a provider construction concern in local mode. We intentionally
             # do not create new providers per call unless the host explicitly chooses to.
@@ -7153,6 +7432,11 @@ class MultiLocalAbstractCoreLLMClient:
         core_config_file: Optional[str | Path] = None,
         capability_defaults: Optional[Any] = None,
     ):
+        # `_llm_kwargs` stays the single source of truth (hosts and tests read
+        # and even replace it). ROUTING INVARIANT: its connection-scoped half
+        # (base_url/api_key) belongs to the DEFAULT provider identity only, and
+        # `_create_client` re-splits it per construction so a per-call provider
+        # override can never inherit another provider's address or credential.
         self._llm_kwargs = dict(llm_kwargs or {})
         self._default_provider = provider.strip().lower()
         self._default_model = model.strip()
@@ -7175,7 +7459,32 @@ class MultiLocalAbstractCoreLLMClient:
         # work immediately, and calls with none fail at call time with a
         # message that says what to configure.
         if self._default_provider or self._default_model:
-            self._default_client = self._get_client(self._default_provider, self._default_model)
+            try:
+                self._default_client = self._get_client(self._default_provider, self._default_model)
+            except Exception as exc:
+                # SAME GUARD, SECOND SHAPE (2026-08-01). The blank-pair case
+                # above stopped being the fresh install the day the recommended
+                # seed started WRITING a default: a new machine now boots with
+                # `lmstudio/qwen/qwen3.5-9b` configured and those weights not
+                # downloaded yet. Eagerly building that client raised
+                # ModelNotFoundError at construction and the shipped catalog
+                # could never load -- release gap 1 reopened wearing a
+                # different error.
+                #
+                # The eager build is a WARM-UP, never a requirement. A default
+                # that cannot be built yet is deferred to call time, where the
+                # same failure is raised WITH attribution (which route
+                # configured it, how to change it, how to fetch the weights) by
+                # `_get_client`. Nothing is swallowed: a run still fails, and it
+                # fails legibly. What no longer happens is a whole host refusing
+                # to start because one model has not been downloaded.
+                self._default_client = None
+                logger.warning(
+                    f"#FALLBACK: the configured default {self._default_provider}/{self._default_model} "
+                    f"could not be prepared at startup ({exc}) - the runtime still serves per-call "
+                    "provider choices; a call that uses the default will report this with the route "
+                    "that configured it"
+                )
         else:
             self._default_client = None
             logger.warning(
@@ -7189,15 +7498,109 @@ class MultiLocalAbstractCoreLLMClient:
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return self._default_provider, self._default_model
 
+    def set_default_provider_model(
+        self,
+        *,
+        provider: Optional[str],
+        model: Optional[str],
+        llm_kwargs: Optional[Dict[str, Any]] = None,
+        capability_defaults: Optional[Any] = _UNSET,
+    ) -> bool:
+        """Re-point the pool's DEFAULT identity in place. Returns True if it changed.
+
+        A default is a DEFAULT: the execution host resolves it once at
+        construction, but the operator may change it at any moment from the
+        console. Baking it in forever meant a console change was invisible
+        until the host reloaded its bundles (defect 2026-07-31, reproduced
+        live: the run right after a console default change still used the
+        previous provider/model). This is the in-place refresh the host calls
+        when its capability defaults are rewritten.
+
+        Only the DEFAULT identity moves. Per-call provider/model overrides are
+        resolved per call and never touch this, so an app override can never be
+        clobbered by a default change.
+
+        ROUTING INVARIANT (see `_create_client`): connection-scoped kwargs
+        (base_url/api_key/...) belong to the default provider identity ONLY.
+        A new default therefore REPLACES that half wholesale -- inheriting the
+        previous endpoint/credential is exactly the misroute the 2026-07-31
+        isolation fix closed. Pooled clients built under the old default are
+        evicted for the same reason; per-override clients are keyed by their
+        own endpoint+credential and stay valid.
+        """
+
+        provider_s = str(provider or "").strip().lower()
+        model_s = str(model or "").strip()
+
+        if llm_kwargs is None:
+            # Nothing said about the endpoint -> keep the pool exactly as it is
+            # (this is the capability-defaults-only refresh path).
+            next_kwargs: Dict[str, Any] = dict(getattr(self, "_llm_kwargs", None) or {})
+        else:
+            shared_kwargs, _old_connection = _split_connection_scoped_llm_kwargs(getattr(self, "_llm_kwargs", None))
+            new_shared, new_connection = _split_connection_scoped_llm_kwargs(llm_kwargs)
+            # The caller owns the default endpoint (the host's endpoint
+            # profile): its connection half REPLACES the old one, its
+            # provider-agnostic knobs win, and knobs it does not mention
+            # (timeout, read_idle_timeout_s, tracing) are preserved.
+            next_kwargs = dict(shared_kwargs)
+            next_kwargs.update(new_shared)
+            next_kwargs.update(new_connection)
+
+        capability_changed = False
+        if capability_defaults is not _UNSET:
+            normalized_defaults = _normalize_core_capability_defaults(capability_defaults)
+            capability_changed = normalized_defaults != getattr(self, "_capability_defaults", {})
+            if capability_changed:
+                self._capability_defaults = normalized_defaults
+
+        identity_changed = (
+            provider_s != str(getattr(self, "_default_provider", "") or "")
+            or model_s != str(getattr(self, "_default_model", "") or "")
+            or next_kwargs != dict(getattr(self, "_llm_kwargs", None) or {})
+        )
+        if not identity_changed and not capability_changed:
+            return False
+
+        self._llm_kwargs = next_kwargs
+        self._default_provider = provider_s
+        self._default_model = model_s
+        # Evict the shared pool: entries built for the OLD default carry its
+        # connection kwargs, and an entry for the NEW default provider was
+        # built WITHOUT them (it was not the default then). Both are wrong now.
+        # Rebuild is lazy, so this costs one construction per identity in use.
+        self._clients = {}
+        if capability_changed:
+            self._override_clients = {}
+        self._capability_residency_core = None
+        if provider_s or model_s:
+            self._default_client = self._get_client(provider_s, model_s)
+        else:
+            self._default_client = None
+        self._llm = getattr(self._default_client, "_llm", None)
+        return True
+
+    def set_capability_defaults(self, capability_defaults: Optional[Any]) -> bool:
+        """Refresh the non-text capability routes (image/voice/music/...) in place.
+
+        Same reason as `set_default_provider_model`: these routes are the
+        operator's console defaults and must not be frozen at host construction.
+        """
+        return self.set_default_provider_model(
+            provider=getattr(self, "_default_provider", None),
+            model=getattr(self, "_default_model", None),
+            capability_defaults=capability_defaults,
+        )
+
     def _require_default_client(self) -> "LocalAbstractCoreLLMClient":
         """Capability lookups route through the default client; a fresh
         install has none until the operator chooses. Ask for configuration
         instead of crashing on None (release gap 1, 2026-07-27)."""
         client = getattr(self, "_default_client", None)
         if client is None:
-            raise ValueError(
-                "no provider configured - set one in the request, the workflow, "
-                "or the gateway defaults (a fresh install has none until you choose)"
+            raise no_default_provider_configured_error(
+                core_config_file=getattr(self, "_core_config_file", None),
+                what="model capability lookup",
             )
         return client
 
@@ -7209,7 +7612,25 @@ class MultiLocalAbstractCoreLLMClient:
         llm_kwargs_override: Optional[Dict[str, Any]] = None,
     ) -> LocalAbstractCoreLLMClient:
         key = (provider.strip().lower(), model.strip())
-        llm_kwargs = dict(self._llm_kwargs)
+        # ROUTING INVARIANT (defect 2026-07-31): only the DEFAULT provider
+        # inherits the pool's connection-scoped kwargs. A client built for any
+        # other provider starts from the provider-agnostic half and gets its
+        # endpoint/credential from the explicit per-call override, or from that
+        # provider's own configuration inside AbstractCore. Inheriting them was
+        # what made every `lmstudio`/`ollama`/`openai` pin land on the gateway's
+        # default endpoint profile.
+        shared_kwargs, default_connection_kwargs = _split_connection_scoped_llm_kwargs(
+            getattr(self, "_llm_kwargs", None)
+        )
+        llm_kwargs = dict(shared_kwargs)
+        if key[0] == str(getattr(self, "_default_provider", "") or "").strip().lower():
+            llm_kwargs.update(default_connection_kwargs)
+        elif default_connection_kwargs:
+            logger.info(
+                f"provider override {key[0]!r} does not inherit the default provider "
+                f"{str(getattr(self, '_default_provider', '') or '')!r} connection settings "
+                f"({', '.join(sorted(default_connection_kwargs))}); it resolves its own endpoint"
+            )
         if llm_kwargs_override:
             llm_kwargs.update(dict(llm_kwargs_override))
         # POOLED instances serve every run/session of this runtime, so a construction-time
@@ -7301,9 +7722,8 @@ class MultiLocalAbstractCoreLLMClient:
             # Fresh-install path: no default was configured and this call
             # brought no provider of its own. Say what to configure instead
             # of crashing with core's bare "Unknown provider: ".
-            raise ValueError(
-                "no provider configured - set one in the request, the workflow, "
-                "or the gateway defaults (a fresh install has none until you choose)"
+            raise no_default_provider_configured_error(
+                core_config_file=getattr(self, "_core_config_file", None),
             )
         key = (provider.strip().lower(), model.strip())
         if llm_kwargs_override:
@@ -7322,7 +7742,26 @@ class MultiLocalAbstractCoreLLMClient:
             return client
         client = self._clients.get(key)
         if client is None:
-            client = self._create_client(key[0], key[1])
+            try:
+                client = self._create_client(key[0], key[1])
+            except DefaultRouteProviderError:
+                raise
+            except Exception as exc:
+                # ATTRIBUTION. When the pair that failed IS the host default,
+                # the operator did not type it on this call -- they set it in
+                # the config store, possibly weeks ago through the other entry
+                # point. Say so, and say where to change it.
+                if key == (
+                    str(getattr(self, "_default_provider", "") or "").strip().lower(),
+                    str(getattr(self, "_default_model", "") or "").strip(),
+                ):
+                    raise default_route_provider_error(
+                        exc,
+                        provider=key[0],
+                        model=key[1],
+                        core_config_file=getattr(self, "_core_config_file", None),
+                    ) from exc
+                raise
             self._clients[key] = client
         return client
 
@@ -7765,13 +8204,19 @@ class MultiLocalAbstractCoreLLMClient:
             llm_kwargs_override["api_key"] = provider_api_key
 
         client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
-        return client.generate(
+        result = client.generate(
             prompt=prompt,
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
             media=media,
             params=params,
+        )
+        return _stamp_effective_route(
+            result,
+            requested_provider=provider_str,
+            requested_model=model_str,
+            client=client,
         )
 
     def stream_tts(
@@ -11700,7 +12145,9 @@ class RemoteAbstractCoreLLMClient:
         requested_base_url = params.get("base_url")
         requested_provider = params.get("_provider")
         requested_model = params.get("_model")
-        requested_thinking = params.get("thinking")
+        requested_thinking = _with_capability_default_reasoning(
+            params, getattr(self, "_capability_defaults", None)
+        )
         effective_model = self._effective_model_from_params(params)
 
         trace_metadata = params.pop("trace_metadata", None)

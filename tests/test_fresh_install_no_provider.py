@@ -25,15 +25,21 @@ def test_generate_without_any_provider_asks_for_configuration() -> None:
     with pytest.raises(ValueError) as exc:
         client.generate(prompt="hello")
     msg = str(exc.value)
-    assert "no provider configured" in msg
-    assert "gateway defaults" in msg  # the message names where to fix it
+    # THE MESSAGE IS THE UX (2026-08-01): a first-run user must be able to act
+    # on it without leaving the terminal, so it names the route, the
+    # AbstractCore command and the Gateway route. See
+    # tests/test_no_default_provider_refusal_ux.py for the full contract.
+    assert "no provider/model is configured" in msg
+    assert "abstractcore config set-default output.text" in msg
+    assert "/api/gateway/config/capability-defaults/output/text" in msg
 
 
 def test_capability_lookups_ask_for_configuration_not_none_crash() -> None:
     client = MultiLocalAbstractCoreLLMClient(provider="", model="")
     with pytest.raises(ValueError) as exc:
         client.get_model_capabilities()
-    assert "no provider configured" in str(exc.value)
+    assert "no provider/model is configured" in str(exc.value)
+    assert "abstractcore config set-default output.text" in str(exc.value)
 
 
 def test_configured_construction_still_builds_eagerly(monkeypatch: pytest.MonkeyPatch) -> None:

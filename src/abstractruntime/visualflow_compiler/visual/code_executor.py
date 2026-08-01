@@ -296,10 +296,91 @@ def _sandbox_to_json(obj: Any, *, indent: Any = None) -> str:
     return json.dumps(obj, default=str, indent=indent if isinstance(indent, int) else None)
 
 
+def _sandbox_shq(value: Any) -> str:
+    """``shq(value)`` — POSIX single-quote escape for shell composition.
+
+    A flow that composes a command for ``execute_command`` must quote every
+    interpolated value: ``"cd '" + shq(path) + "'"``. The escape itself is
+    three characters of ``str.replace`` and needs no imports, so this is NOT
+    the ``parse_json`` case (impossible inside the sandbox). It is promoted
+    for a different and stronger reason: the runtime ships the dangerous
+    primitive (``execute_command``), so it owes callers the safe quoting
+    primitive next to it. Hand-rolled per flow, the escape gets copied — it
+    was inlined NINE times in one bundle before it was factored — and ONE
+    divergent copy is a command injection on a path containing a quote.
+
+    Semantics, deliberately: ``None`` becomes ``""``, but a falsy NON-None
+    value keeps its text (``shq(0)`` is ``"0"``; ``s or ""`` would erase it).
+    Total — never raises, so a composer cannot fail its step on odd input.
+    """
+    text = "" if value is None else str(value)
+    return text.replace("'", "'\\''")
+
+
+# Depth cap for text_of's fold. Envelopes nest 2-3 levels; the cap only makes
+# the walk TOTAL on a pathological (or cyclic-by-reference) payload so it can
+# never spin the tick thread.
+_TEXT_OF_MAX_STEPS = 400
+
+
+def _sandbox_text_of(raw: Any) -> str:
+    """``text_of(envelope)`` — the text inside any tool-result envelope.
+
+    Promoted because the shapes it decodes are the RUNTIME'S OWN, not any
+    flow's, and they have changed under flows before:
+
+    - the direct lane delivers a bare output dict (``{stdout, stderr, ...}``)
+    - older tools return a plain string
+    - durable compaction leaves only the ``*_preview`` keys
+    - the approval-resume lane nests ``{mode, results: [...]}``
+
+    A flow-local reader written against three of those four silently drops
+    text the day the fourth appears — which is exactly how this function grew
+    its shapes. Knowledge of an envelope belongs to whoever defines it. Same
+    architecture as the runtime-owned ``stringify_json`` /
+    ``render_agent_trace_markdown`` the visual layer already delegates to.
+
+    Total by construction: never raises, returns ``""`` when there is no text.
+    NOT overridable — ``function_library`` refuses a flow function that shadows
+    a helper name, so a bundle cannot silently re-fork this reader; that
+    refusal is deliberate (a second copy is how the shapes drifted apart in the
+    first place) and it fails LOUDLY at flow build, naming the collision.
+    """
+    parts: list[str] = []
+    stack: list[Any] = [raw]
+    steps = 0
+    while stack and steps < _TEXT_OF_MAX_STEPS:
+        steps += 1
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if cur:
+                parts.append(cur)
+            continue
+        if isinstance(cur, dict):
+            for key in ("stdout", "stderr", "stdout_preview", "stderr_preview"):
+                value = cur.get(key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+            for key in ("output", "result", "results", "payload"):
+                if key in cur:
+                    stack.append(cur.get(key))
+            continue
+        if isinstance(cur, list):
+            for item in cur:
+                stack.append(item)
+    return "\n".join(parts)
+
+
 def sandbox_helper_globals() -> Dict[str, Any]:
     """The convenience names granted to BOTH code-node bodies and pin
     expressions — one source so the two sandboxes can never drift (the
     four-copy-contract lesson applied preemptively).
+
+    NOTE on precedence (unchanged, stated so the next reader does not have to
+    rediscover it): a name here wins over a same-named helper defined INSIDE a
+    code-node body, because ``_create_restricted_handler`` only copies a local
+    definition into the execution globals ``if name not in restricted_globals``.
+    Keep additions here rare, generic, and unlikely to collide.
     """
     return {
         "len": len,
@@ -327,6 +408,8 @@ def sandbox_helper_globals() -> Dict[str, Any]:
         "type": type,
         "parse_json": _sandbox_parse_json,
         "to_json": _sandbox_to_json,
+        "shq": _sandbox_shq,
+        "text_of": _sandbox_text_of,
         "print": lambda *args, **kwargs: None,  # Silent print
     }
 

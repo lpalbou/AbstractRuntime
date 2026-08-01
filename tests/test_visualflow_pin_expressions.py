@@ -11,10 +11,13 @@ Each test pins one clause of the design contract:
 - `vars` is read-only and unknown names raise helpfully
 - the skew-safe encoding: an ABSENT expression leaves the pin on its default
   (the old-compiler degrade is bounded-by-falsy, never truthy-dict spin)
-- parse_json/to_json exist in BOTH the expression env and code-node bodies
+- parse_json/to_json/shq/text_of exist in BOTH the expression env and
+  code-node bodies (one `sandbox_helper_globals` source, two sandboxes)
 """
 
 from __future__ import annotations
+
+import subprocess
 
 import pytest
 
@@ -22,6 +25,10 @@ from abstractruntime import Runtime
 from abstractruntime.core.models import RunStatus
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 from abstractruntime.visualflow_compiler import compile_visualflow
+from abstractruntime.visualflow_compiler.visual.code_executor import (
+    _sandbox_shq,
+    _sandbox_text_of,
+)
 from abstractruntime.visualflow_compiler.visual.pin_expressions import (
     PinExpressionError,
     compile_pin_expression,
@@ -376,6 +383,122 @@ def test_parse_json_available_in_expressions_and_code_nodes() -> None:
     assert state.status == RunStatus.COMPLETED
     assert state.output.get("ok") is True
     assert state.output.get("roundtrip") == '{"x": 1}'
+
+
+# --- shq / text_of: the same one-source contract as parse_json/to_json ------
+
+
+def test_shq_escapes_for_single_quoted_shell_context() -> None:
+    # THE point of the helper: a value carrying an apostrophe must not be able
+    # to break out of the '...' it is interpolated into. The POSIX idiom is to
+    # close the quote, emit an escaped quote, reopen: ' -> '\''.
+    assert _sandbox_shq("plain") == "plain"
+    assert _sandbox_shq("it's") == "it'\\''s"
+    assert _sandbox_shq("/tmp/a'; rm -rf /; echo '") == "/tmp/a'\\''; rm -rf /; echo '\\''"
+    # Reassembled, the escaped text is ONE shell word again — proven by asking
+    # a real shell to echo it back unchanged.
+    for raw in ("it's", "a b", "$HOME", "`id`", '"q"', "back\\slash", "'"):
+        out = subprocess.run(
+            ["/bin/sh", "-c", "printf %s '" + _sandbox_shq(raw) + "'"],
+            capture_output=True, text=True, check=True,
+        )
+        assert out.stdout == raw, f"shq round-trip failed for {raw!r}"
+
+
+def test_shq_none_is_empty_but_falsy_values_keep_their_text() -> None:
+    # `s or ""` would erase a legitimate 0/False; only None becomes "".
+    assert _sandbox_shq(None) == ""
+    assert _sandbox_shq(0) == "0"
+    assert _sandbox_shq(False) == "False"
+    assert _sandbox_shq("") == ""
+
+
+def test_text_of_reads_every_tool_envelope_shape() -> None:
+    # The four shapes the runtime actually produces (see _sandbox_text_of).
+    assert _sandbox_text_of("bare string") == "bare string"
+    assert _sandbox_text_of({"stdout": "out", "stderr": "err"}) == "out\nerr"
+    # durable compaction leaves only the previews
+    assert _sandbox_text_of({"stdout_preview": "head..."}) == "head..."
+    # direct lane: output nested one level
+    assert _sandbox_text_of({"output": {"stdout": "deep"}}) == "deep"
+    # approval-resume lane: {mode, results:[...]}
+    assert _sandbox_text_of(
+        {"mode": "resumed", "results": [{"output": {"stdout": "a"}}, {"output": {"stdout": "b"}}]}
+    ).split("\n") == ["b", "a"]
+    # total on junk / empties — never raises, never invents text
+    assert _sandbox_text_of(None) == ""
+    assert _sandbox_text_of(42) == ""
+    assert _sandbox_text_of({}) == ""
+
+
+def test_text_of_terminates_on_a_self_referential_envelope() -> None:
+    # The step cap is what makes the fold TOTAL: a payload that references
+    # itself must not spin the tick thread.
+    loop: dict = {"stdout": "x"}
+    loop["output"] = loop
+    assert _sandbox_text_of(loop).startswith("x")
+
+
+def test_shq_and_text_of_available_in_expressions_and_code_nodes() -> None:
+    # The one-source property, pinned exactly like parse_json/to_json above:
+    # a helper added to sandbox_helper_globals reaches BOTH sandboxes.
+    flow = {
+        "id": "fx-shell",
+        "name": "fx-shell",
+        "entryNode": "start",
+        "nodes": [
+            {
+                "id": "start",
+                "type": "on_flow_start",
+                "data": {"inputs": [], "outputs": [{"id": "exec-out", "label": "", "type": "execution"}]},
+            },
+            {
+                "id": "compose",
+                "type": "code",
+                "data": {
+                    "label": "compose",
+                    "inputs": [
+                        {"id": "exec-in", "label": "", "type": "execution"},
+                        {"id": "path", "label": "path", "type": "string"},
+                    ],
+                    "outputs": [
+                        {"id": "exec-out", "label": "", "type": "execution"},
+                        {"id": "command", "label": "command", "type": "string"},
+                    ],
+                    # A code-node body calling the helper — the lane that made
+                    # shell composers unbuildable as code nodes before.
+                    "code": (
+                        "def transform(_input):\n"
+                        "    return {\"command\": \"cd '\" + shq(_input.get(\"path\")) + \"'\"}\n"
+                    ),
+                    "pinDefaults": {"path": "/tmp/it's here"},
+                },
+            },
+            {
+                "id": "end",
+                "type": "on_flow_end",
+                "data": {
+                    "label": "End",
+                    "inputs": [
+                        {"id": "exec-in", "label": "", "type": "execution"},
+                        {"id": "command", "label": "command", "type": "string"},
+                        {"id": "extracted", "label": "extracted", "type": "string"},
+                    ],
+                    "outputs": [],
+                    "pinExpressions": {"extracted": "text_of(vars.envelope)"},
+                },
+            },
+        ],
+        "edges": [
+            {"id": "e1", "source": "start", "target": "compose", "sourceHandle": "exec-out", "targetHandle": "exec-in"},
+            {"id": "e2", "source": "compose", "target": "end", "sourceHandle": "exec-out", "targetHandle": "exec-in"},
+            {"id": "e3", "source": "compose", "target": "end", "sourceHandle": "command", "targetHandle": "command"},
+        ],
+    }
+    state = _run(flow, vars={"envelope": {"results": [{"output": {"stdout": "MERGED_OK"}}]}})
+    assert state.status == RunStatus.COMPLETED
+    assert state.output.get("command") == "cd '/tmp/it'\\''s here'"
+    assert state.output.get("extracted") == "MERGED_OK"
 
 
 def test_expression_on_pure_node_applies_in_the_pure_resolution_lane() -> None:

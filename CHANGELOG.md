@@ -8,6 +8,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The execution host's configured reasoning effort reaches the call (2026-08-01).**
+  When a call names no `thinking`, the LLM client applies the effort configured on
+  AbstractCore's text-generation capability route. An explicit `thinking` wins,
+  `thinking=False` included, and an absent effort sends no reasoning parameter at
+  all. The route keys come from AbstractCore through
+  `integrations/abstractcore/output_specs.py::capability_default_reasoning_for_text`,
+  so the Runtime keeps no second copy of that mapping. A value the caller actually
+  wrote is always a pin, falsy ones included; only `None` and whitespace mean the
+  call named nothing.
+- **`config_facade.read_email_settings()` and `read_maintenance_settings()`
+  (2026-08-01).** Hosts can read AbstractCore's stored mail connection and
+  maintenance-triage LLM settings through the Runtime facade instead of keeping a
+  second copy. Neither returns a secret: the `email` section names the environment
+  variable a password is read from, and the `maintenance` section carries none.
+
+### Fixed
+- **Every tool approval gets its own durable `wait_key` (2026-08-01)**. The
+  `TOOL_CALLS` wait fell back to `tool_calls:{run_id}:{node_id}` — a CONSTANT
+  key for every approval round of an agent node, because an agent loops on the
+  same node. Any approver that deduplicates by key (a sane idempotency
+  measure: AbstractFlow's `multiagent_coding_run.mjs`, the benchmark driver,
+  and the flow editor's approval panel all do it) answered approval #1 and
+  then parked the run forever on #2. Live-reproduced on multiagent/bugfix and
+  across the 36-run benchmark wave. The other branch —
+  `ApprovalToolExecutor`'s default `tool_approval:{uuid4}` factory — was
+  distinct but re-randomised on every crash-replay, so a key a host had handed
+  out could never be recomputed. Both are replaced by
+  `core/event_keys.py::build_tool_approval_wait_key`:
+  `tool_approval:{run_id}:{node_id}:{effect_identity}`, where the identity is
+  the effect's OWN idempotency key (run + node + normalized payload + the
+  run's effect-issuance counter). That makes it unique per approval instance —
+  including two byte-identical batches at the same node — and identical across
+  a crash-replay of the same instance, by construction. `ApprovalToolExecutor`
+  no longer mints a key by default (an explicit `wait_key_factory` still
+  wins), and an effect `payload.wait_key` still wins over everything.
+  BACKWARD COMPATIBLE: the key lives in the persisted `WaitState` and `resume`
+  validates against THAT, never a recomputation, so a run already parked on an
+  old-style key stays approvable. No re-run required.
+- **A host can re-point its default provider/model without restarting
+  (2026-08-01)**. The execution-host default was resolved once at construction
+  and frozen in two places: the pooled LLM client AND `RuntimeConfig` (which
+  `start()` seeds into `_runtime.provider|model`, the namespace every Auto
+  Agent node reads). An operator changing the default in the console saw no
+  effect until the process restarted. Two new setters —
+  `MultiLocalAbstractCoreLLMClient.set_default_provider_model()` /
+  `.set_capability_defaults()` and `Runtime.set_default_provider_model()` —
+  let a host move BOTH truths together; moving only one had agent nodes and
+  llm_call nodes disagreeing inside a single host. The pool's refresh honours
+  the routing invariant: connection-scoped kwargs (`base_url`/`api_key`/...)
+  are REPLACED, never inherited by the new default, and clients pooled under
+  the old default are evicted. Only the DEFAULT moves — per-call pins and
+  already-started runs are untouched.
+- **A per-call provider pin reaches the provider it names (2026-07-31)**.
+  `MultiLocalAbstractCoreLLMClient` handed its construction kwargs to EVERY
+  client it pooled. Those kwargs carry the host's default endpoint `base_url`
+  and `api_key`, so a run pinning `lmstudio` built
+  `create_llm("lmstudio", base_url="<default relay>/v1", api_key="<relay key>")`
+  — an LM Studio client aimed at the relay. Every `lmstudio` / `ollama` /
+  `openai` pin was silently served by the default endpoint instead; a live
+  36-run benchmark wave measured it across four bundles and the ledger showed
+  nothing, because the record declared the REQUEST. Connection-scoped kwargs
+  (`base_url`, `api_key`, `api_base`, `organization`, `project`) now travel
+  only with the identity they were configured for: the default provider keeps
+  them, any other provider starts from the provider-agnostic half and resolves
+  its own endpoint, and an explicit per-call override still wins. Discovering
+  a local provider and being unable to route to it was the same bug.
+- **An LLM result discloses the endpoint that actually served it
+  (2026-07-31)**. Results now carry `route` — `provider`, `model`, `base_url`
+  read off the CONSTRUCTED provider instance, plus `served_model`,
+  `declared_provider`/`declared_model` and a `mismatch` flag. A ledger record
+  can no longer report a route it did not take. Model agreement tolerates
+  provider snapshots (`gpt-5.4-mini` -> `gpt-5.4-mini-2026-03-17`) and
+  namespacing (`qwen/qwen3.6-27b` -> `qwen3.6-27b`) so the flag names
+  substitutions, not naming conventions.
+
+### Added
+- **`shq` and `text_of` join the shared sandbox helpers (2026-07-30)**.
+  `sandbox_helper_globals()` — the ONE source merged into both the Code-node
+  sandbox and the pin-expression environment, alongside `parse_json` /
+  `to_json` — gains two names, for two reasons that are not the same reason.
+  `shq(value)` is a POSIX single-quote escape (`' -> '\''`, `None -> ""`,
+  falsy non-None keeps its text): the runtime ships `execute_command`, so it
+  owes callers the safe quoting primitive next to the dangerous one — hand
+  rolled per flow, the escape gets copied (nine inline copies in one bundle
+  before it was factored) and ONE divergent copy is a command injection on a
+  quoted path. `text_of(envelope)` reads the text out of any tool-result
+  envelope — bare output dict, plain string, `*_preview`-only after durable
+  compaction, and the nested `{mode, results: [...]}` of the approval-resume
+  lane — because those four shapes are the RUNTIME's, not any flow's, and a
+  flow-local reader written against three of them silently drops text the day
+  the fourth ships. Both are total (never raise); `text_of`'s fold is
+  step-capped so a self-referential payload terminates. Sandbox posture is
+  unchanged: same globals dict, same RestrictedPython policy, no new imports
+  reachable from user code. Consequence for flow authors: a shell-command
+  composer can now be an ordinary Code node with a visible body instead of a
+  flow-library function reached through a pin expression.
 - **The CLI lanes honor a stored reasoning effort (reasoning plan, CLI
   half, 2026-07-27)**. `resolve_home_substrate` now returns
   (provider, model, thinking); the chain for the dial is explicit

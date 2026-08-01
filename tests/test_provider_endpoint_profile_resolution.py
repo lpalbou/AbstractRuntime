@@ -328,16 +328,34 @@ def test_runtime_applies_voice_music_sound_capability_defaults() -> None:
     )
     assert sound["model"] == "acestep-sfx"
 
-    # Task-level sub-keys win over modality-level (mirror of the image shape).
+    # Task-level sub-keys win over modality-level -- on the routes that HAVE
+    # sub-keys. This block used to assert the layering on `output.voice.tts`,
+    # which the store can never hold: `tts` is not in `CAPABILITY_ROUTE_TASKS`,
+    # so `set_capability_default(..., task="tts")` returns False and
+    # `capability_defaults_from_dict` drops the key on load. The old assertion
+    # passed only because the Runtime kept its own copy of the route-key table
+    # and probed that impossible key first; both tables are now one (in
+    # AbstractCore), so the layering is asserted where it is actually reachable.
     layered = llm_client_mod._normalize_core_capability_defaults(
         {
-            "output.voice": {"provider": "supertonic", "model": "supertonic-3"},
-            "output.voice.tts": {"provider": "piper", "model": "piper-en"},
+            "output.image": {"provider": "broad", "model": "broad-model"},
+            "output.image.image_upscale": {"provider": "seedvr2", "model": "seedvr2-3b"},
         }
     )
     assert llm_client_mod._with_capability_default_route(
-        {"modality": "voice", "task": "tts"}, layered
-    )["provider"] == "piper"
+        {"modality": "image", "task": "image_upscale"}, layered
+    )["provider"] == "seedvr2"
+    # ...and the broad key still serves a task with no sub-route of its own.
+    assert llm_client_mod._with_capability_default_route(
+        {"modality": "image", "task": "image_generation"}, layered
+    )["provider"] == "broad"
+
+    # The invariant the old assertion contradicted, stated directly: voice has
+    # no persistable sub-task, so a bare TTS spec resolves at the modality cell.
+    from abstractcore.config.capability_defaults import capability_defaults_from_dict
+
+    dropped = capability_defaults_from_dict({"routes": {"output.voice.tts": {"provider": "piper"}}})
+    assert "output.voice.tts" not in dropped.routes
 
     # Explicit specs stay untouched (caller routing always wins).
     explicit_tts = llm_client_mod._with_capability_default_route(

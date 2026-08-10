@@ -1390,6 +1390,24 @@ def _create_visual_agent_effect_handler(
                 if isinstance(child_tools, list) and child_tools and "read_skill" not in child_tools:
                     child_tools.append("read_skill")
 
+            # prompt_cache posture rides too (BENCH-B 2026-08-03: the
+            # `--no-prompt-cache` A/B was a no-op — Agent-node children built a
+            # fresh `_runtime` without it, so their llm_calls re-defaulted to
+            # enabled and derived session keys). Unlike the string riders above,
+            # False is a MEANINGFUL value: gate on presence with the consumer's
+            # types (bool or dict), never truthiness. Verbatim; dicts cross as a
+            # copy; an explicit child value would win via setdefault. Inheriting
+            # an enabled posture is behaviourally identical to the old
+            # re-default, so cached runs are unchanged.
+            parent_prompt_cache = parent_runtime.get("prompt_cache")
+            if isinstance(parent_prompt_cache, (bool, dict)):
+                runtime_ns.setdefault(
+                    "prompt_cache",
+                    dict(parent_prompt_cache)
+                    if isinstance(parent_prompt_cache, dict)
+                    else parent_prompt_cache,
+                )
+
         thinking_value = _normalize_thinking(thinking)
         if thinking_value is None and isinstance(parent_runtime, dict):
             thinking_value = _normalize_thinking(parent_runtime.get("thinking"))
@@ -2218,22 +2236,119 @@ def _create_visual_agent_effect_handler(
                                 meta["sub_run_id"] = sub_run_id
                             msgs.append({"role": role, "content": text, "metadata": meta})
 
-                        def _truncate(text: str, *, max_chars: int) -> str:
+                        def _observation_bound(key: str) -> int:
+                            """Operator-declared bound from `_limits`, or 0 = unbounded.
+
+                            THE OBSERVE FOLD (adversarial budget audit
+                            2026-08-02). This function used to carry two
+                            hardcoded budgets nobody asked for — a 2,000-char
+                            cut on every tool result and a 20-result slice —
+                            applied to the evidence that becomes the NEXT
+                            prompt. A file read, a grep, a test log: whatever
+                            the agent actually saw was shortened to 2k chars
+                            before the outer loop could reason over it, and
+                            results 21+ vanished behind a "for brevity" line.
+                            ADR-0026 §2 names exactly this class: "durable tool
+                            execution outputs that are used as inputs to later
+                            steps" are a critical path, and "do not set
+                            arbitrary output caps by default" there.
+
+                            So: no default bound. An operator who WANTS one
+                            sets `_limits.agent_observation_max_chars` /
+                            `_limits.max_tool_observations`, and when it fires
+                            the cut names the key that caused it (ADR-0026 §1
+                            attribution). The full results remain durable in
+                            the sub-run's traces and ledger either way.
+                            """
+                            try:
+                                limits_ns = run.vars.get("_limits") if isinstance(run.vars, dict) else None
+                                raw = limits_ns.get(key) if isinstance(limits_ns, dict) else None
+                                if raw is None or isinstance(raw, bool):
+                                    return 0
+                                parsed = int(raw)
+                                return parsed if parsed > 0 else 0
+                            except Exception:
+                                return 0
+
+                        def _truncate(text: str, *, max_chars: int, limit_key: str) -> str:
+                            #[WARNING:TRUNCATION] operator-declared observation bound (opt-in; 0 = whole)
                             if max_chars <= 0:
                                 return text
                             if len(text) <= max_chars:
                                 return text
-                            suffix = f"\n… (truncated, {len(text):,} chars total)"
+                            suffix = (
+                                f"\n#TRUNCATION: tool observation cut at {max_chars} of {len(text):,} chars "
+                                f"by _limits.{limit_key}; full result in sub_run_id={sub_run_id}"
+                            )
                             keep = max_chars - len(suffix)
                             if keep < 200:
                                 keep = max_chars
-                                suffix = ""
                             return text[:keep].rstrip() + suffix
+
+                        def _offloaded_result_count() -> int:
+                            """Tool results the trace bounder turned into `$artifact` refs.
+
+                            `_extract_tool_activity_from_steps` drops refs (a
+                            ref is not a call), so an oversized result leaves
+                            NO trace in `tr` — the outer loop simply never
+                            learns the tool ran. Counting them here is what
+                            turns that omission from silent into stated.
+                            """
+                            total = 0
+                            steps_any = scratchpad.get("steps") if isinstance(scratchpad, dict) else None
+                            if not isinstance(steps_any, list):
+                                return 0
+                            for entry_any in steps_any:
+                                if not isinstance(entry_any, dict):
+                                    continue
+                                effect_d = entry_any.get("effect")
+                                if not isinstance(effect_d, dict) or str(effect_d.get("type") or "") != "tool_calls":
+                                    continue
+                                result_d = entry_any.get("result")
+                                if not isinstance(result_d, dict):
+                                    continue
+                                results_any = result_d.get("results")
+                                if isinstance(results_any, dict) and "$artifact" in results_any:
+                                    total += 1
+                                    continue
+                                if isinstance(results_any, list):
+                                    total += sum(
+                                        1 for item in results_any if isinstance(item, dict) and "$artifact" in item
+                                    )
+                            return total
+
+                        def _append_offloaded_notice() -> None:
+                            #[WARNING:TRUNCATION] offloaded tool results are absent from the fold — say so
+                            offloaded = _offloaded_result_count()
+                            if offloaded <= 0:
+                                return
+                            mid = f"agent:{sub_run_id or run.run_id}:{node_id}:tool:offloaded"
+                            if _has_message_id(mid):
+                                return
+                            msgs.append(
+                                {
+                                    "role": "assistant",
+                                    "content": (
+                                        f"[tools]: #TRUNCATION: {offloaded} tool result(s) exceeded the node-trace "
+                                        f"inline bound and were offloaded to the artifact store, so their output is "
+                                        f"NOT in this transcript. Do not assume those tools were never run; "
+                                        f"re-run them or read sub_run_id={sub_run_id}."
+                                    ),
+                                    "metadata": {
+                                        "kind": "tool_observation_offloaded",
+                                        "node_id": node_id,
+                                        "message_id": mid,
+                                        "offloaded_results": offloaded,
+                                        "sub_run_id": sub_run_id,
+                                    },
+                                }
+                            )
 
                         def _append_tool_observations() -> None:
                             # Persist a compact transcript of tool results executed by this Agent sub-run.
                             # This is critical for outer loops (e.g. RALPH) that re-invoke the agent and
                             # need evidence continuity to avoid repeating the same tool calls forever.
+                            _append_offloaded_notice()
                             if not isinstance(tr, list) or not tr:
                                 return
 
@@ -2247,8 +2362,10 @@ def _create_visual_agent_effect_handler(
                                     if cid:
                                         call_by_id[cid] = dict(c)
 
-                            max_results = 20
-                            for i, r in enumerate(tr[:max_results]):
+                            max_results = _observation_bound("max_tool_observations")
+                            observation_max_chars = _observation_bound("agent_observation_max_chars")
+                            visible = tr if max_results <= 0 else tr[:max_results]
+                            for i, r in enumerate(visible):
                                 if not isinstance(r, dict):
                                     continue
                                 name = str(r.get("name") or "tool").strip() or "tool"
@@ -2278,7 +2395,11 @@ def _create_visual_agent_effect_handler(
                                         args_txt = str(args)
                                     details = f"args={args_txt}\n{details}".strip()
 
-                                details = _truncate(details, max_chars=2000)
+                                details = _truncate(
+                                    details,
+                                    max_chars=observation_max_chars,
+                                    limit_key="agent_observation_max_chars",
+                                )
                                 content = f"[{name}]: {details}" if success else f"[{name}]: Error: {details}"
 
                                 # Store as an assistant message for broad provider compatibility.
@@ -2300,14 +2421,18 @@ def _create_visual_agent_effect_handler(
                                     meta["sub_run_id"] = sub_run_id
                                 msgs.append({"role": "assistant", "content": content, "metadata": meta})
 
-                            if len(tr) > max_results:
+                            if max_results > 0 and len(tr) > max_results:
+                                #[WARNING:TRUNCATION] operator-declared observation-count bound (opt-in)
                                 omitted = len(tr) - max_results
                                 mid = f"agent:{sub_run_id or run.run_id}:{node_id}:tool:omitted"
                                 if not _has_message_id(mid):
                                     msgs.append(
                                         {
                                             "role": "assistant",
-                                            "content": f"[tools]: (omitted {omitted} additional tool results for brevity; see sub_run_id={sub_run_id})",
+                                            "content": (
+                                                f"[tools]: #TRUNCATION: {omitted} additional tool result(s) omitted by "
+                                                f"_limits.max_tool_observations={max_results}; see sub_run_id={sub_run_id}"
+                                            ),
                                             "metadata": {
                                                 "kind": "tool_observation_summary",
                                                 "node_id": node_id,

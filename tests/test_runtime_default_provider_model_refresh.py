@@ -77,6 +77,72 @@ def test_caller_supplied_runtime_pin_survives_the_default_seed() -> None:
     assert state.vars["_runtime"]["model"] == "app-pinned"
 
 
+def test_run_own_route_outranks_the_process_default() -> None:
+    """`_runtime.model` must name the model THIS run routes to.
+
+    Reproduces the silent-substitution report of 2026-08-02: a session that
+    selected `qwen/qwen3-4b` on lmstudio produced sub-runs whose durable state
+    read `_runtime.model = "gpt-5.4"`, `_runtime.provider = "openai-compatible"`
+    -- the PROCESS default frozen at host construction. The LLM call honored
+    the per-call pin, so nothing misrouted, but every observer of run state
+    (console, ledger, `bench_workflows.py` model-drift detector) was told a
+    model that was never called. A route the run carries is the run's word and
+    outranks a default, which is nobody's word.
+    """
+    rt = _runtime(RuntimeConfig(provider="openai-compatible", model="gpt-5.4"))
+
+    def node(run, ctx) -> StepPlan:
+        del ctx, run
+        return StepPlan(node_id="n", complete_output={})
+
+    workflow = WorkflowSpec(workflow_id="run_route_test", entry_node="n", nodes={"n": node})
+    state = rt.get_state(
+        rt.start(workflow=workflow, vars={"provider": "lmstudio", "model": "qwen/qwen3-4b"})
+    )
+
+    assert state.vars["_runtime"]["model"] == "qwen/qwen3-4b"
+    assert state.vars["_runtime"]["provider"] == "lmstudio"
+
+
+def test_explicit_runtime_pin_still_outranks_the_run_route() -> None:
+    """Precedence is `_runtime` pin > run route > process default."""
+    rt = _runtime(RuntimeConfig(provider="openai-compatible", model="gpt-5.4"))
+
+    def node(run, ctx) -> StepPlan:
+        del ctx, run
+        return StepPlan(node_id="n", complete_output={})
+
+    workflow = WorkflowSpec(workflow_id="run_route_pin_test", entry_node="n", nodes={"n": node})
+    state = rt.get_state(
+        rt.start(
+            workflow=workflow,
+            vars={
+                "provider": "lmstudio",
+                "model": "qwen/qwen3-4b",
+                "_runtime": {"provider": "mlx", "model": "host-pinned"},
+            },
+        )
+    )
+
+    assert state.vars["_runtime"]["model"] == "host-pinned"
+    assert state.vars["_runtime"]["provider"] == "mlx"
+
+
+def test_process_default_still_seeds_a_run_that_carries_no_route() -> None:
+    """The default is still the fallback -- this fix narrows it, not removes it."""
+    rt = _runtime(RuntimeConfig(provider="lmstudio", model="qwen/qwen3.6-35b-a3b"))
+
+    def node(run, ctx) -> StepPlan:
+        del ctx, run
+        return StepPlan(node_id="n", complete_output={})
+
+    workflow = WorkflowSpec(workflow_id="run_route_fallback_test", entry_node="n", nodes={"n": node})
+    state = rt.get_state(rt.start(workflow=workflow, vars={"context": {}}))
+
+    assert state.vars["_runtime"]["model"] == "qwen/qwen3.6-35b-a3b"
+    assert state.vars["_runtime"]["provider"] == "lmstudio"
+
+
 class _FakeCoreLLM:
     def __init__(self, provider: str, model: str, **kwargs: Any) -> None:
         self.provider = provider

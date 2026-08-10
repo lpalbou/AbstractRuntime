@@ -52,6 +52,7 @@ from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
 from .chat import (
     SUMMON_POSTURE_SELF_FRACTION,
+    _sheet_line,
     ChatHome,
     _memories_block,
     _serialize_under_budget,
@@ -65,6 +66,7 @@ from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     FeelingElection,
+    _receipt_gist,
     build_reflection_prompt,
     parse_feel_blocks,
     parse_interest_blocks,
@@ -579,7 +581,7 @@ def build_visit_workflow(
                     else:
                         notices.append(
                             "#FALLBACK realization refused (no evidence resolved against "
-                            f'what you saw this turn): "{_re.text[:60]}"'
+                            f'what you saw this turn): "{_receipt_gist(_re.text, 60)}"'
                         )
             staged_count = (
                 len(pending["feelings"]) + len(pending.get("session_feelings") or [])
@@ -715,7 +717,7 @@ def build_visit_workflow(
             sheet = list(visit.get("sheet") or [])
             formed_ids = list((turn.get("formed") or {}).get("record_ids") or [])
             for rid in formed_ids:
-                sheet.append([str(rid), str(turn.get("digest") or "")[:160]])
+                sheet.append([str(rid), _sheet_line(turn.get("digest"))])
                 visit["last_episode_id"] = str(rid)
             for meta in list(turn.get("diary_meta") or []):
                 projected = (meta or {}).get("projected_record_id")
@@ -848,7 +850,7 @@ def build_visit_workflow(
                 else:
                     r_notes.append(
                         "#FALLBACK realization refused (no evidence resolved against "
-                        f'this visit\'s sheet): "{_re.text[:60]}"'
+                        f'this visit\'s sheet): "{_receipt_gist(_re.text, 60)}"'
                     )
             # Elected topics (operator directive 2026-07-19): parsed here,
             # stamped as attributes.topics on the summary stage below — the

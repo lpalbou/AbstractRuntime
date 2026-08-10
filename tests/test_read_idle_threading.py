@@ -1,11 +1,16 @@
 """read_idle_timeout_s threading (0152 face 2; core c5051 shipped the base
 param, runtime confirmed the name at c5041 and committed same-day threading).
 
-The factory seeds the NO-PROGRESS bound beside the absolute total: 300s
-default for orchestrated lanes (loud - a 5-minute silent stream is already
-pathological while the 7200s total protects legitimate long generations);
-callers override or disable (None = core's byte-identical pre-fix
-behavior); entity lanes thread their own tighter 60s.
+The factory seeds the NO-PROGRESS bound beside the absolute total: 1800s
+default for orchestrated lanes (operator ruling 2026-08-02 — a slow local
+model may legitimately pause between chunks, while the 7200s total protects
+the whole generation); callers override or disable (None = core's
+byte-identical pre-fix behavior); entity lanes thread their own tighter 60s.
+
+STREAM-ONLY: abstractcore applies this bound only when streaming=True
+(providers/_http.py). On a non-streaming request the body arrives only after
+generation finishes, so a read bound there is a hard generation cap, not an
+idle gap — that is what cost a coding session ~70% of its compute.
 """
 
 from abstractruntime.integrations.abstractcore.constants import (
@@ -61,7 +66,12 @@ def test_caller_override_and_disable_respected(monkeypatch):
 
 
 def test_default_value_is_the_committed_number():
-    assert DEFAULT_LLM_READ_IDLE_TIMEOUT_S == 300.0
+    # #[WARNING:TIMEOUT] Operator ruling 2026-08-02: 300 -> 1800. Local models
+    # can be legitimately slow BETWEEN chunks, and the old 300 was doubling as
+    # a hard generation cap because abstractcore applied it to non-streaming
+    # requests too (fixed: providers/_http.py gates it behind streaming=True).
+    # This assertion is the guard against a silent re-lowering.
+    assert DEFAULT_LLM_READ_IDLE_TIMEOUT_S == 1800.0
 
 
 def test_entity_lanes_thread_the_tighter_number():

@@ -185,17 +185,29 @@ def create_local_runtime(
     resolved_tool_timeout_s = float(tool_timeout_s) if tool_timeout_s is not None else float(default_tool_timeout_s)
 
     effective_llm_kwargs: Dict[str, Any] = dict(llm_kwargs or {})
+    # #[WARNING:TIMEOUT] — ADR-0014: this is the runtime's AUTHORITATIVE per-effect
+    # budget (7200s, or the operator's abstractcore.json `default_timeout`). No
+    # layer below may abort earlier without saying so (ADR-0027 §1/§2).
     effective_llm_kwargs.setdefault("timeout", float(default_llm_timeout_s))
-    # READ-IDLE BOUND (0152 wedge face 2; core c5051 shipped the base param
-    # runtime confirmed at c5041): the total `timeout` above is the ABSOLUTE
-    # budget (7200s backstop for legitimate long generations); read_idle is
-    # the NO-PROGRESS bound — a stream that produces nothing for this long
-    # aborts at the socket instead of holding a tick worker for the total.
-    # 300s default (loud, CHANGELOG'd): o1-class thinking pauses stay well
-    # under it, a 5-minute silent stream is already pathological. Callers
-    # opt out with read_idle_timeout_s=None in llm_kwargs (core: None =
-    # byte-identical pre-fix behavior); entity lanes pass their own tighter
-    # patience numbers.
+    # #[WARNING:TIMEOUT] READ-IDLE BOUND (0152 wedge face 2; core c5051 shipped
+    # the base param, runtime confirmed at c5041): the total `timeout` above is
+    # the ABSOLUTE budget (7200s backstop for legitimate long generations);
+    # read_idle is the NO-PROGRESS bound — a STREAM that produces nothing for
+    # this long aborts at the socket instead of holding a tick worker for the
+    # total. 300s default: o1-class thinking pauses stay well under it, a
+    # 5-minute silent stream is already pathological. Callers opt out with
+    # read_idle_timeout_s=None in llm_kwargs; entity lanes pass their own
+    # tighter patience numbers.
+    #
+    # STREAMING ONLY (2026-08-02 LM Studio incident, CONFIRMED — see
+    # constants.DEFAULT_LLM_READ_IDLE_TIMEOUT_S): abstractcore used to install
+    # this on the shared httpx client, where it also governed NON-streaming
+    # requests. There httpx's `read` is time-to-first-byte, so the bound became
+    # a hard 300s cap on the entire generation and silently destroyed every
+    # local tool call that took longer — below the authoritative budget above,
+    # exactly what ADR-0027 §2 forbids. abstractcore now applies it only when
+    # `streaming=True`, per request. Passing it here is therefore safe for the
+    # non-streaming coder lane (runtime default is stream=False).
     effective_llm_kwargs.setdefault("read_idle_timeout_s", float(DEFAULT_LLM_READ_IDLE_TIMEOUT_S))
 
     llm_client = MultiLocalAbstractCoreLLMClient(

@@ -5964,8 +5964,40 @@ class LocalAbstractCoreLLMClient:
         except Exception:
             return
 
-        # Build immutable prefix caches for (system, tools), then maintain a mutable per-session
-        # cache (history) under `prompt_cache_key`.
+        # Build the immutable prefix cache as an ordered BLOC CHAIN, then fork the chain's
+        # final key ONCE into the per-session key. The message lane is deliberately NOT
+        # maintained here — see the long note at the state check below.
+        #
+        # SEPARATE `system` AND `tools` BLOCS (restored 2026-08-03). A bloc is an
+        # independently-keyed slice of one rendered conversation, and the separation is the
+        # whole point: `system` alone is the bloc that many agents and sessions share, and
+        # keeping it separately keyed is what will let it be reused when the tool set
+        # differs. Merging the two collapsed that abstraction for a render bug that belonged
+        # to the render layer.
+        #
+        # The bug: chat templates fold the tool instructions INTO the single system turn, so
+        # rendering each module as its own standalone conversation emitted two consecutive
+        # `<|im_start|>system` blocks — bytes generate() never produces — and the token LCP
+        # between the prefix cache and the real prompt stopped at the end of the system text
+        # (measured 618 of 2148 prefix tokens reachable). It is fixed where it lives:
+        # `BaseProvider.prompt_cache_plan_bloc_chain` renders the CUMULATIVE conversation
+        # through the provider's own generate() renderer and cuts it at successor-independent
+        # TOKEN boundaries, so the `system` bloc ends mid-turn (before `<|im_end|>`) and the
+        # `tools` bloc carries the rest of that same turn. Concatenation is byte-identical to
+        # the single-shot render; each bloc keeps its own key.
+        #
+        # Reachable fraction of generate()'s prompt, measured tokenizer-only on an
+        # agent-shaped chain (700-token persona + 14 tool schemas, 2026-08-03):
+        #
+        #   lane           N=1 old/new     N=2 old/new     N=3 old/new
+        #   qwen3 ChatML   99.6% / 99.2%   53.3% / 99.8%   52.8% / 99.8%
+        #   gemma-4 turn   99.6% / 99.3%   52.9% / 99.8%   52.4% / 99.8%
+        #   llama-3 plain  99.7% / 99.7%   53.7% / 99.9%   53.3% / 99.9%
+        #
+        # The old shape was ANTI-composable — it degraded with every bloc added. The
+        # tax for keeping the blocs separate is ZERO at N>=2 (they cache exactly as
+        # many tokens as one merged module would); the ~0.4% at N=1 is the system
+        # turn's closing tag, left uncached so a tools bloc can still extend that turn.
         try:
             prep_fn = getattr(provider, "prompt_cache_prepare_modules", None)
             if not callable(prep_fn):
@@ -6003,115 +6035,120 @@ class LocalAbstractCoreLLMClient:
                 system_hash = module_hash
             elif module_id == "tools" and module_hash:
                 tools_hash = module_hash
-
         system_hash = system_hash or "none"
         tools_hash = tools_hash or "none"
 
-        # The trailing runtime-grounding envelope is per-call ephemeral (fresh timestamp
-        # every call). Baking it into the durable per-session KV cache would poison the
-        # prefix for the next call, so it is excluded from the cached message lane.
-        # Same rule for STRUCTURALLY volatile messages (`volatile: true`, B1): adapter
-        # tails change every cycle — fingerprinting them breaks the prefix-extension
-        # check and forces a full re-prefill per iteration on local control planes.
-        msg_list: List[Dict[str, Any]] = []
-        for m in (messages if isinstance(messages, list) and messages else []):
-            if _is_runtime_grounding_only_user_message(m) or _is_volatile_message(m):
-                continue
-            # 0064 P1-1: strip the INLINE grounding envelope from the cached
-            # lane (user messages only - that is the only injection site).
-            # The durable history keeps raw bytes, so stripping here makes
-            # the cached prefix match what next turn's transcript sends.
-            if isinstance(m, dict) and str(m.get("role") or "") == "user":
-                content = m.get("content")
-                if isinstance(content, str) and content.strip():
-                    stripped = _strip_runtime_grounding_prefix(content)
-                    if stripped != content:
-                        m = dict(m)
-                        m["content"] = stripped
-            msg_list.append(m)
-        msg_hashes: List[str] = [_prompt_cache_message_fingerprint(m) for m in msg_list]
+        # `messages` is accepted for API stability but no longer drives this method.
+        _ = messages
+
+        # ------------------------------------------------------------------
+        # The message lane belongs to generate(), not to this method (2026-08-02).
+        #
+        # What this used to do: fingerprint the message list every call and, on any
+        # divergence from the recorded sequence, `prompt_cache_clear(key)` + re-fork +
+        # re-append the whole history. Three things made that a net destroyer of the very
+        # state it exists to build:
+        #
+        #  1. `_prompt_cache_state` is PER LLMClient INSTANCE and a fresh client is built
+        #     per llm_call effect, so `state is None` on essentially every call — the
+        #     "needs_rebuild" clear fired unconditionally and the session cache never held
+        #     more than the bare prefix. (MLX's `prompt_cache_clear` additionally drops
+        #     `_hybrid_snapshots[key]`, the exact state the untrimmable/hybrid lane needs.)
+        #  2. The bytes this lane appended never matched what generate() sends anyway: the
+        #     cached lane strips the runtime-grounding envelope and skips volatile messages,
+        #     while generate() receives them. Every append was work that the delta feed then
+        #     had to trim back off.
+        #  3. Since 0819, `mlx_provider._prepare_cache_delta_feed` already does the right
+        #     thing for a full-context caller: token-level LCP against the key's fed-token
+        #     record, trim the cache to the shared prefix, feed only the suffix. That
+        #     handles a rewritten tail (loop counters, edits, truncation) correctly and
+        #     WITHOUT throwing the shared prefix away.
+        #
+        # So the contract is now: this method only guarantees "the session key exists and
+        # was forked from the current (system+tools) prefix". Everything downstream of that
+        # boundary is the provider's delta feed. Divergence is no longer a rebuild trigger —
+        # a diverging transcript (including two sub-runs sharing one derived key) is handled
+        # by LCP+trim, which is correct by construction: the cache is trimmed to the true
+        # shared token prefix and the rest is fed. Correctness never depended on the clear.
+        #
+        # The identity check reads the PROVIDER's cache meta (`forked_from`, written by
+        # `prompt_cache_fork`) rather than the per-instance state dict, so it survives the
+        # fresh-client-per-call shape that defeated the old check.
+        # ------------------------------------------------------------------
+        live_meta: Dict[str, Any] = {}
+        try:
+            meta_fn = getattr(provider, "prompt_cache_key_meta", None)
+            if callable(meta_fn):
+                meta = meta_fn(key)
+                if isinstance(meta, dict):
+                    live_meta = meta
+        except Exception:
+            live_meta = {}
+        already_forked = bool(live_meta) and str(live_meta.get("forked_from") or "") == final_prefix_key
 
         with self._prompt_cache_state_lock:
             state = self._prompt_cache_state.get(key)
-            needs_rebuild = (
-                state is None
-                or state.system_module_hash != system_hash
-                or state.tools_module_hash != tools_hash
-                or state.prefix_cache_key != final_prefix_key
-            )
-
-            if needs_rebuild:
-                try:
-                    clearer = getattr(provider, "prompt_cache_clear", None)
-                    if callable(clearer):
-                        clearer(key)
-                except Exception:
-                    pass
-
-                forked = False
-                try:
-                    forker = getattr(provider, "prompt_cache_fork", None)
-                    if callable(forker):
-                        forked = bool(forker(final_prefix_key, key, make_default=False))
-                except Exception:
-                    forked = False
-
-                if not forked:
-                    try:
-                        setter = getattr(provider, "prompt_cache_set", None)
-                        updater = getattr(provider, "prompt_cache_update", None)
-                        if callable(setter) and callable(updater) and bool(setter(key, make_default=False)):
-                            updater(key, system_prompt=system_prompt, tools=tools, add_generation_prompt=False)
-                            forked = True
-                    except Exception:
-                        forked = False
-
-                if not forked:
-                    return
-
-                state = _PromptCacheSessionState(
-                    system_module_hash=system_hash,
-                    tools_module_hash=tools_hash,
-                    prefix_cache_key=final_prefix_key,
-                    message_hashes=[],
-                )
-                self._prompt_cache_state[key] = state
-
-            if not msg_list:
-                state.message_hashes = []
+            if already_forked:
+                if state is None or state.prefix_cache_key != final_prefix_key:
+                    self._prompt_cache_state[key] = _PromptCacheSessionState(
+                        system_module_hash=system_hash,
+                        tools_module_hash=tools_hash,
+                        prefix_cache_key=final_prefix_key,
+                        message_hashes=[],
+                    )
                 return
 
-            if msg_hashes[: len(state.message_hashes)] == state.message_hashes:
-                new_msgs = msg_list[len(state.message_hashes) :]
-                if not new_msgs:
-                    return
-                try:
-                    updater = getattr(provider, "prompt_cache_update", None)
-                    if callable(updater) and bool(updater(key, messages=new_msgs, add_generation_prompt=False)):
-                        state.message_hashes.extend(msg_hashes[len(state.message_hashes) :])
-                except Exception:
-                    pass
-                return
-
-            # History diverged (edits/truncation): rebuild per-session history cache from the prefix.
+            # No usable session cache for this prefix identity (first call, or the
+            # system/tools prefix genuinely changed): (re)fork from the prefix once.
             try:
                 clearer = getattr(provider, "prompt_cache_clear", None)
                 if callable(clearer):
                     clearer(key)
             except Exception:
                 pass
+
+            forked = False
             try:
                 forker = getattr(provider, "prompt_cache_fork", None)
-                if not callable(forker) or not bool(forker(final_prefix_key, key, make_default=False)):
-                    return
+                if callable(forker):
+                    forked = bool(forker(final_prefix_key, key, make_default=False))
             except Exception:
+                forked = False
+
+            if not forked:
+                try:
+                    setter = getattr(provider, "prompt_cache_set", None)
+                    updater = getattr(provider, "prompt_cache_update", None)
+                    if callable(setter) and callable(updater) and bool(setter(key, make_default=False)):
+                        # Fork-less fallback: ONE update carrying system AND tools together,
+                        # so the provider renders the single merged system turn in one go.
+                        # This lane has no bloc structure by construction (there is nothing
+                        # to reuse — the key is being built from empty anyway); it exists
+                        # only so providers without `prompt_cache_fork` still get a warm
+                        # session key.
+                        updater(key, system_prompt=system_prompt, tools=tools, add_generation_prompt=False)
+                        forked = True
+                except Exception:
+                    forked = False
+
+            if not forked:
                 return
+
+            # Stamp the prefix identity so the NEXT call (a different client instance) can
+            # recognize this key as already prepared instead of clearing it.
             try:
-                updater = getattr(provider, "prompt_cache_update", None)
-                if callable(updater) and bool(updater(key, messages=msg_list, add_generation_prompt=False)):
-                    state.message_hashes = list(msg_hashes)
+                meta_setter = getattr(provider, "prompt_cache_update_key_meta", None)
+                if callable(meta_setter):
+                    meta_setter(key, forked_from=final_prefix_key)
             except Exception:
                 pass
+
+            self._prompt_cache_state[key] = _PromptCacheSessionState(
+                system_module_hash=system_hash,
+                tools_module_hash=tools_hash,
+                prefix_cache_key=final_prefix_key,
+                message_hashes=[],
+            )
 
     def generate(
         self,

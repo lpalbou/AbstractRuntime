@@ -180,10 +180,29 @@ def test_prompt_path_unchanged() -> None:
 
 
 class _FakeCacheProvider:
-    """Minimal local control-plane provider for `_maybe_prepare_prompt_cache`."""
+    """Minimal local control-plane provider for `_maybe_prepare_prompt_cache`.
+
+    `prompt_cache_key_meta` / `prompt_cache_update_key_meta` and the `forked_from`
+    stamp inside `prompt_cache_fork` are NOT test conveniences: every real provider
+    inherits them from `BaseProvider` (abstractcore `providers/base.py`, and
+    `prompt_cache_fork` there does `meta.setdefault("forked_from", src)` itself). A
+    fake without them reports "never forked" forever, which makes the fork-once
+    contract untestable and would let a per-call clear pass unnoticed.
+    """
 
     def __init__(self) -> None:
         self.calls: List[Tuple[str, Any]] = []
+        self.meta: Dict[str, Dict[str, Any]] = {}
+
+    def prompt_cache_key_meta(self, key: Any) -> Dict[str, Any]:
+        return dict(self.meta.get(str(key)) or {})
+
+    def prompt_cache_update_key_meta(self, key: Any, **updates: Any) -> bool:
+        entry = self.meta.setdefault(str(key), {})
+        for name, value in updates.items():
+            if value is not None:
+                entry[str(name)] = value
+        return True
 
     def supports_prompt_cache(self) -> bool:
         return True
@@ -213,11 +232,16 @@ class _FakeCacheProvider:
 
     def prompt_cache_clear(self, key: Optional[str] = None) -> bool:
         self.calls.append(("clear", key))
+        if key is None:
+            self.meta.clear()
+        else:
+            self.meta.pop(str(key), None)
         return True
 
     def prompt_cache_fork(self, from_key: str, to_key: str, *, make_default: bool = False, ttl_s: Optional[float] = None, **kwargs: Any) -> bool:
         _ = (make_default, ttl_s, kwargs)
         self.calls.append(("fork", from_key, to_key))
+        self.meta.setdefault(str(to_key), {}).setdefault("forked_from", str(from_key))
         return True
 
     def prompt_cache_update(
@@ -236,33 +260,22 @@ class _FakeCacheProvider:
         return True
 
 
-def test_prompt_cache_prepare_excludes_trailing_envelope_and_appends_incrementally() -> None:
-    """The per-call envelope must never enter the durable per-session KV cache: with the
-    envelope excluded, a growing tool-loop transcript is a clean prefix-extension and the
-    control plane appends incrementally instead of rebuilding every iteration."""
+def _cache_client(provider: _FakeCacheProvider) -> Any:
     from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCoreLLMClient
 
-    provider = _FakeCacheProvider()
     client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
     client._llm = provider  # type: ignore[attr-defined]
     client._prompt_cache_state_lock = threading.Lock()  # type: ignore[attr-defined]
     client._prompt_cache_state = {}  # type: ignore[attr-defined]
+    return client
 
-    key = "sess:loop"
-    sys = "SYSTEM"
-    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
 
-    transcript = _tool_loop_messages()
-    _, msgs1 = llm_client._normalize_turn_grounding(prompt="", messages=transcript, grounding=_grounding(1))
-    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=sys, tools=tools, messages=msgs1)  # type: ignore[attr-defined]
+_SYS = "SYSTEM"
+_TOOLS = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
 
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
-    first_update = provider.calls[-1][2]
-    assert all(not llm_client._is_runtime_grounding_only_user_message(m) for m in first_update)
-    assert len(first_update) == len(transcript)
 
-    # Iteration 2: transcript grew at the tail; a fresh envelope replaced the old one.
-    grown = transcript + [
+def _grown_tool_loop() -> List[Dict[str, Any]]:
+    return _tool_loop_messages() + [
         {
             "role": "assistant",
             "content": "Creating the folder.",
@@ -270,56 +283,112 @@ def test_prompt_cache_prepare_excludes_trailing_envelope_and_appends_incremental
         },
         {"role": "tool", "content": "[execute_command]: ok", "tool_call_id": "call_2"},
     ]
-    _, msgs2 = llm_client._normalize_turn_grounding(prompt="", messages=grown, grounding=_grounding(2))
-    provider.calls.clear()
-    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=sys, tools=tools, messages=msgs2)  # type: ignore[attr-defined]
-
-    # Incremental append (no clear/fork rebuild), and only the delta was sent.
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "update"]
-    delta = provider.calls[-1][2]
-    assert len(delta) == 2
-    assert all(not llm_client._is_runtime_grounding_only_user_message(m) for m in delta)
 
 
-def test_prompt_cache_prepare_excludes_volatile_marked_messages() -> None:
-    """B1 fix (code seat c971, runtime half): an adapter tail marked
-    `volatile: true` changes every cycle — with the STRUCTURAL exclusion, the
-    grown transcript still reads as a prefix extension (incremental append),
-    never a full clear+fork+re-prefill per iteration."""
-    from abstractruntime.integrations.abstractcore.llm_client import LocalAbstractCoreLLMClient
+def test_prompt_cache_prepare_never_feeds_messages_into_the_durable_cache() -> None:
+    """The per-call envelope must never enter the durable per-session KV cache.
 
+    This method's whole message lane was removed (2026-08-02), which makes that
+    guarantee STRUCTURAL rather than filtered: no message of any kind is handed to
+    the control plane here, so no per-call envelope, no volatile adapter tail and no
+    generation scaffolding can be baked into the session key by this seam. The
+    transcript reaches the provider exactly once, through `generate()`, where
+    `mlx_provider._prepare_cache_delta_feed` does token-level LCP against the key's
+    fed-token record and feeds only the true suffix.
+    """
     provider = _FakeCacheProvider()
-    client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
-    client._llm = provider  # type: ignore[attr-defined]
-    client._prompt_cache_state_lock = threading.Lock()  # type: ignore[attr-defined]
-    client._prompt_cache_state = {}  # type: ignore[attr-defined]
+    client = _cache_client(provider)
 
+    key = "sess:loop"
+    _, msgs1 = llm_client._normalize_turn_grounding(prompt="", messages=_tool_loop_messages(), grounding=_grounding(1))
+    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=msgs1)
+
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+    assert not any(c[0] == "update" for c in provider.calls), (
+        "the session key must be built from the (system, tools) bloc chain only; "
+        "any transcript pushed here is per-call bytes entering durable KV"
+    )
+
+
+def test_prompt_cache_prepare_forks_once_and_never_reclears_the_session_key() -> None:
+    """A growing tool-loop transcript must cost ONE fork per session, not one per turn.
+
+    `prompt_cache_clear(key)` is not free on a local control plane: the MLX provider
+    drops `_hybrid_snapshots[key]` with it, which is the exact state the untrimmable /
+    hybrid lane restores from. Re-clearing mid-session therefore forces a full cold
+    prefill on the next turn. The identity check reads the PROVIDER's `forked_from`
+    meta, so it holds even when a later turn runs on a different client instance.
+    """
+    provider = _FakeCacheProvider()
+    client = _cache_client(provider)
+    key = "sess:loop"
+
+    _, msgs1 = llm_client._normalize_turn_grounding(prompt="", messages=_tool_loop_messages(), grounding=_grounding(1))
+    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=msgs1)
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+
+    # Turn 2: transcript grew at the tail, a fresh envelope replaced the old one.
+    _, msgs2 = llm_client._normalize_turn_grounding(prompt="", messages=_grown_tool_loop(), grounding=_grounding(2))
+    provider.calls.clear()
+    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=msgs2)
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
+
+    # Turn 3 on a FRESH client (the shape that defeated the old per-instance state
+    # dict): still no clear, because the provider's own meta carries the identity.
+    fresh_client = _cache_client(provider)
+    _, msgs3 = llm_client._normalize_turn_grounding(prompt="", messages=_grown_tool_loop(), grounding=_grounding(3))
+    provider.calls.clear()
+    fresh_client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=msgs3)
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
+
+
+def test_prompt_cache_prepare_reforks_when_the_prefix_identity_changes() -> None:
+    """Fork-once is conditional on IDENTITY, not unconditional: a genuinely different
+    (system, tools) prefix produces a different final bloc key, and the session key
+    must be re-forked from it. Without this the shortcut above would silently serve a
+    session off a stale persona/tool set."""
+    provider = _FakeCacheProvider()
+    client = _cache_client(provider)
+    key = "sess:reprefix"
+
+    client._maybe_prepare_prompt_cache(prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=_tool_loop_messages())
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+
+    provider.calls.clear()
+    client._maybe_prepare_prompt_cache(
+        prompt_cache_key=key, system_prompt="A DIFFERENT SYSTEM", tools=_TOOLS, messages=_tool_loop_messages()
+    )
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+
+
+def test_prompt_cache_prepare_is_indifferent_to_a_changed_volatile_tail() -> None:
+    """B1 (code seat c971, runtime half): an adapter tail marked `volatile: true`
+    changes every cycle. It must never force a clear+fork+re-prefill per iteration.
+
+    The original structural EXCLUSION lived in this method's message lane; with that
+    lane gone the guarantee is stronger — the tail is not merely filtered out here,
+    it never had a path into the durable key at all, so no tail rewrite can be
+    mistaken for a prefix divergence at this seam. The rewritten-tail case is
+    exercised end-to-end against the real delta feed by abstractcore's
+    `tests/providers/test_mlx_hybrid_snapshot_lane.py`.
+    """
+    provider = _FakeCacheProvider()
+    client = _cache_client(provider)
     key = "sess:volatile"
-    sys = "SYSTEM"
-    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
 
     transcript = _tool_loop_messages()
     tail1 = {"role": "user", "content": "[loop] iteration 1 of 20.", "volatile": True}
-    client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
-        prompt_cache_key=key, system_prompt=sys, tools=tools, messages=transcript + [tail1]
+    client._maybe_prepare_prompt_cache(
+        prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=transcript + [tail1]
     )
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
-    assert all(not m.get("volatile") for m in provider.calls[-1][2])
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
 
-    grown = transcript + [
-        {"role": "assistant", "content": "step", "tool_calls": [
-            {"type": "function", "id": "call_2", "function": {"name": "t", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "content": "[t]: ok", "tool_call_id": "call_2"},
-    ]
     tail2 = {"role": "user", "content": "[loop] iteration 2 of 20.", "volatile": True}
     provider.calls.clear()
-    client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
-        prompt_cache_key=key, system_prompt=sys, tools=tools, messages=grown + [tail2]
+    client._maybe_prepare_prompt_cache(
+        prompt_cache_key=key, system_prompt=_SYS, tools=_TOOLS, messages=_grown_tool_loop() + [tail2]
     )
-    # Incremental append despite the changed volatile tail — only the real delta rides.
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "update"]
-    assert len(provider.calls[-1][2]) == 2
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
 
 
 def test_volatile_marker_is_stripped_before_the_provider() -> None:

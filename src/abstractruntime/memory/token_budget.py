@@ -10,7 +10,15 @@ budget (ADR-0008) even when the underlying model supports much larger contexts.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# Metadata marker stamped on the notice message this module inserts when it
+# drops history. Consumers (transcripts, UI, tests) can find the cut by key
+# instead of by matching prose.
+TRIM_NOTICE_KIND = "input_budget_trim"
 
 
 def estimate_tokens(text: str, *, model: Optional[str] = None) -> int:
@@ -50,6 +58,17 @@ def trim_messages_to_max_input_tokens(
     - Preserve all system messages.
     - Preserve the most recent non-system message (typically the user prompt).
     - Drop oldest non-system messages first.
+
+    LOUDNESS (adversarial budget audit 2026-08-02, ADR-0026 §1): the budget
+    itself is legitimate — it only runs when a caller sets a POSITIVE
+    `max_input_tokens` (unset/`-1` disables it, and that is the default). What
+    was not legitimate is the way it fired: whole turns simply disappeared, so
+    the model was handed a conversation with a missing beginning and no way to
+    know. Dropping messages for budget reasons is lossy truncation by ADR-0026's
+    own list, and "no truncation may occur quietly". When this drops anything it
+    now inserts a labeled notice naming the budget that caused it, and logs a
+    warning attributable to this module. Returning the messages untouched
+    (budget unset, or nothing dropped) inserts nothing.
     """
     try:
         budget = int(max_input_tokens)
@@ -82,5 +101,29 @@ def trim_messages_to_max_input_tokens(
         total += tok
 
     kept.reverse()
-    return system_messages + kept
+
+    dropped = len(non_system) - len(kept)
+    if dropped <= 0:
+        return system_messages + kept
+
+    #[WARNING:TRUNCATION] caller-declared input budget dropped whole messages — never silently
+    dropped_tokens = sum(non_tokens[: len(non_system) - len(kept)])
+    logger.warning(
+        "abstractruntime.memory.token_budget: dropped %d oldest message(s) "
+        "(~%d estimated tokens) to fit max_input_tokens=%d",
+        dropped,
+        dropped_tokens,
+        budget,
+    )
+    notice = {
+        "role": "system",
+        "content": (
+            f"#TRUNCATION: {dropped} earlier message(s) (~{dropped_tokens} estimated tokens) were "
+            f"dropped from this request to fit max_input_tokens={budget} "
+            "(abstractruntime.memory.token_budget). The conversation above is INCOMPLETE — "
+            "do not assume the missing turns never happened; ask or re-read if they matter."
+        ),
+        "metadata": {"kind": TRIM_NOTICE_KIND, "dropped_messages": dropped, "max_input_tokens": budget},
+    }
+    return system_messages + [notice] + kept
 

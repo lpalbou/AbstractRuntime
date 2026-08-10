@@ -58,7 +58,12 @@ _DEFAULT_MAX_TOTAL_CHARS = 24000
 
 def _truncate_labeled(text: str, *, max_chars: int, run_id: str) -> str:
     """Cut over-long content with an explicit, labeled marker (house rule:
-    truncation is never silent)."""
+    truncation is never silent).
+
+    #[WARNING:TRUNCATION] caller-supplied `max_chars_per_message` (ADR-0026 §4):
+    the bound is a parameter with a documented default, the cut names its size
+    and the run holding the full text, and the run itself is never mutated.
+    """
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     marker = f"\n[#TRUNCATION: replay cut at {max_chars} chars; full text in run {run_id}]"
@@ -181,14 +186,17 @@ def session_chat_messages(
     kept: List[List[Dict[str, Any]]] = []
     kept_messages = 0
     kept_chars = 0
+    dropped_by = ""
     for pair in reversed(turn_pairs):
         pair_chars = sum(len(str(m.get("content") or "")) for m in pair)
         if kept_messages + len(pair) > max_msgs:
+            dropped_by = f"max_messages={max_msgs}"
             break
         if kept and kept_chars + pair_chars > total_budget:
             # Always keep at least the newest turn, even when it alone
             # exceeds the budget: replaying nothing would be worse than
             # replaying one long turn (per-message caps already bound it).
+            dropped_by = f"max_total_chars={total_budget}"
             break
         kept.append(pair)
         kept_messages += len(pair)
@@ -197,4 +205,32 @@ def session_chat_messages(
     messages: List[Dict[str, Any]] = []
     for pair in reversed(kept):
         messages.extend(pair)
+
+    dropped_turns = len(turn_pairs) - len(kept)
+    if dropped_turns > 0 and messages:
+        #[WARNING:TRUNCATION] whole turns dropped by the replay budget — stated, never silent
+        #
+        # Per-MESSAGE cuts were already labeled (`_truncate_labeled`); dropping
+        # a whole TURN was not, so a replayed model received a conversation
+        # whose beginning had been deleted and read it as the whole session
+        # (ADR-0026 §1: "no truncation may occur quietly", and §1's attribution
+        # rule — the marker names the budget that caused the cut).
+        #
+        # Carried as a PREFIX on the oldest surviving user message rather than
+        # as an extra message: this function's contract is strict user/assistant
+        # PAIRS (a dangling half-turn is provider-hostile), and the message
+        # count is what the `max_messages` window means. A prefix is visible to
+        # the model and to any transcript without breaking either.
+        head = messages[0]
+        head["metadata"] = {
+            **(head.get("metadata") if isinstance(head.get("metadata"), dict) else {}),
+            "replay_truncated": True,
+            "dropped_turns": dropped_turns,
+            "dropped_by": dropped_by,
+        }
+        head["content"] = (
+            f"[#TRUNCATION: {dropped_turns} earlier turn(s) of this session were dropped from replay "
+            f"by {dropped_by} (abstractruntime.session_history); this history starts mid-conversation]\n"
+            f"{head.get('content') or ''}"
+        )
     return messages

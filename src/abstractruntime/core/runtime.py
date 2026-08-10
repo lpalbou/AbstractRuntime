@@ -1203,9 +1203,40 @@ class Runtime:
         session_id: Optional[str] = None,
         parent_run_id: Optional[str] = None,
     ) -> str:
-        # Initialize vars with _limits from config if not already set
+        # Seed `_limits` PER KEY, never all-or-nothing (adversarial budget
+        # audit 2026-08-02, CONFIRMED defect).
+        #
+        # This used to read `if "_limits" not in vars: vars["_limits"] =
+        # config.to_limits_dict()`. A caller that named ONE budget therefore
+        # suppressed the seeding of EVERY other one: `start(vars={"_limits":
+        # {"max_iterations": 200}})` produced a run whose `_limits` held that
+        # single key, and each reader then fell through to its own inline
+        # constant — `limits.get("max_tokens", DEFAULT_MAX_TOKENS)` reported a
+        # 32,768-token window for a model the config had already resolved at
+        # 262,144. The caller asked for MORE iterations and silently received a
+        # SMALLER token budget than the runtime itself had derived: a default
+        # nobody requested, quietly shrinking a budget (the exact shape the
+        # framework budget law forbids).
+        #
+        # `setdefault` is the whole discipline: what the caller NAMED is never
+        # touched (their word wins, high or low), what they left out comes from
+        # the config the runtime already resolved from model capabilities —
+        # never from a downstream reader's fallback literal. Seeding can only
+        # ADD keys, so it can never reduce a caller's declared budget.
         vars = dict(vars or {})
-        if "_limits" not in vars:
+        declared_limits = vars.get("_limits")
+        # Captured BEFORE the merge: the operator ceiling below distinguishes a
+        # workflow that DECLARED an iteration budget from one that stayed
+        # silent, and after seeding the key is always present.
+        caller_declared_max_iterations = (
+            isinstance(declared_limits, dict) and declared_limits.get("max_iterations") is not None
+        )
+        if isinstance(declared_limits, dict):
+            merged_limits = dict(declared_limits)
+            for _key, _value in self._config.to_limits_dict().items():
+                merged_limits.setdefault(_key, _value)
+            vars["_limits"] = merged_limits
+        else:
             vars["_limits"] = self._config.to_limits_dict()
 
         # OPERATOR CEILING, refuse-at-start (laurent c786: hard ceiling on
@@ -1226,7 +1257,9 @@ class Runtime:
             except (TypeError, ValueError):
                 ceiling = None
             if ceiling is not None and ceiling > 0:
-                declared = limits.get("max_iterations")
+                # Only the CALLER's own value counts as a declaration; the
+                # per-key seeding above always leaves `max_iterations` present.
+                declared = limits.get("max_iterations") if caller_declared_max_iterations else None
                 if declared is None:
                     limits["max_iterations"] = min(
                         int(self._config.max_iterations), ceiling
@@ -1252,13 +1285,41 @@ class Runtime:
         if not isinstance(runtime_ns, dict):
             runtime_ns = {}
             vars["_runtime"] = runtime_ns
+        # ROUTE TRUTH (silent-substitution defect, 2026-08-02).
+        #
+        # `_runtime.provider/model` is the answer to "what did this run
+        # actually talk to" -- it is what the ledger shows, what the console
+        # reports, and what drift detectors compare against. It used to be
+        # seeded ONLY from `self._config`, the PROCESS-level default frozen at
+        # host construction. A run that carried its own route in `vars`
+        # (`{"provider": "lmstudio", "model": "qwen/qwen3-4b"}` -- how every
+        # `coding-agent` sub-workflow passes a model) was therefore stamped
+        # with whatever the host happened to default to. Reproduced live: a
+        # pure-lmstudio 4B session whose sub-runs all read
+        # `_runtime.model = "gpt-5.4"`, `_runtime.provider = "openai-compatible"`.
+        # The LLM call itself still honored the per-call pin, so nothing
+        # misrouted -- but every observer of the run state was told a model
+        # that was never called. An operator auditing "which model ran my
+        # work" could not get a true answer out of the runtime.
+        #
+        # Precedence, highest first:
+        #   1. `_runtime.provider/model` -- an explicit pin by the host/app.
+        #   2. `vars.provider/model`     -- THIS run's selected route.
+        #   3. `self._config`            -- the process default (nobody's word).
         try:
-            provider_id = getattr(self._config, "provider", None)
-            model_id = getattr(self._config, "model", None)
-            if isinstance(provider_id, str) and provider_id.strip():
-                runtime_ns.setdefault("provider", provider_id.strip())
-            if isinstance(model_id, str) and model_id.strip():
-                runtime_ns.setdefault("model", model_id.strip())
+            def _clean_route(value: Any) -> Optional[str]:
+                return value.strip() if isinstance(value, str) and value.strip() else None
+
+            provider_id = _clean_route(vars.get("provider")) or _clean_route(
+                getattr(self._config, "provider", None)
+            )
+            model_id = _clean_route(vars.get("model")) or _clean_route(
+                getattr(self._config, "model", None)
+            )
+            if provider_id:
+                runtime_ns.setdefault("provider", provider_id)
+            if model_id:
+                runtime_ns.setdefault("model", model_id)
         except Exception:
             pass
 
@@ -1272,19 +1333,46 @@ class Runtime:
                 tool_support = caps.get("tool_support")
                 if isinstance(tool_support, str) and tool_support.strip():
                     ts = tool_support.strip()
-                    runtime_ns.setdefault("tool_support", ts)
-                    runtime_ns.setdefault("supports_native_tools", ts == "native")
                     # Capability-bit PROVENANCE (abstractagent wave-F P1,
-                    # commons c1801): the bits above describe the CONFIG
-                    # model, but per-run routing (`_runtime.model`) can point
-                    # at a DIFFERENT model — a native-default runtime routing
-                    # to a prompted model made CodeAct complete silently with
+                    # commons c1801): the bits describe the CONFIG model, but
+                    # per-run routing (`_runtime.model`) can point at a
+                    # DIFFERENT model — a native-default runtime routing to a
+                    # prompted model made CodeAct complete silently with
                     # code-as-prose. Stamping WHICH model the bits were
-                    # derived for lets consumers detect staleness and fail
-                    # toward the safe posture (fence ON).
+                    # derived for lets consumers detect staleness.
                     cap_model = getattr(self._config, "model", None)
-                    if isinstance(cap_model, str) and cap_model.strip():
-                        runtime_ns.setdefault("tool_support_model", cap_model.strip())
+                    cap_model_s = (
+                        cap_model.strip()
+                        if isinstance(cap_model, str) and cap_model.strip()
+                        else None
+                    )
+                    if cap_model_s:
+                        runtime_ns.setdefault("tool_support_model", cap_model_s)
+
+                    # ...but provenance only helps a consumer that CHECKS it.
+                    # Stamping the bits unconditionally hands every consumer a
+                    # confident `supports_native_tools` derived from a model
+                    # this run will never call. So seed the bits ONLY when the
+                    # capability model IS the routed model. On a mismatch leave
+                    # them unset: absent bits make consumers resolve
+                    # capabilities for the real model (or fall back to the safe
+                    # prompted posture), which is the failure direction that
+                    # does not silently produce code-as-prose.
+                    routed_model = runtime_ns.get("model")
+                    routed_model_s = (
+                        routed_model.strip()
+                        if isinstance(routed_model, str) and routed_model.strip()
+                        else None
+                    )
+                    if (
+                        cap_model_s is None
+                        or routed_model_s is None
+                        or routed_model_s == cap_model_s
+                    ):
+                        runtime_ns.setdefault("tool_support", ts)
+                        runtime_ns.setdefault("supports_native_tools", ts == "native")
+                    else:
+                        runtime_ns.setdefault("tool_support_stale_for_model", routed_model_s)
         except Exception:
             pass
 
@@ -3745,6 +3833,55 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("operator_email", operator_email)
+            # prompt_cache posture crosses the hop too (BENCH-B 2026-08-03, the
+            # FIFTH rider of the skills_block P1-2 class): `--no-prompt-cache`
+            # serialized `_runtime.prompt_cache=false` on the ROOT run, but
+            # llm_calls execute in child/grandchild runs whose fresh vars never
+            # carried it — the effect handler read the EXECUTING run's vars,
+            # found nothing, re-defaulted to enabled, and all 48 "nocache"
+            # llm_calls derived session keys (hit_extend), silently invalidating
+            # the A/B. Unlike every rider above, False is a MEANINGFUL value
+            # here, so the gate is PRESENCE with the consumer's types (bool or
+            # dict — exactly what _maybe_inject_prompt_cache_key reads), never
+            # truthiness. Same setdefault semantics: an explicit child posture
+            # wins. Dicts cross as a copy (child mutation must not rewrite the
+            # parent's posture). Inheriting an enabled posture is behaviourally
+            # identical to the old re-default, so cached runs are unchanged.
+            prompt_cache = (parent_rt or {}).get("prompt_cache") if isinstance(parent_rt, dict) else None
+            if isinstance(prompt_cache, (bool, dict)):
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault(
+                    "prompt_cache",
+                    dict(prompt_cache) if isinstance(prompt_cache, dict) else prompt_cache,
+                )
+            # reasoning `thinking` crosses the hop too (2026-08-03 handoff, the
+            # SIXTH rider of the skills_block P1-2 class): thin clients set
+            # `_runtime.thinking` on the ROOT run, but bundle agents do their
+            # LLM work in subflow-spawned CHILD runs (and in react-wrapper
+            # grandchildren, whose visual-Agent spawn inherits from the
+            # EXECUTING run — so a stripped child propagates the loss another
+            # level down). The per-call consumer
+            # (abstractagent generation_params.runtime_llm_params) reads the
+            # executing run's `_runtime.thinking`, found nothing, and every
+            # child LLM call silently ran at the provider/relay default —
+            # store witness 2026-08-03: roots medium, working children None,
+            # five of eight bench arms with reasoning OFF while every layer
+            # above reported medium. Like prompt_cache, False is a MEANINGFUL
+            # value ("reasoning off" is a decision, not an absence), so the
+            # gate is PRESENCE with the consumer's types (bool, or non-empty
+            # str), never truthiness. Same setdefault semantics: an explicit
+            # child value wins. Scalars cross by assignment; consumers
+            # normalize and drop invalid levels (never this hop's job).
+            thinking = (parent_rt or {}).get("thinking") if isinstance(parent_rt, dict) else None
+            if isinstance(thinking, bool) or (isinstance(thinking, str) and thinking.strip()):
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault("thinking", thinking)
         except Exception:
             pass
         is_async = bool(effect.payload.get("async", False))

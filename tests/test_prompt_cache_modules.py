@@ -12,8 +12,20 @@ import pytest
 class _FakeProvider:
     def __init__(self) -> None:
         self.calls: List[Tuple[str, Any]] = []
+        # Minimal stand-in for the provider's in-process prompt-cache store meta.
+        self.key_meta: Dict[str, Dict[str, Any]] = {}
 
     def supports_prompt_cache(self) -> bool:
+        return True
+
+    def prompt_cache_key_meta(self, key: Any) -> Dict[str, Any]:
+        return dict(self.key_meta.get(str(key)) or {})
+
+    def prompt_cache_update_key_meta(self, key: Any, **updates: Any) -> bool:
+        meta = self.key_meta.setdefault(str(key), {})
+        for k, v in updates.items():
+            if v is not None:
+                meta[k] = v
         return True
 
     def get_prompt_cache_capabilities(self) -> Dict[str, Any]:
@@ -65,6 +77,10 @@ class _FakeProvider:
 
     def prompt_cache_clear(self, key: Optional[str] = None) -> bool:
         self.calls.append(("clear", key))
+        if key is None:
+            self.key_meta.clear()
+        else:
+            self.key_meta.pop(str(key), None)
         return True
 
     def prompt_cache_fork(
@@ -78,6 +94,7 @@ class _FakeProvider:
     ) -> bool:
         _ = (make_default, ttl_s, kwargs)
         self.calls.append(("fork", from_key, to_key))
+        self.key_meta.setdefault(str(to_key), {})["forked_from"] = str(from_key)
         return True
 
     def prompt_cache_update(
@@ -136,7 +153,10 @@ def _new_client_for_cache_tests(provider: _FakeProvider):
     return client
 
 
-def test_prompt_cache_modules_appends_incrementally() -> None:
+def test_prompt_cache_forks_once_and_leaves_the_message_lane_to_generate() -> None:
+    """2026-08-02: this method prepares the (system+tools) prefix and forks the session key
+    ONCE. It must not append messages — `_prepare_cache_delta_feed` owns the message lane
+    (token-level LCP + trim), and every append here was work the delta feed had to undo."""
     provider = _FakeProvider()
     client = _new_client_for_cache_tests(provider)
 
@@ -153,8 +173,23 @@ def test_prompt_cache_modules_appends_incrementally() -> None:
         messages=[m1],
     )
 
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
-    assert provider.calls[-1][2] == [m1]
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+    # SEPARATE `system` and `tools` BLOCS (restored 2026-08-03). A bloc is an
+    # independently-keyed slice of one rendered conversation; `system` alone is the bloc
+    # many agents and sessions share, and it must keep its own key. Merging the two
+    # collapsed that abstraction to work around a RENDER bug (chat templates fold the tool
+    # instructions into the single system turn, so two standalone renders emitted two
+    # consecutive `<|im_start|>system` blocks). The bug is fixed where it lives, in
+    # `BaseProvider.prompt_cache_plan_bloc_chain`, which cuts ONE cumulative render at
+    # successor-independent token boundaries — measured reuse 46% -> 99% with the blocs
+    # still separate. Do NOT re-merge these to fix a rendering problem.
+    prepared_modules = provider.calls[0][2]
+    assert len(prepared_modules) == 2
+    assert prepared_modules[0]["module_id"] == "system"
+    assert prepared_modules[0]["system_prompt"] == sys
+    assert "tools" not in prepared_modules[0]
+    assert prepared_modules[1]["module_id"] == "tools"
+    assert prepared_modules[1]["tools"] == tools
 
     provider.calls.clear()
     client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
@@ -164,8 +199,30 @@ def test_prompt_cache_modules_appends_incrementally() -> None:
         messages=[m1, m2],
     )
 
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "update"]
-    assert provider.calls[-1][2] == [m2]
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
+
+
+def test_prompt_cache_recognizes_a_prepared_key_from_a_fresh_client() -> None:
+    """The runtime builds a fresh LLMClient per llm_call effect, so the per-instance state
+    dict is empty on essentially every call. The prepared-ness check must come from the
+    provider's own cache meta, or the session cache is cleared before every generate."""
+    provider = _FakeProvider()
+    client = _new_client_for_cache_tests(provider)
+
+    key = "sess:abc"
+    sys = "SYSTEM"
+
+    client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
+        prompt_cache_key=key, system_prompt=sys, tools=None, messages=[{"role": "user", "content": "hi"}]
+    )
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
+
+    provider.calls.clear()
+    fresh_client = _new_client_for_cache_tests(provider)  # same provider, new client instance
+    fresh_client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
+        prompt_cache_key=key, system_prompt=sys, tools=None, messages=[{"role": "user", "content": "hi"}]
+    )
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
 
 
 def test_prompt_cache_rebuilds_on_tools_change() -> None:
@@ -193,10 +250,14 @@ def test_prompt_cache_rebuilds_on_tools_change() -> None:
         messages=msgs,
     )
 
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
+    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork"]
 
 
-def test_prompt_cache_rebuilds_on_history_divergence() -> None:
+def test_prompt_cache_does_not_clear_on_history_divergence() -> None:
+    """A rewritten transcript tail (loop counters, edits, truncation, a sibling sub-run
+    sharing the derived key) must NOT destroy the session cache. `prompt_cache_clear` also
+    drops MLX's hybrid snapshot for the key; the provider's token-level LCP+trim already
+    handles a divergent tail correctly and keeps the shared prefix."""
     provider = _FakeProvider()
     client = _new_client_for_cache_tests(provider)
 
@@ -214,7 +275,7 @@ def test_prompt_cache_rebuilds_on_history_divergence() -> None:
     )
 
     provider.calls.clear()
-    # Truncate history (not a prefix-extension): should rebuild from prefix and append full list.
+    # Truncate history (not a prefix-extension).
     client._maybe_prepare_prompt_cache(  # type: ignore[attr-defined]
         prompt_cache_key=key,
         system_prompt=sys,
@@ -222,8 +283,8 @@ def test_prompt_cache_rebuilds_on_history_divergence() -> None:
         messages=[m1],
     )
 
-    assert [c[0] for c in provider.calls] == ["prepare_modules", "clear", "fork", "update"]
-    assert provider.calls[-1][2] == [m1]
+    assert [c[0] for c in provider.calls] == ["prepare_modules"]
+    assert "clear" not in [c[0] for c in provider.calls]
 
 
 def test_prompt_cache_skips_module_preparation_for_keyed_provider() -> None:

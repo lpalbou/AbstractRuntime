@@ -944,6 +944,36 @@ def _normalize_prompt_cache_binding_request(params: Dict[str, Any]) -> Optional[
     return dict(binding)
 
 
+def _maybe_inject_runtime_thinking(*, run: RunState, params: Dict[str, Any]) -> None:
+    """Fold the run's `_runtime.thinking` into LLM_CALL params when the call
+    carries no explicit value.
+
+    WHY (wire witness 2026-08-04, probe session acode-74ac46b3b5b2): run-level
+    reasoning is declared once in `_runtime.thinking` and consumed per call.
+    Agent react loops read it via abstractagent's `runtime_llm_params`, but
+    every OTHER LLM_CALL emitter — the visual Agent node's structured-output
+    post-pass (compiler params carry only the node pin/config), plain visual
+    `llm_call` nodes (config/pins only) — sent params without `thinking`, so
+    a run that asked for medium still emitted ABSENT-effort formatting calls.
+    This is the one seam every LLM_CALL crosses, exactly like the
+    audio_policy/stt_language riders below it.
+
+    Precedence: an explicit `params.thinking` wins — INCLUDING False ("off"
+    is a decision, so the gate is key-presence, never truthiness). Then the
+    executing run's `_runtime.thinking` (bool or non-empty str, the consumer
+    vocabulary). A run with neither stays absent and the capability-route
+    default in llm_client applies, unchanged."""
+    if "thinking" in params:
+        return
+    try:
+        runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+    except Exception:
+        return
+    thinking = runtime_ns.get("thinking") if isinstance(runtime_ns, dict) else None
+    if isinstance(thinking, bool) or (isinstance(thinking, str) and thinking.strip()):
+        params["thinking"] = thinking
+
+
 def _maybe_inject_prompt_cache_key(
     *,
     run: RunState,
@@ -1319,6 +1349,48 @@ def _inline_active_text_attachments(
     return updated, (remaining or None)
 
 
+_ABORT_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+)
+
+
+def _looks_like_aborted_generation(result: Any) -> bool:
+    """True when an LLM_CALL result is the corpse of an aborted generation.
+
+    Operator evidence 2026-08-02 (LM Studio 0.3.x + qwen3.6-35b-a3b): a
+    generation cut mid-tool-call returns HTTP 200 with the tool-call PREFACE as
+    content, `tool_calls: []`, `finish_reason: "stop"` and an all-zero usage
+    block. The dropped call appears only in the provider's server log; the wire
+    body has no error field. So `finish_reason` cannot be the detector — the
+    usage block is: text cannot have been produced by a completion that
+    consumed zero prompt tokens and produced zero completion tokens.
+
+    Absent or empty usage is UNKNOWN, never "aborted": we do not manufacture a
+    verdict out of missing evidence. A result carrying tool calls is never lost
+    work. Kept in sync with abstractcore's provider-side detector; either
+    signal alone is enough downstream.
+    """
+    if not isinstance(result, dict):
+        return False
+    if result.get("tool_calls"):
+        return False
+    usage = result.get("usage")
+    if not isinstance(usage, dict) or not usage:
+        return False
+    counters = [usage.get(k) for k in _ABORT_USAGE_KEYS if usage.get(k) is not None]
+    if not counters or any(bool(c) for c in counters):
+        return False
+    for key in ("content", "reasoning"):
+        val = result.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+    return False
+
+
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
@@ -1640,6 +1712,13 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
         fallback_enabled = _coerce_boolish(structured_output_fallback)
         base_params = dict(params)
+        # The structured-output FALLBACK and REPAIR lanes below re-issue
+        # generation from THIS snapshot, which is taken before the per-call
+        # rider block mutates `params_for_call` — without its own injection
+        # the run-level reasoning silently vanished exactly when the model
+        # was struggling (adversary defect A, 2026-08-04). Same presence
+        # gate: an explicit pin (including False) survives untouched.
+        _maybe_inject_runtime_thinking(run=run, params=base_params)
 
         try:
             # View-time dedup of repeated document reads (keeps LLM-visible context lean).
@@ -1686,6 +1765,12 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     stt_language = runtime_ns.get("audio_language")
                 if "stt_language" not in params_for_call and isinstance(stt_language, str) and stt_language.strip():
                     params_for_call["stt_language"] = stt_language.strip()
+
+            # Run-level reasoning rides the same seam (wire witness 2026-08-04:
+            # the Agent structured post-pass and plain llm_call nodes emitted
+            # ABSENT-effort calls inside medium runs). Explicit params win,
+            # including False.
+            _maybe_inject_runtime_thinking(run=run, params=params_for_call)
 
             if structured_requested:
                 structured_model_name = (
@@ -1770,6 +1855,32 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 return value.strip().lower() in {"length", "max_tokens", "max_output_tokens"}
 
             def _bump_max_output_tokens(current: dict[str, Any]) -> dict[str, Any]:
+                """DEPRECATED (2026-08-09) — retained for reference, no longer called.
+
+                This raised `max_output_tokens` on `finish_reason=length` so the call
+                could be retried with a bigger budget. Both of its cases are wrong:
+
+                * DEFAULT POLICY. Callers send the model's maximum output budget unless
+                  they say otherwise, and the bump is clamped by `min(bumped, cap)` where
+                  `cap` falls back to the model's own capabilities. At the maximum that is
+                  `min(2*max, max) = max` — a no-op. The "escalating retry" is therefore a
+                  byte-identical re-run of a request that already failed, up to
+                  `max_truncation_attempts` times.
+                * EXPLICIT CALLER BUDGET. If an operator DID name a smaller budget, doubling
+                  it silently overrides their number. The framework budget law is explicit
+                  that what the caller named is never touched, high or low.
+
+                A budget that is already maximal cannot be increased, so truncation is a
+                fact to report, not a condition to retry. The call site now records the
+                truncation, warns once, and lets the terminal block surface
+                `finish_reason=length` to the caller. `retry_on_truncation` and
+                `max_truncation_attempts` are deprecated with it and no longer change
+                behaviour; `allow_truncation` is unaffected and still returns the partial.
+
+                Kept (not deleted) so the rationale stays attached to the code, and because
+                a provider that reports `length` for a reason OTHER than an exhausted output
+                budget would need this discussion re-opened rather than re-invented.
+                """
                 updated = dict(current)
                 raw = updated.get("max_output_tokens")
                 if raw is None:
@@ -1850,18 +1961,33 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 updated.pop("max_tokens", None)
                 return updated
 
+            # DEPRECATED (2026-08-09): `retry_on_truncation` / `no_truncation` and
+            # `max_truncation_attempts` / `truncation_max_attempts` no longer change
+            # behaviour — truncation is reported, never retried with a raised budget
+            # (see `_bump_max_output_tokens` for the full rationale). Still parsed so
+            # existing payloads keep working, and a caller who explicitly sets one is
+            # told it is inert rather than left to assume it took effect.
             retry_on_truncation_raw = payload.get("retry_on_truncation")
             if retry_on_truncation_raw is None:
                 retry_on_truncation_raw = payload.get("no_truncation")
             retry_on_truncation = True
             if retry_on_truncation_raw is not None:
                 retry_on_truncation = _coerce_boolish(retry_on_truncation_raw)
+                logger.warning(
+                    "LLM_CALL retry_on_truncation is DEPRECATED and ignored; truncation is "
+                    "reported once and never retried with a raised budget "
+                    "(a maximal budget cannot be raised; an operator budget must not be "
+                    "overridden). Use allow_truncation=true to accept a partial answer.",
+                    requested=retry_on_truncation,
+                )
 
             allow_truncation_raw = payload.get("allow_truncation")
             if allow_truncation_raw is None:
                 allow_truncation_raw = payload.get("allow_truncated")
             allow_truncation = _coerce_boolish(allow_truncation_raw) if allow_truncation_raw is not None else False
 
+            # DEPRECATED with `retry_on_truncation` above: the loop now always makes
+            # exactly one attempt, so this bound is inert. Parsed and warned-about only.
             max_truncation_attempts = 3
             raw_attempts = payload.get("max_truncation_attempts")
             if raw_attempts is None:
@@ -1871,6 +1997,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     max_truncation_attempts = max(1, int(raw_attempts))
                 except Exception:
                     max_truncation_attempts = 3
+                logger.warning(
+                    "LLM_CALL max_truncation_attempts is DEPRECATED and ignored; the call is "
+                    "attempted once and truncation is reported, never retried.",
+                    requested=max_truncation_attempts,
+                )
 
             params_attempt = dict(params_for_call)
             base_params_attempt = dict(base_params)
@@ -1943,19 +2074,29 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     if allow_truncation:
                         break
 
-                    if not retry_on_truncation or attempt >= max_truncation_attempts:
-                        break
-
-                    bumped = _bump_max_output_tokens(params_attempt)
+                    # DEPRECATED PATH, DELIBERATELY NOT TAKEN (see
+                    # `_bump_max_output_tokens`). Truncation is reported once, loudly,
+                    # and the call is NOT retried with a raised budget. Retrying could
+                    # only ever do one of two wrong things:
+                    #
+                    #   * default policy — the budget already IS the model's max, so the
+                    #     bump resolves to `min(2*max, max) = max` and the "retry" re-runs
+                    #     a byte-identical request. Pure burn, up to 3x.
+                    #   * explicit caller budget — raising it overrides a number the
+                    #     operator NAMED, which the framework budget law forbids: what the
+                    #     caller named is never touched.
+                    #
+                    # Either way the honest move is to surface `finish_reason=length` to
+                    # the caller, which the terminal block below already does.
                     logger.warning(
-                        "LLM_CALL output truncated; retrying with higher max_output_tokens",
+                        "LLM_CALL output truncated (finish_reason=length); not retrying — "
+                        "the budget cannot be raised above the model's maximum, and an "
+                        "operator-set budget must not be overridden",
                         finish_reason=finish_reason,
                         attempt=attempt,
                         max_output_tokens=params_attempt.get("max_output_tokens"),
-                        next_max_output_tokens=bumped.get("max_output_tokens"),
                     )
-                    params_attempt = bumped
-                    base_params_attempt = _bump_max_output_tokens(base_params_attempt)
+                    break
 
                 if _finish_reason_is_truncation(last_finish_reason) and not allow_truncation:
                     budgets = ", ".join(
@@ -1982,6 +2123,42 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         attempts=len(truncation_attempts),
                         max_output_tokens=params_attempt.get("max_output_tokens"),
                     )
+
+                # ABORTED GENERATION (operator 2026-08-02) — the OTHER way a
+                # generation dies. finish_reason says "stop", so the loop above
+                # never fires; the tell is a zero-token usage block next to
+                # non-empty content and no tool calls. The provider cut the
+                # generation mid-flight (client disconnect / server stop) and
+                # DROPPED the tool call it was emitting; what comes back is the
+                # preface, which downstream read as an ordinary assistant turn.
+                # Record it on the step result so the LEDGER carries the fault
+                # (`aborted_generation` rides `llm_call`'s durable result, and
+                # the agent loops' parse nodes route it to a named retry rather
+                # than to an intent guess). Not raised: the handler cannot ask
+                # for a smaller unit of work — the loop can, and a blind replay
+                # of a multi-minute generation is the cure costing more than
+                # the disease.
+                if _looks_like_aborted_generation(result):
+                    logger.warning(
+                        "LLM_CALL generation was aborted mid-flight; any tool call it carried was lost",
+                        finish_reason=last_finish_reason,
+                        usage=result.get("usage") if isinstance(result, dict) else None,
+                    )
+                    meta = result.get("metadata") if isinstance(result, dict) else None
+                    if not isinstance(meta, dict):
+                        meta = {}
+                        if isinstance(result, dict):
+                            result["metadata"] = meta
+                    meta["generation_aborted"] = True
+                    meta.setdefault("output_truncated", True)
+                    meta.setdefault("truncation_kind", "aborted_generation")
+                    runtime_observability["aborted_generation"] = {
+                        "finish_reason": last_finish_reason,
+                        "usage": result.get("usage") if isinstance(result, dict) else None,
+                        "content_preview": (
+                            str(result.get("content") or "")[:200] if isinstance(result, dict) else None
+                        ),
+                    }
 
                 # Keep observability aligned with the actual params used.
                 if had_truncation or len(truncation_attempts) > 1:

@@ -17,9 +17,15 @@ Two symptoms, three runtime fixes:
 from __future__ import annotations
 
 from abstractruntime.identity.chat import (
+    _CARD_TEXT_MAX,
+    _REFLECTION_DIGEST_MAX,
+    _SHEET_LINE_MAX,
+    _bounded_card_text,
     _handle_origin_label,
+    _sheet_line,
     floored_reflection_digest,
 )
+from abstractruntime.identity.reflection import _receipt_gist
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +57,32 @@ def test_empty_reply_still_floors() -> None:
     assert floored is True
     assert "Look-back over 2 moment(s)" in digest
     assert "walked the workspace" in digest
+
+
+def test_long_reflection_digest_marker_fits_inside_the_bound() -> None:
+    digest, floored = floored_reflection_digest("x" * 500, [("ex:1", "ignored")])
+    assert floored is False
+    assert len(digest) <= _REFLECTION_DIGEST_MAX
+    assert "#TRUNCATION" in digest
+
+
+def test_sheet_line_marker_fits_inside_the_bound() -> None:
+    line = _sheet_line("x" * 500)
+    assert len(line) <= _SHEET_LINE_MAX
+    assert "#TRUNCATION" in line
+
+
+def test_receipt_gist_keeps_total_length_within_the_requested_chars() -> None:
+    gist = _receipt_gist("x" * 200, 80)
+    assert len(gist) <= 80
+    assert gist.endswith("…")
+
+
+def test_bounded_card_text_marker_fits_inside_the_card_bound() -> None:
+    card, kept = _bounded_card_text(("Sentence. " * 300).strip())
+    assert len(card) <= _CARD_TEXT_MAX
+    assert kept < len(("Sentence. " * 300).strip())
+    assert "#TRUNCATION" in card
 
 
 # ---------------------------------------------------------------------------

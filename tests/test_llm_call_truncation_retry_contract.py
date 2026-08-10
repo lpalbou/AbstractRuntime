@@ -40,7 +40,17 @@ def _run_state() -> RunState:
     )
 
 
-def test_llm_call_retries_on_truncation_and_returns_untruncated() -> None:
+def test_llm_call_does_not_retry_truncation_with_a_raised_budget() -> None:
+    """CONTRACT CHANGE 2026-08-09: truncation is reported, never retried.
+
+    This used to assert the opposite — one retry with a doubled budget. That retry was
+    wrong in both of its cases: under the default policy the budget already IS the
+    model's maximum, so the bump clamps to `min(2*max, max) = max` and the retry re-runs
+    a byte-identical request; and when an operator DID name a budget, doubling it
+    overrides a number the budget law says must never be touched. A maximal budget
+    cannot be raised, so `finish_reason=length` is a fact to surface, not a condition
+    to retry. `_bump_max_output_tokens` is kept in the source, deprecated and uncalled.
+    """
     llm = _FakeLLM(always_truncate=False)
     handler = make_llm_call_handler(llm=llm, artifact_store=None)
     run = _run_state()
@@ -59,16 +69,14 @@ def test_llm_call_retries_on_truncation_and_returns_untruncated() -> None:
     )
 
     out = handler(run, effect, None)
-    assert out.status == "completed"
-    assert isinstance(out.result, dict)
-    assert out.result.get("content") == "ok"
-    assert len(llm.calls) == 2
-    assert llm.calls[0].get("max_output_tokens") == 10
-    assert isinstance(llm.calls[1].get("max_output_tokens"), int)
-    assert int(llm.calls[1]["max_output_tokens"]) > 10
+    # The first response is truncated; with no retry that is the whole story.
+    assert len(llm.calls) == 1, "truncation must not trigger a second call"
+    assert llm.calls[0].get("max_output_tokens") == 10, "the caller's budget is untouched"
+    assert out.status == "failed"
+    assert "truncated" in str(out.error).lower()
 
 
-def test_llm_call_fails_loudly_if_still_truncated() -> None:
+def test_llm_call_fails_loudly_and_only_once_if_truncated() -> None:
     llm = _FakeLLM(always_truncate=True)
     handler = make_llm_call_handler(llm=llm, artifact_store=None)
     run = _run_state()
@@ -90,4 +98,27 @@ def test_llm_call_fails_loudly_if_still_truncated() -> None:
     assert out.status == "failed"
     assert isinstance(out.error, str)
     assert "truncated" in out.error.lower()
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
+
+
+def test_allow_truncation_still_returns_the_partial_answer() -> None:
+    """`allow_truncation` is deliberately UNCHANGED by the deprecation."""
+    llm = _FakeLLM(always_truncate=True)
+    handler = make_llm_call_handler(llm=llm, artifact_store=None)
+    run = _run_state()
+
+    effect = Effect(
+        type=EffectType.LLM_CALL,
+        payload={
+            "prompt": "hello",
+            "provider": "lmstudio",
+            "model": "unit-test-model",
+            "max_out_tokens": 10,
+            "allow_truncation": True,
+        },
+    )
+
+    out = handler(run, effect, None)
+    assert out.status == "completed"
+    assert out.result.get("content") == "partial"
+    assert len(llm.calls) == 1

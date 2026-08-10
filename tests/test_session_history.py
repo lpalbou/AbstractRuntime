@@ -257,7 +257,14 @@ def test_session_chat_messages_caps_to_newest_window_without_splitting_turns() -
     # 5 would split a turn — the leading assistant half is dropped.
     assert len(messages) == 4
     assert messages[0]["role"] == "user"
-    assert [m["content"] for m in messages] == ["q8", "a8", "q9", "a9"]
+    # Whole-turn drops are LOUD (ADR-0026 §1, budget audit 2026-08-02): the
+    # oldest surviving message carries a labeled marker naming the budget that
+    # caused the cut. The pair shape and the message count are untouched.
+    assert messages[0]["content"].endswith("q8")
+    assert "#TRUNCATION" in messages[0]["content"]
+    assert "max_messages=5" in messages[0]["content"]
+    assert messages[0]["metadata"]["dropped_turns"] == 8
+    assert [m["content"] for m in messages[1:]] == ["a8", "q9", "a9"]
 
 
 def test_session_chat_messages_truncates_long_content_with_label() -> None:
@@ -307,6 +314,10 @@ def test_session_chat_messages_total_char_budget_drops_oldest_whole_turns() -> N
         "run-2",
         "run-2",
     ]
+    # ...and says so (ADR-0026 §1): the drop names max_total_chars.
+    assert "#TRUNCATION" in messages[0]["content"]
+    assert "max_total_chars=700" in messages[0]["content"]
+    assert messages[0]["metadata"]["dropped_turns"] == 1
 
     # A single over-budget newest turn still replays (never an empty seed).
     tight = session_chat_messages(

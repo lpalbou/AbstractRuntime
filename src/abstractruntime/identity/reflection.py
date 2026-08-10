@@ -64,6 +64,29 @@ MAX_FEELINGS_PER_SESSION = 5
 # cap sits at the interests level, not the feelings level.
 MAX_REALIZATIONS_PER_SESSION = 2
 
+# Echo-receipt bound (ADR-0026): receipts quote a head of the elected text —
+# the full text always rides in the election itself. Marked when it cuts.
+_RECEIPT_GIST_CHARS = 80
+
+
+def _receipt_gist(text: Any, chars: int) -> str:
+    """A receipt-sized head of `text`, MARKED when it actually cuts.
+
+    ADR-0026 §1: these strings are substituted into the entity's own reply
+    and read back next turn — an unmarked cut reads as the whole elected
+    text. The election itself always carries the full words.
+    #[WARNING:TRUNCATION] echo-receipt bound; election keeps the full text
+    """
+    s = str(text or "")
+    if chars <= 0:
+        return ""
+    if len(s) <= chars:
+        return s
+    marker = "…"
+    if chars <= len(marker):
+        return marker[:chars]
+    return s[: chars - len(marker)].rstrip() + marker
+
 
 @dataclass
 class FeelingElection:
@@ -233,9 +256,9 @@ def parse_feel_blocks(
                     # sheet lines arrive as "N. description" — strip the number
                     desc = re.sub(r"^\d+\.\s*", "", desc).strip()
                     if desc:
-                        shown = f'about "{desc[:60]}"'
+                        shown = f'about "{_receipt_gist(desc, 60)}"'
             block_lines.append(
-                f'[felt: {shown} {signed}{marks} - "{e.reason[:80]}"]'
+                f'[felt: {shown} {signed}{marks} - "{_receipt_gist(e.reason, 80)}"]'
             )
         return " ".join(block_lines)
 
@@ -370,7 +393,11 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
             )
             return f"[realization refused - at most {MAX_REALIZATIONS_PER_SESSION} per session]"
         realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches))
-        gist = body[:80]
+        # ADR-0026 §1: the receipt is an echo (the FULL body rides in the
+        # election above), but a bare 80-char cut reads back to him as the
+        # whole realization — mark the cut so the echo cannot be mistaken
+        # for the record.  #[WARNING:TRUNCATION] realize-receipt echo bound
+        gist = _receipt_gist(body, _RECEIPT_GIST_CHARS)
         return f'[realized: "{gist}" - held for sleep]'
 
     marked = _REALIZE_FENCE_RE.sub(_sub, reply)

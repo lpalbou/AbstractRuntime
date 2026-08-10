@@ -1212,6 +1212,12 @@ def test_local_provider_models_preserve_provider_errors(monkeypatch) -> None:
             "base_url": "https://endpoint.example.test/v1",
             "api_key": "secret",
             "raise_on_error": True,
+            # Discovery probes are ALWAYS bounded now (operator ruling
+            # 2026-08-03): a caller that passes no timeout used to send no
+            # `timeout` kwarg at all, so the probe inherited the provider's own
+            # budget (default_timeout is 7200s) and one unreachable host could
+            # stall a whole catalog.
+            "timeout": 5.0,
         }
     ]
 

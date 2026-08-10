@@ -70,6 +70,32 @@ that too (the same block, starting "blocked:" instead of "done:"). An
 honest blocked is worth more than a pretended done."""
 
 
+# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3: an explicit,
+# documented, auditable safeguard — not a hidden performance knob). This is a
+# TOTAL per-attempt LLM budget, so it CAN cut a healthy long generation on a
+# slow local model; it is deliberately low because these are INTERACTIVE lanes
+# where a human is watching "Thinking...", and it fails loudly (the 180s
+# wall-clock retry budget bounds the whole ladder at ~3 minutes). Operators
+# running big local models MUST raise it: ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S
+# (0 = no client timeout) and ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S.
+def _entity_patience_window() -> "tuple[float | None, float | None]":
+    """(per-attempt total, wall-clock retry budget) — env-overridable."""
+    import os as _os
+
+    def _f(name: str, default: float):
+        raw = str(_os.getenv(name) or "").strip()
+        if raw:
+            try:
+                default = float(raw)
+            except ValueError:
+                pass
+        return None if default <= 0 else default
+
+    return _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", 120.0), _f(
+        "ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", 180.0
+    )
+
+
 def read_work_order(home_dir: Path) -> Optional[str]:
     """The standing work order, or None. Pure read; unreadable = None with
     the day falling back to personal (a broken order file must never kill
@@ -3930,8 +3956,7 @@ def build_session_factory(
         # the timeout alone (labeled).
         kwargs: dict[str, Any] = {
             "model": day_model,
-            "timeout": 120,
-            "retry_wall_clock_budget_s": 180,
+            **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
             # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
             # the absolute budget; a stream silent for 60s on an
             # interactive lane is already dead - abort at the socket, let
@@ -4297,8 +4322,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         kwargs: Dict[str, Any] = {"model": n_model}
         if n_provider in ("lmstudio", "openai-compatible", "openai_compatible"):
             kwargs["base_url"] = args.base_url
-        kwargs.setdefault("timeout", 120)
-        kwargs.setdefault("retry_wall_clock_budget_s", 180)
+        _pw_timeout, _pw_budget = _entity_patience_window()
+        kwargs.setdefault("timeout", _pw_timeout)
+        kwargs.setdefault("retry_wall_clock_budget_s", _pw_budget)
         try:
             return _cl(n_provider, **kwargs)
         except TypeError:

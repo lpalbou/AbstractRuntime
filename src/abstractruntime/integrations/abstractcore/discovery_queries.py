@@ -14,6 +14,84 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
+# DISCOVERY IS A LOOKUP, NOT A WORKLOAD (operator ruling 2026-08-03).
+#
+# Asking "which providers are up, and what models do they have" must answer
+# quickly or not at all: it populates pickers, and a picker that hangs is worse
+# than a picker that says "nothing found". Callers that pass no timeout used to
+# pass NO `timeout` kwarg at all, so the probe inherited the provider's own
+# budget -- `timeouts.default_timeout` is 7200s -- and one unreachable host
+# could stall a whole catalog. Five seconds is the operator's number.
+#
+# This bounds DISCOVERY ONLY. Inference, generation and downloads run through
+# different call paths and keep their own (long, correct) budgets. Override per
+# call by passing `timeout_s`, or globally with ABSTRACTRUNTIME_DISCOVERY_TIMEOUT_S.
+_DISCOVERY_TIMEOUT_S_DEFAULT = 5.0
+
+
+def _discovery_timeout_s(timeout_s: Optional[float] = None) -> float:
+    """The probe budget for one discovery call. Never None, never unbounded."""
+    if timeout_s is not None:
+        try:
+            value = float(timeout_s)
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    raw = os.environ.get("ABSTRACTRUNTIME_DISCOVERY_TIMEOUT_S")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    return _DISCOVERY_TIMEOUT_S_DEFAULT
+
+
+# ONE BUDGET FOR THE CATALOG, NOT ONE PER PROVIDER (operator ruling 2026-08-03).
+#
+# Providers in a catalog listing are INDEPENDENT: each is a separate host and a
+# separate round trip, and none of them reads the others' answers. Probed one
+# after another, a catalog costs the SUM of the probe budgets -- measured at
+# 26.5s for the seven embedding providers, every one of them bounded correctly
+# at 5s. Probed together it costs the SLOWEST provider: 5.1s for the same seven.
+#
+# The pool is bounded (a catalog must not spawn a thread per provider on a box
+# already running inference), and results are merged back in the caller's
+# ORIGINAL order -- concurrency must never reorder a picker.
+_DISCOVERY_MAX_WORKERS = 8
+
+
+def _probe_in_parallel(items: list[Any], probe: Any) -> list[tuple[Any, Any, Optional[BaseException]]]:
+    """Run ``probe(item)`` for every item at once, preserving input order.
+
+    Returns ``[(item, result, error)]`` with one row per input, in the SAME
+    order as ``items``. A probe that raises reports its exception in ``error``
+    with ``result`` None, so callers reproduce their serial ``except`` branch
+    exactly -- including the error text, which several catalogs surface.
+    """
+    if not items:
+        return []
+    if len(items) == 1:
+        try:
+            return [(items[0], probe(items[0]), None)]
+        except Exception as exc:  # noqa: BLE001 - mirrors the serial except branch
+            return [(items[0], None, exc)]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(items), _DISCOVERY_MAX_WORKERS)) as pool:
+        futures = [pool.submit(probe, item) for item in items]
+        out: list[tuple[Any, Any, Optional[BaseException]]] = []
+        for item, future in zip(items, futures):
+            try:
+                out.append((item, future.result(), None))
+            except Exception as exc:  # noqa: BLE001 - mirrors the serial except branch
+                out.append((item, None, exc))
+    return out
+
+
 _VISION_TASKS = {"text_to_image", "image_to_image", "image_upscale", "text_to_video", "image_to_video"}
 _VISION_TASKS_MESSAGE = "task must be one of: text_to_image, image_to_image, image_upscale, text_to_video, image_to_video"
 _VISION_ADAPTER_TASKS = {"text_to_image", "image_to_image", "text_to_video", "image_to_video"}
@@ -570,6 +648,10 @@ def _runtime_capability_owner_config(
         "ABSTRACTVISION_BACKEND": "vision_backend",
         "ABSTRACTVISION_BASE_URL": "vision_base_url",
         "ABSTRACTVISION_API_KEY": "vision_api_key",
+        # Mapped so an operator-set budget still wins over the discovery
+        # default applied below; the plugin reads this env var itself, and
+        # without the mapping our default would silently shadow it.
+        "ABSTRACTVISION_TIMEOUT_S": "vision_timeout_s",
         "ABSTRACTVISION_MODEL_ID": "vision_model_id",
         "ABSTRACTVISION_DIFFUSERS_MODEL_ID": "vision_model_id",
         "ABSTRACTVISION_MFLUX_MODEL": "vision_mflux_model",
@@ -591,6 +673,31 @@ def _runtime_capability_owner_config(
         value = os.getenv(env_key)
         if isinstance(value, str) and value.strip() and cfg_key not in cfg:
             cfg[cfg_key] = value.strip()
+    # BOUND THE REMOTE ENGINES, AND ONLY THE REMOTE ONES (operator ruling
+    # 2026-08-03). This owner config is built for DISCOVERY only -- every caller
+    # lives in this module -- so the budget here never reaches synthesis.
+    #
+    # `voice_remote_timeout_s` is the plugin's own knob for calls that leave the
+    # machine; it defaulted to unbounded, so one unreachable TTS endpoint stalled
+    # the whole voice catalog. Measured: 66s and then a DROPPED connection (no
+    # HTTP status at all), against ~1s when reachable. Local engines never read
+    # it -- they load weights from disk, which is legitimately slow and must not
+    # be cut off at 5s.
+    cfg.setdefault("voice_remote_timeout_s", _discovery_timeout_s())
+    # `vision_timeout_s` is the SAME knob for AbstractVision, and it was the
+    # single biggest number in the whole discovery family. Unset, the
+    # OpenAI-compatible vision backend builds its catalog client with
+    # timeout_s=300.0; against an unreachable host the kernel's own TCP
+    # connect ceiling lands first, so `local_list_vision_provider_models`
+    # measured 82.5s of which ONE socket.connect was 75.00s (91% of wall,
+    # cProfile + connect census). Not fifteen providers -- one connect nobody
+    # had bounded.
+    #
+    # On this backend timeout_s reaches the CATALOG path only: it feeds
+    # `_control_timeout()`, used by `_get_json` (GET /models), while
+    # `_generation_timeout()` returns None and stays unbounded. And this owner
+    # config is discovery-only regardless -- every caller lives in this module.
+    cfg.setdefault("vision_timeout_s", _discovery_timeout_s())
     return cfg
 
 
@@ -692,8 +799,7 @@ def local_list_provider_models(
         kwargs["base_url"] = base_url.strip()
     if isinstance(provider_api_key, str) and provider_api_key.strip():
         kwargs["api_key"] = provider_api_key.strip()
-    if timeout_s is not None:
-        kwargs["timeout"] = float(timeout_s)
+    kwargs["timeout"] = _discovery_timeout_s(timeout_s)
     try:
         input_capabilities = _provider_model_input_capabilities(input_type)
         output_capabilities = _provider_model_output_capabilities(output_type)
@@ -846,21 +952,53 @@ def local_list_embedding_models(
     remote_like = [p for p in providers if p != "huggingface"]
     if provider_text and provider_text != "huggingface":
         remote_like = [provider_text]
-    for provider_id in remote_like:
+
+    # THE EMBEDDING PROVIDERS ARE PROBED TOGETHER, NOT ONE AFTER ANOTHER.
+    # Measured serially against one unreachable host: lmstudio 5.14s, ollama
+    # 5.02s, vllm 5.02s, openai 1.29s, openai-compatible 5.02s, openrouter
+    # 0.02s, portkey 5.02s -- 26.5s of wall for a picker, with every single
+    # probe already correctly bounded at 5s. The budget was never the problem;
+    # the summation was.
+    #
+    # Safe to thread: `get_available_models_for_provider` builds a FRESH
+    # provider instance per call and shares nothing mutable between distinct
+    # provider names -- the registry's only write is the idempotent lazy
+    # `provider_info.provider_class` assignment, which is per-provider and
+    # guarded underneath by the import lock. The imports and the config/registry
+    # singletons below are warmed on THIS thread first, so no worker races to
+    # construct them.
+    if remote_like:
         try:
             from abstractcore.providers.model_capabilities import ModelOutputCapability
-            from abstractcore.providers.registry import get_available_models_for_provider
+            from abstractcore.providers.registry import (
+                get_available_models_for_provider,
+                get_provider_registry,
+            )
 
-            kwargs: Dict[str, Any] = {"output_capabilities": [ModelOutputCapability.EMBEDDINGS]}
+            try:
+                get_provider_registry()
+            except Exception:  # noqa: BLE001 - warming is best effort; probes report their own errors
+                pass
+
+            base_kwargs: Dict[str, Any] = {"output_capabilities": [ModelOutputCapability.EMBEDDINGS]}
             if isinstance(base_url, str) and base_url.strip():
-                kwargs["base_url"] = base_url.strip()
+                base_kwargs["base_url"] = base_url.strip()
             if isinstance(provider_api_key, str) and provider_api_key.strip():
-                kwargs["api_key"] = provider_api_key.strip()
-            if timeout_s is not None:
-                kwargs["timeout"] = float(timeout_s)
-            add_models(provider_id, list(get_available_models_for_provider(provider_id, **kwargs) or []))
-        except Exception as exc:
-            errors.append(f"{provider_id}: {exc}")
+                base_kwargs["api_key"] = provider_api_key.strip()
+            base_kwargs["timeout"] = _discovery_timeout_s(timeout_s)
+
+            def _probe_embedding_provider(provider_id: str) -> list[str]:
+                return list(get_available_models_for_provider(provider_id, **dict(base_kwargs)) or [])
+
+            probed = _probe_in_parallel(list(remote_like), _probe_embedding_provider)
+        except Exception as exc:  # noqa: BLE001 - an import failure used to fail every provider
+            probed = [(provider_id, None, exc) for provider_id in remote_like]
+
+        for provider_id, models, error in probed:
+            if error is not None:
+                errors.append(f"{provider_id}: {error}")
+                continue
+            add_models(provider_id, list(models or []))
 
     if provider_text:
         models_by_provider = {

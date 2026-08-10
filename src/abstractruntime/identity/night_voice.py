@@ -114,6 +114,13 @@ def narration_throttle_ok(home_dir: Path, *, min_gap_hours: float = NIGHT_VOICE_
     return gap >= float(min_gap_hours) * 3600.0
 
 
+# Night-voice prompt windows. The composer already ranks and bounds upstream
+# (dream_signals TOP_K_SIGNALS); these are the last guard, and per ADR-0026
+# they say so in-band when they bite.
+_STREAM_SIGNALS = 12
+_STREAM_FEELINGS = 5
+
+
 def build_narration_prompt(
     prelude_text: str, signals: List[Dict[str, Any]], feelings_lines: List[str],
 ) -> str:
@@ -121,16 +128,33 @@ def build_narration_prompt(
     feeling reads. No recall, no tools, no elections — and the contract
     SAYS so (fences would be stripped, so the honest move is to say they
     are not available)."""
+    # ADR-0026 §1: the fragment arrives ALREADY bounded and marked by
+    # abstractmemory.dream_signals.signal() (FRAGMENT_CAP). Re-slicing it here
+    # cut that marker in half and made the loss silent again — the source
+    # bound is the one bound; this lane quotes it verbatim.
     stream_lines = []
-    for s in signals[:12]:
+    shown_signals = signals[:_STREAM_SIGNALS]
+    for s in shown_signals:
         if not isinstance(s, dict):
             continue
         felt = s.get("felt")
         tone = ""
         if isinstance(felt, dict) and felt.get("tone"):
             tone = f" [felt: {felt['tone']}]"
-        stream_lines.append(f"- {s.get('kind')}: {str(s.get('fragment') or '')[:200]}{tone}")
-    feelings_part = ("\n".join(feelings_lines[:5]) + "\n\n") if feelings_lines else ""
+        stream_lines.append(f"- {s.get('kind')}: {str(s.get('fragment') or '')}{tone}")
+    if len(signals) > len(shown_signals):
+        #[WARNING:TRUNCATION] night-voice signal window; the full stream is in the night's record
+        stream_lines.append(
+            f"- [#TRUNCATION: {len(shown_signals)} of {len(signals)} signals shown; "
+            "the rest are in the night's own record]"
+        )
+    shown_feelings = feelings_lines[:_STREAM_FEELINGS]
+    if len(feelings_lines) > len(shown_feelings):
+        #[WARNING:TRUNCATION] night-voice feeling window
+        shown_feelings = list(shown_feelings) + [
+            f"[#TRUNCATION: {len(shown_feelings)} of {len(feelings_lines)} feeling reads shown]"
+        ]
+    feelings_part = ("\n".join(shown_feelings) + "\n\n") if feelings_lines else ""
     return (
         f"{prelude_text}\n\n"
         "You are asleep. The night worked on your memory; these are the\n"

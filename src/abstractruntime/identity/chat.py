@@ -85,6 +85,12 @@ SUMMON_POSTURE_SELF_FRACTION = 0.5
 DEFAULT_HISTORY_TURNS = 10  # declared tunable, not a fear cap (width-over-fear)
 MAX_DIARY_BLOCKS_PER_TURN = 3
 
+# The authored world-model card bound. A card is orientation (the prompt asks
+# for 3-6 sentences), not an essay — but per ADR-0026 the bound may never be
+# silent: an over-long briefing is cut on a sentence boundary, marked in-band,
+# and announced on the entity's own out-channel.
+_CARD_TEXT_MAX = 1600
+
 _DIARY_FENCE_RE = re.compile(
     r"```diary([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE
 )
@@ -109,6 +115,98 @@ _LIVENESS_CLAIM_RE = re.compile(
 _MARKERS_ONLY_RE = re.compile(r"^\s*(?:\[[^\[\]\n]*\]\s*)+$")
 
 
+# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3: an explicit,
+# documented, auditable safeguard — not a hidden performance knob). This is a
+# TOTAL per-attempt LLM budget, so it CAN cut a healthy long generation on a
+# slow local model; it is deliberately low because these are INTERACTIVE lanes
+# where a human is watching "Thinking...", and it fails loudly (the 180s
+# wall-clock retry budget bounds the whole ladder at ~3 minutes). Operators
+# running big local models MUST raise it: ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S
+# (0 = no client timeout) and ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S.
+def _entity_patience_window() -> "tuple[float | None, float | None]":
+    """(per-attempt total, wall-clock retry budget) — env-overridable."""
+    import os as _os
+
+    def _f(name: str, default: float):
+        raw = str(_os.getenv(name) or "").strip()
+        if raw:
+            try:
+                default = float(raw)
+            except ValueError:
+                pass
+        return None if default <= 0 else default
+
+    return _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", 120.0), _f(
+        "ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", 180.0
+    )
+
+
+# The session-summary digest bound. This string is INGESTED as the durable
+# reflection record's digest (ADR-0026 §2 critical path), so the bound may
+# never be silent: an unmarked cut reads back forever as the whole look-back.
+_REFLECTION_DIGEST_MAX = 280
+
+
+def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
+    """Bound `text` INCLUDING the marker itself."""
+    s = str(text or "")
+    if max_chars <= 0 or len(s) <= max_chars:
+        return s
+    marker_s = str(marker or "")
+    if not marker_s:
+        return s[:max_chars]
+    keep = max_chars - len(marker_s)
+    if keep <= 0:
+        return marker_s[:max_chars]
+    return s[:keep].rstrip() + marker_s
+
+
+def _bounded_digest(text: str) -> str:
+    """Bound the session digest, MARKED when the bound bites.
+    #[WARNING:TRUNCATION] reflection digest bounded; the verbatim episode keeps the full reply
+    """
+    return _bounded_with_marker(
+        text,
+        max_chars=_REFLECTION_DIGEST_MAX,
+        marker="… [#TRUNCATION: digest bounded]",
+    )
+
+
+# The session-sheet moment bound. Sheet lines ride BOTH the reflection prompt
+# and the card-authoring prompt — a silent cut there is the entity being asked
+# to reflect on an amputated account of its own turn (ADR-0026 §1).
+_SHEET_LINE_MAX = 160
+
+
+def _sheet_line(digest: Any) -> str:
+    """One sheet moment, bounded and MARKED when the bound bites.
+    #[WARNING:TRUNCATION] session-sheet moment bound; the formed episode keeps the full digest
+    """
+    return _bounded_with_marker(
+        digest,
+        max_chars=_SHEET_LINE_MAX,
+        marker="… [#TRUNCATION: moment line bounded]",
+    )
+
+
+def _bounded_card_text(text: str) -> tuple[str, int]:
+    """Bound an authored world-model card INCLUDING its truncation marker."""
+    s = str(text or "")
+    if len(s) <= _CARD_TEXT_MAX:
+        return s, len(s)
+    marker = (
+        f" [#TRUNCATION: briefing cut by the {_CARD_TEXT_MAX}-char card bound; "
+        f"full draft was {len(s)} chars]"
+    )
+    keep = max(_CARD_TEXT_MAX - len(marker), 0)
+    cut = s[:keep]
+    dot = cut.rfind(". ")
+    if dot > keep // 2:
+        cut = cut[: dot + 1]
+    kept = len(cut.rstrip())
+    return cut.rstrip() + marker, kept
+
+
 def floored_reflection_digest(
     marked_reply: str, sheet: List[Tuple[Optional[str], str]]
 ) -> Tuple[str, bool]:
@@ -130,12 +228,15 @@ def floored_reflection_digest(
     floored digest would read as entity-authored to that scan)."""
     prose = " ".join(str(marked_reply or "").split())
     if prose and not _MARKERS_ONLY_RE.match(prose):
-        return prose[:280], False
+        return _bounded_digest(prose), False
     descs = [str(d or "").strip() for _rid, d in (sheet or []) if str(d or "").strip()]
     floor = f"Look-back over {len(sheet or [])} moment(s)"
     if descs:
         floor += ": " + " | ".join(descs[:3])
-    return ((prose + " - " if prose else "") + floor)[:280], True
+        if len(descs) > 3:
+            #[WARNING:TRUNCATION] floored digest quotes 3 sheet moments
+            floor += f" (+{len(descs) - 3} more moment(s) on the sheet)"
+    return _bounded_digest((prose + " - " if prose else "") + floor), True
 _STOPWORDS = frozenset(
     "the a an and or but if then else of to in on at for with from by as is are was were be been "
     "it its this that these those i you he she we they me him her us them my your his our their "
@@ -1049,7 +1150,16 @@ class ChatSession:
         budget_kwargs: Dict[str, Any] = {}
         if shelf_size is not None:
             budget_kwargs["shelf_size"] = int(shelf_size)
-        budget = entity_recall_budget(int(context_window), **budget_kwargs)  # raises only on a non-positive window (soft-recommendation era)
+        # ATTENTION IS SIZED BY THE RECOMMENDATION, NOT THE WINDOW (operator
+        # 2026-08-01, same rule the gateway door now applies to the visit
+        # lane): the recommendation sizes what he holds in mind per turn; the
+        # window sizes how far the conversation may grow. Without this clamp
+        # a wide own-time window scaled the decoration with it — a 200k
+        # window would budget 24k tokens of memories EVERY turn, the exact
+        # growth the audit caught on the visit lane. Below-recommendation
+        # windows still scale DOWN (min), so a small context stays honest.
+        attention_window = min(int(context_window), int(ENTITY_CONTEXT_FLOOR))
+        budget = entity_recall_budget(attention_window, **budget_kwargs)  # raises only on a non-positive window (soft-recommendation era)
         profile = dataclasses.asdict(budget) if dataclasses.is_dataclass(budget) else dict(budget)
         profile["self_fraction"] = SUMMON_POSTURE_SELF_FRACTION
         self.profile = profile
@@ -2441,7 +2551,7 @@ class ChatSession:
         report.formed = list(formed.get("record_ids", []))
         report.notices.extend(formed.get("warnings", []))
         for rid in report.formed:
-            self.session_sheet.append((str(rid), digest[:160]))
+            self.session_sheet.append((str(rid), _sheet_line(digest)))
             self._last_episode_id = str(rid)
         # PER-TURN CARD UPDATE (laurent's directive 2026-07-18: "the update
         # of the world model should happen naturally after each turn...
@@ -2766,13 +2876,20 @@ class ChatSession:
                     break
             if card is None or card_scope is None:
                 continue  # floor not formed yet; sleep's lane
+            # ADR-0026 §1/§2: the card is READ WHOLE. The old `[:1200]` cut
+            # was silent and it BIT — an authored lead (bounded 1600) plus
+            # its mechanical "+delta" gists reaches ~2.1k chars, so the tail
+            # of his own standing sense was dropped before he was asked to
+            # rewrite it, and the rewrite then REPLACED the card. Silent
+            # amputation of the thing being revised; a card is bounded by
+            # construction, so no prompt cap is needed here at all.
             current_text = str(getattr(card, "object", None) or "").strip()
             if target.startswith("topic:"):
                 # A SUBJECT, not a person: "who they are / stand with them"
                 # reads wrong for an idea — ask for understanding instead.
                 subject = target.split(":", 1)[1]
                 prompt = (
-                    f"Your current sense of \"{subject}\" reads:\n\n{current_text[:1200]}\n\n"
+                    f"Your current sense of \"{subject}\" reads:\n\n{current_text}\n\n"
                     "The session that just ended circled it again. What happened, "
                     "from your own records:\n"
                     + "\n".join(sheet_lines)
@@ -2784,7 +2901,7 @@ class ChatSession:
                 )
             else:
                 prompt = (
-                    f"Your current briefing of {target} reads:\n\n{current_text[:1200]}\n\n"
+                    f"Your current briefing of {target} reads:\n\n{current_text}\n\n"
                     "This session with them just ended. What happened, from your own records:\n"
                     + "\n".join(sheet_lines)
                     + f"\n\nRewrite what you now know of {target} - a short briefing "
@@ -2802,9 +2919,23 @@ class ChatSession:
             if not text or len(text) < 40:
                 self.out(f"#FALLBACK card authoring for {target} returned too little; floor stands")
                 continue
+            # ADR-0026 §1: the card-write bound stands (a card is orientation,
+            # not an essay) but it may never be SILENT — this text becomes
+            # durable memory, and a mid-word cut with no trace reads back
+            # forever as "this is all he wrote". Cut on a sentence boundary
+            # when one is near, and say so in-band + on his own out-channel.
+            card_text = text
+            if len(text) > _CARD_TEXT_MAX:
+                #[WARNING:TRUNCATION] authored world-model card bounded at
+                # _CARD_TEXT_MAX chars (abstractruntime.identity.chat)
+                card_text, kept = _bounded_card_text(text)
+                self.out(
+                    f"#NOTE your briefing of {target} ran {len(text)} chars; "
+                    f"kept {kept} (the card bound is {_CARD_TEXT_MAX})"
+                )
             try:
                 out = author_world_model(
-                    self.home.ms, target=target, text=text[:1600],
+                    self.home.ms, target=target, text=card_text,
                     scope=card_scope[0], owner_id=card_scope[1],
                     author="entity-reflection",
                 )
@@ -3504,8 +3635,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # wedged substrates fail in minutes, loudly.
         llm_kwargs: Dict[str, Any] = {
             "model": model,
-            "timeout": 120,
-            "retry_wall_clock_budget_s": 180,
+            **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
             # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
             # the absolute budget; a stream silent for 60s on an
             # interactive lane is already dead - abort at the socket, let

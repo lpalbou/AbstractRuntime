@@ -63,7 +63,15 @@ def _json_loads_maybe(text: str) -> Optional[Any]:
 
 
 def _compact_rendered_text(text: str, *, artifact_id: str, max_chars: int = MAX_INLINE_RENDERED_CHARS) -> str:
-    """Return an explicit model-visible preview for large rendered tool observations."""
+    """Return an explicit model-visible preview for large rendered tool observations.
+
+    #[WARNING:TRUNCATION] ADR-0026 §4. This is the ADR's own recommended shape
+    for a bounded preview (Implementation Notes): the FULL rendered output is
+    stored durably first and its `artifact_id` is named in the marker, so the
+    model is told both that the text was cut and exactly where the rest lives.
+    `max_chars` is a parameter — a caller that wants the whole thing inline
+    passes a larger bound.
+    """
     s = str(text or "")
     if len(s) <= max_chars:
         return s
@@ -71,8 +79,29 @@ def _compact_rendered_text(text: str, *, artifact_id: str, max_chars: int = MAX_
         f"\n#TRUNCATION: rendered tool output compacted to {max_chars} chars "
         f"from {len(s)} chars. Full rendered output artifact_id={artifact_id}."
     )
-    keep = max(0, max_chars - len(marker))
-    return s[:keep].rstrip() + marker
+
+    # TAIL-TRUNCATION RESCUE. A tool that cut its own output says so on the LAST
+    # line: read_file's `#TRUNCATION ... NEXT PART: read_file(start_char=N)`
+    # footer, search_files' multiline byte-cap label, skim_folders' "the map
+    # stopped at N directory lines". A plain head-keeping cut deletes exactly
+    # those lines — so a payload the TOOL labelled honestly arrives at the model
+    # looking complete, and the continuation offset it needs to get the rest is
+    # gone. That is the ADR 0001 silent-degradation failure reintroduced one
+    # layer up, and it bites hardest on the biggest results. Carry the trailing
+    # marker lines across the cut.
+    tail_lines: list[str] = []
+    for line in reversed(s.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#TRUNCATION") or stripped.startswith("NEXT PART:"):
+            tail_lines.insert(0, line)
+            continue
+        break
+    rescued = ("\n" + "\n".join(tail_lines)) if tail_lines else ""
+
+    keep = max(0, max_chars - len(marker) - len(rescued))
+    return s[:keep].rstrip() + rescued + marker
 
 
 def _store_text(

@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 25 (8 top-level + 15 in the `runtime_systemic_reliability/` track
+- Planned: 26 (9 top-level + 15 in the `runtime_systemic_reliability/` track
   + 2 in the `runtime_portability/` track)
 - Proposed: 11 (3 top-level + 8 in the `runtime_systemic_reliability/` track)
 - Completed: 33
@@ -114,6 +114,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 026* | `planned/026_context_checkpoint_self_compression.md` |
 | 027* | `planned/027_quote_provenance_discipline.md` |
 | 028* | `planned/028_selective_artifact_rehydration.md` |
+| 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

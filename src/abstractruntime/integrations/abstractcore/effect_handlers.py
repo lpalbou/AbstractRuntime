@@ -3636,7 +3636,14 @@ def make_tool_calls_handler(
             # model supplied, so one run can never reach another run's sessions. The stamped
             # value rides the approval wait's stored tool_calls, so the approved-resume path
             # executes with the same namespace.
-            if name in ("shell_exec", "shell_write_stdin", "shell_close"):
+            if name in (
+                "shell_exec",
+                "shell_write_stdin",
+                "shell_close",
+                "local_helper_start",
+                "local_helper_status",
+                "local_helper_stop",
+            ):
                 arguments["_registry_namespace"] = str(getattr(run, "run_id", "") or "")
 
             # Agora tools (hooks plan H8): the agent identity alias is a TRUST BOUNDARY

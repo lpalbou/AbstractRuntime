@@ -906,6 +906,8 @@ _DEFAULT_SAFE_AUTO_APPROVE: Set[str] = {
     "channel_fs_read",
     "channel_fs_list",
     "channel_store_get",
+    # Runtime-owned run-scoped helper reads.
+    "local_helper_status",
 }
 
 
@@ -924,6 +926,8 @@ _DEFAULT_REQUIRE_APPROVAL: Set[str] = {
     "write_file",
     "edit_file",
     "execute_command",
+    "local_helper_start",
+    "local_helper_stop",
     # Persistent shell sessions (backlog 0220): execute_command-level trust with state
     # persistence; opt-in via ABSTRACT_ENABLE_SHELL_TOOLS and still approval-gated per call.
     "shell_exec",

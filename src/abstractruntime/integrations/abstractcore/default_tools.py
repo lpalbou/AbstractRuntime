@@ -526,6 +526,7 @@ def get_default_toolsets(
         fetch_url,
         execute_command,
     )
+    from .local_helper_tools import LOCAL_HELPER_TOOLS
 
     toolsets: Dict[str, Dict[str, Any]] = {
         "files": {
@@ -560,7 +561,7 @@ def get_default_toolsets(
     toolsets["system"] = {
         "id": "system",
         "label": "System",
-        "tools": [execute_command],
+        "tools": [execute_command, *LOCAL_HELPER_TOOLS],
     }
 
     if comms_tools_enabled():

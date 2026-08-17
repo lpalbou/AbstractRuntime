@@ -80,23 +80,30 @@ def _compose_durable_ledger(ledger_store: LedgerStore, artifact_store: ArtifactS
 
 
 def register_shell_session_teardown(runtime: Runtime) -> None:
-    """Close a run's persistent shell sessions when the run reaches a terminal state.
+    """Close a run's process-local helper namespaces when it reaches a terminal state.
 
     Backlog 0220: shell sessions are process-local resources namespaced by run id
     (`namespaced_session_id`); this hook guarantees an approved session never outlives
     the run it was approved for — including explicit cancel, which flows through the
-    same terminal seam. Safe to call on any runtime (no-op when shell tools are unused
-    or abstractcore is absent).
+    same terminal seam. The same seam also reaps runtime-owned local-helper processes.
+    Safe to call on any runtime (no-op when the registries are unused or unavailable).
     """
     try:
         from abstractcore.tools.shell_session import get_shell_session_registry
     except Exception:  # pragma: no cover - abstractcore always present in this integration
-        return
+        get_shell_session_registry = None  # type: ignore[assignment]
+    try:
+        from .local_helper_tools import get_local_helper_registry
+    except Exception:  # pragma: no cover - local helper module lives in this package
+        get_local_helper_registry = None  # type: ignore[assignment]
 
     def _close_run_sessions(run: Any) -> None:
         run_id = str(getattr(run, "run_id", "") or "").strip()
         if run_id:
-            get_shell_session_registry().close_namespace(run_id)
+            if callable(get_shell_session_registry):
+                get_shell_session_registry().close_namespace(run_id)
+            if callable(get_local_helper_registry):
+                get_local_helper_registry().close_namespace(run_id)
 
     add = getattr(runtime, "add_terminal_hook", None)
     if callable(add):

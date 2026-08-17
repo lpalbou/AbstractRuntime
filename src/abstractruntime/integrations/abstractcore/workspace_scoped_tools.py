@@ -639,6 +639,9 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
     if tool_name == "execute_command":
         _rewrite_path_field("working_directory", default_to_root=True)
         return out
+    if tool_name == "local_helper_start":
+        _rewrite_path_field("working_directory", default_to_root=True)
+        return out
     if tool_name == "shell_exec":
         # Pins the INITIAL cwd of a persistent shell session (backlog 0220). Like
         # execute_command, this is policy for the starting point, not a sandbox: once

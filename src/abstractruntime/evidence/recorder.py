@@ -247,6 +247,74 @@ class EvidenceRecorder:
                         output_dict["normalized_artifact"] = norm_ref
                         artifacts["normalized_text"] = norm_ref
 
+                    # `content` is fetch_url's PRIMARY payload — the cleaned,
+                    # structure-preserving text the model actually read. It became
+                    # the only text field the tool inlines once fetch_url started
+                    # withholding raw_text/normalized_text above a size cap
+                    # (they arrive as None plus a `*_withheld` descriptor). Before
+                    # that change the two branches above captured the page; after
+                    # it, a large fetch recorded NOTHING. Store `content` so the
+                    # forensic record survives the tool's payload policy.
+                    content_text = output_dict.get("content")
+                    if isinstance(content_text, str) and content_text:
+                        content_ref = _store_text(
+                            self._store,
+                            text=content_text,
+                            run_id=run.run_id,
+                            tags={**tags, "part": "content"},
+                            content_type="text/markdown",
+                        )
+                        if content_ref is not None:
+                            output_dict["content_artifact"] = content_ref
+                            artifacts["content"] = content_ref
+
+                    # The POST-JAVASCRIPT DOM is separate evidence from the
+                    # bytes the server sent, and it is text/html regardless of
+                    # what the transfer was labelled — storing it under the HTTP
+                    # content type would mislabel a browser-built document as the
+                    # server's own response.
+                    dom_text = output_dict.pop("rendered_dom", None)
+                    if isinstance(dom_text, str) and dom_text:
+                        dom_ref = _store_text(
+                            self._store,
+                            text=dom_text,
+                            run_id=run.run_id,
+                            tags={**tags, "part": "rendered_dom"},
+                            content_type="text/html",
+                        )
+                        if dom_ref is not None:
+                            output_dict["rendered_dom_artifact"] = dom_ref
+                            artifacts["rendered_dom"] = dom_ref
+
+                    # Carry the tool's own account of what it did NOT inline. The
+                    # descriptor (chars/bytes/sha256/reason) is what lets an
+                    # auditor tell "the source was withheld by policy" apart from
+                    # "nothing was ever fetched" — without it the absence of a raw
+                    # artifact is indistinguishable from a failed fetch.
+                    withheld: Dict[str, Any] = {}
+                    for key in ("raw_text_withheld", "rendered_dom_withheld", "normalized_text_withheld"):
+                        descriptor = output_dict.get(key)
+                        if isinstance(descriptor, dict) and descriptor:
+                            withheld[key] = descriptor
+                    if withheld:
+                        evidence_payload["withheld"] = withheld
+
+                    # PROVENANCE. Text produced by a headless render is not the
+                    # same evidence as text the server sent, and a ledger that
+                    # does not record which one it holds cannot be replayed.
+                    if output_dict.get("rendered_with_browser"):
+                        evidence_payload["rendered_with_browser"] = True
+                        evidence_payload["render_note"] = str(output_dict.get("render_note") or "")
+
+                    # A FAILED fetch used to store NOTHING — so "the server sent a
+                    # bot-mitigation shell" and "the network was down" left
+                    # identical (empty) records. The failure envelope carries the
+                    # class, the status and the reason; keep them.
+                    for key in ("error", "error_class", "status_code", "extraction_error", "final_url"):
+                        value = output_dict.get(key)
+                        if value not in (None, ""):
+                            evidence_payload.setdefault(key, value)
+
                     if isinstance(rendered_text, str) and len(rendered_text) > MAX_INLINE_RENDERED_CHARS:
                         rendered_ref = _store_text(
                             self._store,

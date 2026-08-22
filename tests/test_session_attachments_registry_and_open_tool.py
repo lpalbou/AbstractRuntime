@@ -642,9 +642,15 @@ def test_llm_call_handler_injects_active_attachments_when_media_present(tmp_path
     assert isinstance(msgs, list) and msgs
     assert msgs[0].get("role") == "system"
     content = str(msgs[0].get("content") or "")
-    assert content.startswith("Active attachments")
+    assert content.startswith("The following attachments were sent with this call")
     assert "notes.txt" in content
     assert "@notes.txt" not in content
+    # The list is rendered before the provider runs, so it can only speak to what
+    # was ATTACHED. It must not assert that the model received the bytes: a
+    # provider that drops them (no vision tower, no encoder installed) would
+    # otherwise leave the model believing it can see something it cannot.
+    assert "ATTACHED, not what reached you" in content
+    assert "never describe an attachment you cannot see" in content
 
 
 @pytest.mark.basic
@@ -705,7 +711,7 @@ def test_llm_call_handler_inlines_active_text_attachments_into_messages_and_remo
     assert "hello" in user_text and "world" in user_text
 
     sys_text = "\n".join([str(m.get("content") or "") for m in msgs if isinstance(m, dict) and m.get("role") == "system"])
-    assert "Active attachments" in sys_text
+    assert "The following attachments were sent with this call" in sys_text
     assert "notes.txt" in sys_text
     assert "@notes.txt" not in sys_text
     assert "/Users/" not in sys_text

@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from ..storage.artifacts import is_artifact_ref
 from .flow import Flow
 from .adapters.function_adapter import create_function_node_handler
 from .adapters.agent_adapter import create_agent_node_handler
@@ -38,6 +39,113 @@ from .visual.executor import (
 if TYPE_CHECKING:
     from abstractruntime.core.models import StepPlan
     from abstractruntime.core.spec import WorkflowSpec
+
+
+def _as_dict_list(value: Any) -> List[Dict[str, Any]]:
+    """Normalize a value into a list of dicts (best-effort, JSON-safe)."""
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [dict(value)]
+    if isinstance(value, list):
+        out: List[Dict[str, Any]] = []
+        for x in value:
+            if isinstance(x, dict):
+                out.append(dict(x))
+        return out
+    return []
+
+
+def _extract_agent_tool_activity(scratchpad: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Extract tool call requests and tool results from an agent scratchpad.
+
+    This is *post-run* ergonomics: it does not provide real-time streaming while the agent runs.
+    For real-time tool observability, hosts should subscribe to the ledger and/or node_traces.
+    """
+    sp = scratchpad if isinstance(scratchpad, dict) else None
+    if sp is None:
+        return [], []
+
+    node_traces = sp.get("node_traces")
+    # An OFFLOADED trace map is `{"$artifact": "<id>"}` — still a dict, so
+    # the isinstance guard below passes and the ref's own keys get walked
+    # as if they were node ids, yielding zero steps. The run then reports
+    # `meta.tool_calls: 0` for a run that made 19 (live: e72c9edf, 23
+    # iterations / 0 calls, beside sibling 1d59b704 at 18 / 13) — a
+    # confident zero, not an unknown, which any cost or triage query keyed
+    # on that field silently believes. Refuse to answer instead: this
+    # function has no artifact store, so `None` is the only honest reading
+    # of an unresolved ref (2026-08-21).
+    if is_artifact_ref(node_traces):
+        return [], []
+    if not isinstance(node_traces, dict):
+        # Allow passing a single node trace directly.
+        if isinstance(sp.get("steps"), list) and sp.get("node_id") is not None:
+            node_traces = {str(sp.get("node_id")): sp}
+        else:
+            return [], []
+
+    # Flatten steps across nodes and sort by timestamp (ISO strings are lexicographically sortable).
+    steps: List[Tuple[str, Dict[str, Any]]] = []
+    for _nid, trace_any in node_traces.items():
+        trace = trace_any if isinstance(trace_any, dict) else None
+        if trace is None:
+            continue
+        entries = trace.get("steps")
+        if not isinstance(entries, list):
+            continue
+        for entry_any in entries:
+            entry = entry_any if isinstance(entry_any, dict) else None
+            if entry is None:
+                continue
+            ts = entry.get("ts")
+            ts_s = ts if isinstance(ts, str) else ""
+            steps.append((ts_s, entry))
+    steps.sort(key=lambda x: x[0])
+
+    def _dicts_excluding_refs(value: Any) -> List[Dict[str, Any]]:
+        # Trace-bounded entries (0053) may hold `$artifact` refs where
+        # subtrees were offloaded — a ref is not a tool call (phantom
+        # count of 1 otherwise); the ledger keeps the byte truth.
+        if isinstance(value, dict) and "$artifact" in value:
+            return []
+        return [d for d in _as_dict_list(value) if not (isinstance(d, dict) and "$artifact" in d)]
+
+    tool_calls: List[Dict[str, Any]] = []
+    tool_results: List[Dict[str, Any]] = []
+    for _ts, entry in steps:
+        effect = entry.get("effect")
+        if not isinstance(effect, dict):
+            continue
+        if str(effect.get("type") or "") != "tool_calls":
+            continue
+        payload = effect.get("payload")
+        payload_d = payload if isinstance(payload, dict) else {}
+        tool_calls.extend(_dicts_excluding_refs(payload_d.get("tool_calls")))
+
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        tool_results.extend(_dicts_excluding_refs(result.get("results")))
+
+    return tool_calls, tool_results
+
+
+def _agent_tool_activity_is_unknown(scratchpad: Any) -> bool:
+    """True when the trace this count would be derived from was OFFLOADED.
+
+    `{"$artifact": "<id>"}` is a dict, so the extractor's isinstance
+    guard passed and the ref's own keys were walked as node ids — zero
+    steps, and a confident `meta.tool_calls: 0` for a run that made 19
+    (live: e72c9edf, 23 iterations / 0 calls, beside sibling 1d59b704 at
+    18 / 13). A zero that means "I could not look" is the silent,
+    success-shaped miss this codebase refuses elsewhere: the counts are
+    OMITTED instead, so a consumer sees an absence rather than a lie.
+    """
+    sp = scratchpad if isinstance(scratchpad, dict) else None
+    if sp is None:
+        return False
+    return is_artifact_ref(sp.get("node_traces"))
 
 
 def _is_agent(obj: Any) -> bool:
@@ -2190,6 +2298,10 @@ def _create_visual_agent_effect_handler(
                 "tool_calls": len(tc),
                 "tool_results": len(tr),
             }
+            if _agent_tool_activity_is_unknown(scratchpad):
+                meta.pop("tool_calls", None)
+                meta.pop("tool_results", None)
+                meta["tool_activity"] = "unknown: node traces were offloaded"
             if sub_run_id:
                 meta["sub_run_id"] = sub_run_id
             if iterations is not None:
@@ -2916,20 +3028,6 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             return span_id.strip()
         return None
 
-    def _as_dict_list(value: Any) -> List[Dict[str, Any]]:
-        """Normalize a value into a list of dicts (best-effort, JSON-safe)."""
-        if value is None:
-            return []
-        if isinstance(value, dict):
-            return [dict(value)]
-        if isinstance(value, list):
-            out: List[Dict[str, Any]] = []
-            for x in value:
-                if isinstance(x, dict):
-                    out.append(dict(x))
-            return out
-        return []
-
     def _has_nonempty_generation_map(value: Any) -> bool:
         if not isinstance(value, dict):
             return False
@@ -2985,69 +3083,6 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     if aid and ref:
                         return aid, ref
         return None, None
-
-    def _extract_agent_tool_activity(scratchpad: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Extract tool call requests and tool results from an agent scratchpad.
-
-        This is *post-run* ergonomics: it does not provide real-time streaming while the agent runs.
-        For real-time tool observability, hosts should subscribe to the ledger and/or node_traces.
-        """
-        sp = scratchpad if isinstance(scratchpad, dict) else None
-        if sp is None:
-            return [], []
-
-        node_traces = sp.get("node_traces")
-        if not isinstance(node_traces, dict):
-            # Allow passing a single node trace directly.
-            if isinstance(sp.get("steps"), list) and sp.get("node_id") is not None:
-                node_traces = {str(sp.get("node_id")): sp}
-            else:
-                return [], []
-
-        # Flatten steps across nodes and sort by timestamp (ISO strings are lexicographically sortable).
-        steps: List[Tuple[str, Dict[str, Any]]] = []
-        for _nid, trace_any in node_traces.items():
-            trace = trace_any if isinstance(trace_any, dict) else None
-            if trace is None:
-                continue
-            entries = trace.get("steps")
-            if not isinstance(entries, list):
-                continue
-            for entry_any in entries:
-                entry = entry_any if isinstance(entry_any, dict) else None
-                if entry is None:
-                    continue
-                ts = entry.get("ts")
-                ts_s = ts if isinstance(ts, str) else ""
-                steps.append((ts_s, entry))
-        steps.sort(key=lambda x: x[0])
-
-        def _dicts_excluding_refs(value: Any) -> List[Dict[str, Any]]:
-            # Trace-bounded entries (0053) may hold `$artifact` refs where
-            # subtrees were offloaded — a ref is not a tool call (phantom
-            # count of 1 otherwise); the ledger keeps the byte truth.
-            if isinstance(value, dict) and "$artifact" in value:
-                return []
-            return [d for d in _as_dict_list(value) if not (isinstance(d, dict) and "$artifact" in d)]
-
-        tool_calls: List[Dict[str, Any]] = []
-        tool_results: List[Dict[str, Any]] = []
-        for _ts, entry in steps:
-            effect = entry.get("effect")
-            if not isinstance(effect, dict):
-                continue
-            if str(effect.get("type") or "") != "tool_calls":
-                continue
-            payload = effect.get("payload")
-            payload_d = payload if isinstance(payload, dict) else {}
-            tool_calls.extend(_dicts_excluding_refs(payload_d.get("tool_calls")))
-
-            result = entry.get("result")
-            if not isinstance(result, dict):
-                continue
-            tool_results.extend(_dicts_excluding_refs(result.get("results")))
-
-        return tool_calls, tool_results
 
     for node_id, flow_node in flow.nodes.items():
         effect_type = flow_node.effect_type
@@ -3654,8 +3689,11 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 meta["sub_run_id"] = sub_run_id
             if iterations is not None:
                 meta["iterations"] = iterations
-            meta["tool_calls"] = len(tc)
-            meta["tool_results"] = len(tr)
+            if _agent_tool_activity_is_unknown(scratchpad):
+                meta["tool_activity"] = "unknown: node traces were offloaded"
+            else:
+                meta["tool_calls"] = len(tc)
+                meta["tool_results"] = len(tr)
             if bucket_output_mode:
                 meta["output_mode"] = bucket_output_mode
 

@@ -39,6 +39,7 @@ from .session_attachments import (
     dedup_messages_view,
     execute_open_attachment,
     list_session_attachments,
+    materialize_attachment_path,
     render_active_attachments_system_message,
     render_session_attachments_system_message,
     session_memory_owner_run_id,
@@ -2854,6 +2855,12 @@ def make_tool_calls_handler(
         blocked_by_index: Dict[int, Dict[str, Any]] = {}
         pre_results_by_index: Dict[int, Dict[str, Any]] = {}
         planned: list[Dict[str, Any]] = []
+        # call_id -> artifact id, for analyze_media calls whose file_path was
+        # resolved from a session attachment. Lets the RESULT name the exact
+        # `open_attachment(...)` that would put the image in front of the model
+        # — advice the tool itself cannot give, because whether these bytes are
+        # attachable is a session fact core does not have.
+        analyze_media_artifact_by_call: Dict[str, str] = {}
 
         # For evidence and deterministic resume merging, keep a positional tool call list aligned to the
         # *original* tool call order. Blocked entries are represented as empty-args stubs.
@@ -3178,6 +3185,41 @@ def make_tool_calls_handler(
             except Exception:
                 session_attachments_cache = []
             return list(session_attachments_cache)
+
+        def _attachment_media_path_for(raw: Any) -> Optional[Tuple[str, str]]:
+            """Local path for a session attachment addressed by id or name.
+
+            Accepts the two spellings the runtime shows the model (artifact id
+            and display filename) plus the handle, and requires an
+            UNAMBIGUOUS single match — two attachments sharing a name is not a
+            resolution, and guessing which one the operator meant is exactly
+            the silent-wrong-answer class this fix exists to remove.
+            """
+            query = _normalize_attachment_query(raw)
+            if not query or artifact_store is None:
+                return None
+            needle = query.lower()
+            matches = []
+            for entry in _get_session_attachments():
+                handle = _normalize_attachment_query(entry.get("handle")).lower()
+                if (
+                    str(entry.get("artifact_id") or "").strip().lower() == needle
+                    or handle == needle
+                    or str(entry.get("filename") or "").strip().lower() == needle
+                    or (handle and handle.endswith("/" + needle))
+                ):
+                    matches.append(entry)
+            if len(matches) != 1:
+                return None
+            try:
+                resolved = materialize_attachment_path(
+                    artifact_store=artifact_store, entry=matches[0]
+                )
+            except Exception:
+                return None
+            if not resolved:
+                return None
+            return resolved, str(matches[0].get("artifact_id") or "")
 
         def _read_file_output_from_open_attachment(*, file_path: str, opened: Dict[str, Any]) -> Optional[str]:
             rendered = opened.get("rendered")
@@ -3706,6 +3748,25 @@ def make_tool_calls_handler(
                 )
                 continue
 
+            # Delegated sight addresses BOTH namespaces (2026-08-21 review).
+            # `analyze_media` stats the path it is given, so a session
+            # attachment — addressed by artifact id, or by the display name
+            # this runtime itself put in the model's system message — always
+            # failed with "does not exist". Resolved HERE, before the wall,
+            # because the tool must actually run on real bytes (unlike
+            # read_file, whose recovery can synthesize the result text).
+            # A miss leaves the argument untouched: the file namespace then
+            # answers, so a genuinely absent path refuses exactly as before.
+            if name == "analyze_media":
+                resolved_media = _attachment_media_path_for(arguments.get("file_path"))
+                if resolved_media:
+                    media_path, media_artifact_id = resolved_media
+                    arguments = dict(arguments)
+                    arguments["file_path"] = media_path
+                    tc = {**tc, "arguments": arguments}
+                    if media_artifact_id:
+                        analyze_media_artifact_by_call[str(call_id)] = media_artifact_id
+
             # Host tools: rewrite under workspace scope (when configured) before execution.
             tc2 = dict(tc)
             if scope is not None:
@@ -4122,6 +4183,29 @@ def make_tool_calls_handler(
                         "output": None,
                         "error": "Invalid tool result",
                     }
+
+                # Delegated sight returns ONE bounded reading. When the image is a
+                # session attachment the model has a strictly better option than
+                # re-reading someone else's summary — look at it itself — and this
+                # is the only layer that knows the exact call, because whether these
+                # bytes are attachable is a session fact the tool does not have.
+                if seg_item.get("name") == "analyze_media" and isinstance(r_out, dict):
+                    call_key = str(
+                        r_out.get("call_id")
+                        or (seg_item.get("tc") or {}).get("call_id")
+                        or ""
+                    )
+                    aid_media = analyze_media_artifact_by_call.get(call_key)
+                    out_media = r_out.get("output")
+                    if (
+                        aid_media
+                        and isinstance(out_media, str)
+                        and out_media
+                        and r_out.get("success") is not False
+                    ):
+                        r_out["output"] = out_media + (
+                            f'\n(or see it yourself: open_attachment(artifact_id="{aid_media}"))'
+                        )
 
                 # execute_command output offload (backlog 0215): the full stdout/stderr live in the
                 # result dict and land in the durable ledger. Symmetric with read_file, offload a

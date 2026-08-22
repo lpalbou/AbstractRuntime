@@ -556,6 +556,40 @@ class WorkspaceScopedToolExecutor:
         return rewrite_tool_arguments(tool_name=tool_name, args=args, scope=self._scope)
 
 
+def _is_system_produced_media_path(candidate: str) -> bool:
+    """True for paths this PROCESS wrote (materialized attachments, probe
+    screenshots) rather than paths naming the user's filesystem.
+
+    Kept as a predicate rather than an ordering rule between two call sites:
+    an ordering constraint between distant blocks rots silently the moment a
+    third rewrite is added, and this one is checkable in place.
+    """
+    try:
+        target = Path(candidate).expanduser().resolve()
+    except Exception:
+        return False
+    roots = []
+    try:
+        from .session_attachments import attachment_media_dir
+
+        roots.append(Path(attachment_media_dir()).resolve())
+    except Exception:
+        pass
+    try:
+        from abstractcore.tools.browser_tools import _shared_screenshot_dir
+
+        roots.append(Path(_shared_screenshot_dir()).resolve())
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: WorkspaceScope) -> Dict[str, Any]:
     """Rewrite tool args so file operations follow the workspace policy."""
     root = scope.root
@@ -660,6 +694,25 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         if "paths" not in out:
             raise ValueError("skim_folders requires paths")
         return out
+    if tool_name == "analyze_media":
+        # The one file-reading tool that ships BYTES off-host (its own source
+        # says so) was the one tool absent from this wall: under
+        # `workspace_only`, `read_file "/etc/hosts"` raised while
+        # `analyze_media "/etc/hosts"` passed through untouched, and a
+        # relative path resolved against the gateway's cwd instead of the
+        # workspace. Measured 2026-08-21.
+        _alias_field("file_path", ["path", "filename", "file", "image", "image_path"])
+        raw_media = out.get("file_path")
+        if isinstance(raw_media, str) and raw_media.strip():
+            # System-produced bytes are not a user-filesystem read: the
+            # runtime's own materialized attachment copies and the browser
+            # probe's screenshot dir are written BY this process, and walling
+            # them would refuse the very path it just handed over. Everything
+            # else walls exactly like read_file's file_path.
+            if not _is_system_produced_media_path(raw_media):
+                _rewrite_path_field("file_path")
+        return out
+
     if tool_name == "browser_probe":
         # Core's render-verification tool (c4872 note 1): the arg is named
         # `target` and carries EITHER a URL or a local file path — a new

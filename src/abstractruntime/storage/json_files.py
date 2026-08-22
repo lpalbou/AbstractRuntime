@@ -9,9 +9,12 @@ This is meant as a straightforward MVP backend.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import json
+import os
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -85,6 +88,30 @@ class JsonFileRunStore(RunStore):
         # so a torn file is not re-parsed on every poll.
         self._scan_memo_lock = threading.Lock()
         self._scan_memo: Dict[str, tuple[tuple[int, int, int], Dict[str, Any]]] = {}
+        # SIDECAR (2026-08-19, operator's session-reload investigation —
+        # measured on the live 7.9k-run / 1.8GB directory): the memo dies
+        # with the process, so EVERY gateway restart re-paid a full-JSON
+        # parse of the whole store on the first scan (6.3s) and AGAIN on
+        # the first list_children (7.3s via _iter_all_runs) — the "first
+        # session reload is slow" experience. The sidecar persists the
+        # memo's (token, fields) rows; entries are identity-validated
+        # per use, so a stale/corrupt/foreign sidecar degrades to
+        # re-parses — with the stat token's ONE documented blind spot
+        # (adversarial review 2026-08-19, F2): an EXTERNAL in-place
+        # rewrite that preserves mtime_ns+size+inode would go unseen
+        # across restarts too (pre-sidecar, a restart healed it). No
+        # writer in this system does that (save() is tmp+replace = new
+        # inode), and the blast radius is filter/index rows — load()
+        # always returns disk truth. Cache, not truth: persist/load
+        # failures are swallowed.
+        self._scan_sidecar_path = self._base / ".runs_scan_cache.json"
+        self._scan_sidecar_loaded = False
+        # New knowledge since the last persist (new rids, changed fields,
+        # tombstones, prunes). Persist policy lives in
+        # `_maybe_persist_scan_memo` — checked at scan ends only, never on
+        # the save() hot path.
+        self._scan_dirty = 0
+        self._scan_last_persist = time.monotonic()
 
     @staticmethod
     def _stat_token(st: Any) -> tuple[int, int, int]:
@@ -134,9 +161,15 @@ class JsonFileRunStore(RunStore):
 
     @staticmethod
     def _index_fields_of(run: RunState) -> Dict[str, Any]:
-        """The small filter/index fields scans need — never vars."""
+        """The small filter/index fields scans need — never vars.
+
+        `__run_id` is the INTERNAL run id (dunder = stripped from
+        list_run_index rows): the children index needs it because a
+        glob-matching copy's filename-derived id differs from the id
+        the tree actually references (adversary P2-1's copy class)."""
         waiting = run.waiting
         return {
+            "__run_id": str(run.run_id),
             "status": str(getattr(run.status, "value", run.status)),
             "workflow_id": str(run.workflow_id or ""),
             "session_id": str(run.session_id) if run.session_id else None,
@@ -153,6 +186,14 @@ class JsonFileRunStore(RunStore):
         if not rid or token[0] <= 0:
             return
         with self._scan_memo_lock:
+            # Only NEW rids count as persist-worthy dirt (adversarial
+            # review 2026-08-19, F3): an active run's row goes token-
+            # stale by the next restart regardless, so re-persisting on
+            # every field flip bought nothing and cost a 4.4MB write
+            # per 32 saves. New/pruned/deleted rids are what a restart
+            # actually wants to remember.
+            if rid not in self._scan_memo:
+                self._scan_dirty += 1
             self._scan_memo[rid] = (token, fields)
 
     def _scan_memo_prune(self, seen_rids: set) -> None:
@@ -163,6 +204,81 @@ class JsonFileRunStore(RunStore):
         with self._scan_memo_lock:
             for rid in set(self._scan_memo) - seen_rids:
                 self._scan_memo.pop(rid, None)
+                self._scan_dirty += 1
+
+    def _load_scan_sidecar_once(self) -> None:
+        """Seed the scan memo from the persisted sidecar, once per process.
+
+        Entries are (token, fields) rows exactly as the memo holds them;
+        every use re-validates the token against the file's current stat,
+        so a stale entry costs one re-parse and a corrupt/foreign sidecar
+        degrades to the pre-sidecar cold scan. In-memory entries win over
+        sidecar rows (they are at least as fresh)."""
+        if self._scan_sidecar_loaded:
+            return
+        with self._scan_memo_lock:
+            if self._scan_sidecar_loaded:
+                return
+            self._scan_sidecar_loaded = True
+            try:
+                raw = json.loads(self._scan_sidecar_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return
+            except Exception as e:  # noqa: BLE001 - cache, not truth
+                logger.warning("#FALLBACK scan sidecar unreadable (%s); cold scan", e)
+                return
+            entries = raw.get("entries") if isinstance(raw, dict) else None
+            if int((raw or {}).get("version") or 0) != 1 or not isinstance(entries, dict):
+                return
+            for rid, item in entries.items():
+                try:
+                    token = (int(item[0][0]), int(item[0][1]), int(item[0][2]))
+                    fields = item[1]
+                except Exception:
+                    continue
+                if rid and isinstance(fields, dict) and token[0] > 0 and rid not in self._scan_memo:
+                    self._scan_memo[rid] = (token, fields)
+
+    def _maybe_persist_scan_memo(self) -> None:
+        """Persist the memo when enough new knowledge accumulated.
+
+        Called at SCAN ends only (list_runs / list_run_index /
+        list_due_wait_until / the children-index build) — never on the
+        save() hot path. The thresholds keep steady-state writes rare
+        (a run's own saves only mark dirt; the next scan flushes it),
+        while a cold rebuild (thousands of parses) persists immediately."""
+        with self._scan_memo_lock:
+            dirty = self._scan_dirty
+            elapsed = time.monotonic() - self._scan_last_persist
+        if dirty >= 32 or (dirty > 0 and elapsed >= 120.0):
+            self._persist_scan_memo()
+
+    def _persist_scan_memo(self) -> None:
+        with self._scan_memo_lock:
+            snapshot = {rid: [list(tok), fields] for rid, (tok, fields) in self._scan_memo.items()}
+            self._scan_dirty = 0
+            self._scan_last_persist = time.monotonic()
+        # uuid tmp (adversarial review 2026-08-19, F4): pid alone
+        # collides for two stores over one dir in one process — an
+        # interleaved write_text could publish a torn (= discarded)
+        # sidecar. Same discipline as save()'s tmp names.
+        tmp = self._scan_sidecar_path.with_name(f".runs_scan_cache.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            # default=str never fires today (_index_fields_of str-coerces
+            # everything; lifecycle fields are str/int) — it exists so a
+            # future non-JSON-safe field degrades to a stringly row
+            # instead of killing every persist. If you ADD a field with
+            # non-str semantics, round-trip it explicitly.
+            tmp.write_text(
+                json.dumps({"version": 1, "entries": snapshot}, separators=(",", ":"), default=str),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self._scan_sidecar_path)
+        except Exception as e:  # noqa: BLE001 - a failed persist costs a
+            # future cold scan, never correctness.
+            logger.warning("#FALLBACK scan sidecar persist failed (%s)", e)
+            with contextlib.suppress(Exception):
+                tmp.unlink()
 
     def _scan_fields(self, p: Path) -> Optional[Dict[str, Any]]:
         """Index fields for a run file: memo hit when the identity token
@@ -220,14 +336,33 @@ class JsonFileRunStore(RunStore):
             children: Dict[str, set[str]] = {}
             run_parent: Dict[str, Optional[str]] = {}
 
-            for run in self._iter_all_runs():
-                parent = run.parent_run_id
-                run_parent[run.run_id] = parent
-                if isinstance(parent, str) and parent:
-                    children.setdefault(parent, set()).add(run.run_id)
+            # Build from SCAN FIELDS, never full parses (2026-08-19,
+            # operator's session-reload investigation): the old
+            # `_iter_all_runs` walk json.load-ed every run file — 7.3s
+            # on the live 7.9k-run / 1.8GB directory, paid on the FIRST
+            # list_children of every process (= the first history_bundle
+            # of the first session reload after every gateway restart),
+            # and it ignored the memo a scan had just populated. The
+            # memo/sidecar fields carry `__run_id` (internal id) and
+            # `parent_run_id` — everything this index needs; unchanged
+            # files now cost one stat, changed ones one parse.
+            self._load_scan_sidecar_once()
+            for p in self._base.glob("run_*.json"):
+                fields = self._scan_fields(p)
+                if fields is None:
+                    continue
+                rid = str(fields.get("__run_id") or self._run_id_from_path(p) or "")
+                if not rid:
+                    continue
+                parent = fields.get("parent_run_id")
+                parent = str(parent) if parent else None
+                run_parent[rid] = parent
+                if parent:
+                    children.setdefault(parent, set()).add(rid)
 
             self._children_index = children
             self._run_parent_index = run_parent
+        self._maybe_persist_scan_memo()
 
     def _drop_from_children_index(self, run_id: str) -> None:
         with self._index_lock:
@@ -310,7 +445,8 @@ class JsonFileRunStore(RunStore):
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
             with self._scan_memo_lock:
-                self._scan_memo.pop(rid, None)
+                if self._scan_memo.pop(rid, None) is not None:
+                    self._scan_dirty += 1
         return bool(existed)
 
     def _load_from_path(self, p: Path) -> Optional[RunState]:
@@ -378,14 +514,12 @@ class JsonFileRunStore(RunStore):
             self._cache_put(rid, token, run, memo_rid=rid_hint or rid)
         return run
 
-    def _iter_all_runs(self) -> List[RunState]:
-        """Iterate over all stored runs."""
-        runs: List[RunState] = []
-        for p in self._base.glob("run_*.json"):
-            run = self._load_from_path(p)
-            if run is not None:
-                runs.append(run)
-        return runs
+    # `_iter_all_runs` was removed 2026-08-19 (operator's session-reload
+    # investigation): it full-parsed every run file — 7.3s on the live
+    # 7.9k-run / 1.8GB directory — and its one caller (the children-index
+    # build) now reads the memoized scan fields instead. A whole-store
+    # RunState walk has no sub-O(store) implementation; anything that
+    # thinks it needs one should go through `_scan_fields`.
 
     # --- QueryableRunStore methods ---
 
@@ -426,6 +560,7 @@ class JsonFileRunStore(RunStore):
           the ownership contract: a re-load re-reads the last saved state.
         """
         lim = max(1, int(limit or 100))
+        self._load_scan_sidecar_once()
         ranked: list[tuple[int, Path]] = []
         for p in self._base.glob("run_*.json"):
             try:
@@ -462,6 +597,7 @@ class JsonFileRunStore(RunStore):
                 break
 
         results.sort(key=lambda r: r.updated_at or "", reverse=True)
+        self._maybe_persist_scan_memo()
         return results[:lim]
 
     def list_run_index(
@@ -476,6 +612,7 @@ class JsonFileRunStore(RunStore):
     ) -> List[Dict[str, Any]]:
         """List lightweight run index rows without depending on full RunState consumers."""
         lim = max(1, int(limit or 100))
+        self._load_scan_sidecar_once()
         ranked: list[tuple[int, Path]] = []
         for p in self._base.glob("run_*.json"):
             try:
@@ -524,6 +661,7 @@ class JsonFileRunStore(RunStore):
                 break
 
         out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
+        self._maybe_persist_scan_memo()
         return out[:lim]
 
     def list_due_wait_until(
@@ -540,6 +678,7 @@ class JsonFileRunStore(RunStore):
         # Memo-first (2026-07-15 scan-memo): the scheduler's due-scan runs on
         # a poll loop too — filter on stat-validated fields, parse only runs
         # that are actually due.
+        self._load_scan_sidecar_once()
         paths = list(self._base.glob("run_*.json"))
         self._scan_memo_prune({self._run_id_from_path(p) for p in paths})
         for p in paths:
@@ -562,6 +701,7 @@ class JsonFileRunStore(RunStore):
         # Sort by waiting.until ascending (earliest due first)
         results.sort(key=lambda r: r.waiting.until if r.waiting else "")
 
+        self._maybe_persist_scan_memo()
         return results[:limit]
 
     def list_children(

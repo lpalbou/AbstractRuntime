@@ -66,8 +66,17 @@ def purge_data_home(name: str, *, dry_run: bool = False) -> Dict[str, Any]:
     return _data_registry().purge_data_home(name, dry_run=dry_run)
 
 
+def unregister_data_home(name: str) -> bool:
+    """Remove ONE registry ROW (never touches disk). The stale-registration
+    cleanup lane (gateway console 'Forget', 2026-08-19): rows whose path
+    was deleted or whose data root moved. A row whose path still exists
+    re-registers at the owner's next boot — callers should refuse those."""
+    return bool(_data_registry().unregister_data_home(name))
+
+
 __all__ = [
     "ensure_data_home_registered",
     "list_data_homes",
     "purge_data_home",
+    "unregister_data_home",
 ]

@@ -43,25 +43,32 @@ def test_list_children_builds_index_once_and_updates_on_save(tmp_path):
     store.save(parent)
     store.save(child1)
 
-    call_count = {"iter_all_runs": 0}
-    original_iter_all_runs = store._iter_all_runs
+    # The build walks SCAN FIELDS (2026-08-19: the old `_iter_all_runs`
+    # walk full-parsed every run file — 7.3s on the live 7.9k-run dir);
+    # counting `_scan_fields` pins both halves: exactly one directory
+    # walk at first use, then incremental updates on save, never a
+    # rebuild.
+    call_count = {"scan_fields": 0}
+    original_scan_fields = store._scan_fields
 
-    def wrapped_iter_all_runs():
-        call_count["iter_all_runs"] += 1
-        return original_iter_all_runs()
+    def wrapped_scan_fields(p):
+        call_count["scan_fields"] += 1
+        return original_scan_fields(p)
 
-    store._iter_all_runs = wrapped_iter_all_runs  # type: ignore[method-assign]
+    store._scan_fields = wrapped_scan_fields  # type: ignore[method-assign]
 
     children1 = store.list_children(parent_run_id=parent.run_id)
+    walk_calls = call_count["scan_fields"]
+    assert walk_calls >= 2, "first use walks the directory"
     children2 = store.list_children(parent_run_id=parent.run_id)
     assert {r.run_id for r in children1} == {child1.run_id}
     assert {r.run_id for r in children2} == {child1.run_id}
-    assert call_count["iter_all_runs"] == 1
+    assert call_count["scan_fields"] == walk_calls, "second use never re-walks"
 
     child2 = _new_run(workflow_id="child2", parent_run_id=parent.run_id)
     store.save(child2)
 
     children3 = store.list_children(parent_run_id=parent.run_id)
     assert {r.run_id for r in children3} == {child1.run_id, child2.run_id}
-    assert call_count["iter_all_runs"] == 1
+    assert call_count["scan_fields"] == walk_calls, "saves update the index in place"
 

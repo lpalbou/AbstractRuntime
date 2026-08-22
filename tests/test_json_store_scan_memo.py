@@ -275,3 +275,101 @@ def test_externally_removed_runs_are_pruned_from_the_memo(tmp_path: Path) -> Non
     with store._scan_memo_lock:
         remaining = set(store._scan_memo)
     assert remaining == {keep.run_id}, "vanished files must leave the memo"
+
+
+# --- Persistent sidecar (2026-08-19, operator's session-reload investigation) ---
+# The memo died with the process, so every gateway restart re-paid a full-JSON
+# parse of the whole store on the first scan (6.3s measured on the live
+# 7.9k-run / 1.8GB directory) and AGAIN on the first list_children (7.3s).
+# The sidecar persists the memo's (token, fields) rows; entries stay
+# identity-validated per use, so staleness/corruption cost re-parses, never
+# correctness.
+
+
+def test_sidecar_makes_a_fresh_store_scan_without_parses(tmp_path: Path, monkeypatch) -> None:
+    store = JsonFileRunStore(tmp_path, run_cache_max=4)
+    runs = [_mk_run(store, status=RunStatus.COMPLETED, fat=True) for _ in range(40)]
+    running = _mk_run(store, status=RunStatus.RUNNING)
+    # A scan populates the memo; 40+ new entries cross the persist threshold.
+    store.list_run_index(limit=100)
+    assert (tmp_path / ".runs_scan_cache.json").exists(), "cold build persists the sidecar"
+
+    # A FRESH instance (process restart) scans from the sidecar: only the
+    # actual matches are parsed, never the unchanged terminal files.
+    cold = JsonFileRunStore(tmp_path, run_cache_max=4)
+    counter = _count_loads(cold, monkeypatch)
+    got = cold.list_runs(status=RunStatus.RUNNING, limit=100)
+    assert [r.run_id for r in got] == [running.run_id]
+    assert counter["n"] == 1, f"sidecar-warm scan parses only the match, got {counter['n']}"
+
+    # Index rows come straight from sidecar fields — zero parses.
+    counter["n"] = 0
+    rows = cold.list_run_index(limit=100)
+    assert len(rows) == 41
+    assert counter["n"] == 0
+    assert all(not k.startswith("__") for row in rows for k in row if k != "run_id"), (
+        "dunder memo fields never leak into index rows"
+    )
+    # The children index builds from the same fields — zero parses.
+    counter["n"] = 0
+    cold._ensure_children_index()
+    assert counter["n"] == 0, "children index builds from memoized fields"
+    assert set(cold._run_parent_index) == {r.run_id for r in runs} | {running.run_id}
+
+
+def test_sidecar_staleness_is_caught_by_the_stat_token(tmp_path: Path, monkeypatch) -> None:
+    store = JsonFileRunStore(tmp_path)
+    run = _mk_run(store, status=RunStatus.RUNNING)
+    for _ in range(40):
+        _mk_run(store, status=RunStatus.COMPLETED)
+    store.list_run_index(limit=100)  # persists the sidecar
+
+    # An EXTERNAL writer completes the run AFTER the sidecar was written.
+    import time as _time
+
+    writer = JsonFileRunStore(tmp_path)
+    run2 = writer.load(run.run_id)
+    assert run2 is not None
+    run2.status = RunStatus.COMPLETED
+    _time.sleep(0.02)  # ensure a distinct mtime tick
+    writer.save(run2)
+
+    cold = JsonFileRunStore(tmp_path)
+    got = cold.list_runs(status=RunStatus.RUNNING, limit=100)
+    assert got == [], "the stale sidecar row must not resurrect a finished run"
+    rows = cold.list_run_index(status=RunStatus.COMPLETED, limit=100)
+    assert run.run_id in {r["run_id"] for r in rows}
+
+
+def test_corrupt_sidecar_degrades_to_a_cold_scan(tmp_path: Path) -> None:
+    store = JsonFileRunStore(tmp_path)
+    running = _mk_run(store, status=RunStatus.RUNNING)
+    (tmp_path / ".runs_scan_cache.json").write_text("{not json", encoding="utf-8")
+    cold = JsonFileRunStore(tmp_path)
+    got = cold.list_runs(status=RunStatus.RUNNING, limit=100)
+    assert [r.run_id for r in got] == [running.run_id]
+
+
+def test_sidecar_never_matches_the_run_glob(tmp_path: Path) -> None:
+    store = JsonFileRunStore(tmp_path)
+    for _ in range(40):
+        _mk_run(store)
+    store.list_run_index(limit=100)
+    rows = store.list_run_index(limit=200)
+    assert all(".runs_scan_cache" not in str(r.get("run_id")) for r in rows)
+
+
+def test_deleted_runs_leave_the_sidecar(tmp_path: Path) -> None:
+    store = JsonFileRunStore(tmp_path)
+    victim = _mk_run(store)
+    for _ in range(40):
+        _mk_run(store)
+    store.list_run_index(limit=100)  # persist with victim present
+    store.delete(victim.run_id)
+    # Enough churn to cross the threshold again, then re-persist.
+    for _ in range(40):
+        _mk_run(store)
+    store.list_run_index(limit=100)
+    cold = JsonFileRunStore(tmp_path)
+    rows = cold.list_run_index(limit=200)
+    assert victim.run_id not in {r["run_id"] for r in rows}

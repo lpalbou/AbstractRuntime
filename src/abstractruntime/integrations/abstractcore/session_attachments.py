@@ -11,7 +11,11 @@ the runtime's effect handlers (not via a host ToolExecutor).
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -129,6 +133,18 @@ def render_session_attachments_system_message(
         "Stored session attachments (most recent first; not necessarily active in this call). Do not mention this list:"
     ]
     used = len(lines[0]) + 1
+    # PHANTOM-INDEX GUARD (2026-08-21 incident, session acode-bc425138014f):
+    # this header + the open hint below used to render for an EMPTY entry list,
+    # so a session with zero attachments still told the model "stored session
+    # attachments exist, open them by artifact_id" — with no ids to open. The
+    # model guessed (`a1`, `a2`, `a3`, handle `attachment`), all 12 calls
+    # failed, and the stuck detector ended the turn at cycle 12 of 50. The
+    # sibling renderer `render_active_attachments_system_message` already
+    # returns "" on an empty list; this one must too. COUNTED, not
+    # `len(entries)`-checked: `entries` is an Iterable and malformed items are
+    # skipped below, so the only honest test is "did any entry line render?".
+    entries_rendered = 0
+    considered = 0
 
     if include_open_attachment_hint:
         hint = (
@@ -142,6 +158,7 @@ def render_session_attachments_system_message(
     for i, e in enumerate(list(entries)[:max_e]):
         if not isinstance(e, dict):
             continue
+        considered += 1
         handle = _normalize_handle(e.get("handle") or e.get("source_path") or e.get("filename") or "")
         if not handle:
             handle = str(e.get("filename") or "").strip() or "attachment"
@@ -179,6 +196,22 @@ def render_session_attachments_system_message(
 
         lines.append(line)
         used += len(line) + 1
+        entries_rendered += 1
+
+    if entries_rendered <= 0:
+        if considered > 0:
+            # There ARE attachments; the budget could not fit even one line.
+            # Silence here would be the same lie as the phantom header in the
+            # other direction, so say the count and nothing else — no
+            # identifiers to guess at, no claim that the set is empty.
+            #[WARNING:TRUNCATION] the index did not fit; the count is reported instead of the entries
+            note = f"Stored session attachments: {considered} (index did not fit here; ask by filename)."
+            # If even THAT does not fit the caller's budget, say nothing: a
+            # half-sentence about attachments is worse than no sentence.
+            return note if len(note) <= max_c else ""
+        # Nothing to point at: say NOTHING. A header with no entries under it
+        # is a standing invitation to invent identifiers.
+        return ""
 
     rendered = "\n".join(lines)
     if len(rendered) <= max_c:
@@ -204,6 +237,17 @@ def render_active_attachments_system_message(
 
     This is metadata-only: it does not inline attachment contents, and should remain stable
     across `/compact` (system messages are not compacted).
+
+    The list says what was ATTACHED, never what was DELIVERED. It is rendered from
+    the request, before the provider has run, so it cannot know whether the model
+    actually received the bytes -- and a provider may legitimately drop them (no
+    vision tower, missing optional encoder, unsupported family). Asserting
+    presence here used to make that drop invisible to the only party that could
+    have caught it: measured 2026-08-21 on two mlx runs where the encoder was
+    absent, the model was told its attachments "are already available", was
+    forbidden from re-opening them or mentioning the list, and answered
+    "Yes, I can see it!" over a screenshot it had never received -- inventing a
+    macOS terminal session and a web app called "Scribble" in full detail.
     """
     max_e = max(0, int(max_entries))
     max_c = max(0, int(max_chars))
@@ -217,7 +261,11 @@ def render_active_attachments_system_message(
         return ""
 
     lines: list[str] = [
-        "Active attachments are already available in this call. Use their content directly; do not call tools to re-open them. Do not mention this list."
+        "The following attachments were sent with this call. Use their content directly; "
+        "do not call tools to re-open them. Do not mention this list. "
+        "This list records what was ATTACHED, not what reached you: if you cannot "
+        "actually perceive an item's content, say so plainly rather than inferring "
+        "it from the filename — never describe an attachment you cannot see."
     ]
     used = len(lines[0]) + 1
 
@@ -508,6 +556,110 @@ def dedup_messages_view(
     return out
 
 
+# --------------------------------------------------------------------------
+# Attachment -> local path (delegated sight, 2026-08-21)
+#
+# `analyze_media` addresses the FILE namespace only: it stats the path it is
+# given (`common_tools.py`, `Path(file_path).exists()`). A session attachment
+# is addressed by artifact id or by the display name the runtime itself put in
+# the model's system message — neither is a path, so every such call failed
+# with "File '<x>' does not exist". Measured 2026-08-21: 9 of the 10
+# `analyze_media` calls across 14 sessions, one of them retried five times
+# against a live artifact id while `open_attachment` resolved the SAME id in
+# the same turn.
+#
+# The bytes are already on local disk (the artifact store's blob), but under a
+# `.bin` name, and analyze_media gates on the image SUFFIX. So the resolution
+# materializes a suffixed copy, deduplicated by artifact id: N analyses of one
+# screenshot cost one file, which is the observed shape (12 opens over 2
+# artifacts). The cache is capped and evicts FIFO — an unbounded temp dir is
+# the kind of silent growth this codebase refuses elsewhere.
+# --------------------------------------------------------------------------
+
+_ATTACHMENT_MEDIA_DIR: Optional[str] = None
+_ATTACHMENT_MEDIA_LOCK = threading.Lock()
+_ATTACHMENT_MEDIA_CACHE: "OrderedDict[str, str]" = OrderedDict()
+#[BOUND] materialized attachment copies retained per process. Small on purpose:
+# the working set is "attachments this run is looking at", not the session index.
+_ATTACHMENT_MEDIA_CACHE_MAX = 64
+
+
+def attachment_media_dir() -> str:
+    """Process-owned directory holding materialized attachment copies.
+
+    Public so the workspace wall can recognize it: bytes THIS PROCESS wrote
+    from the artifact store are not a user-filesystem read, and walling them
+    would refuse the very path the runtime just produced.
+    """
+    global _ATTACHMENT_MEDIA_DIR
+    with _ATTACHMENT_MEDIA_LOCK:
+        if _ATTACHMENT_MEDIA_DIR is None or not os.path.isdir(_ATTACHMENT_MEDIA_DIR):
+            _ATTACHMENT_MEDIA_DIR = tempfile.mkdtemp(prefix="abstractruntime_attachment_media_")
+        return _ATTACHMENT_MEDIA_DIR
+
+
+def _suffix_for(entry: Dict[str, Any]) -> str:
+    name = str(entry.get("filename") or "").strip() or str(entry.get("handle") or "").strip()
+    suf = Path(name).suffix if name else ""
+    if suf:
+        return suf
+    ct = str(entry.get("content_type") or "").strip().lower()
+    return {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }.get(ct, "")
+
+
+def materialize_attachment_path(
+    *, artifact_store: ArtifactStore, entry: Dict[str, Any]
+) -> Optional[str]:
+    """Return a local path carrying this attachment's bytes AND its suffix.
+
+    `None` when the artifact has no readable content — the caller then leaves
+    the argument alone and the file namespace answers, so a genuinely missing
+    path still refuses exactly as it does today.
+    """
+    aid = str(entry.get("artifact_id") or "").strip()
+    if not aid:
+        return None
+    with _ATTACHMENT_MEDIA_LOCK:
+        cached = _ATTACHMENT_MEDIA_CACHE.get(aid)
+        if cached and os.path.isfile(cached):
+            _ATTACHMENT_MEDIA_CACHE.move_to_end(aid)
+            return cached
+    # `load()` rather than `content_path()`: the filesystem store has a blob
+    # path, the in-memory store does not, and the resolution must behave the
+    # same under both (the tests run on the in-memory one).
+    try:
+        artifact = artifact_store.load(aid)
+        content = getattr(artifact, "content", None)
+    except Exception:
+        content = None
+    if not isinstance(content, (bytes, bytearray)) or not content:
+        return None
+    target = Path(attachment_media_dir()) / f"{aid}{_suffix_for(entry)}"
+    try:
+        if not target.is_file():
+            target.write_bytes(bytes(content))
+    except Exception:
+        return None
+    with _ATTACHMENT_MEDIA_LOCK:
+        _ATTACHMENT_MEDIA_CACHE[aid] = str(target)
+        _ATTACHMENT_MEDIA_CACHE.move_to_end(aid)
+        while len(_ATTACHMENT_MEDIA_CACHE) > _ATTACHMENT_MEDIA_CACHE_MAX:
+            _, victim = _ATTACHMENT_MEDIA_CACHE.popitem(last=False)
+            try:
+                os.unlink(victim)
+            except Exception:
+                pass
+    return str(target)
+
+
 def execute_open_attachment(
     *,
     artifact_store: ArtifactStore,
@@ -527,6 +679,13 @@ def execute_open_attachment(
     rid = session_memory_owner_run_id(sid)
     handle_norm = _normalize_handle(handle)
     artifact_id_norm = str(artifact_id or "").strip() or None
+    # What the CALLER asked for. `artifact_id_norm` is rewritten into
+    # `handle_norm` further down when the id does not resolve, so a failure
+    # message built from the mutated values names an identifier the model
+    # never sent (2026-08-21: model asked for artifact_id='a1', was told
+    # "no attachment matches handle 'attachment'").
+    requested_artifact_id = artifact_id_norm
+    requested_handle = handle_norm
 
     expected = str(expected_sha256 or "").strip().lower() or None
     if expected and expected.startswith("sha256:"):
@@ -657,7 +816,45 @@ def execute_open_attachment(
             except Exception:
                 suggestions = []
 
-            rendered = f"Error: no attachment matches handle '{handle_norm}' in this session."
+            asked_bits: list[str] = []
+            if requested_artifact_id:
+                asked_bits.append(f"artifact_id '{requested_artifact_id}'")
+            if requested_handle:
+                asked_bits.append(f"handle '{requested_handle}'")
+            asked = " / ".join(asked_bits) or f"handle '{handle_norm}'"
+
+            if not candidates:
+                # EMPTY STORE (2026-08-21 incident). The old text — "no
+                # attachment matches handle 'x' in this session" — reads as
+                # "wrong identifier, try another one", and that is exactly
+                # what the model did: 12 fabricated ids across 4 cycles until
+                # the stuck detector killed the turn. State the fact that ends
+                # the retry loop, and name the tools that can actually help.
+                # NOTE: the `err` string stays "attachment not found" — the
+                # read_file attachment probe in effect_handlers.py keys on it
+                # to fall through to a real filesystem read.
+                # SCOPED TO NOW, not to the session (adversarial review):
+                # `read_file` registers what it reads as a session attachment
+                # (`effect_handlers.py` `_register_read_file_as_attachment`),
+                # so "nothing was ever attached, never call this again" is a
+                # claim the very next tool call can falsify — and it would sit
+                # in the transcript as a standing prohibition after it became
+                # false.
+                rendered = (
+                    "Error: this session has no stored attachments right now, so "
+                    f"{asked} cannot be opened. Nothing has been attached or read into the session "
+                    "yet, so open_attachment has nothing to open: stop retrying it with other "
+                    "identifiers. Use read_file / search_files for local files, or web_search / "
+                    "fetch_url for external sources — a file you read this way becomes openable "
+                    "afterwards."
+                )
+                return (
+                    False,
+                    {"rendered": rendered, "suggestions": []},
+                    "attachment not found",
+                )
+
+            rendered = f"Error: no attachment matches {asked} in this session."
             if suggestions:
                 parts = []
                 for s in suggestions:
@@ -672,6 +869,21 @@ def execute_open_attachment(
                     meta = f" ({', '.join(bits)})" if bits else ""
                     parts.append(f"- {h}{meta}")
                 rendered += "\nDid you mean:\n" + "\n".join(parts)
+            else:
+                # No fuzzy hit: show the real set. Guessing is only possible
+                # while the actual identifiers stay hidden.
+                listed: list[str] = []
+                for m in candidates[:10]:
+                    tags_m = getattr(m, "tags", {}) or {}
+                    h = _normalize_handle(
+                        tags_m.get("path") or tags_m.get("source_path") or tags_m.get("filename") or ""
+                    ) or "(unnamed)"
+                    aid = str(getattr(m, "artifact_id", "") or "").strip()
+                    listed.append(f"- {h}" + (f" (id={aid})" if aid else ""))
+                if listed:
+                    rendered += "\nThis session's attachments:\n" + "\n".join(listed)
+                    if len(candidates) > 10:
+                        rendered += f"\n- … and {len(candidates) - 10} more"
 
             return (
                 False,
@@ -686,14 +898,28 @@ def execute_open_attachment(
                 tags = getattr(m, "tags", {}) or {}
                 sha = str(tags.get("sha256") or "").strip()
                 cand.append({"artifact_id": str(getattr(m, "artifact_id", "") or ""), "sha256": sha or None})
-                return (
-                    False,
-                    {
-                    "rendered": f"Error: multiple attachments match '{handle_norm}'. Provide expected_sha256 or artifact_id.",
-                    "candidates": cand,
-                    },
-                    "multiple matches",
-                )
+            # The `return` used to sit INSIDE this loop, so `candidates` never
+            # held more than one entry while the message asked the model to
+            # disambiguate between several.
+            listed = []
+            for c in cand:
+                aid = str(c.get("artifact_id") or "").strip()
+                sha = str(c.get("sha256") or "").strip()
+                bits = []
+                if aid:
+                    bits.append(f"id={aid}")
+                if sha:
+                    bits.append(f"sha={sha[:8]}…")
+                if bits:
+                    listed.append("- " + ", ".join(bits))
+            rendered = f"Error: {len(matches)} attachments match '{handle_norm}'. Provide expected_sha256 or artifact_id."
+            if listed:
+                rendered += "\nCandidates:\n" + "\n".join(listed)
+            return (
+                False,
+                {"rendered": rendered, "candidates": cand},
+                "multiple matches",
+            )
 
         selected_meta = matches[0]
 
@@ -939,6 +1165,8 @@ def execute_open_attachment(
 __all__ = [
     "session_memory_owner_run_id",
     "list_session_attachments",
+    "attachment_media_dir",
+    "materialize_attachment_path",
     "render_active_attachments_system_message",
     "render_session_attachments_system_message",
     "dedup_messages_view",

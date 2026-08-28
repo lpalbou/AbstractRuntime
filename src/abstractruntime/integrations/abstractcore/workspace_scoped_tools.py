@@ -556,19 +556,10 @@ class WorkspaceScopedToolExecutor:
         return rewrite_tool_arguments(tool_name=tool_name, args=args, scope=self._scope)
 
 
-def _is_system_produced_media_path(candidate: str) -> bool:
-    """True for paths this PROCESS wrote (materialized attachments, probe
-    screenshots) rather than paths naming the user's filesystem.
-
-    Kept as a predicate rather than an ordering rule between two call sites:
-    an ordering constraint between distant blocks rots silently the moment a
-    third rewrite is added, and this one is checkable in place.
-    """
-    try:
-        target = Path(candidate).expanduser().resolve()
-    except Exception:
-        return False
-    roots = []
+def _system_media_roots() -> List[Path]:
+    """Directories holding bytes THIS PROCESS wrote: materialized attachment
+    copies and browser-probe screenshots."""
+    roots: List[Path] = []
     try:
         from .session_attachments import attachment_media_dir
 
@@ -581,13 +572,126 @@ def _is_system_produced_media_path(candidate: str) -> bool:
         roots.append(Path(_shared_screenshot_dir()).resolve())
     except Exception:
         pass
-    for root in roots:
+    return roots
+
+
+def _is_system_produced_media_path(candidate: str) -> bool:
+    """True for paths this PROCESS wrote (materialized attachments, probe
+    screenshots) rather than paths naming the user's filesystem.
+
+    Kept as a predicate rather than an ordering rule between two call sites:
+    an ordering constraint between distant blocks rots silently the moment a
+    third rewrite is added, and this one is checkable in place.
+    """
+    try:
+        target = Path(candidate).expanduser().resolve()
+    except Exception:
+        return False
+    for root in _system_media_roots():
         try:
             target.relative_to(root)
             return True
         except ValueError:
             continue
     return False
+
+
+# A mistyped directory token stays within a couple of edits of the real one;
+# anything further apart is a different directory, not a slip.
+_MEDIA_DIR_MAX_EDITS = 2
+
+
+def _within_edits(a: str, b: str, *, max_edits: int) -> bool:
+    """Bounded Levenshtein: True when `a` is at most `max_edits` from `b`."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > max_edits:
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ch_a in enumerate(a, start=1):
+        cur = [i]
+        for j, ch_b in enumerate(b, start=1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ch_a != ch_b)))
+        if min(cur) > max_edits:
+            return False
+        prev = cur
+    return prev[-1] <= max_edits
+
+
+def _aimed_at_media_root(candidate: str) -> Optional[Path]:
+    """The media root an absolute path was AIMED at, when it missed.
+
+    `browser_probe` prints its screenshot as an absolute temp path carrying a
+    random directory token, so using the shot it just took means copying that
+    token character-for-character. A path whose directory is a near-miss of a
+    real media root — and which does not exist — was aimed at that root.
+    Requiring the near-miss (rather than accepting any basename) keeps the
+    resolver from becoming a way to address media by name: the caller must
+    still have SEEN the path it is mistyping.
+    """
+    try:
+        target = Path(str(candidate or "").strip()).expanduser()
+    except Exception:
+        return None
+    if not target.is_absolute() or target.exists():
+        return None
+    parent_name = target.parent.name
+    if not parent_name:
+        return None
+    for root in _system_media_roots():
+        if target.parent == root:
+            continue
+        if _within_edits(parent_name, root.name, max_edits=_MEDIA_DIR_MAX_EDITS):
+            return root
+    return None
+
+
+def _recover_system_media_path(candidate: str) -> Optional[Path]:
+    """Recover a system-produced media file whose DIRECTORY token was mistyped.
+
+    Live run acode-f8866395de21 (2026-08-22, qwen3.5-35b-a3b) dropped ONE
+    character from the token (`…_browser_probe_hqlzfin` for the real
+    `…_hqlkzfin`) and the wall answered with a containment refusal telling the
+    model to retry relative to the workspace — advice that can never reach a
+    file in a temp dir. The file name survived intact, and inside the root it
+    was aimed at, that name identifies the file.
+    """
+    root = _aimed_at_media_root(candidate)
+    if root is None:
+        return None
+    name = os.path.basename(str(candidate or "").strip().rstrip("/"))
+    if not name or name in {".", ".."}:
+        return None
+    hit = root / name
+    try:
+        if not hit.is_file():
+            return None
+    except Exception:
+        return None
+    return hit.resolve()
+
+
+def _media_refusal(*, raw_media: str, refusal: ValueError) -> ValueError:
+    """The error `analyze_media` refuses with when recovery found nothing.
+
+    Containment wording ("retry with a path relative to <workspace>") is the
+    right answer for a path naming the user's filesystem and the wrong answer
+    for one aimed at a capture directory, where no workspace-relative path can
+    ever reach. Say what is true instead: the capture is not there, and the
+    path as the capturing tool printed it is the one that resolves.
+
+    Deliberately names no other file. The roots are per-PROCESS and a gateway
+    process serves many sessions, so listing what they hold would hand one
+    session the capture names of another.
+    """
+    if _aimed_at_media_root(raw_media) is None:
+        return refusal
+    return ValueError(
+        f"No capture named '{os.path.basename(raw_media)}' exists in "
+        f"'{os.path.dirname(raw_media)}'. Captures live in a temporary directory outside "
+        f"the workspace: re-read the output of the tool that produced this one and pass "
+        f"the path exactly as it was printed there."
+    )
 
 
 def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: WorkspaceScope) -> Dict[str, Any]:
@@ -709,8 +813,25 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
             # probe's screenshot dir are written BY this process, and walling
             # them would refuse the very path it just handed over. Everything
             # else walls exactly like read_file's file_path.
-            if not _is_system_produced_media_path(raw_media):
+            if _is_system_produced_media_path(raw_media):
+                return out
+            try:
                 _rewrite_path_field("file_path")
+            except ValueError as exc:
+                # The wall refused. Before the refusal stands, check whether
+                # the model was aiming at a screenshot THIS process produced
+                # and mistyped the directory token (see
+                # `_recover_system_media_path`). Recovery runs only on the
+                # refusal path, so a workspace file is never shadowed.
+                recovered = _recover_system_media_path(raw_media)
+                if recovered is None:
+                    raise _media_refusal(raw_media=raw_media, refusal=exc) from exc
+                _logger.warning(
+                    "analyze_media: recovered system-produced media '%s' -> '%s' (mistyped directory)",
+                    raw_media,
+                    str(recovered),
+                )
+                out["file_path"] = str(recovered)
         return out
 
     if tool_name == "browser_probe":

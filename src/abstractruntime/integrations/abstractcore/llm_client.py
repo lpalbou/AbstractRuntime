@@ -33,7 +33,7 @@ import uuid
 import wave
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
@@ -1637,9 +1637,31 @@ class AbstractCoreControlClient(Protocol):
         provider: Optional[str] = None,
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Request best-effort model unload."""
+        """Request best-effort model unload (locked runtimes refuse without force)."""
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Lock a warm model runtime against unloading (payload mapping and/or kwargs; kwargs win)."""
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Clear a model runtime lock (payload mapping and/or kwargs; kwargs win)."""
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Relay core's analytical context-fit estimate (payload mapping and/or kwargs; kwargs win)."""
 
 
 def _jsonable(value: Any) -> Any:
@@ -3317,6 +3339,254 @@ def _unknown_provider_residency_claim(*, provider: str, model: str, warning: str
     }
 
 
+def _normalize_residency_size_extras(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize ollama-style `size`/`size_vram` extras into `size_bytes`/
+    `size_vram_bytes` (originals kept) so downstream consumers see one name."""
+    for raw_name, normalized_name in (("size", "size_bytes"), ("size_vram", "size_vram_bytes")):
+        if record.get(normalized_name) is not None:
+            continue
+        raw_value = record.get(raw_name)
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            continue
+        record[normalized_name] = int(raw_value)
+    return record
+
+
+def _sweep_host_loaded_models() -> List[Dict[str, Any]]:
+    """Core-owned host sweep of local model servers (ADR 0007: relayed truth,
+    never synthesized here). Best-effort: unavailable core or a failing sweep
+    yields an empty list."""
+    try:
+        from abstractcore.utils.residency import sweep_loaded_models  # type: ignore
+    except Exception:
+        return []
+    try:
+        return [dict(record) for record in sweep_loaded_models() if isinstance(record, dict)]
+    except Exception:
+        return []
+
+
+def _merge_host_sweep_into_text_records(
+    records: List[Dict[str, Any]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Merge the core host sweep into a local text-residency listing, in
+    place, using the CANONICAL `abstractcore.utils.residency` helpers (the
+    same alias/dedup rules core's `/acore/models/loaded` uses): pool/client
+    records win and absorb missing memory fields; sweep-only entries are
+    appended tagged `source: "provider_server"` relaying ONLY what the sweep
+    reported (no task label is invented — server enumerations cannot
+    classify residents)."""
+    try:
+        from abstractcore.utils.residency import (  # type: ignore
+            SWEEP_PROVIDERS,
+            normalize_sweep_model,
+            sweep_models_match,
+        )
+    except Exception:
+        # Without the core helpers there is no core sweep either.
+        return records
+    provider_filter = str(provider or "").strip().lower()
+    model_filter = str(model or "").strip()
+    if provider_filter and provider_filter not in SWEEP_PROVIDERS:
+        # The sweep can never answer for this provider: skip the live probes.
+        return records
+    sweep_records = _sweep_host_loaded_models()
+    if not sweep_records:
+        return records
+    remaining: List[Dict[str, Any]] = list(sweep_records)
+    for existing in records:
+        existing_provider = str(existing.get("provider") or "").strip().lower()
+        match: Optional[Dict[str, Any]] = None
+        for candidate in remaining:
+            if str(candidate.get("provider") or "").strip().lower() != existing_provider:
+                continue
+            if sweep_models_match(existing_provider, existing.get("model"), candidate):
+                match = candidate
+                break
+        if match is None:
+            continue
+        remaining.remove(match)
+        for field_name in ("size_bytes", "size_vram_bytes"):
+            if existing.get(field_name) is None and match.get(field_name) is not None:
+                existing[field_name] = match[field_name]
+    for record in remaining:
+        if provider_filter and str(record.get("provider") or "").strip().lower() != provider_filter:
+            continue
+        if model_filter and normalize_sweep_model(model_filter) != normalize_sweep_model(record.get("model")):
+            continue
+        record.setdefault("loaded", True)
+        record.setdefault("resident", True)
+        record["source"] = "provider_server"
+        # Sweep-only rows are observed on a model server, not managed by this
+        # client: nothing here can enforce a lock on them, so they are not
+        # lockable (same v1 honesty rule as core's server-side sweep merge).
+        record.setdefault("lockable", False)
+        # Sweep rows are observed on THIS host too — same core-owned stamps
+        # core's server-side sweep merge applies to its own sweep rows.
+        _stamp_local_record_modalities(record, model=record.get("model"))
+        _stamp_local_record_host_identity(record)
+        records.append(_normalize_residency_size_extras(record))
+    return records
+
+
+def _local_memory_snapshot() -> Dict[str, Any]:
+    try:
+        from abstractcore.utils.memory import get_memory_snapshot  # type: ignore
+    except Exception as exc:  # pragma: no cover - the core sibling ships it
+        return {"ok": False, "error": f"AbstractCore memory snapshot is unavailable: {exc}"}
+    try:
+        snapshot = get_memory_snapshot()
+    except Exception as exc:  # noqa: BLE001 - core never raises; belt and braces
+        return {"ok": False, "error": str(exc)}
+    if not isinstance(snapshot, dict):
+        return {"ok": False, "error": "invalid memory snapshot"}
+    return dict(snapshot)
+
+
+def _provider_prompt_cache_stats_raw(provider: Any) -> Optional[Dict[str, Any]]:
+    """A provider's raw `get_prompt_cache_stats()` payload, or None when the
+    provider does not support stats (or the query fails)."""
+    method = getattr(provider, "get_prompt_cache_stats", None)
+    if not callable(method) or not _prompt_cache_supports(provider, "stats"):
+        return None
+    try:
+        stats = method()
+    except Exception:
+        return None
+    return stats if isinstance(stats, dict) else None
+
+
+def _session_prompt_cache_rows_from_stats(
+    stats: Any,
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    runtime_id: Optional[str],
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Rows for `list_session_prompt_caches` from one provider's raw
+    `get_prompt_cache_stats()` payload. Unknown fields stay None; the
+    session_id comes from stamped key meta and filters when given."""
+    if not isinstance(stats, dict):
+        return []
+    keys = stats.get("keys")
+    if not isinstance(keys, list):
+        return []
+    meta_by_key = stats.get("meta_by_key") if isinstance(stats.get("meta_by_key"), dict) else {}
+    session_filter = str(session_id or "").strip()
+    rows: List[Dict[str, Any]] = []
+    for key in keys:
+        key_s = str(key or "").strip()
+        if not key_s:
+            continue
+        meta = meta_by_key.get(key_s)
+        meta = dict(meta) if isinstance(meta, dict) else {}
+        row_session_id = meta.get("session_id")
+        row_session_id = (
+            row_session_id.strip() if isinstance(row_session_id, str) and row_session_id.strip() else None
+        )
+        if session_filter and row_session_id != session_filter:
+            continue
+        token_count = meta.get("token_count")
+        cache_bytes = meta.get("bytes")
+        rows.append(
+            {
+                "key": key_s,
+                "provider": provider,
+                "model": model,
+                "runtime_id": runtime_id,
+                "session_id": row_session_id,
+                "token_count": token_count if isinstance(token_count, int) and not isinstance(token_count, bool) else None,
+                "bytes": cache_bytes if isinstance(cache_bytes, int) and not isinstance(cache_bytes, bool) else None,
+                "created_at_s": meta.get("created_at_s"),
+                "last_used_at_s": meta.get("last_used_at_s"),
+                "meta": meta,
+            }
+        )
+    return rows
+
+
+def _clear_provider_prompt_cache_key(provider: Any, *, key: Any) -> Dict[str, Any]:
+    """Per-row clear outcome fields for `clear_session_prompt_caches`."""
+    key_s = str(key or "").strip()
+    method = getattr(provider, "prompt_cache_clear", None)
+    if not key_s or not callable(method):
+        return {"cleared": False, "error": "provider does not support prompt_cache_clear"}
+    try:
+        ok = bool(method(key_s))
+    except Exception as exc:  # noqa: BLE001 - partial failures are reported per row
+        return {"cleared": False, "error": str(exc)}
+    if ok:
+        return {"cleared": True}
+    return {"cleared": False, "error": "prompt_cache_clear returned False"}
+
+
+def _stamp_local_record_modalities(
+    record: Dict[str, Any],
+    *,
+    model: Any,
+    provider_instance: Any = None,
+) -> None:
+    """Stamp core's registry-declared modalities onto a LOCALLY-SERVED text
+    residency record, in place (ADR 0007: core-owned truth relayed — core's
+    server lane stamps its own rows the same way; without this the gateway
+    LOCAL lane never carries `modalities`, since provider claims don't).
+
+    Registry miss → field omitted (never the text-only guess). Runtime truth
+    beats declared truth: a provider instance that knows its vision lane is
+    unusable (`_vision_usable is False`, MLX) has `input.image` removed and
+    the divergence noted. Outright assignment on a registry hit (post-claim),
+    mirroring core: a hostile claim cannot override registry truth.
+    Best-effort: never raises.
+
+    IMPORT ORDER (E2E-verified env quirk): a FRESH import of
+    `abstractcore.providers.model_capabilities` can trip the pre-existing
+    architectures↔media circular import unless `abstractcore.utils` is
+    imported first — hence the guarded two-step lazy import."""
+    try:
+        import abstractcore.utils  # noqa: F401 - import-order guard (see docstring)
+        from abstractcore.providers.model_capabilities import modalities_for_model  # type: ignore
+    except Exception:
+        return
+    try:
+        modalities = modalities_for_model(str(model or ""))
+        if modalities is None:
+            return
+        modalities = list(modalities)
+        if (
+            "input.image" in modalities
+            and provider_instance is not None
+            and getattr(provider_instance, "_vision_usable", None) is False
+        ):
+            modalities = [m for m in modalities if m != "input.image"]
+            record["modalities_note"] = "vision_unusable"
+        record["modalities"] = modalities
+    except Exception:
+        pass
+
+
+def _stamp_local_record_host_identity(record: Dict[str, Any]) -> None:
+    """Stamp THIS host's identity onto a LOCALLY-SERVED residency record, in
+    place (core-owned truth via `abstractcore.utils.hostinfo`; the remote lane
+    is deliberately NOT stamped — its rows already carry the SERVER's identity
+    and overwriting with the client's would be a lie). `setdefault`, mirroring
+    core: an already-attributed record is never overwritten. Best-effort:
+    never raises."""
+    try:
+        from abstractcore.utils.hostinfo import get_host_identity  # type: ignore
+    except Exception:
+        return
+    try:
+        identity = get_host_identity()
+        record.setdefault("host_id", identity.get("host_id"))
+        record.setdefault("host_name", identity.get("host_name"))
+    except Exception:
+        pass
+
+
 def _local_provider_residency_claim(
     *,
     provider: str,
@@ -3377,6 +3647,12 @@ def _local_provider_residency_claim(
         "isolation",
         "default",
         "pinned",
+        # Lock state is runtime-owned enforcement truth (client-side pairs set;
+        # managed rows are stamped by `_stamp_local_lock_state`): claims cannot
+        # override it — the same post-fix blocked set core's gateway uses.
+        "locked",
+        "locked_at",
+        "lockable",
         "cache_state",
         "runtime_cached",
         "provider_residency_verified",
@@ -3388,7 +3664,7 @@ def _local_provider_residency_claim(
         if key in blocked or value is None:
             continue
         claim[str(key)] = value
-    return claim
+    return _normalize_residency_size_extras(claim)
 
 
 def _local_residency_record(
@@ -3399,6 +3675,7 @@ def _local_residency_record(
     runtime_cached: bool = True,
     provider_instance: Any = None,
     include_provider_state: bool = True,
+    lock_owner: Any = None,
 ) -> Dict[str, Any]:
     provider_s = str(provider or "").strip().lower()
     model_s = str(model or "").strip()
@@ -3432,7 +3709,7 @@ def _local_residency_record(
         resident = False
         state = "not_found"
 
-    return {
+    record = {
         "task": "text_generation",
         "provider": provider_s,
         "model": model_s,
@@ -3442,12 +3719,31 @@ def _local_residency_record(
         "state": state,
         "runtime_cached": bool(runtime_cached),
         "cache_state": "runtime_client_cached" if runtime_cached else "not_cached",
-        "pinned": bool(default),
+        # `pinned` is a truthful alias of `locked` (core parity) — NEVER the
+        # default-identity flag: presenting every capability-default model as
+        # "pinned" was exactly the default-vs-loaded lie. `default` alone
+        # carries the default-identity pair; `_stamp_local_lock_state` raises
+        # `pinned` alongside `locked` on managed list rows.
+        "pinned": False,
         "default": bool(default),
         "source": "abstractruntime.local",
         "isolation": "in_process",
         **provider_claim,
     }
+    # Locally-served managed rows carry core-owned modalities + host identity
+    # (the gateway LOCAL lane's analog of core's server-side record stamps;
+    # provider claims never include these).
+    _stamp_local_record_modalities(record, model=model_s, provider_instance=provider_instance)
+    _stamp_local_record_host_identity(record)
+    if lock_owner is not None:
+        # Load/unload response records carry the same lock truth as list rows
+        # (alias parity: a re-load of a LOCKED pair must not answer
+        # `pinned: false` beside `lock.locked: true`).
+        _stamp_local_lock_state(
+            record,
+            locked=(provider_s, model_s) in _local_locked_residency_pairs(lock_owner),
+        )
+    return record
 
 
 def _local_provider_load_options(
@@ -3506,6 +3802,363 @@ def _unload_local_provider_residency(
             return None, f"Provider model unload failed: {exc}"
     except Exception as exc:  # noqa: BLE001
         return None, f"Provider model unload failed: {exc}"
+
+
+def _merge_optional_payload(payload: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge the two supported calling conventions into one request mapping.
+
+    Contract (gateway reviewer, misbinding bugs in convention-guessing):
+    - `payload` is an OPTIONAL Mapping and is only ever the payload mapping —
+      the first positional argument is never reinterpreted as anything else.
+    - `kwargs` merge into a COPY of the payload; kwargs win on key conflicts.
+    """
+    merged: Dict[str, Any] = {}
+    if payload is not None:
+        if not isinstance(payload, Mapping):
+            raise TypeError(
+                "payload must be a mapping of request fields when provided "
+                f"(got {type(payload).__name__}); pass fields as keyword arguments otherwise."
+            )
+        merged.update(payload)
+    merged.update(kwargs)
+    return merged
+
+
+def _local_locked_residency_pairs(owner: Any) -> set:
+    """Client-side model-lock state for a local pool owner.
+
+    Keyed by normalized (provider, model). Lazily created so test doubles
+    built via `object.__new__` participate without running `__init__`."""
+    pairs = getattr(owner, "_locked_model_residency", None)
+    if not isinstance(pairs, set):
+        pairs = set()
+        try:
+            owner._locked_model_residency = pairs
+        except Exception:
+            pass
+    return pairs
+
+
+def _stamp_local_lock_state(record: Dict[str, Any], *, locked: bool) -> Dict[str, Any]:
+    """Stamp client-side lock truth onto a MANAGED local record (mirrors
+    core's `_gateway_text_residency_record`: managed rows are ALWAYS lockable
+    and `locked` is the enforcement flag, never a provider claim — the claim
+    helper additionally blocks locked/lockable/locked_at, like core).
+
+    `pinned` is a truthful alias of `locked` (same value, core parity): no
+    row may carry `pinned: true` unless it is actually locked."""
+    record["locked"] = bool(locked)
+    record["pinned"] = bool(locked)
+    record["lockable"] = True
+    return record
+
+
+# Ollama's server-side default keep-alive; restored on unlock so an unlocked
+# model goes back to ordinary server-managed residency (same value core uses).
+_OLLAMA_DEFAULT_KEEP_ALIVE = "5m"
+
+
+def _apply_local_provider_side_lock_knob(
+    *,
+    provider: str,
+    provider_instance: Any,
+    model: str,
+    lock: bool,
+) -> Dict[str, Any]:
+    """Best-effort provider-side reinforcement of the client-side lock.
+
+    Mirrors core's `_apply_provider_side_lock_knob`: ollama honors
+    `keep_alive` (-1 pins server-side; the 5m default restores normal
+    behavior); no other provider exposes a residency-pin knob. The
+    client-side flag is the enforcement truth either way — a provider-side
+    failure is REPORTED, never raised.
+
+    The knob rides Ollama's native load request, which would LOAD a
+    non-resident model. Lock callers verify residency up front (the lock rule
+    refuses non-resident pairs); unlock verifies here and skips the restore
+    when the model is gone — unlocking a locked-but-since-evicted pair must
+    never load it back as a side effect."""
+    if str(provider or "").strip().lower() != "ollama":
+        return {"supported": False, "applied": False}
+    if not lock and provider_instance is not None:
+        # Restore only on VERIFIED residency (the knob rides a load request).
+        # UNKNOWN is not evidence of eviction: a transient probe failure on a
+        # genuinely resident model still skips the restore — the safe act —
+        # but the detail must not claim "not resident" it never verified.
+        claim = _local_provider_residency_claim(
+            provider=str(provider or "").strip().lower(),
+            model=str(model or "").strip(),
+            provider_instance=provider_instance,
+        )
+        resident = claim.get("provider_resident")
+        if resident is not True:
+            detail = (
+                "model is not resident server-side; keep_alive restore skipped (no load side effect)"
+                if resident is False
+                else "model residency unverified; keep_alive restore skipped (no load side effect)"
+            )
+            return {"supported": True, "applied": False, "detail": detail}
+    keep_alive: Any = -1 if lock else _OLLAMA_DEFAULT_KEEP_ALIVE
+    method = getattr(provider_instance, "load_model", None)
+    if not callable(method):
+        return {
+            "supported": True,
+            "applied": False,
+            "detail": "provider instance does not expose load_model",
+        }
+    try:
+        method(str(model or "").strip(), keep_alive=keep_alive)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised
+        return {
+            "supported": True,
+            "applied": False,
+            "detail": f"ollama keep_alive={keep_alive} update failed: {exc}",
+        }
+    return {"supported": True, "applied": True}
+
+
+def _local_lock_pair_from_request(
+    merged: Dict[str, Any],
+    *,
+    default_provider: str,
+    default_model: str,
+) -> Tuple[str, str, bool]:
+    """Resolve the (provider, model) selector for a local lock/unlock request:
+    explicit provider/model, else a `local:text_generation:...` runtime_id,
+    else — ONLY when no selector was given at all — the client's default
+    identity.
+
+    Returns (provider, model, unresolved_runtime_id). A NON-EMPTY runtime_id
+    that does not address a local text runtime must never fall back to the
+    default pair: `lock(runtime_id="rid-core-42")` would otherwise lock (and
+    unlock UNLOCK) a runtime the caller never addressed."""
+    provider_s = str(merged.get("provider") or "").strip().lower()
+    model_s = str(merged.get("model") or "").strip()
+    runtime_id = str(merged.get("runtime_id") or "").strip()
+    if (not provider_s or not model_s) and runtime_id:
+        prefix = "local:text_generation:"
+        if runtime_id.startswith(prefix):
+            rest = runtime_id[len(prefix) :]
+            if ":" in rest:
+                rid_provider, rid_model = rest.split(":", 1)
+                provider_s = provider_s or rid_provider.strip().lower()
+                model_s = model_s or rid_model.strip()
+        if not provider_s or not model_s:
+            return provider_s, model_s, True
+    if not provider_s and not model_s and not runtime_id:
+        provider_s = str(default_provider or "").strip().lower()
+        model_s = str(default_model or "").strip()
+    return provider_s, model_s, False
+
+
+def _local_model_residency_lock_result(
+    merged: Dict[str, Any],
+    *,
+    lock: bool,
+    default_provider: str,
+    default_model: str,
+    known_pairs: set,
+    locked_pairs: set,
+    provider_instance_lookup: Any,
+    source: str,
+) -> Dict[str, Any]:
+    """Shared local lock/unlock implementation (Local + MultiLocal clients).
+
+    The client-side flag is the enforcement truth (checked by
+    `unload_model_residency`); the ollama keep_alive knob is best-effort
+    reinforcement reported in `provider_side`, exactly like core's
+    `/acore/models/lock` contract.
+
+    LOCK RULE (core parity): a lock requires provider-VERIFIED residency
+    (`provider_resident is True`) on top of the warm-pair requirement;
+    locking a non-resident pair refuses with `error: "model_not_resident"`
+    (load with lock:true instead). Unlock never requires residency — a
+    locked-but-since-evicted pair must always be unlockable."""
+    operation = "lock" if lock else "unlock"
+    task_raw = merged.get("task")
+    if task_raw is not None and str(task_raw).strip():
+        task_s = _normalize_residency_task(task_raw)
+        if task_s != "text_generation":
+            return _model_residency_unsupported_payload(
+                operation=operation,
+                task=task_s,
+                provider=str(merged.get("provider") or "").strip().lower(),
+                model=str(merged.get("model") or "").strip(),
+                error=f"model_residency {operation} is only supported for text_generation runtimes.",
+            )
+    provider_s, model_s, unresolved_runtime_id = _local_lock_pair_from_request(
+        merged,
+        default_provider=default_provider,
+        default_model=default_model,
+    )
+    if unresolved_runtime_id:
+        # A foreign/unparseable runtime_id addresses NOTHING here — refuse
+        # honestly (never the default pair the caller did not name).
+        message = "Requested local runtime was not found in this client."
+        return {
+            "ok": False,
+            "success": False,
+            "supported": True,
+            "operation": operation,
+            "runtime_id": str(merged.get("runtime_id") or "").strip(),
+            "error": message,
+            "warnings": [message],
+            "affected_models": [],
+            "diagnostics": {"source": source, "reason": "not_found"},
+        }
+    if not provider_s or not model_s:
+        message = f"model_residency {operation} requires runtime_id or provider/model"
+        return {
+            "ok": False,
+            "success": False,
+            "supported": True,
+            "operation": operation,
+            "error": message,
+            "warnings": [message],
+            "affected_models": [],
+        }
+    pair = (provider_s, model_s)
+    # Unlock must stay reachable for a locked pair even after its pooled
+    # client was evicted; lock requires a known (warm) local runtime, the
+    # analog of core's registry-entry requirement.
+    if pair not in known_pairs and not (not lock and pair in locked_pairs):
+        message = "Requested local runtime was not found in this client."
+        return {
+            "ok": False,
+            "success": False,
+            "supported": True,
+            "operation": operation,
+            "provider": provider_s,
+            "model": model_s,
+            "error": message,
+            "warnings": [message],
+            "affected_models": [],
+            "diagnostics": {"source": source, "reason": "not_found"},
+        }
+    provider_instance = provider_instance_lookup(provider_s, model_s) if callable(provider_instance_lookup) else None
+    if lock:
+        # LOCK RULE (core parity): lock requires provider-VERIFIED residency.
+        # A warm pool client alone is configuration, not memory — for lmstudio
+        # a constructed HTTP client counted as "warm" with nothing resident,
+        # and the lock presented a configured model as loaded.
+        claim = _local_provider_residency_claim(
+            provider=provider_s,
+            model=model_s,
+            provider_instance=provider_instance,
+        )
+        if claim.get("provider_resident") is not True:
+            detail = (
+                f"Model {provider_s}/{model_s} is not resident in provider memory; "
+                "load it first (load with lock:true) before locking."
+            )
+            return {
+                "ok": False,
+                "success": False,
+                "supported": True,
+                "operation": operation,
+                "provider": provider_s,
+                "model": model_s,
+                "runtime_id": f"local:text_generation:{provider_s}:{model_s}",
+                "error": "model_not_resident",
+                "detail": detail,
+                "warnings": [detail],
+                "affected_models": [],
+                "diagnostics": {"source": source, "reason": "model_not_resident"},
+            }
+        locked_pairs.add(pair)
+    else:
+        locked_pairs.discard(pair)
+    provider_side = _apply_local_provider_side_lock_knob(
+        provider=provider_s,
+        provider_instance=provider_instance,
+        model=model_s,
+        lock=lock,
+    )
+    return {
+        "ok": True,
+        "operation": operation,
+        "locked": bool(lock),
+        "runtime_id": f"local:text_generation:{provider_s}:{model_s}",
+        "provider": provider_s,
+        "model": model_s,
+        "provider_side": provider_side,
+        "diagnostics": {"source": source},
+    }
+
+
+def _local_model_locked_refusal(*, provider: str, model: str, source: str) -> Dict[str, Any]:
+    """The soft refusal payload for unloading a client-side-locked pair
+    without force (the local analog of core's 409 `model_locked` envelope;
+    a payload, never an exception)."""
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    return {
+        "ok": False,
+        "success": False,
+        "supported": True,
+        "operation": "unload",
+        "task": "text_generation",
+        "unloaded": False,
+        "error": "model_locked",
+        "detail": (
+            f"Model residency for {provider_s}/{model_s} is locked; pass force=true to unload."
+        ),
+        "runtime_id": f"local:text_generation:{provider_s}:{model_s}",
+        "provider": provider_s,
+        "model": model_s,
+        "affected_models": [],
+        "diagnostics": {"source": source, "reason": "model_locked"},
+    }
+
+
+def _local_context_estimate(
+    *,
+    provider: str,
+    model: str,
+    context_length: Any = None,
+    base_url: Any = None,
+) -> Dict[str, Any]:
+    """Relay core's analytical context-fit estimator (ADR 0007: core-owned
+    truth; an absent estimator degrades to the structured unsupported
+    envelope instead of raising)."""
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    if not provider_s or not model_s:
+        message = "context_estimate requires provider and model"
+        return {
+            "ok": False,
+            "success": False,
+            "supported": True,
+            "operation": "context_estimate",
+            "error": message,
+            "warnings": [message],
+        }
+    try:
+        from abstractcore.utils.context_estimate import estimate_context_fit  # type: ignore
+    except Exception as exc:
+        return {
+            "ok": False,
+            "supported": False,
+            "operation": "context_estimate",
+            "error": f"AbstractCore context estimator is unavailable: {exc}",
+        }
+    ctx: Optional[int] = None
+    if context_length is not None and not isinstance(context_length, bool):
+        try:
+            ctx = int(context_length)
+        except Exception:
+            ctx = None
+    call_kwargs: Dict[str, Any] = {"context_length": ctx}
+    base_s = str(base_url or "").strip()
+    if base_s:
+        call_kwargs["base_url"] = base_s
+    try:
+        result = estimate_context_fit(provider_s, model_s, **call_kwargs)
+    except Exception as exc:  # noqa: BLE001 - the estimator never raises; belt and braces
+        return {"ok": False, "operation": "context_estimate", "error": str(exc)}
+    if not isinstance(result, dict):
+        return {"ok": False, "operation": "context_estimate", "error": "invalid context estimate response"}
+    return dict(result)
 
 
 def _provider_supports_uncached_text_residency(provider: str) -> bool:
@@ -3689,7 +4342,13 @@ def _local_all_model_residency_result(
     provider_s = str(provider or "").strip().lower()
     model_s = str(model or "").strip()
     records = list(text_records)
-    task_counts: Dict[str, int] = {"text_generation": len(text_records)}
+    # Sweep-only rows carry no task label (relayed, never inferred) and must
+    # not be counted as verified text_generation runtimes.
+    task_counts: Dict[str, int] = {
+        "text_generation": sum(
+            1 for record in text_records if str(record.get("task") or "") == "text_generation"
+        )
+    }
     task_errors: Dict[str, str] = {}
 
     for task_s in _LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS:
@@ -5536,6 +6195,7 @@ class LocalAbstractCoreLLMClient:
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
+        self._locked_model_residency: set = set()
         self._on_token: Optional[Any] = None
 
     def set_on_token(self, callback: Optional[Any]) -> None:
@@ -5683,6 +6343,12 @@ class LocalAbstractCoreLLMClient:
             model=self._model,
             default=True,
             provider_instance=getattr(self, "_llm", None),
+            lock_owner=self,
+        )
+        _stamp_local_lock_state(
+            record,
+            locked=(str(self._provider or "").strip().lower(), str(self._model or "").strip())
+            in _local_locked_residency_pairs(self),
         )
         if isinstance(provider, str) and provider.strip() and provider.strip().lower() != self._provider:
             records: List[Dict[str, Any]] = []
@@ -5690,6 +6356,7 @@ class LocalAbstractCoreLLMClient:
             records = []
         else:
             records = [record]
+        records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -5752,6 +6419,7 @@ class LocalAbstractCoreLLMClient:
             model=self._model,
             default=True,
             provider_instance=getattr(self, "_llm", None),
+            lock_owner=self,
         )
         provider_load_result: Any = None
         if before_record.get("loaded") is not True:
@@ -5779,6 +6447,7 @@ class LocalAbstractCoreLLMClient:
             model=self._model,
             default=True,
             provider_instance=getattr(self, "_llm", None),
+            lock_owner=self,
         )
         provider_loaded_new = bool(before_record.get("loaded") is not True and record.get("loaded") is True)
         if record.get("loaded") is not True:
@@ -5825,6 +6494,7 @@ class LocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         _ = kwargs
@@ -5845,6 +6515,22 @@ class LocalAbstractCoreLLMClient:
             )
         provider_s = str(provider or self._provider or "").strip().lower()
         model_s = str(model or self._model or "").strip()
+        locked_pairs = _local_locked_residency_pairs(self)
+        force_unlock_pending = False
+        if (provider_s, model_s) in locked_pairs:
+            if not force:
+                # Locked pairs refuse plain unloads (payload, never an
+                # exception); force=true unlocks first — same choke-point
+                # semantics as core's /acore/models/unload 409.
+                return _local_model_locked_refusal(
+                    provider=provider_s,
+                    model=model_s,
+                    source="abstractruntime.local",
+                )
+            # The discard is DEFERRED until the provider unload succeeds: a
+            # raising provider must leave the pair resident AND still locked
+            # (same ordering fix as core's force path).
+            force_unlock_pending = True
         if provider_s != self._provider or model_s != self._model:
             requested = _local_residency_record(
                 provider=provider_s,
@@ -5852,6 +6538,7 @@ class LocalAbstractCoreLLMClient:
                 default=False,
                 runtime_cached=False,
                 include_provider_state=False,
+                lock_owner=self,
             )
             result = {
                 "ok": True,
@@ -5877,6 +6564,7 @@ class LocalAbstractCoreLLMClient:
             model=self._model,
             default=True,
             provider_instance=getattr(self, "_llm", None),
+            lock_owner=self,
         )
         provider_unload_result: Any = None
         unload_error: Optional[str] = None
@@ -5887,12 +6575,19 @@ class LocalAbstractCoreLLMClient:
                 model=self._model,
                 options=options,
             )
+        if should_call_unload and unload_error is None:
+            # Core's unload_model already dropped the in-provider prompt-cache
+            # stores; drop this client's mirrors of them too.
+            self._drop_prompt_cache_client_state()
+        if force_unlock_pending and unload_error is None:
+            locked_pairs.discard((provider_s, model_s))
 
         record = _local_residency_record(
             provider=self._provider,
             model=self._model,
             default=True,
             provider_instance=getattr(self, "_llm", None),
+            lock_owner=self,
         )
         unloaded = bool(before_record.get("loaded") is True and record.get("loaded") is False)
         warnings: List[str] = []
@@ -5933,6 +6628,152 @@ class LocalAbstractCoreLLMClient:
             action="unload_failed" if error else ("unloaded" if unloaded else "already_unloaded"),
             changed=unloaded,
         )
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        provider_s = str(self._provider or "").strip().lower()
+        model_s = str(self._model or "").strip()
+        return _local_model_residency_lock_result(
+            merged,
+            lock=True,
+            default_provider=provider_s,
+            default_model=model_s,
+            known_pairs={(provider_s, model_s)},
+            locked_pairs=_local_locked_residency_pairs(self),
+            provider_instance_lookup=lambda p, m: (
+                getattr(self, "_llm", None) if (p, m) == (provider_s, model_s) else None
+            ),
+            source="abstractruntime.local",
+        )
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        provider_s = str(self._provider or "").strip().lower()
+        model_s = str(self._model or "").strip()
+        return _local_model_residency_lock_result(
+            merged,
+            lock=False,
+            default_provider=provider_s,
+            default_model=model_s,
+            known_pairs={(provider_s, model_s)},
+            locked_pairs=_local_locked_residency_pairs(self),
+            provider_instance_lookup=lambda p, m: (
+                getattr(self, "_llm", None) if (p, m) == (provider_s, model_s) else None
+            ),
+            source="abstractruntime.local",
+        )
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        return _local_context_estimate(
+            provider=merged.get("provider") or self._provider,
+            model=merged.get("model") or self._model,
+            context_length=merged.get("context_length"),
+            base_url=merged.get("base_url"),
+        )
+
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _local_memory_snapshot()
+
+    def list_session_prompt_caches(self, session_id: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        stats = _provider_prompt_cache_stats_raw(getattr(self, "_llm", None))
+        rows = _session_prompt_cache_rows_from_stats(
+            stats,
+            provider=self._provider,
+            model=self._model,
+            runtime_id=f"local:text_generation:{self._provider}:{self._model}",
+            session_id=session_id,
+        )
+        return {"ok": True, "caches": rows}
+
+    def clear_session_prompt_caches(self, session_id: str, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        session_s = str(session_id or "").strip()
+        if not session_s:
+            return {
+                "ok": False,
+                "error": "clear_session_prompt_caches requires a session_id",
+                "cleared": [],
+                "count": 0,
+            }
+        cleared: List[Dict[str, Any]] = []
+        count = 0
+        for row in self.list_session_prompt_caches(session_id=session_s).get("caches") or []:
+            out = dict(row)
+            out.update(_clear_provider_prompt_cache_key(getattr(self, "_llm", None), key=row.get("key")))
+            if out.get("cleared"):
+                count += 1
+                self._forget_prompt_cache_key(str(row.get("key") or ""))
+            cleared.append(out)
+        return {"ok": True, "cleared": cleared, "count": count}
+
+    def _forget_prompt_cache_key(self, key: str) -> None:
+        key_s = str(key or "").strip()
+        if not key_s:
+            return
+        lock = getattr(self, "_prompt_cache_state_lock", None)
+        state = getattr(self, "_prompt_cache_state", None)
+        if isinstance(state, dict):
+            if lock is not None:
+                with lock:
+                    state.pop(key_s, None)
+            else:
+                state.pop(key_s, None)
+
+    def _drop_prompt_cache_client_state(self) -> None:
+        """Unload hygiene: the provider's own unload dropped its stores; drop
+        the client-side mirrors so a later session cannot see stale
+        prepared-prefix bookkeeping."""
+        lock = getattr(self, "_prompt_cache_state_lock", None)
+        state = getattr(self, "_prompt_cache_state", None)
+        if isinstance(state, dict):
+            if lock is not None:
+                with lock:
+                    state.clear()
+            else:
+                state.clear()
+
+    def _maybe_stamp_prompt_cache_attribution(
+        self,
+        *,
+        key: Optional[str],
+        attribution: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort session attribution on a session-scoped cache key.
+
+        Placed AFTER generate: `BaseProvider.prompt_cache_update_key_meta`
+        merges into an EXISTING entry and returns False for a missing key, and
+        the entry may only exist once the first generate on the key has
+        completed. Stamped after EVERY generate that used a derived key — a
+        done-set would go stale against core's LRU (an evicted-then-recreated
+        key would silently keep empty meta forever); the merge itself is
+        cheap and idempotent. Never fails the call."""
+        key_s = str(key or "").strip()
+        if not key_s or not isinstance(attribution, dict):
+            return
+        if not str(attribution.get("session_id") or "").strip():
+            return
+        meta_setter = getattr(getattr(self, "_llm", None), "prompt_cache_update_key_meta", None)
+        if not callable(meta_setter):
+            return
+        try:
+            meta_setter(key_s, **{k: v for k, v in attribution.items() if v is not None})
+        except Exception:
+            pass
 
     def _maybe_prepare_prompt_cache(
         self,
@@ -6186,6 +7027,7 @@ class LocalAbstractCoreLLMClient:
 
         try:
             params = _normalize_prompt_cache_binding_params(params)
+            prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
             prompt = _promote_text_param_to_prompt(prompt, params)
             has_binding = _has_prompt_cache_binding(params)
             output_request = params.get("output")
@@ -6507,6 +7349,10 @@ class LocalAbstractCoreLLMClient:
                 # Never fail an LLM call due to observability.
                 pass
 
+            self._maybe_stamp_prompt_cache_attribution(
+                key=params.get("prompt_cache_key"),
+                attribution=prompt_cache_attribution,
+            )
             return result
         finally:
             if tmpdir is not None:
@@ -7487,6 +8333,7 @@ class MultiLocalAbstractCoreLLMClient:
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
+        self._locked_model_residency: set = set()
         # Fresh-install guard (release gap 1, gateway c5878, 2026-07-27): a
         # brand-new install has NO provider configured anywhere. Eagerly
         # building the default client here crashed the whole runtime at
@@ -7606,9 +8453,40 @@ class MultiLocalAbstractCoreLLMClient:
         # connection kwargs, and an entry for the NEW default provider was
         # built WITHOUT them (it was not the default then). Both are wrong now.
         # Rebuild is lazy, so this costs one construction per identity in use.
-        self._clients = {}
+        #
+        # LOCK EXEMPTION (review fix): a LOCKED pair's pooled client holds the
+        # resident weights (in-process providers would be GC'd — a silent lock
+        # bypass), so it survives the eviction. The one structural exception:
+        # a locked pair that IS the new default identity — keeping its stale
+        # entry would serve default traffic with the old connection kwargs
+        # (the 2026-07-31 misroute), so it is evicted LOUDLY and its dangling
+        # flag cleared so a re-lock binds the rebuilt client.
+        locked_pairs = _local_locked_residency_pairs(self)
+        kept_clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
+        for pool_key, pool_client in dict(getattr(self, "_clients", {}) or {}).items():
+            if pool_key not in locked_pairs:
+                continue
+            if pool_key == (provider_s, model_s):
+                locked_pairs.discard(pool_key)
+                logger.warning(
+                    f"🔒 pool eviction dropped a LOCKED pair {pool_key[0]}/{pool_key[1]}: it is the "
+                    "new default identity and must be rebuilt with the new connection kwargs; "
+                    "its lock was cleared — re-lock to pin the rebuilt client"
+                )
+                continue
+            kept_clients[pool_key] = pool_client
+            logger.info(f"🔒 pool eviction skipped (locked): {pool_key[0]}/{pool_key[1]}")
+        self._clients = kept_clients
         if capability_changed:
-            self._override_clients = {}
+            kept_overrides: Dict[Tuple[str, str, str, str], LocalAbstractCoreLLMClient] = {}
+            for override_key, override_client in dict(getattr(self, "_override_clients", {}) or {}).items():
+                if (override_key[0], override_key[1]) not in locked_pairs:
+                    continue
+                kept_overrides[override_key] = override_client
+                logger.info(
+                    f"🔒 override eviction skipped (locked): {override_key[0]}/{override_key[1]}"
+                )
+            self._override_clients = kept_overrides
         self._capability_residency_core = None
         if provider_s or model_s:
             self._default_client = self._get_client(provider_s, model_s)
@@ -7858,6 +8736,7 @@ class MultiLocalAbstractCoreLLMClient:
 
         provider_filter = str(provider or "").strip().lower()
         model_filter = str(model or "").strip()
+        locked_pairs = _local_locked_residency_pairs(self)
         records: List[Dict[str, Any]] = []
         for provider_s, model_s in self.list_loaded_clients():
             if provider_filter and provider_s != provider_filter:
@@ -7866,13 +8745,17 @@ class MultiLocalAbstractCoreLLMClient:
                 continue
             cached_client = self._clients.get((provider_s, model_s))
             records.append(
-                _local_residency_record(
-                    provider=provider_s,
-                    model=model_s,
-                    default=(provider_s, model_s) == (self._default_provider, self._default_model),
-                    provider_instance=getattr(cached_client, "_llm", None),
+                _stamp_local_lock_state(
+                    _local_residency_record(
+                        provider=provider_s,
+                        model=model_s,
+                        default=(provider_s, model_s) == (self._default_provider, self._default_model),
+                        provider_instance=getattr(cached_client, "_llm", None),
+                    ),
+                    locked=(provider_s, model_s) in locked_pairs,
                 )
             )
+        records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -7940,6 +8823,7 @@ class MultiLocalAbstractCoreLLMClient:
             model=model_s,
             default=key == (self._default_provider, self._default_model),
             provider_instance=getattr(client, "_llm", None),
+            lock_owner=self,
         )
         provider_load_result: Any = None
         if before_record.get("loaded") is not True:
@@ -7959,6 +8843,7 @@ class MultiLocalAbstractCoreLLMClient:
                         default=False,
                         runtime_cached=False,
                         include_provider_state=False,
+                        lock_owner=self,
                     )
                 return _local_model_residency_load_failure(
                     operation="load",
@@ -7977,6 +8862,7 @@ class MultiLocalAbstractCoreLLMClient:
             model=model_s,
             default=key == (self._default_provider, self._default_model),
             provider_instance=getattr(client, "_llm", None),
+            lock_owner=self,
         )
         provider_loaded_new = bool(before_record.get("loaded") is not True and record.get("loaded") is True)
         loaded_new = bool((runtime_cache_loaded_new or provider_loaded_new) and record.get("loaded") is True)
@@ -7989,6 +8875,7 @@ class MultiLocalAbstractCoreLLMClient:
                     default=False,
                     runtime_cached=False,
                     include_provider_state=False,
+                    lock_owner=self,
                 )
             return _local_model_residency_load_failure(
                 operation="load",
@@ -8034,6 +8921,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         _ = kwargs
@@ -8073,6 +8961,22 @@ class MultiLocalAbstractCoreLLMClient:
                 "warnings": ["model_residency unload requires runtime_id or provider/model"],
                 "affected_models": [],
             }
+        locked_pairs = _local_locked_residency_pairs(self)
+        force_unlock_pending = False
+        if (provider_s, model_s) in locked_pairs:
+            if not force:
+                # Locked pairs refuse plain unloads (payload, never an
+                # exception); force=true unlocks first — same choke-point
+                # semantics as core's /acore/models/unload 409.
+                return _local_model_locked_refusal(
+                    provider=provider_s,
+                    model=model_s,
+                    source="abstractruntime.multilocal",
+                )
+            # The discard is DEFERRED until the provider unload succeeds: a
+            # raising provider must leave the pair resident AND still locked
+            # (same ordering fix as core's force path).
+            force_unlock_pending = True
 
         key = (provider_s, model_s)
         default_key = key == (self._default_provider, self._default_model)
@@ -8096,6 +9000,7 @@ class MultiLocalAbstractCoreLLMClient:
             runtime_cached=runtime_cached_before,
             provider_instance=provider_instance,
             include_provider_state=provider_instance is not None,
+            lock_owner=self,
         )
         if transient_error:
             result = {
@@ -8149,6 +9054,14 @@ class MultiLocalAbstractCoreLLMClient:
                 model=model_s,
                 options=options,
             )
+        if should_call_unload and unload_error is None and client is not None:
+            # Core's unload_model already dropped the in-provider prompt-cache
+            # stores; drop the pooled client's mirrors of them too.
+            dropper = getattr(client, "_drop_prompt_cache_client_state", None)
+            if callable(dropper):
+                dropper()
+        if force_unlock_pending and unload_error is None:
+            locked_pairs.discard(key)
 
         record_after_unload = _local_residency_record(
             provider=provider_s,
@@ -8157,6 +9070,7 @@ class MultiLocalAbstractCoreLLMClient:
             runtime_cached=runtime_cached_before,
             provider_instance=provider_instance,
             include_provider_state=provider_instance is not None,
+            lock_owner=self,
         )
         unloaded = bool(record.get("loaded") is True and record_after_unload.get("loaded") is False)
         runtime_cache_unloaded = False
@@ -8182,6 +9096,7 @@ class MultiLocalAbstractCoreLLMClient:
                 runtime_cached=False,
                 provider_instance=provider_instance,
                 include_provider_state=provider_instance is not None,
+                lock_owner=self,
             )
 
         result = {
@@ -8211,6 +9126,83 @@ class MultiLocalAbstractCoreLLMClient:
             runtime=record_after_unload,
             action="unload_failed" if error else ("unloaded" if unloaded else "already_unloaded"),
             changed=bool(unloaded or runtime_cache_unloaded),
+        )
+
+    def _lock_known_pairs(self) -> set:
+        """Warm (provider, model) pairs a lock can target: the pool plus the
+        configured default identity (the analog of core's registry entries)."""
+        known = set(self.list_loaded_clients())
+        default_provider = str(getattr(self, "_default_provider", "") or "").strip().lower()
+        default_model = str(getattr(self, "_default_model", "") or "").strip()
+        if default_provider and default_model:
+            known.add((default_provider, default_model))
+        return known
+
+    def _lock_provider_instance(self, provider_s: str, model_s: str) -> Any:
+        clients = getattr(self, "_clients", None)
+        client = clients.get((provider_s, model_s)) if isinstance(clients, dict) else None
+        if client is None and (provider_s, model_s) == (
+            str(getattr(self, "_default_provider", "") or "").strip().lower(),
+            str(getattr(self, "_default_model", "") or "").strip(),
+        ):
+            client = getattr(self, "_default_client", None)
+        if client is None:
+            # A lock on the plain (provider, model) pair is honored when the
+            # warm client is override-keyed — that client IS the one holding
+            # (and able to verify) the residency the lock rule requires.
+            override_clients = getattr(self, "_override_clients", None)
+            if isinstance(override_clients, dict):
+                for key, candidate in override_clients.items():
+                    if isinstance(key, tuple) and len(key) >= 2 and (key[0], key[1]) == (provider_s, model_s):
+                        client = candidate
+                        break
+        return getattr(client, "_llm", None)
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        return _local_model_residency_lock_result(
+            merged,
+            lock=True,
+            default_provider=str(getattr(self, "_default_provider", "") or ""),
+            default_model=str(getattr(self, "_default_model", "") or ""),
+            known_pairs=self._lock_known_pairs(),
+            locked_pairs=_local_locked_residency_pairs(self),
+            provider_instance_lookup=self._lock_provider_instance,
+            source="abstractruntime.multilocal",
+        )
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        return _local_model_residency_lock_result(
+            merged,
+            lock=False,
+            default_provider=str(getattr(self, "_default_provider", "") or ""),
+            default_model=str(getattr(self, "_default_model", "") or ""),
+            known_pairs=self._lock_known_pairs(),
+            locked_pairs=_local_locked_residency_pairs(self),
+            provider_instance_lookup=self._lock_provider_instance,
+            source="abstractruntime.multilocal",
+        )
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        return _local_context_estimate(
+            provider=merged.get("provider") or getattr(self, "_default_provider", None),
+            model=merged.get("model") or getattr(self, "_default_model", None),
+            context_length=merged.get("context_length"),
+            base_url=merged.get("base_url"),
         )
 
     def generate(
@@ -8493,6 +9485,97 @@ class MultiLocalAbstractCoreLLMClient:
         model_str = str(model).strip() if isinstance(model, str) and model.strip() else self._default_model
         client = self._get_client(provider_str, model_str)
         return client.get_prompt_cache_stats(**kwargs)
+
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        return _local_memory_snapshot()
+
+    def _pooled_clients(self) -> List[Any]:
+        """Existing pooled clients only (never constructs new ones)."""
+        clients: List[Any] = list(getattr(self, "_clients", {}).values())
+        clients.extend(list(getattr(self, "_override_clients", {}).values()))
+        default_client = getattr(self, "_default_client", None)
+        if default_client is not None:
+            clients.append(default_client)
+        unique: List[Any] = []
+        seen: set[int] = set()
+        for client in clients:
+            if id(client) in seen:
+                continue
+            seen.add(id(client))
+            unique.append(client)
+        return unique
+
+    def _pooled_client_error_row(self, client: Any, *, error: str) -> Dict[str, Any]:
+        return {
+            "provider": str(getattr(client, "_provider", "") or "") or None,
+            "model": str(getattr(client, "_model", "") or "") or None,
+            "error": error,
+        }
+
+    def list_session_prompt_caches(self, session_id: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        rows: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        for client in self._pooled_clients():
+            lister = getattr(client, "list_session_prompt_caches", None)
+            if not callable(lister):
+                errors.append(self._pooled_client_error_row(client, error="client does not implement list_session_prompt_caches"))
+                continue
+            try:
+                listing = lister(session_id=session_id)
+            except Exception as exc:  # noqa: BLE001 - reported per client, never raised
+                errors.append(self._pooled_client_error_row(client, error=str(exc)))
+                continue
+            if not isinstance(listing, dict):
+                errors.append(self._pooled_client_error_row(client, error="invalid session prompt cache listing"))
+                continue
+            if listing.get("ok") is False:
+                errors.append(self._pooled_client_error_row(client, error=str(listing.get("error") or "listing failed")))
+                continue
+            rows.extend(row for row in (listing.get("caches") or []) if isinstance(row, dict))
+        out: Dict[str, Any] = {"ok": True, "caches": rows}
+        if errors:
+            out["errors"] = errors
+        return out
+
+    def clear_session_prompt_caches(self, session_id: str, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        session_s = str(session_id or "").strip()
+        if not session_s:
+            return {
+                "ok": False,
+                "error": "clear_session_prompt_caches requires a session_id",
+                "cleared": [],
+                "count": 0,
+            }
+        cleared: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        count = 0
+        for client in self._pooled_clients():
+            clearer = getattr(client, "clear_session_prompt_caches", None)
+            if not callable(clearer):
+                errors.append(self._pooled_client_error_row(client, error="client does not implement clear_session_prompt_caches"))
+                continue
+            try:
+                result = clearer(session_id=session_s)
+            except Exception as exc:  # noqa: BLE001 - reported per client, never raised
+                errors.append(self._pooled_client_error_row(client, error=str(exc)))
+                continue
+            if not isinstance(result, dict):
+                errors.append(self._pooled_client_error_row(client, error="invalid session prompt cache clear result"))
+                continue
+            if result.get("ok") is False:
+                errors.append(self._pooled_client_error_row(client, error=str(result.get("error") or "clear failed")))
+                continue
+            cleared.extend(row for row in (result.get("cleared") or []) if isinstance(row, dict))
+            raw_count = result.get("count")
+            if isinstance(raw_count, int) and not isinstance(raw_count, bool):
+                count += raw_count
+        out: Dict[str, Any] = {"ok": True, "cleared": cleared, "count": count}
+        if errors:
+            out["errors"] = errors
+        return out
 
     def prompt_cache_set(
         self,
@@ -9132,6 +10215,35 @@ class HttpxRequestSender:
         return HttpBinaryResponse(content=bytes(resp.content or b""), headers=dict(resp.headers))
 
 
+def _http_error_response_body(error: Any) -> Optional[Any]:
+    """Best-effort parse of the response body carried by a raised HTTP-status
+    error (the raise_for_status pattern: httpx.HTTPStatusError and fakes carry
+    `.response`). Returns a dict when the body is JSON, the stripped text
+    otherwise, or None when nothing is accessible."""
+    response = getattr(error, "response", None)
+    if response is None:
+        return None
+    body = getattr(response, "body", None)
+    if isinstance(body, dict):
+        return dict(body)
+    json_fn = getattr(response, "json", None)
+    if callable(json_fn):
+        try:
+            parsed = json_fn()
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text.strip()
+        return parsed if isinstance(parsed, dict) else text.strip()
+    return None
+
+
 def _unwrap_http_response(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
     if isinstance(value, dict):
         return value, {}
@@ -9524,6 +10636,9 @@ class RemoteAbstractCoreLLMClient:
         self._artifact_store = artifact_store
         self._core_config_file = _coerce_core_config_file(core_config_file)
         self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
+        # Negative cache: set once the server unambiguously reports the
+        # key_meta route missing (older core); transient failures keep retrying.
+        self._prompt_cache_key_meta_route_unsupported = False
         _attach_core_execution_context_to_client(
             self,
             core_config_file=self._core_config_file,
@@ -10302,6 +11417,139 @@ class RemoteAbstractCoreLLMClient:
     def get_prompt_cache_stats(self, **kwargs: Any) -> Dict[str, Any]:
         return self._prompt_cache_get("/acore/prompt_cache/stats", operation="stats", kwargs=kwargs)
 
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        url = _join_core_control_url(self._server_base_url, "/acore/memory")
+        try:
+            raw = self._sender.get(url, headers=dict(self._headers), timeout=self._timeout_s)
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as exc:  # noqa: BLE001 - relay surface never raises
+            return {"ok": False, "error": str(exc)}
+        if not isinstance(resp, dict):
+            return {"ok": False, "error": "invalid memory snapshot response"}
+        out = dict(resp)
+        out.pop("ok", None)
+        return out
+
+    def list_session_prompt_caches(self, session_id: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
+        # No-selector stats: the core server enumerates its loaded runtimes.
+        result = self._prompt_cache_get("/acore/prompt_cache/stats", operation="stats", kwargs=kwargs)
+        if not isinstance(result, dict):
+            return {"ok": False, "error": "invalid prompt cache stats response", "caches": []}
+        runtimes = result.get("runtimes")
+        if not isinstance(runtimes, list):
+            error = result.get("error") or "core server did not return cross-runtime prompt cache stats"
+            return {"ok": False, "error": str(error), "caches": []}
+        rows: List[Dict[str, Any]] = []
+        for entry in runtimes:
+            if not isinstance(entry, dict):
+                continue
+            rows.extend(
+                _session_prompt_cache_rows_from_stats(
+                    entry.get("stats"),
+                    provider=str(entry.get("provider") or "").strip().lower() or None,
+                    model=str(entry.get("model") or "").strip() or None,
+                    runtime_id=str(entry.get("runtime_id") or "").strip() or None,
+                    session_id=session_id,
+                )
+            )
+        return {"ok": True, "caches": rows}
+
+    def clear_session_prompt_caches(self, session_id: str, **kwargs: Any) -> Dict[str, Any]:
+        session_s = str(session_id or "").strip()
+        if not session_s:
+            return {
+                "ok": False,
+                "error": "clear_session_prompt_caches requires a session_id",
+                "cleared": [],
+                "count": 0,
+            }
+        listing = self.list_session_prompt_caches(session_id=session_s, **dict(kwargs))
+        if listing.get("ok") is not True:
+            return {
+                "ok": False,
+                "error": str(listing.get("error") or "unable to enumerate session prompt caches"),
+                "cleared": [],
+                "count": 0,
+            }
+        cleared: List[Dict[str, Any]] = []
+        count = 0
+        for row in listing.get("caches") or []:
+            out = dict(row)
+            body: Dict[str, Any] = {"key": row.get("key")}
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if runtime_id:
+                body["runtime_id"] = runtime_id
+            else:
+                if row.get("provider"):
+                    body["provider"] = row.get("provider")
+                if row.get("model"):
+                    body["model"] = row.get("model")
+            result = self._prompt_cache_post("/acore/prompt_cache/clear", operation="clear", body=body, kwargs={})
+            if isinstance(result, dict) and result.get("ok") is True:
+                out["cleared"] = True
+                count += 1
+            else:
+                out["cleared"] = False
+                error = result.get("error") if isinstance(result, dict) else None
+                out["error"] = str(error or "prompt cache clear failed")
+            cleared.append(out)
+        return {"ok": True, "cleared": cleared, "count": count}
+
+    def _maybe_stamp_prompt_cache_attribution(
+        self,
+        *,
+        key: Optional[str],
+        attribution: Optional[Dict[str, Any]],
+        effective_model: Optional[str],
+    ) -> None:
+        """Best-effort session attribution relay (`POST /acore/prompt_cache/key_meta`).
+
+        AFTER the chat call: the server-side cache entry exists only once the
+        generate that created it has completed (a missing key is refused with
+        `code: prompt_cache_missing_key`). Stamped after EVERY generate that
+        used a derived key — a done-set would go stale against core's cache
+        LRU, and the merge is idempotent server-side. Never fails the LLM
+        call. A server that unambiguously lacks the route (404/405) is
+        negative-cached per client instance; transient transport failures
+        keep retrying on the next generate."""
+        if getattr(self, "_prompt_cache_key_meta_route_unsupported", False):
+            return
+        key_s = str(key or "").strip()
+        if not key_s or not isinstance(attribution, dict):
+            return
+        if not str(attribution.get("session_id") or "").strip():
+            return
+        provider: Optional[str] = None
+        model: Optional[str] = None
+        model_s = str(effective_model or "").strip()
+        if "/" in model_s:
+            maybe_provider, maybe_model = model_s.split("/", 1)
+            if maybe_provider.strip() and maybe_model.strip():
+                provider = maybe_provider.strip().lower()
+                model = maybe_model.strip()
+        if not provider or not model:
+            # The key_meta route needs a runtime selector; a bare model name
+            # cannot address one, so the stamp is skipped rather than guessed.
+            return
+        body = {
+            "provider": provider,
+            "model": model,
+            "key": key_s,
+            "meta": {k: v for k, v in attribution.items() if v is not None},
+        }
+        url = _join_core_control_url(self._server_base_url, "/acore/prompt_cache/key_meta")
+        try:
+            self._sender.post(url, headers=dict(self._headers), json=body, timeout=self._timeout_s)
+        except Exception as exc:  # noqa: BLE001 - best-effort; never fails the call
+            status_code = None
+            try:
+                status_code = int(getattr(getattr(exc, "response", None), "status_code", None))
+            except Exception:
+                status_code = None
+            if status_code in (404, 405):
+                self._prompt_cache_key_meta_route_unsupported = True
+
     def prompt_cache_set(
         self,
         *,
@@ -10759,7 +12007,11 @@ class RemoteAbstractCoreLLMClient:
         payload: Dict[str, Any] = {
             "ok": False,
             "success": False,
-            "supported": False,
+            # This client DOES implement the op — the transport/server failed.
+            # `supported: false` is reserved for the facade's optional-method
+            # degradation; stamping it here made a genuine 404 look identical
+            # to "not implemented" (review fix).
+            "supported": True,
             "operation": operation,
             "error": str(error),
             "warnings": [str(error)],
@@ -10768,6 +12020,9 @@ class RemoteAbstractCoreLLMClient:
         }
         if status_code is not None:
             payload["status_code"] = status_code
+        upstream = _http_error_response_body(error)
+        if upstream is not None:
+            payload["upstream_error"] = _jsonable(upstream)
         return payload
 
     def _model_residency_get(self, path: str, *, operation: str, kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -10847,6 +12102,10 @@ class RemoteAbstractCoreLLMClient:
                     if isinstance(result.get(key), list):
                         result["models"] = result.get(key)
                         break
+            if isinstance(result.get("models"), list):
+                for record in result["models"]:
+                    if isinstance(record, dict):
+                        _normalize_residency_size_extras(record)
             result.setdefault("success", result.get("ok") is not False)
             result.setdefault("affected_models", result.get("models") if isinstance(result.get("models"), list) else [])
         return result
@@ -10889,6 +12148,7 @@ class RemoteAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
@@ -10898,18 +12158,137 @@ class RemoteAbstractCoreLLMClient:
             "model": model,
             "options": options if isinstance(options, dict) else None,
         }
+        if force:
+            # Only ride the body when explicitly forcing — older cores'
+            # UnloadModelRequest predates the field.
+            body["force"] = True
         result = self._model_residency_post(
             "/acore/models/unload",
             operation="unload",
             body=body,
             kwargs=kwargs,
         )
+        if isinstance(result, dict) and result.get("status_code") == 409:
+            # The core server refuses to unload a LOCKED runtime with HTTP 409
+            # `{"ok": false, "error": "model_locked", "detail", "runtime_id"}`.
+            # The request sender raised on the status (raise_for_status
+            # pattern); relay the server's envelope as a payload — the 409
+            # must never escape as an exception to the effect handler.
+            upstream = result.get("upstream_error")
+            if isinstance(upstream, dict):
+                converted: Dict[str, Any] = dict(upstream)
+            else:
+                converted = {"ok": False, "error": "model_locked"}
+                if isinstance(upstream, str) and upstream.strip():
+                    converted["detail"] = upstream.strip()
+            converted["ok"] = False
+            converted.setdefault("error", "model_locked")
+            converted["status_code"] = 409
+            converted.setdefault("unloaded", False)
+            result = converted
         if isinstance(result, dict):
             result.setdefault("operation", "unload")
             result.setdefault("success", result.get("ok") is not False)
             if "affected_models" not in result:
                 result["affected_models"] = [result["runtime"]] if isinstance(result.get("runtime"), dict) else []
         return result
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._model_residency_lock_post(payload, kwargs, operation="lock", path="/acore/models/lock")
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self._model_residency_lock_post(payload, kwargs, operation="unlock", path="/acore/models/unlock")
+
+    def _model_residency_lock_post(
+        self,
+        payload: Optional[Mapping[str, Any]],
+        kwargs: Dict[str, Any],
+        *,
+        operation: str,
+        path: str,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        task_raw = merged.get("task")
+        if task_raw is not None and str(task_raw).strip():
+            task_s = _normalize_residency_task(task_raw)
+            if task_s != "text_generation":
+                # Same guard as the local clients: core's lock route addresses
+                # TEXT runtimes only — silently dropping a media task would
+                # relay the request onto a text runtime the caller never named.
+                return _model_residency_unsupported_payload(
+                    operation=operation,
+                    task=task_s,
+                    provider=str(merged.get("provider") or "").strip().lower(),
+                    model=str(merged.get("model") or "").strip(),
+                    error=f"model_residency {operation} is only supported for text_generation runtimes.",
+                )
+        # `LockModelRequest` selector: {runtime_id | provider+model}, base_url
+        # optional (the base_url/timeout_s proxy fields ride through the
+        # shared post helper from the remaining merged fields).
+        body = {key: merged.pop(key, None) for key in ("runtime_id", "provider", "model")}
+        result = self._model_residency_post(path, operation=operation, body=body, kwargs=merged)
+        if isinstance(result, dict) and operation == "lock" and result.get("status_code") == 409:
+            # Core's lock route refuses a non-resident model with HTTP 409
+            # `{"ok": false, "error": "model_not_resident", "detail",
+            # "runtime_id"}` (the lock rule: lock requires provider-verified
+            # residency). Relay the server's envelope as a payload — same
+            # conversion idiom as the unload 409.
+            upstream = result.get("upstream_error")
+            if isinstance(upstream, dict):
+                converted: Dict[str, Any] = dict(upstream)
+            else:
+                converted = {"ok": False, "error": "model_not_resident"}
+                if isinstance(upstream, str) and upstream.strip():
+                    converted["detail"] = upstream.strip()
+            converted["ok"] = False
+            converted.setdefault("error", "model_not_resident")
+            converted["status_code"] = 409
+            converted.setdefault("locked", False)
+            result = converted
+        if isinstance(result, dict):
+            result.setdefault("operation", operation)
+            result.setdefault("success", result.get("ok") is not False)
+        return result
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        merged = _merge_optional_payload(payload, kwargs)
+        provider_api_key = _pop_provider_api_key(merged)
+        query: Dict[str, str] = {}
+        for key in ("provider", "model"):
+            raw = merged.get(key)
+            if isinstance(raw, str) and raw.strip():
+                query[key] = raw.strip()
+        context_length = merged.get("context_length")
+        if context_length is not None and not isinstance(context_length, bool):
+            try:
+                query["context_length"] = str(int(context_length))
+            except Exception:
+                pass
+        url = _join_core_control_url(self._server_base_url, "/acore/models/context_estimate")
+        if query:
+            url = f"{url}?{urlencode(query)}"
+        try:
+            raw = self._sender.get(
+                url,
+                headers=self._headers_with_provider_api_key(provider_api_key),
+                timeout=self._timeout_s,
+            )
+            resp, _resp_headers = _unwrap_http_response(raw)
+        except Exception as e:
+            return self._model_residency_error_payload(operation="context_estimate", error=e)
+        return resp if isinstance(resp, dict) else {"ok": False, "operation": "context_estimate", "data": _jsonable(resp)}
 
     def _effective_model_from_params(self, params: Dict[str, Any]) -> str:
         provider = params.pop("_provider", None)
@@ -12176,6 +13555,7 @@ class RemoteAbstractCoreLLMClient:
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = _normalize_prompt_cache_binding_params(params)
+        prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
         prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)
@@ -12391,6 +13771,12 @@ class RemoteAbstractCoreLLMClient:
         resp, resp_headers = _unwrap_http_response(raw)
         lower_headers = {str(k).lower(): str(v) for k, v in resp_headers.items()}
         trace_id = lower_headers.get("x-abstractcore-trace-id") or lower_headers.get("x-trace-id")
+
+        self._maybe_stamp_prompt_cache_attribution(
+            key=body.get("prompt_cache_key"),
+            attribution=prompt_cache_attribution,
+            effective_model=effective_model,
+        )
 
         # Normalize OpenAI-like response.
         try:

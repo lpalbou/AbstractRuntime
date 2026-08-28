@@ -27,7 +27,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
-- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
+- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings and locks, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - run history bundle replay now also exports `resolved_actions` summaries for cross-client capability replay; see `api.md` and `integrations/abstractcore.md`
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` self-recipient rule)

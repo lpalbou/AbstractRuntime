@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.38 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.13.40 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -394,11 +394,17 @@ AbstractRuntime's AbstractCore integration now exposes a public host-control fac
 - `list_model_residency(...)`
 - `load_model_residency(...)`
 - `unload_model_residency(...)`
+- `lock_model_residency(...)`
+- `unlock_model_residency(...)`
+- `get_context_estimate(...)`
+- `get_memory_snapshot(...)`
+- `list_session_prompt_caches(...)`
+- `clear_session_prompt_caches(...)`
 
 Behavior by execution mode:
 
 - **Local** (`MultiLocalAbstractCoreLLMClient` / `LocalAbstractCoreLLMClient`): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.
-- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*` and `/acore/models/*` on the configured AbstractCore server.
+- **Remote / Hybrid** (`RemoteAbstractCoreLLMClient`): proxies `/acore/prompt_cache/*`, `/acore/models/*`, and `/acore/memory` on the configured AbstractCore server.
   - When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream `base_url` through these prompt-cache methods. Per-request provider key overrides supplied as `api_key` / `provider_api_key` are converted to `X-AbstractCore-Provider-API-Key` headers, not request bodies or query strings.
   - For durable bloc/KV methods, `base_url` takes precedence over local loaded-runtime selectors. Runtime omits `provider`, `model`, and `runtime_id` when `base_url` is supplied so Core takes the upstream endpoint branch cleanly.
 
@@ -422,6 +428,8 @@ Contract notes:
   - host-local prompt-cache export/import admin: optional operator tooling
     around live local provider cache state, separate from durable workflow
     memory
+- `get_memory_snapshot(...)`, `list_session_prompt_caches(...)`, `clear_session_prompt_caches(...)`, `lock_model_residency(...)`, `unlock_model_residency(...)`, and `get_context_estimate(...)` are optional in the LLM-client contract. A configured client that does not implement one still binds to the facade; the facade answers `{"ok": false, "supported": false, "operation": ...}` for that call instead of failing at construction time.
+- `lock_model_residency(...)`, `unlock_model_residency(...)`, and `get_context_estimate(...)` accept an optional payload mapping and/or keyword arguments. Keyword arguments merge over a copy of the payload and win on key conflicts; the first positional argument is only ever the payload mapping, and a non-mapping positional raises `TypeError`.
 
 Host-side prompt-cache example:
 
@@ -576,6 +584,86 @@ Effect(
   - `force=True` bypasses that safety check and should be treated as an explicit operator choice
 - `delete_bloc_kv_artifact(...)` deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.
 - `delete_bloc(...)` removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass `delete_kv=False` only if you intentionally want to leave those artifacts behind.
+
+### Session prompt-cache attribution and lifecycle
+
+When Runtime derives the session-scoped prompt-cache key for a text/chat `LLM_CALL`, the LLM client stamps session attribution — `session_id`, `run_id`, `workflow_id`, `node_id`, and `namespace` — into the cache entry's metadata after each generate that used the derived key. Local clients stamp through the provider's public key-meta contract; remote clients post `POST /acore/prompt_cache/key_meta` to the configured AbstractCore server, and skip the stamp when the server does not expose that route. Stamping is best-effort and never affects the LLM call result.
+
+Caller-owned keys are deliberately never stamped: an explicit `LLM_CALL.params.prompt_cache_key`, a `prompt_cache_binding` key, or a `_runtime.prompt_cache.key` override may be shared across sessions, so session-scoped clearing never touches them.
+
+Hosts inspect and manage session caches through the facade:
+
+- `list_session_prompt_caches(session_id=None)` returns `{"ok": true, "caches": [...]}` with one row per live cache key: `key`, `provider`, `model`, `runtime_id`, `session_id`, `token_count`, `bytes`, `created_at_s`, `last_used_at_s`, and the raw `meta`. Fields the backend does not report are `null` (`last_used_at_s` currently is). Without a filter, all live keys are listed; keys without attribution carry `session_id: null`.
+- `clear_session_prompt_caches(session_id)` enumerates the session's keys and clears them one by one. It returns `{"ok": true, "cleared": [...], "count": <successes>}` with a per-row `cleared` flag; per-key failures are reported in the rows rather than raised. A `session_id` is required.
+- `get_memory_snapshot()` returns the Core-owned host memory snapshot: `ram` (total/available/used), `process` (`rss_bytes`), and `device` (backend, allocated/total/free bytes; `null` where the backend has no query). To confirm that an unload released memory, compare `device.allocated_bytes`; process RSS is not a reliable release signal because freed device buffers can return to the process heap.
+
+Session caches outlive runs by design: completing a run does not clear the session's caches, so later runs in the same session keep their warm prefixes. Caches go away when a host clears them explicitly, when the owning model is unloaded (`unload_model_residency` clears the provider's cache stores and Runtime's client-side mirrors), or when the provider evicts them.
+
+```python
+snapshot = facade.get_memory_snapshot()
+caches = facade.list_session_prompt_caches(session_id="support-session-1")
+result = facade.clear_session_prompt_caches("support-session-1")
+```
+
+## Model residency listings
+
+`list_model_residency(...)` relays Core-owned residency truth (ADR-0007) and, for text-generation listings, includes the whole host:
+
+- Local and multi-local runtimes merge AbstractCore's host-wide loaded-model sweep into the listing, so models resident on host-local provider servers (for example Ollama or LM Studio) appear even when they were not loaded through this runtime. Sweep-only rows carry `source: "provider_server"` and no `task` label — Runtime relays what the sweep reports and does not invent task assignments. Remote runtimes receive the same host-wide view from the Core server.
+- Rows for models this runtime loaded win deduplication against sweep rows and absorb the sweep's `size_bytes` / `size_vram_bytes` when they lack their own.
+- Provider-reported size extras are normalized across local and remote listings: `size` is surfaced as `size_bytes` and `size_vram` as `size_vram_bytes`, with the original fields kept.
+- Local text rows carry AbstractCore's registry-declared `modalities` (capability route keys such as `input.text`, `input.image`, `output.text`). When the registry has no entry for the model, the field is omitted rather than guessed. When the provider instance reports its vision lane unusable, `input.image` is removed and `modalities_note: "vision_unusable"` records the divergence.
+- Local rows also carry the serving host's identity (`host_id`, `host_name`) from AbstractCore's host-info utility; rows already carrying another host's attribution — for example sweep rows — are not overwritten. Remote listings relay the Core server's rows verbatim, including the server's host identity; Runtime never re-stamps them with the client's identity.
+- Rows report lock truth: rows for models this runtime manages carry `locked` and `lockable: true`, while sweep-only provider-server rows carry `lockable: false` because this runtime cannot enforce a lock on them. Lock state is runtime-owned — provider claims cannot supply or override `locked`, `lockable`, or `locked_at`. `pinned` is a truthful alias of `locked` (same value, Core parity), never the default-identity flag: `default` alone marks the client's default pair, so a configured capability default is never presented as pinned or loaded.
+
+## Model residency locks and context estimates
+
+The host facade and all execution modes expose model-residency lock controls and a context-fit estimate relay:
+
+- `lock_model_residency(payload=None, **kwargs)`
+- `unlock_model_residency(payload=None, **kwargs)`
+- `get_context_estimate(payload=None, **kwargs)`
+
+Each accepts an optional payload mapping and/or keyword arguments; keyword arguments win on conflicts. Locks apply to text-generation runtimes only — a request naming another task returns a structured `model_residency_unsupported` payload instead of being relayed onto a text runtime.
+
+**Lock rule (all execution modes): lock requires provider-verified residency.** A lock is a promise the model stays in memory, so it only applies to a model the provider verifies as resident (`provider_resident: true`). A warm client or configured default alone is configuration, not memory — locking a non-resident pair refuses with `{"ok": false, "error": "model_not_resident", ...}`; load the model first (load with `lock: true`) to lock it at load time. Unlock never requires residency, so a locked-but-since-evicted pair can always be released.
+
+Lock behavior by execution mode:
+
+- **Local / multi-local**: the lock is enforced client-side per `(provider, model)` pair. `unload_model_residency` refuses a locked pair with a soft `{"ok": false, "error": "model_locked", ...}` payload — never an exception. Passing `force=true` unloads the pair, and the lock is released only after the provider unload succeeds; a failed forced unload leaves the pair resident and locked. For Ollama, lock and unlock also apply the server-side `keep_alive` knob best-effort (`-1` on lock, the `"5m"` default on unlock) and report the outcome under `provider_side` (`supported` / `applied` / optional `detail`); the client-side flag remains the enforcement truth for every provider, so a knob failure does not fail the lock. Because the knob rides Ollama's native load request, unlocking a pair whose model was since evicted skips the keep-alive restore (`applied: false` with a detail) — unlock never loads a model back as a side effect, and the residency-required lock rule prevents the lock-side equivalent.
+- **Remote / hybrid**: `lock_model_residency` and `unlock_model_residency` relay `POST /acore/models/lock` and `POST /acore/models/unlock` on the configured AbstractCore server, which owns the lock (and enforces the same residency-required rule). When the server refuses to unload a locked runtime with HTTP 409, `unload_model_residency` converts that refusal into the same structured `{"ok": false, "error": "model_locked", "status_code": 409, ...}` payload instead of raising; a lock refused for a non-resident model (HTTP 409) is likewise converted to `{"ok": false, "error": "model_not_resident", "status_code": 409, ...}`. `force` rides the unload request body only when true. Transport or server errors from these residency operations report `supported: true`; `supported: false` is reserved for a client that does not implement the operation at all.
+
+Request selectors:
+
+- Address the runtime with explicit `provider` / `model` fields or with a `runtime_id`. Local clients accept `local:text_generation:<provider>:<model>` runtime ids; a runtime id that does not address a local text runtime returns a not-found payload rather than acting on a runtime the caller did not name. A request with no selector at all applies to the client's own default identity.
+- Locking requires the pair to be warm in the local client or pool AND provider-verified resident (the lock rule above). Unlocking additionally reaches a locked pair whose pooled client is no longer warm, so a lock can always be released.
+
+When a multi-local pool re-points its default provider/model, locked pairs are exempt from the pool eviction so their in-process weights stay resident behind the lock. The one exception is a locked pair that becomes the new default identity itself: its pooled client is rebuilt with the new connection settings and its lock is cleared (logged as a warning); re-lock to pin the rebuilt client.
+
+`get_context_estimate(...)` relays AbstractCore's analytical context-fit estimator. Local and multi-local clients call the estimator in-process, defaulting `provider` / `model` to the client's identity when omitted; remote clients relay `GET /acore/models/context_estimate` with `provider`, `model`, and an optional integer-coerced `context_length`. The estimator response is relayed verbatim — including the tri-state `fits_weights` / `fits_requested_context` split, `predicted_max_context` (the context that fits beside the weights), and `budget_bytes` (real-ceiling budget; basis and reserve stated in `notes`); it is advisory only — no Runtime load path gates on it. When the local estimator utility is unavailable, the call degrades to `{"ok": false, "supported": false, "operation": "context_estimate", ...}`.
+
+Example:
+
+```python
+facade = get_abstractcore_host_facade(rt)
+
+locked = facade.lock_model_residency(provider="ollama", model="qwen3:4b")
+refused = facade.unload_model_residency(provider="ollama", model="qwen3:4b")  # model_locked payload
+unloaded = facade.unload_model_residency(provider="ollama", model="qwen3:4b", force=True)
+fit = facade.get_context_estimate(provider="ollama", model="qwen3:4b", context_length=32768)
+```
+
+### `MODEL_RESIDENCY` effect operations
+
+The `MODEL_RESIDENCY` effect supports the operations `list_loaded`, `load`, `unload`, `lock`, and `unlock`, so workflows can author residency control durably:
+
+```json
+{"operation": "lock", "provider": "ollama", "model": "qwen3:4b"}
+{"operation": "unlock", "runtime_id": "local:text_generation:ollama:qwen3:4b"}
+{"operation": "unload", "provider": "ollama", "model": "qwen3:4b", "force": true, "required": false}
+```
+
+`lock` / `unlock` accept the same selector fields as the client methods (`task`, `provider`, `model`, `runtime_id`, plus `base_url` / `timeout_s` / provider-key overrides for remote relays). On `unload`, `force` is forwarded only when it is authored in the effect payload. All residency operations keep soft-fail semantics: unless the payload sets `required: true`, a refusal such as `model_locked` completes the step with `status_hint: "warning"` and `degraded: true` instead of failing the run.
 
 ## Host-local comms and Telegram wrappers
 

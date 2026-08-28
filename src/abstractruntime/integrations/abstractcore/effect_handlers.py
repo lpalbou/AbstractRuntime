@@ -1057,6 +1057,18 @@ def _maybe_inject_prompt_cache_key(
         workflow_id=workflow_id,
         node_id=node_id,
     )
+    # Session-attribution rider for the derived (session-scoped) key: the
+    # client stamps it onto the provider cache entry AFTER the generate that
+    # creates it (missing keys reject meta updates). Explicit/binding keys are
+    # caller-owned and may be shared across sessions, so they never get one.
+    attribution = {
+        "session_id": session_id,
+        "run_id": str(getattr(run, "run_id", "") or "").strip() or None,
+        "workflow_id": workflow_id or None,
+        "node_id": node_id or None,
+        "namespace": namespace,
+    }
+    params["_prompt_cache_attribution"] = {k: v for k, v in attribution.items() if v is not None}
 
 
 def _normalize_explicit_prompt_cache_binding_without_deriving(params: Dict[str, Any]) -> None:
@@ -4408,6 +4420,10 @@ def _normalize_model_residency_operation(raw: Any) -> str:
         return "load"
     if op in {"unload", "release", "evict"}:
         return "unload"
+    if op in {"lock", "lock_model", "lock_residency"}:
+        return "lock"
+    if op in {"unlock", "unlock_model", "unlock_residency"}:
+        return "unlock"
     return op
 
 
@@ -4498,7 +4514,7 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
         operation = _normalize_model_residency_operation(payload.get("operation"))
         required = _coerce_boolish(payload.get("required"), default=False)
 
-        if operation not in {"list_loaded", "load", "unload"}:
+        if operation not in {"list_loaded", "load", "unload", "lock", "unlock"}:
             result = _soft_model_residency_failure(
                 operation=operation,
                 message=f"Unsupported model_residency operation: {operation!r}",
@@ -4509,6 +4525,8 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
             "list_loaded": "list_model_residency",
             "load": "load_model_residency",
             "unload": "unload_model_residency",
+            "lock": "lock_model_residency",
+            "unlock": "unlock_model_residency",
         }[operation]
         method = getattr(control, method_name, None)
         if not callable(method):
@@ -4549,7 +4567,18 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
                     pin=call_kwargs.pop("pin", True),
                     **call_kwargs,
                 )
+            elif operation in {"lock", "unlock"}:
+                # `lock_model_residency`/`unlock_model_residency` accept a
+                # payload mapping and/or kwargs (kwargs win); the selector
+                # fields (and `task`, which the clients validate) ride as
+                # kwargs here. `options`/`pin` are load/unload concerns, not
+                # lock request fields.
+                call_kwargs.pop("options", None)
+                call_kwargs.pop("pin", None)
+                result = method(**call_kwargs)
             else:
+                if "force" in payload:
+                    call_kwargs["force"] = _coerce_boolish(payload.get("force"), default=False)
                 result = method(
                     task=call_kwargs.pop("task", None),
                     runtime_id=call_kwargs.pop("runtime_id", None),
@@ -4593,6 +4622,10 @@ def make_model_residency_handler(*, control: Any) -> EffectHandler:
             result.setdefault("success", result.get("ok") is not False)
             if "affected_models" not in result:
                 result["affected_models"] = [result["runtime"]] if isinstance(result.get("runtime"), dict) else []
+        elif operation in {"lock", "unlock"}:
+            result.setdefault("ok", True)
+            result.setdefault("success", result.get("ok") is not False)
+            result.setdefault("affected_models", [])
         elif operation == "unload":
             result.setdefault("unloaded", False)
             if result.get("ok") is False and _model_residency_not_found(result) and not required:

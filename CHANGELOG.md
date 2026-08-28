@@ -3015,6 +3015,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function-level lazy imports sanctioned) and `identity/digest.py`'s
   estimator import was made genuinely lazy under the clarified rule.
 
+## [0.4.31] - 2026-08-27
+
+### Added
+- Host facade methods `get_memory_snapshot()`, `list_session_prompt_caches(session_id=None)`, and
+  `clear_session_prompt_caches(session_id)`. Hosts can read the Core-owned host memory snapshot
+  (RAM, process RSS, device allocation) and enumerate or clear live session prompt caches per
+  session across local, multi-local, and remote runtimes. The three methods are optional in the
+  LLM-client contract: a configured client that does not implement one still binds, and the facade
+  answers `{"ok": false, "supported": false, ...}` for that call.
+- Session attribution on derived prompt-cache keys. When Runtime injects the session-scoped
+  prompt-cache key for a text/chat `LLM_CALL`, the client stamps `session_id`, `run_id`,
+  `workflow_id`, `node_id`, and `namespace` into the cache entry's metadata after each generate —
+  locally through the provider's key-meta contract, remotely via `POST /acore/prompt_cache/key_meta`
+  (skipped for servers without the route). Caller-supplied `prompt_cache_key`s and binding keys are
+  never stamped, so clearing a session cannot destroy caches shared across sessions. Session caches
+  are not cleared automatically when a run ends; clearing stays an explicit host operation.
+- Local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into
+  text-generation listings: models resident on host-local provider servers (for example Ollama or
+  LM Studio) now appear with `source: "provider_server"` even when they were not loaded through
+  this runtime. Rows loaded by this runtime win deduplication and absorb the sweep's size fields.
+- Model-residency locks. The host facade and all execution modes expose
+  `lock_model_residency(...)`, `unlock_model_residency(...)`, and `get_context_estimate(...)`,
+  each accepting an optional payload mapping and/or keyword arguments (keyword arguments win on
+  conflicts). A locked model refuses `unload_model_residency` with a structured
+  `{"ok": false, "error": "model_locked", ...}` payload instead of an exception; `force=true`
+  unloads it, and the lock is released only after the unload succeeds. Lock requires
+  provider-verified residency: a warm client or configured default alone is configuration, not
+  memory, and locking a non-resident pair refuses with
+  `{"ok": false, "error": "model_not_resident", ...}` (load with `lock: true` instead); unlock
+  never requires residency, so a locked-but-since-evicted pair can always be released, and the
+  Ollama keep-alive restore is skipped for a non-resident model so unlock never loads it back as
+  a side effect. Local clients enforce the
+  lock per `(provider, model)` pair, reinforce it best-effort with Ollama's `keep_alive` knob
+  (reported under `provider_side`), refuse foreign runtime ids with a not-found payload, and
+  exempt locked pairs from the multi-local pool eviction when the default provider/model is
+  re-pointed (a locked pair that becomes the new default identity is rebuilt and its lock cleared,
+  with a logged warning). Remote clients relay `POST /acore/models/lock|unlock` and convert the
+  server's HTTP 409 refusals into the same structured payloads (`model_locked` on unload,
+  `model_not_resident` on lock). The three methods are
+  optional in the LLM-client contract, degrading to `{"ok": false, "supported": false, ...}` at
+  the facade; locks apply to text-generation runtimes only.
+- `MODEL_RESIDENCY` effect operations `lock` and `unlock`, with the same soft-fail semantics as
+  the existing operations; on `unload`, `force` is forwarded only when authored in the effect
+  payload.
+- `get_context_estimate(...)` relays AbstractCore's analytical context-fit estimator: in-process
+  for local clients (defaulting to the client's provider/model identity), via
+  `GET /acore/models/context_estimate` for remote clients.
+- Local text-residency rows carry AbstractCore's registry-declared `modalities` (omitted on a
+  registry miss; `input.image` is stripped with `modalities_note: "vision_unusable"` when the
+  provider reports its vision lane unusable), the serving host's identity (`host_id` /
+  `host_name`), and runtime-owned lock truth (`locked` / `lockable`); provider claims cannot
+  supply lock state. `pinned` on local rows is a truthful alias of `locked` (same value, Core
+  parity), never the default-identity flag — `default` alone marks the client's default pair, so
+  a configured capability default is no longer presented as pinned. Remote listings keep the
+  Core server's row identity and are never re-stamped
+  with the client's.
+
+### Changed
+- Residency rows normalize provider-reported `size` / `size_vram` extras to `size_bytes` /
+  `size_vram_bytes` across local and remote listings; the original fields are kept.
+- `unload_model_residency` also drops the runtime's client-side prompt-cache mirrors for the
+  unloaded model, alongside AbstractCore's clearing of the in-provider cache stores.
+- Raised the AbstractCore dependency floor to `abstractcore>=2.13.40`, the release that provides
+  the shared memory/residency utility surface and the prompt-cache `key_meta` endpoint.
+
 ## [0.4.29] - 2026-06-14
 
 ### Changed
@@ -3625,7 +3690,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.31...HEAD
+[0.4.31]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.31
 [0.4.29]: https://github.com/lpalbou/abstractruntime/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/lpalbou/abstractruntime/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/lpalbou/abstractruntime/compare/v0.4.26...v0.4.27

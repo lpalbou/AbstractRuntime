@@ -130,6 +130,13 @@ class _RecordingHostClient:
             "list_model_residency": {"ok": True, "operation": "list_loaded", "models": []},
             "load_model_residency": {"ok": True, "operation": "load"},
             "unload_model_residency": {"ok": True, "operation": "unload"},
+            "get_memory_snapshot": {"ts": 123.0, "ram": {"total_bytes": 8}, "process": {"rss_bytes": 4}},
+            "list_session_prompt_caches": {"ok": True, "caches": [{"key": "session:abc", "session_id": "sess-1"}]},
+            "clear_session_prompt_caches": {
+                "ok": True,
+                "cleared": [{"key": "session:abc", "session_id": "sess-1", "cleared": True}],
+                "count": 1,
+            },
         }
 
     def _record(self, method_name: str, **kwargs: Any) -> Dict[str, Any]:
@@ -345,6 +352,15 @@ class _RecordingHostClient:
             options=options,
             **kwargs,
         )
+
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("get_memory_snapshot", **kwargs)
+
+    def list_session_prompt_caches(self, session_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("list_session_prompt_caches", session_id=session_id, **kwargs)
+
+    def clear_session_prompt_caches(self, session_id: str, **kwargs: Any) -> Dict[str, Any]:
+        return self._record("clear_session_prompt_caches", session_id=session_id, **kwargs)
 
 class _FactoryLocalHostClient(_RecordingHostClient):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -711,6 +727,51 @@ def test_host_facade_delegates_model_residency_operations() -> None:
                 "provider_api_key": "sekret",
             },
         ),
+    ]
+
+
+def test_host_facade_memory_and_session_cache_methods_are_optional_in_the_contract() -> None:
+    """Older/partial clients (e.g. gateway stubs) must keep binding; the new
+    surfaces degrade to structured unsupported payloads instead of a
+    TypeError at bind time."""
+    for name in ("get_memory_snapshot", "list_session_prompt_caches", "clear_session_prompt_caches"):
+        assert name not in host_facade._HOST_CONTROL_METHODS
+        assert name in host_facade._OPTIONAL_HOST_CONTROL_METHODS
+
+    class _LegacyClient(_RecordingHostClient):
+        get_memory_snapshot = None  # type: ignore[assignment]
+        list_session_prompt_caches = None  # type: ignore[assignment]
+        clear_session_prompt_caches = None  # type: ignore[assignment]
+
+    facade = AbstractCoreHostFacade(SimpleNamespace(_abstractcore_llm_client=_LegacyClient()))
+
+    snapshot = facade.get_memory_snapshot()
+    listed = facade.list_session_prompt_caches(session_id="sess-1")
+    cleared = facade.clear_session_prompt_caches(session_id="sess-1")
+
+    assert snapshot["ok"] is False and snapshot["supported"] is False
+    assert listed["ok"] is False and listed["caches"] == []
+    assert cleared["ok"] is False and cleared["cleared"] == [] and cleared["count"] == 0
+    for payload in (snapshot, listed, cleared):
+        assert "does not implement" in payload["error"]
+
+
+def test_host_facade_delegates_memory_and_session_cache_operations() -> None:
+    client = _RecordingHostClient()
+    facade = AbstractCoreHostFacade(SimpleNamespace(_abstractcore_llm_client=client))
+
+    snapshot = facade.get_memory_snapshot()
+    listed = facade.list_session_prompt_caches(session_id="sess-1")
+    cleared = facade.clear_session_prompt_caches(session_id="sess-1")
+
+    assert snapshot == {"ts": 123.0, "ram": {"total_bytes": 8}, "process": {"rss_bytes": 4}}
+    assert listed == {"ok": True, "caches": [{"key": "session:abc", "session_id": "sess-1"}]}
+    assert cleared["count"] == 1
+    assert cleared["cleared"][0]["cleared"] is True
+    assert client.calls == [
+        ("get_memory_snapshot", {}),
+        ("list_session_prompt_caches", {"session_id": "sess-1"}),
+        ("clear_session_prompt_caches", {"session_id": "sess-1"}),
     ]
 
 

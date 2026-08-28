@@ -41,3 +41,18 @@ _prepend_sys_path(ABSTRACTRUNTIME_ROOT / "src")
 _prepend_sys_path(MONOREPO_ROOT / "abstractagent" / "src")
 _prepend_sys_path(MONOREPO_ROOT / "abstractmemory" / "src")
 _prepend_sys_path(MONOREPO_ROOT / "abstractsemantics" / "src")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_host_residency_sweep(monkeypatch: pytest.MonkeyPatch):
+    """Local residency listings merge core's live model-server sweep. This
+    host may run real local servers (Ollama/LM Studio), whose resident models
+    would leak into hermetic residency assertions. Sweep-merge tests
+    monkeypatch their own fakes on top."""
+    from abstractruntime.integrations.abstractcore import llm_client
+
+    monkeypatch.setattr(llm_client, "_sweep_host_loaded_models", lambda: [])
+    yield

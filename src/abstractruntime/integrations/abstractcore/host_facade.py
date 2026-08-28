@@ -5,6 +5,8 @@ Hosts should import this module instead of reaching through
 
 Scope:
 - prompt-cache control operations
+- session prompt-cache visibility and clearing operations
+- host memory snapshot relay
 - host-local prompt-cache export/import admin operations
 - durable bloc/KV prompt-cache operations
 - durable bloc/KV lifecycle operations
@@ -19,7 +21,7 @@ Non-goals:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Mapping, Optional, Protocol
 
 _RUNTIME_ABSTRACTCORE_CLIENT_ATTR = "_abstractcore_llm_client"
 _HOST_CONTROL_METHODS = (
@@ -47,6 +49,17 @@ _HOST_CONTROL_METHODS = (
     "list_model_residency",
     "load_model_residency",
     "unload_model_residency",
+)
+# Newer control surfaces relayed when the bound client implements them. They
+# stay OUT of the required contract so older/partial clients keep binding;
+# the facade methods degrade to a structured unsupported payload instead.
+_OPTIONAL_HOST_CONTROL_METHODS = (
+    "get_memory_snapshot",
+    "list_session_prompt_caches",
+    "clear_session_prompt_caches",
+    "lock_model_residency",
+    "unlock_model_residency",
+    "get_context_estimate",
 )
 
 
@@ -315,6 +328,44 @@ class AbstractCoreHostControlClient(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        ...
+
+    def list_session_prompt_caches(
+        self,
+        session_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def clear_session_prompt_caches(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        ...
+
 
 def _coerce_control_client(client: Any, *, source: str) -> AbstractCoreHostControlClient:
     missing = [name for name in _HOST_CONTROL_METHODS if not callable(getattr(client, name, None))]
@@ -324,6 +375,19 @@ def _coerce_control_client(client: Any, *, source: str) -> AbstractCoreHostContr
             f"{source} does not implement the AbstractCore host control contract. Missing methods: {methods}."
         )
     return client
+
+
+def _optional_control_unsupported(operation: str, **extra: Any) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "supported": False,
+        "operation": operation,
+        "error": (
+            f"The configured Runtime AbstractCore client does not implement {operation}; "
+            "upgrade the client to relay this core surface."
+        ),
+        **extra,
+    }
 
 
 def _client_from_runtime(runtime: Any) -> AbstractCoreHostControlClient:
@@ -752,6 +816,90 @@ class AbstractCoreHostFacade:
             options=options,
             **kwargs,
         )
+
+    def get_memory_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        """Core-owned host memory snapshot (RAM/process/device); unknown fields are None."""
+
+        method = getattr(self._client, "get_memory_snapshot", None)
+        if not callable(method):
+            return _optional_control_unsupported("get_memory_snapshot")
+        return method(**kwargs)
+
+    def list_session_prompt_caches(
+        self,
+        session_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """List live prompt-cache keys with session attribution; filter by session_id when given."""
+
+        method = getattr(self._client, "list_session_prompt_caches", None)
+        if not callable(method):
+            return _optional_control_unsupported("list_session_prompt_caches", caches=[])
+        return method(session_id=session_id, **kwargs)
+
+    def clear_session_prompt_caches(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Clear every prompt-cache key attributed to one session (explicit, per-row reported)."""
+
+        method = getattr(self._client, "clear_session_prompt_caches", None)
+        if not callable(method):
+            return _optional_control_unsupported("clear_session_prompt_caches", cleared=[], count=0)
+        return method(session_id=session_id, **kwargs)
+
+    def lock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Lock a warm model runtime against unloading (core-owned truth relayed).
+
+        Accepts BOTH calling conventions: an optional payload mapping
+        (`{runtime_id | provider+model, base_url?}`), keyword arguments, or
+        both — kwargs merge into a copy of the payload and win on conflicts.
+        The first positional argument is only ever the payload mapping."""
+
+        method = getattr(self._client, "lock_model_residency", None)
+        if not callable(method):
+            return _optional_control_unsupported("lock_model_residency")
+        return method(payload, **kwargs)
+
+    def unlock_model_residency(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Clear a model runtime's residency lock (core-owned truth relayed).
+
+        Accepts BOTH calling conventions: an optional payload mapping
+        (`{runtime_id | provider+model, base_url?}`), keyword arguments, or
+        both — kwargs merge into a copy of the payload and win on conflicts.
+        The first positional argument is only ever the payload mapping."""
+
+        method = getattr(self._client, "unlock_model_residency", None)
+        if not callable(method):
+            return _optional_control_unsupported("unlock_model_residency")
+        return method(payload, **kwargs)
+
+    def get_context_estimate(
+        self,
+        payload: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Relay core's analytical context-fit estimate for a provider/model.
+
+        Accepts BOTH calling conventions: an optional payload mapping
+        (`{provider, model, context_length?, base_url?}`), keyword arguments,
+        or both — kwargs merge into a copy of the payload and win on
+        conflicts. The first positional argument is only ever the payload
+        mapping."""
+
+        method = getattr(self._client, "get_context_estimate", None)
+        if not callable(method):
+            return _optional_control_unsupported("get_context_estimate")
+        return method(payload, **kwargs)
 
     def list_email_accounts(self) -> Dict[str, Any]:
         from .comms_facade import list_email_accounts

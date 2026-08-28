@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.29 • **Python:** 3.10+
+**Version:** 0.4.31 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -32,7 +32,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.38 or newer with remote provider,
+The base install includes AbstractCore 2.13.40 or newer with remote provider,
 tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -96,7 +96,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.26)
+## What’s included (v0.4.31)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -134,7 +134,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Runtime-owned integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY`, public discovery/host/run facades, cached sessions, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends

@@ -292,3 +292,99 @@ def test_system_produced_media_paths_are_not_walled(tmp_path: Path) -> None:
         tool_name="analyze_media", args={"file_path": str(shot)}, scope=scope
     )
     assert out["file_path"] == str(shot)
+
+
+# --------------------------------------------------------------------------
+# 3. Mistyped system-produced media paths (live run acode-f8866395de21)
+# --------------------------------------------------------------------------
+#
+# `browser_probe` returns its screenshot as an absolute temp path carrying a
+# random directory token, so using the shot it just took means copying that
+# token character-for-character. On 2026-08-22 qwen3.5-35b-a3b dropped ONE
+# character from it (`…_browser_probe_hqlzfin` for the real `…_hqlkzfin`) and
+# got the containment refusal — "retry with a path relative to
+# '/Users/albou/tt-35-35b'" — advice that can never reach a file in a temp
+# dir. The run ended without the model ever seeing its own screenshot.
+
+
+def _probe_shot(name: str = "probe_aa6f562ccf9d.png") -> Path:
+    from abstractcore.tools.browser_tools import _shared_screenshot_dir
+
+    shot = Path(_shared_screenshot_dir()) / name
+    shot.write_bytes(PNG_1PX)
+    return shot
+
+
+def _mistype_dir(shot: Path, *, drop: int = 5) -> str:
+    """The live failure: one character gone from the directory token."""
+    parent = shot.parent.name
+    mangled = parent[:-drop] + parent[-drop + 1 :]
+    assert mangled != parent
+    return str(shot.parent.parent / mangled / shot.name)
+
+
+def test_mistyped_probe_directory_still_reaches_the_screenshot(tmp_path: Path) -> None:
+    scope = _scope(tmp_path)
+    shot = _probe_shot()
+
+    out = rewrite_tool_arguments(
+        tool_name="analyze_media", args={"file_path": _mistype_dir(shot)}, scope=scope
+    )
+    assert out["file_path"] == str(shot.resolve())
+
+
+def test_a_bare_capture_name_stays_a_workspace_path(tmp_path: Path) -> None:
+    """Recovery must not become a way to ADDRESS media by name.
+
+    The roots are per-PROCESS and one gateway process serves many sessions
+    (run store, 2026-08-21/22: dir `…_hqlkzfin` served three). A name-only
+    lane would let any session reach another's captures, so the caller has to
+    have SEEN the path it is mistyping.
+    """
+    scope = _scope(tmp_path)
+    shot = _probe_shot("probe_016084d11e31.png")
+
+    out = rewrite_tool_arguments(
+        tool_name="analyze_media", args={"file_path": shot.name}, scope=scope
+    )
+    assert out["file_path"] == str((tmp_path / "ws" / shot.name).resolve())
+
+
+def test_a_far_off_directory_is_not_treated_as_a_typo(tmp_path: Path) -> None:
+    """Recovery covers a slip, not a different directory."""
+    scope = _scope(tmp_path)
+    shot = _probe_shot("probe_c1d2a2d1f307.png")
+    elsewhere = str(shot.parent.parent / "some_other_capture_directory_entirely" / shot.name)
+
+    with pytest.raises(ValueError) as err:
+        rewrite_tool_arguments(tool_name="analyze_media", args={"file_path": elsewhere}, scope=scope)
+    assert "retry with a path relative to" in str(err.value)
+
+
+def test_the_wall_still_refuses_a_real_file_outside_the_workspace(tmp_path: Path) -> None:
+    """The guard the recovery must not have widened: /etc/hosts is not media
+    this process produced, and its directory is nothing like a capture dir."""
+    _probe_shot("probe_unrelated.png")
+    with pytest.raises(ValueError) as err:
+        rewrite_tool_arguments(
+            tool_name="analyze_media", args={"file_path": "/etc/hosts"}, scope=_scope(tmp_path)
+        )
+    assert "outside workspace roots" in str(err.value) or "escapes workspace_root" in str(err.value)
+
+
+def test_an_unrecoverable_capture_is_not_sent_back_to_the_workspace(tmp_path: Path) -> None:
+    """When the file name is mangled too, the refusal must stop repeating
+    advice that cannot reach a temp dir — and must still name no other
+    capture, since the roots are shared across sessions."""
+    scope = _scope(tmp_path)
+    other_session_shot = _probe_shot("probe_d0c10ac32e14.png")
+    ghost = _mistype_dir(other_session_shot).replace(
+        other_session_shot.name, "probe_ffffffffffff.png"
+    )
+
+    with pytest.raises(ValueError) as err:
+        rewrite_tool_arguments(tool_name="analyze_media", args={"file_path": ghost}, scope=scope)
+    message = str(err.value)
+    assert other_session_shot.name not in message, message
+    assert "probe_ffffffffffff.png" in message, message
+    assert "retry with a path relative to" not in message, message

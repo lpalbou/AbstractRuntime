@@ -3366,6 +3366,40 @@ def _sweep_host_loaded_models() -> List[Dict[str, Any]]:
         return []
 
 
+def _sweep_provider_names() -> Tuple[str, ...]:
+    """Core's `SWEEP_PROVIDERS` tuple, or empty when core is unavailable."""
+    try:
+        from abstractcore.utils.residency import SWEEP_PROVIDERS  # type: ignore
+
+        return tuple(str(name).strip().lower() for name in SWEEP_PROVIDERS)
+    except Exception:
+        return ()
+
+
+def _sweep_verifies_model_resident(provider: str, model: str) -> bool:
+    """Does the host sweep verify (provider, model) resident on its local model
+    server? Sweep providers only (the sweep can never answer for anything
+    else); best-effort, never raises. The local-lane twin of core's
+    `_sweep_verifies_model_resident`, using the SAME canonical alias rules."""
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    if not provider_s or not model_s or provider_s not in _sweep_provider_names():
+        return False
+    try:
+        from abstractcore.utils.residency import sweep_models_match  # type: ignore
+    except Exception:
+        return False
+    try:
+        for record in _sweep_host_loaded_models():
+            if str(record.get("provider") or "").strip().lower() != provider_s:
+                continue
+            if sweep_models_match(provider_s, model_s, record):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _merge_host_sweep_into_text_records(
     records: List[Dict[str, Any]],
     *,
@@ -3409,21 +3443,32 @@ def _merge_host_sweep_into_text_records(
         if match is None:
             continue
         remaining.remove(match)
-        for field_name in ("size_bytes", "size_vram_bytes"):
+        # Memory truth the sweep knows and the pool row does not. `cache_bytes`
+        # and `est_weights_bytes` ride along with the size pair: they are
+        # provider/core-owned figures, so an absent value on the pool row is
+        # filled, never overwritten.
+        for field_name in ("size_bytes", "size_vram_bytes", "est_weights_bytes", "cache_bytes"):
             if existing.get(field_name) is None and match.get(field_name) is not None:
                 existing[field_name] = match[field_name]
     for record in remaining:
-        if provider_filter and str(record.get("provider") or "").strip().lower() != provider_filter:
+        record_provider = str(record.get("provider") or "").strip().lower()
+        if provider_filter and record_provider != provider_filter:
             continue
         if model_filter and normalize_sweep_model(model_filter) != normalize_sweep_model(record.get("model")):
             continue
         record.setdefault("loaded", True)
         record.setdefault("resident", True)
         record["source"] = "provider_server"
-        # Sweep-only rows are observed on a model server, not managed by this
-        # client: nothing here can enforce a lock on them, so they are not
-        # lockable (same v1 honesty rule as core's server-side sweep merge).
-        record.setdefault("lockable", False)
+        # Sweep-only rows on a SWEEP provider ARE lockable: locking such a pair
+        # ADOPTS it into this client's pool (client construction only — never a
+        # provider-side load) and then enforces the lock like any managed pair
+        # (unload refuses without force). Same rule core's server-side sweep
+        # merge applies to its own sweep rows. A row from any other source has
+        # nothing here to enforce a lock with, so it stays not lockable.
+        if record_provider in SWEEP_PROVIDERS:
+            record["lockable"] = True
+        else:
+            record.setdefault("lockable", False)
         # Sweep rows are observed on THIS host too — same core-owned stamps
         # core's server-side sweep merge applies to its own sweep rows.
         _stamp_local_record_modalities(record, model=record.get("model"))
@@ -3457,6 +3502,28 @@ def _provider_prompt_cache_stats_raw(provider: Any) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return stats if isinstance(stats, dict) else None
+
+
+def _local_record_prompt_cache_bytes(provider_instance: Any) -> Optional[int]:
+    """Total prompt-cache store bytes held by a pooled provider instance, or
+    None when unknown. Core-owned arithmetic (`prompt_cache_store_bytes` over
+    the provider's OWN `get_prompt_cache_stats()` payload) — nothing is
+    computed here; this is the local-lane twin of core's
+    `_gateway_runtime_prompt_cache_bytes`. Best-effort: never raises."""
+    if provider_instance is None:
+        return None
+    stats = _provider_prompt_cache_stats_raw(provider_instance)
+    if stats is None:
+        return None
+    try:
+        from abstractcore.utils.memory import prompt_cache_store_bytes  # type: ignore
+    except Exception:
+        return None
+    try:
+        total = prompt_cache_store_bytes(stats)
+    except Exception:
+        return None
+    return total if isinstance(total, int) and not isinstance(total, bool) else None
 
 
 def _session_prompt_cache_rows_from_stats(
@@ -3735,6 +3802,15 @@ def _local_residency_record(
     # provider claims never include these).
     _stamp_local_record_modalities(record, model=model_s, provider_instance=provider_instance)
     _stamp_local_record_host_identity(record)
+    # Per-model memory figures. `est_weights_bytes` is pure claim truth (MLX /
+    # HuggingFace stamp it on `get_model_residency`) and already rode the claim
+    # merge above. `cache_bytes` has no claim slot, so it is read the same way
+    # core's server lane reads it — core's own arithmetic over the provider's
+    # own prompt-cache stats — and only when the claim did not supply one.
+    if record.get("cache_bytes") is None:
+        cache_bytes = _local_record_prompt_cache_bytes(provider_instance)
+        if cache_bytes is not None:
+            record["cache_bytes"] = cache_bytes
     if lock_owner is not None:
         # Load/unload response records carry the same lock truth as list rows
         # (alias parity: a re-load of a LOCKED pair must not answer
@@ -3878,7 +3954,17 @@ def _apply_local_provider_side_lock_knob(
     refuses non-resident pairs); unlock verifies here and skips the restore
     when the model is gone — unlocking a locked-but-since-evicted pair must
     never load it back as a side effect."""
-    if str(provider or "").strip().lower() != "ollama":
+    provider_s = str(provider or "").strip().lower()
+    if provider_s != "ollama":
+        if provider_s == "lmstudio" and lock:
+            # Honesty note (core parity): LM Studio exposes no residency-pin
+            # knob, so the lock protects only against THIS stack's unloads —
+            # the external server keeps its own eviction policy.
+            return {
+                "supported": False,
+                "applied": False,
+                "detail": "lock guards this stack's unloads; the external server may still evict on its own policy",
+            }
         return {"supported": False, "applied": False}
     if not lock and provider_instance is not None:
         # Restore only on VERIFIED residency (the knob rides a load request).
@@ -3961,6 +4047,8 @@ def _local_model_residency_lock_result(
     locked_pairs: set,
     provider_instance_lookup: Any,
     source: str,
+    adopt_pair: Any = None,
+    drop_adopted_pair: Any = None,
 ) -> Dict[str, Any]:
     """Shared local lock/unlock implementation (Local + MultiLocal clients).
 
@@ -3973,7 +4061,19 @@ def _local_model_residency_lock_result(
     (`provider_resident is True`) on top of the warm-pair requirement;
     locking a non-resident pair refuses with `error: "model_not_resident"`
     (load with lock:true instead). Unlock never requires residency — a
-    locked-but-since-evicted pair must always be unlockable."""
+    locked-but-since-evicted pair must always be unlockable.
+
+    SWEEP ADOPTION (core parity with `_resolve_or_adopt_text_runtime_for_lock`):
+    a lock naming a pair with NO warm pooled client, on a SWEEP provider
+    (Ollama / LM Studio) whose server the host sweep verifies holds the model,
+    is ADOPTED — `adopt_pair` constructs the pooled client through the ordinary
+    `_get_client` path (CLIENT CONSTRUCTION ONLY, never a provider-side model
+    load), residency is re-verified with the provider's own probe, and the lock
+    is set; the response then carries `adopted: true`. A provider probe that
+    disagrees with the sweep drops the just-adopted pooled client
+    (`drop_adopted_pair`) and refuses `model_not_resident` — a stray pool entry
+    would present a row nobody asked for. Not sweep-resident and not warm keeps
+    today's `not_found` refusal."""
     operation = "lock" if lock else "unlock"
     task_raw = merged.get("task")
     if task_raw is not None and str(task_raw).strip():
@@ -4018,24 +4118,49 @@ def _local_model_residency_lock_result(
             "affected_models": [],
         }
     pair = (provider_s, model_s)
+    adopted = False
     # Unlock must stay reachable for a locked pair even after its pooled
     # client was evicted; lock requires a known (warm) local runtime, the
-    # analog of core's registry-entry requirement.
+    # analog of core's registry-entry requirement — OR a sweep-resident pair
+    # this client can adopt (see the ADOPTION paragraph in the docstring).
     if pair not in known_pairs and not (not lock and pair in locked_pairs):
-        message = "Requested local runtime was not found in this client."
-        return {
-            "ok": False,
-            "success": False,
-            "supported": True,
-            "operation": operation,
-            "provider": provider_s,
-            "model": model_s,
-            "error": message,
-            "warnings": [message],
-            "affected_models": [],
-            "diagnostics": {"source": source, "reason": "not_found"},
-        }
-    provider_instance = provider_instance_lookup(provider_s, model_s) if callable(provider_instance_lookup) else None
+        if lock and callable(adopt_pair) and _sweep_verifies_model_resident(provider_s, model_s):
+            adopted = True
+        else:
+            message = "Requested local runtime was not found in this client."
+            return {
+                "ok": False,
+                "success": False,
+                "supported": True,
+                "operation": operation,
+                "provider": provider_s,
+                "model": model_s,
+                "error": message,
+                "warnings": [message],
+                "affected_models": [],
+                "diagnostics": {"source": source, "reason": "not_found"},
+            }
+    if adopted:
+        # CONSTRUCTION ONLY: the ordinary pooled-client path, which builds the
+        # provider client without ever asking it to load a model.
+        try:
+            provider_instance = adopt_pair(provider_s, model_s)
+        except Exception as exc:  # noqa: BLE001 - a failed adoption is reported, never raised
+            message = f"Adopting sweep-resident {provider_s}/{model_s} failed: {exc}"
+            return {
+                "ok": False,
+                "success": False,
+                "supported": True,
+                "operation": operation,
+                "provider": provider_s,
+                "model": model_s,
+                "error": message,
+                "warnings": [message],
+                "affected_models": [],
+                "diagnostics": {"source": source, "reason": "adoption_failed"},
+            }
+    else:
+        provider_instance = provider_instance_lookup(provider_s, model_s) if callable(provider_instance_lookup) else None
     if lock:
         # LOCK RULE (core parity): lock requires provider-VERIFIED residency.
         # A warm pool client alone is configuration, not memory — for lmstudio
@@ -4047,6 +4172,14 @@ def _local_model_residency_lock_result(
             provider_instance=provider_instance,
         )
         if claim.get("provider_resident") is not True:
+            if adopted and callable(drop_adopted_pair):
+                # The provider's own probe disagreed with the sweep: drop the
+                # just-adopted pooled client — adoption did not complete, and a
+                # stray pool entry would present a row nobody asked for.
+                try:
+                    drop_adopted_pair(provider_s, model_s)
+                except Exception:
+                    pass
             detail = (
                 f"Model {provider_s}/{model_s} is not resident in provider memory; "
                 "load it first (load with lock:true) before locking."
@@ -4082,7 +4215,8 @@ def _local_model_residency_lock_result(
         "provider": provider_s,
         "model": model_s,
         "provider_side": provider_side,
-        "diagnostics": {"source": source},
+        **({"adopted": True} if adopted else {}),
+        "diagnostics": {"source": source, **({"adopted": True} if adopted else {})},
     }
 
 
@@ -9158,6 +9292,31 @@ class MultiLocalAbstractCoreLLMClient:
                         break
         return getattr(client, "_llm", None)
 
+    def _adopt_lock_pair(self, provider_s: str, model_s: str) -> Any:
+        """Construct the pooled client for a sweep-resident pair and return its
+        provider instance (lock ADOPTION). The ORDINARY `_get_client` path —
+        client CONSTRUCTION only. Adoption never pushes a second copy of the
+        weights through this stack: no cold load, no generation.
+
+        It is not a no-op on the provider, and the distinction matters. The
+        lock step that follows adoption calls `_apply_provider_side_lock_knob`,
+        and for ollama that knob rides the native load request —
+        `load_model(model, keep_alive=-1)` POSTs `/api/generate` with
+        `prompt: ""`, the standard preload idiom. On an already-verified-
+        resident model (the only kind the lock rule accepts) that request is a
+        keep-alive REFRESH, not a load: the weights are already in the
+        server's memory and only the TTL moves. `unlock` re-verifies residency
+        first and skips the restore when the model is gone, so neither
+        direction can load a model back as a side effect."""
+        client = self._get_client(provider_s, model_s)
+        return getattr(client, "_llm", None)
+
+    def _drop_adopted_lock_pair(self, provider_s: str, model_s: str) -> None:
+        """Undo `_adopt_lock_pair` when adoption did not complete."""
+        clients = getattr(self, "_clients", None)
+        if isinstance(clients, dict):
+            clients.pop((provider_s, model_s), None)
+
     def lock_model_residency(
         self,
         payload: Optional[Mapping[str, Any]] = None,
@@ -9173,6 +9332,8 @@ class MultiLocalAbstractCoreLLMClient:
             locked_pairs=_local_locked_residency_pairs(self),
             provider_instance_lookup=self._lock_provider_instance,
             source="abstractruntime.multilocal",
+            adopt_pair=self._adopt_lock_pair,
+            drop_adopted_pair=self._drop_adopted_lock_pair,
         )
 
     def unlock_model_residency(

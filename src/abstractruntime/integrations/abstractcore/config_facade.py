@@ -539,10 +539,27 @@ def recommended_model_plan() -> Dict[str, Any]:
     """The recommended fresh-install set, probed. No downloads, no hub calls.
 
     `{"recommended": [...], "total", "installed", "absent", "unknown",
-    "would_download": [...]}` -- the payload behind a "2 of 3 models present"
-    banner and behind `--dry-run`.
+    "would_download": [...]}` -- the payload behind `--dry-run`. It answers ONE
+    question, "is the starter-kit model on this disk?", so a surface that
+    reports it as work to do must first pass it through
+    `mark_recommended_route_gaps`.
     """
     return dict(_model_materializer().recommended_plan())
+
+
+def mark_recommended_route_gaps(plan: Dict[str, Any], routes: Any) -> Dict[str, Any]:
+    """Split a `recommended_model_plan()` into ADVICE and GAPS, in place.
+
+    `plan["gaps"]` is the subset of `would_download` whose route has nothing
+    else serving it -- the only part a console may present as work to do. A
+    host that resolves its own route rows passes THOSE rows, for the same
+    reason it annotates them itself (see `annotate_model_availability`).
+
+    AbstractCore owns the judgement; this is the door it comes through. A host
+    re-deriving "is this route answered?" from its own row fields is exactly
+    the drift this seam exists to prevent.
+    """
+    return dict(_model_materializer().mark_recommended_route_gaps(plan, routes or []))
 
 
 def recommended_model_downloads() -> List[Dict[str, str]]:
@@ -596,6 +613,7 @@ __all__ = [
     "model_availability",
     "annotate_model_availability",
     "recommended_model_plan",
+    "mark_recommended_route_gaps",
     "recommended_model_downloads",
     "download_model_artifact",
 ]

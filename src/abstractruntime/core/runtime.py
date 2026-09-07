@@ -2069,16 +2069,32 @@ class Runtime:
         payload["params"] = params
         return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
 
-    def tick(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
+    def tick(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        run_id: str,
+        max_steps: int = 100,
+        step_gate: Optional[Callable[[], bool]] = None,
+    ) -> RunState:
         """Timed wrapper (backlog 0054/0053): every tick lands in the health
         histogram, and ticks that executed at least one effect step refresh
         the vars-size gauge (gated on step activity so a scheduler sweeping
-        parked runs never pays a serialization per probe)."""
+        parked runs never pays a serialization per probe).
+
+        `step_gate` (host pause, 2026-09-05): an optional callable the loop
+        consults at EVERY step boundary; when it answers False the tick
+        returns the persisted state without executing the next node. The
+        run stays RUNNING and resumes on a later tick — this is how a host
+        (the gateway's pause switch) stops execution mid-tick instead of
+        waiting for up to `max_steps` LLM/tool steps to finish. A gate that
+        raises is treated as open (logged once), never as a silent freeze.
+        """
         import time as _time
 
         t0 = _time.perf_counter()
         try:
-            state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps)
+            state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
         except BaseException as e:
             # The ring exists to answer "what broke last" — a raising tick is
             # the dominant breakage class and must reach it (adversary P3).
@@ -2101,6 +2117,22 @@ class Runtime:
         except Exception:  # pragma: no cover - observability never fails the tick
             pass
         return state
+
+    _step_gate_error_logged = False
+
+    def _step_gate_open(self, step_gate: Callable[[], bool]) -> bool:
+        """True when the host's step gate lets the next step run.
+
+        A raising gate is an open gate: the pre-gate behaviour (execute) is
+        the only answer that cannot freeze a run forever, and the failure is
+        logged once per runtime so the host hears about its broken gate."""
+        try:
+            return bool(step_gate())
+        except Exception as exc:  # noqa: BLE001 - a gate must never fail a tick
+            if not self._step_gate_error_logged:
+                self._step_gate_error_logged = True
+                logger.warning("tick step_gate raised %s: %s — treating the gate as open", type(exc).__name__, exc)
+            return True
 
     # 0053 vars-size watch: warn once per run per process when serialized
     # vars cross the threshold — the 1.5GB-RSS incident class made visible
@@ -2126,12 +2158,24 @@ class Runtime:
                     self.VARS_BYTES_WARN_THRESHOLD / 1e6,
                 )
 
-    def _tick_impl(self, *, workflow: WorkflowSpec, run_id: str, max_steps: int = 100) -> RunState:
+    def _tick_impl(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        run_id: str,
+        max_steps: int = 100,
+        step_gate: Optional[Callable[[], bool]] = None,
+    ) -> RunState:
         run = self.get_state(run_id)
         # Terminal runs never progress.
         if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
             return run
         if _is_paused_run_vars(run.vars):
+            return run
+        # Host step gate, FIRST consultation: before the due-WAIT auto-resume
+        # below mutates the run (a closed gate must leave a WAITING run's
+        # `until` untouched on disk AND in the store's cached object).
+        if step_gate is not None and not self._step_gate_open(step_gate):
             return run
         if run.status == RunStatus.WAITING:
             # For WAIT_UNTIL we can auto-unblock if time passed
@@ -2197,6 +2241,16 @@ class Runtime:
 
         steps = 0
         while steps < max_steps:
+            # Host step gate (see tick()): consulted BEFORE any work for this
+            # step, at a boundary where `run` is exactly what the store holds
+            # (the previous iteration saved before continuing). Returning
+            # here mirrors the externally-controlled early returns below —
+            # nothing to persist, nothing half-done.
+            # (The first step was already gated at the top of the tick — one
+            # consultation per step boundary, never two.)
+            if step_gate is not None and steps > 0 and not self._step_gate_open(step_gate):
+                return run
+
             steps += 1
 
             controlled = _abort_if_externally_controlled()

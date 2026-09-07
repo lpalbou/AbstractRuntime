@@ -9,11 +9,17 @@ Covers:
 - remote wire shapes (lock/unlock POST bodies, context_estimate GET, the 409
   model_locked conversion, force riding the unload body only when true),
 - client-side lock semantics on the local clients (refusal without force,
-  force unlock-then-unload, the best-effort ollama keep_alive knob, lock
-  state surviving and surfacing across list calls),
+  force unlock-then-unload, the best-effort ollama keep_alive knob, the LM
+  Studio external-eviction caveat, lock state surviving across list calls),
+- lock ADOPTION of sweep-resident models (client construction only — never a
+  cold load, though the ollama keep-alive knob that follows does POST
+  `/api/generate` with an EMPTY prompt, a TTL refresh on an already-verified-
+  resident model — plus the re-verification, drop-on-disagreement, and
+  `adopted: true` semantics; core parity),
 - MODEL_RESIDENCY effect ops `lock`/`unlock` (durable, soft-fail semantics),
 - passthrough of the new core record fields through local claims and the
-  sweep merge (sweep-only rows: `lockable: false` stamped if absent),
+  sweep merge (sweep-only rows on SWEEP providers: `lockable: true`;
+  est_weights_bytes / cache_bytes relayed, never stripped),
 - the guarded estimator import.
 """
 
@@ -473,7 +479,82 @@ def test_local_unlock_clears_the_flag_and_restores_the_ollama_default_keep_alive
     assert provider.unload_model_calls == [{"model": "llama3", "kwargs": {}}]
 
 
+def test_ollama_lock_knob_is_a_keep_alive_refresh_with_empty_prompt() -> None:
+    """The knob DOES call the provider — pin what it actually puts on the wire.
+
+    The lock/unlock knob calls `load_model(model, keep_alive=...)`, and
+    abstractcore's ollama provider implements that as a POST to
+    `/api/generate` with `prompt: ""` — the standard Ollama preload idiom.
+    Docstrings in this stack used to claim adoption/locking "never asks the
+    provider to load a model"; that is not literally true, and the honest
+    statement is what this test pins: the request carries an EMPTY prompt, so
+    on an already-verified-resident model (the only kind the lock rule
+    accepts) nothing is generated and no weights are re-read — only the TTL
+    moves.
+    """
+    from abstractcore.providers.ollama_provider import OllamaProvider
+
+    posted: List[Tuple[str, Dict[str, Any]]] = []
+
+    class _Response:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json() -> Dict[str, Any]:
+            return {"done": True}
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    class _Client:
+        @staticmethod
+        def post(url: str, json: Dict[str, Any]) -> "_Response":  # noqa: A002
+            posted.append((url, json))
+            return _Response()
+
+    provider = OllamaProvider.__new__(OllamaProvider)
+    provider.base_url = "http://127.0.0.1:11434"
+    provider.model = "llama3"
+    provider.client = _Client()
+
+    # Lock: pin server-side.
+    provider.load_model("llama3", keep_alive=-1)
+    # Unlock: restore the ordinary server-managed TTL.
+    provider.load_model("llama3", keep_alive="5m")
+
+    assert [url for url, _ in posted] == [
+        "http://127.0.0.1:11434/api/generate",
+        "http://127.0.0.1:11434/api/generate",
+    ]
+    # THE POINT: an empty prompt. Not a generation, not a cold load.
+    assert [body["prompt"] for _, body in posted] == ["", ""]
+    assert all(body["stream"] is False for _, body in posted)
+    assert [body["keep_alive"] for _, body in posted] == [-1, "5m"]
+    assert all(body["model"] == "llama3" for _, body in posted)
+
+
 def test_local_lock_on_non_ollama_provider_reports_no_provider_side_knob() -> None:
+    class _MlxProvider(_FakeOllamaProvider):
+        pass
+
+    provider = _MlxProvider(model="qwen3-4b")
+    client = _local_client(provider="mlx", model="qwen3-4b", provider_instance=provider)
+
+    result = client.lock_model_residency()
+
+    assert result["ok"] is True
+    assert result["locked"] is True
+    assert result["provider_side"] == {"supported": False, "applied": False}
+    assert provider.load_model_calls == []
+    assert client.unload_model_residency(task="text_generation")["error"] == "model_locked"
+
+
+def test_local_lmstudio_lock_reports_the_external_eviction_caveat() -> None:
+    """LM Studio exposes no residency-pin knob (core parity): the lock is real
+    against THIS stack's unloads, and the payload says so instead of implying a
+    server-side pin the external server never granted."""
     class _LmStudioProvider(_FakeOllamaProvider):
         pass
 
@@ -484,9 +565,16 @@ def test_local_lock_on_non_ollama_provider_reports_no_provider_side_knob() -> No
 
     assert result["ok"] is True
     assert result["locked"] is True
-    assert result["provider_side"] == {"supported": False, "applied": False}
+    assert result["provider_side"] == {
+        "supported": False,
+        "applied": False,
+        "detail": "lock guards this stack's unloads; the external server may still evict on its own policy",
+    }
+    # No knob rides a load request on this provider.
     assert provider.load_model_calls == []
     assert client.unload_model_residency(task="text_generation")["error"] == "model_locked"
+    # Unlock stays silent about the caveat (there is nothing to restore).
+    assert client.unlock_model_residency()["provider_side"] == {"supported": False, "applied": False}
 
 
 def test_local_lock_survives_a_failing_ollama_knob_and_reports_it() -> None:
@@ -766,11 +854,16 @@ def test_multilocal_lock_enforces_unload_refusal_and_force_on_pooled_pairs(monke
 
 def test_multilocal_lock_requires_a_warm_pair_but_unlock_reaches_locked_evicted_pairs(monkeypatch) -> None:
     monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    # Nothing on the host sweep: neither warm nor sweep-resident keeps the
+    # `not_found` refusal (and keeps the probe off the network).
+    monkeypatch.setattr(llm_mod, "_sweep_host_loaded_models", lambda: [])
     client = MultiLocalAbstractCoreLLMClient(provider="ollama", model="default")
 
     missing = client.lock_model_residency(provider="ollama", model="never-loaded")
     assert missing["ok"] is False
     assert "not found" in missing["error"]
+    assert missing["diagnostics"]["reason"] == "not_found"
+    assert ("ollama", "never-loaded") not in client._clients
 
     client.load_model_residency(task="text_generation", provider="ollama", model="llama3")
     client.lock_model_residency(provider="ollama", model="llama3")
@@ -783,6 +876,249 @@ def test_multilocal_lock_requires_a_warm_pair_but_unlock_reaches_locked_evicted_
     # The knob has no provider instance to reach; best-effort is reported.
     assert unlocked["provider_side"]["supported"] is True
     assert unlocked["provider_side"]["applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# Lock ADOPTION of sweep-resident models (local lane, core parity)
+# ---------------------------------------------------------------------------
+
+
+class _NeverLoadingProvider:
+    """A provider that FAILS the test if anything asks it to COLD-LOAD a model
+    or generate. Adoption is CLIENT CONSTRUCTION ONLY — the whole point of the
+    feature is that locking a model LM Studio (or Ollama) already holds never
+    pushes a second copy of the weights through this stack.
+
+    Note the precise claim. `load_model` is not universally forbidden by the
+    feature: ollama's residency-pin knob rides the native load request
+    (`load_model(model, keep_alive=-1)`, which POSTs `/api/generate` with
+    `prompt: ""` — the preload idiom), and on an already-verified-resident
+    model that is a keep-alive REFRESH rather than a load. This fixture is
+    `lmstudio`/`mlx`-shaped, where no such knob exists and any `load_model`
+    call really would be a spurious load, so the assertion below is correct
+    *here*. The ollama keep-alive path is pinned separately by
+    `test_ollama_lock_knob_is_a_keep_alive_refresh_with_empty_prompt`."""
+
+    def __init__(self, *, provider: str, model: str, loaded: bool = True) -> None:
+        self.provider = provider
+        self.model = model
+        self.loaded = loaded
+        self.residency_calls = 0
+
+    def get_model_residency(self, **kwargs: Any) -> Dict[str, Any]:
+        self.residency_calls += 1
+        return {
+            "task": "text_generation",
+            "provider": self.provider,
+            "model": str(kwargs.get("model") or self.model),
+            "provider_residency_verified": True,
+            "provider_resident": bool(self.loaded),
+            "loaded": bool(self.loaded),
+            "state": "loaded" if self.loaded else "not_loaded",
+            "source": f"abstractcore.provider.{self.provider}",
+        }
+
+    def load_model(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        raise AssertionError(f"adoption must never load a model (load_model{args!r} {kwargs!r})")
+
+    def generate(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        raise AssertionError("adoption must never generate")
+
+
+def _adopting_multilocal(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    provider_instance: Any,
+    sweep: List[Dict[str, Any]],
+    default_provider: str = "ollama",
+    default_model: str = "default",
+) -> MultiLocalAbstractCoreLLMClient:
+    """A MultiLocal pool whose `_create_client` hands back ONE scripted
+    provider instance, with the host sweep pinned to `sweep`."""
+    constructed: List[Tuple[str, str]] = []
+
+    class _AdoptedLocal(_DummyLocal):
+        def __init__(self, *, provider: str, model: str, llm_kwargs: Dict[str, Any], artifact_store: Any) -> None:
+            _ = llm_kwargs, artifact_store
+            constructed.append((provider, model))
+            self._provider = provider
+            self._model = model
+            self._llm = provider_instance
+
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _AdoptedLocal)
+    monkeypatch.setattr(llm_mod, "_sweep_host_loaded_models", lambda: [dict(r) for r in sweep])
+    client = MultiLocalAbstractCoreLLMClient(provider=default_provider, model=default_model)
+    constructed.clear()  # the default client's own construction is not adoption
+    client._constructed_pairs = constructed  # type: ignore[attr-defined]
+    return client
+
+
+def test_multilocal_lock_adopts_a_sweep_resident_lmstudio_model_without_loading_it(monkeypatch) -> None:
+    """CORE PARITY (`_resolve_or_adopt_text_runtime_for_lock`): a pair with no
+    warm pooled client, on a SWEEP provider whose server the sweep verifies
+    holds the model, is ADOPTED — the pooled client is CONSTRUCTED, residency
+    is re-verified with the provider's own probe, and the lock is set."""
+    provider_instance = _NeverLoadingProvider(provider="lmstudio", model="qwen3-4b")
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "lmstudio", "model": "qwen3-4b", "resident": True, "loaded": True}],
+    )
+
+    result = client.lock_model_residency(provider="lmstudio", model="qwen3-4b")
+
+    assert result["ok"] is True
+    assert result["locked"] is True
+    assert result["adopted"] is True
+    assert result["runtime_id"] == "local:text_generation:lmstudio:qwen3-4b"
+    # LM Studio has no residency-pin knob: the payload says what the lock does
+    # and does NOT do.
+    assert result["provider_side"] == {
+        "supported": False,
+        "applied": False,
+        "detail": "lock guards this stack's unloads; the external server may still evict on its own policy",
+    }
+    # Construction only — `_NeverLoadingProvider` raises on load/generate.
+    assert client._constructed_pairs == [("lmstudio", "qwen3-4b")]
+    assert provider_instance.residency_calls >= 1
+    # The adopted pair is now a managed pool row the lock actually guards.
+    assert ("lmstudio", "qwen3-4b") in client._clients
+    assert client._locked_model_residency == {("lmstudio", "qwen3-4b")}
+    refused = client.unload_model_residency(task="text_generation", provider="lmstudio", model="qwen3-4b")
+    assert refused["error"] == "model_locked"
+
+
+def test_multilocal_adoption_of_an_ollama_model_applies_the_keep_alive_knob(monkeypatch) -> None:
+    """Ollama DOES expose the pin knob: adoption reinforces the client-side
+    lock with keep_alive=-1, exactly like a lock on a warm pair."""
+    provider_instance = _FakeOllamaProvider(model="granite4:small")
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "ollama", "model": "granite4:small", "resident": True, "loaded": True}],
+    )
+
+    result = client.lock_model_residency(provider="ollama", model="granite4:small")
+
+    assert result["ok"] is True
+    assert result["adopted"] is True
+    assert result["provider_side"] == {"supported": True, "applied": True}
+    # The ONLY load_model call is the keep_alive knob — adoption itself loaded
+    # nothing.
+    assert provider_instance.load_model_calls == [{"model": "granite4:small", "kwargs": {"keep_alive": -1}}]
+
+
+def test_multilocal_adoption_matches_the_sweep_latest_alias(monkeypatch) -> None:
+    """`qwen3` and `qwen3:latest` are the same resident model on an Ollama
+    server: adoption uses core's canonical alias rules, not string equality."""
+    provider_instance = _FakeOllamaProvider(model="qwen3")
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "ollama", "model": "qwen3:latest", "resident": True, "loaded": True}],
+    )
+
+    result = client.lock_model_residency(provider="ollama", model="qwen3")
+
+    assert result["ok"] is True
+    assert result["adopted"] is True
+
+
+def test_multilocal_lock_refuses_a_pair_the_sweep_does_not_verify(monkeypatch) -> None:
+    """Not warm AND not sweep-resident keeps today's `not_found` refusal —
+    nothing is constructed on a pair nobody can verify."""
+    provider_instance = _NeverLoadingProvider(provider="lmstudio", model="qwen3-4b")
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "lmstudio", "model": "some-other-model", "resident": True, "loaded": True}],
+    )
+    client._constructed_pairs.clear()
+
+    refused = client.lock_model_residency(provider="lmstudio", model="qwen3-4b")
+
+    assert refused["ok"] is False
+    assert "not found" in refused["error"]
+    assert refused["diagnostics"]["reason"] == "not_found"
+    assert client._constructed_pairs == []
+    assert client._locked_model_residency == set()
+
+
+def test_multilocal_lock_never_adopts_a_non_sweep_provider(monkeypatch) -> None:
+    """MLX/HuggingFace residency lives on an owning provider INSTANCE, not on a
+    server the sweep can ask: a cold mlx pair is never adopted."""
+    provider_instance = _NeverLoadingProvider(provider="mlx", model="qwen3-30b")
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "mlx", "model": "qwen3-30b", "resident": True, "loaded": True}],
+    )
+    client._constructed_pairs.clear()
+
+    refused = client.lock_model_residency(provider="mlx", model="qwen3-30b")
+
+    assert refused["ok"] is False
+    assert "not found" in refused["error"]
+    assert client._constructed_pairs == []
+
+
+def test_multilocal_adoption_drops_the_pooled_client_when_the_provider_probe_disagrees(monkeypatch) -> None:
+    """The provider's OWN probe is the lock rule's authority. When it
+    contradicts the sweep, adoption did not complete: the just-constructed pool
+    entry is dropped so no row nobody asked for is left behind."""
+    provider_instance = _NeverLoadingProvider(provider="lmstudio", model="qwen3-4b", loaded=False)
+    client = _adopting_multilocal(
+        monkeypatch,
+        provider_instance=provider_instance,
+        sweep=[{"provider": "lmstudio", "model": "qwen3-4b", "resident": True, "loaded": True}],
+    )
+
+    refused = client.lock_model_residency(provider="lmstudio", model="qwen3-4b")
+
+    assert refused["ok"] is False
+    assert refused["error"] == "model_not_resident"
+    assert "load it first" in refused["detail"]
+    assert refused["diagnostics"]["reason"] == "model_not_resident"
+    assert ("lmstudio", "qwen3-4b") not in client._clients
+    assert client._locked_model_residency == set()
+
+
+def test_multilocal_adoption_reports_a_failing_client_construction(monkeypatch) -> None:
+    """A provider client that cannot be constructed is REPORTED, never raised
+    out of the lock call."""
+    monkeypatch.setattr(llm_mod, "_sweep_host_loaded_models", lambda: [
+        {"provider": "lmstudio", "model": "qwen3-4b", "resident": True, "loaded": True}
+    ])
+    monkeypatch.setattr(llm_mod, "LocalAbstractCoreLLMClient", _DummyLocal)
+    client = MultiLocalAbstractCoreLLMClient(provider="ollama", model="default")
+    monkeypatch.setattr(
+        type(client),
+        "_get_client",
+        lambda self, provider, model, **kwargs: (_ for _ in ()).throw(RuntimeError("no lmstudio endpoint")),
+        raising=True,
+    )
+
+    refused = client.lock_model_residency(provider="lmstudio", model="qwen3-4b")
+
+    assert refused["ok"] is False
+    assert "no lmstudio endpoint" in refused["error"]
+    assert refused["diagnostics"]["reason"] == "adoption_failed"
+    assert client._locked_model_residency == set()
+
+
+def test_local_single_pair_client_has_nothing_to_adopt_into(monkeypatch) -> None:
+    """The single-pair Local client owns exactly one pair and no pool: a lock
+    naming any other pair keeps the honest `not_found` refusal even when the
+    sweep verifies that model resident."""
+    monkeypatch.setattr(llm_mod, "_sweep_host_loaded_models", lambda: [
+        {"provider": "ollama", "model": "granite4:small", "resident": True, "loaded": True}
+    ])
+    client = _local_client(provider="ollama", model="llama3", provider_instance=_FakeOllamaProvider(model="llama3"))
+
+    refused = client.lock_model_residency(provider="ollama", model="granite4:small")
+
+    assert refused["ok"] is False
+    assert "not found" in refused["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -985,6 +1321,8 @@ def test_new_core_record_fields_pass_through_the_local_claim_blocked_set() -> No
                 "host_id": "abc123def456",
                 "host_name": "studio.local",
                 "expires_at": "2026-08-27T00:00:00Z",
+                "est_weights_bytes": 93_000_000_000,
+                "cache_bytes": 8192,
             }
 
     claim = _local_provider_residency_claim(
@@ -1005,6 +1343,59 @@ def test_new_core_record_fields_pass_through_the_local_claim_blocked_set() -> No
     assert claim["host_id"] == "abc123def456"
     assert claim["host_name"] == "studio.local"
     assert claim["expires_at"] == "2026-08-27T00:00:00Z"
+    # Per-model memory truth is PROVIDER truth (MLX/HuggingFace stamp
+    # est_weights_bytes on their own claim): the blocked set must not strip it.
+    assert claim["est_weights_bytes"] == 93_000_000_000
+    assert claim["cache_bytes"] == 8192
+
+
+def test_est_weights_and_cache_bytes_reach_local_records(monkeypatch) -> None:
+    """The provider's own footprint figures land on the local residency row —
+    `est_weights_bytes` from the claim, `cache_bytes` from core's arithmetic
+    over the provider's own prompt-cache stats (nothing computed here)."""
+    _install_fake_stamp_helpers(monkeypatch, modalities_by_model={})
+
+    class _FootprintProvider(_FakeOllamaProvider):
+        def get_model_residency(self, **kwargs: Any) -> Dict[str, Any]:
+            claim = super().get_model_residency(**kwargs)
+            claim["est_weights_bytes"] = 93_000_000_000
+            return claim
+
+        def prompt_cache_supports_operation(self, operation: str) -> bool:
+            return str(operation) == "stats"
+
+        def get_prompt_cache_stats(self) -> Dict[str, Any]:
+            return {
+                "keys": ["k1", "k2"],
+                "meta_by_key": {"k1": {"bytes": 1024}, "k2": {"bytes": 2048}},
+                "snapshots": {"count": 1, "bytes": 512},
+            }
+
+    client = _local_client(
+        provider="ollama",
+        model="llama3",
+        provider_instance=_FootprintProvider(model="llama3"),
+    )
+
+    record = client.list_model_residency(task="text_generation")["models"][0]
+
+    assert record["est_weights_bytes"] == 93_000_000_000
+    assert record["cache_bytes"] == 1024 + 2048 + 512
+
+
+def test_local_records_omit_cache_bytes_when_the_provider_cannot_report_it(monkeypatch) -> None:
+    """Unknown stays unknown (ADR 0008): a provider with no prompt-cache stats
+    yields no `cache_bytes` key at all — never a 0 that reads as "empty"."""
+    _install_fake_stamp_helpers(monkeypatch, modalities_by_model={})
+    client = _local_client(
+        provider="ollama",
+        model="llama3",
+        provider_instance=_FakeOllamaProvider(model="llama3"),
+    )
+
+    record = client.list_model_residency(task="text_generation")["models"][0]
+
+    assert "cache_bytes" not in record
 
 
 def test_calibration_and_identity_claim_fields_reach_local_records(monkeypatch) -> None:
@@ -1045,7 +1436,7 @@ def test_calibration_and_identity_claim_fields_reach_local_records(monkeypatch) 
     assert "locked_at" not in record
 
 
-def test_sweep_only_rows_are_stamped_not_lockable_and_relay_new_fields_verbatim(monkeypatch) -> None:
+def test_sweep_only_rows_on_sweep_providers_are_lockable_and_relay_new_fields_verbatim(monkeypatch) -> None:
     # Registry MISS pinned: sweep-relayed modalities survive verbatim (a hit
     # would overwrite them with registry truth — core's own sweep behavior).
     _install_fake_stamp_helpers(
@@ -1072,7 +1463,8 @@ def test_sweep_only_rows_are_stamped_not_lockable_and_relay_new_fields_verbatim(
                 "model": "qwen3:latest",
                 "resident": True,
                 "loaded": True,
-                "lockable": True,  # an explicit sweep value is relayed, not clobbered
+                "est_weights_bytes": 93_000_000_000,
+                "cache_bytes": 4096,
             },
         ],
     )
@@ -1087,12 +1479,77 @@ def test_sweep_only_rows_are_stamped_not_lockable_and_relay_new_fields_verbatim(
     by_model = {record["model"]: record for record in result["models"]}
     granite = by_model["granite4:small"]
     assert granite["source"] == "provider_server"
-    assert granite["lockable"] is False  # stamped when absent, matching core
+    # Sweep rows on a SWEEP provider ARE lockable now: locking one ADOPTS it.
+    assert granite["lockable"] is True
     assert granite["modalities"] == ["input.text", "output.text"]
     assert granite["host_id"] == "abc123def456"
     assert granite["host_name"] == "studio.local"
     assert granite["expires_at"] == "2026-08-27T00:00:00Z"
-    assert by_model["qwen3:latest"]["lockable"] is True
+    qwen = by_model["qwen3:latest"]
+    assert qwen["lockable"] is True
+    # The new core memory fields relay VERBATIM on sweep-only rows.
+    assert qwen["est_weights_bytes"] == 93_000_000_000
+    assert qwen["cache_bytes"] == 4096
+
+
+def test_sweep_rows_from_a_non_sweep_source_stay_not_lockable(monkeypatch) -> None:
+    """The lockable stamp keys off the SWEEP provider set, not a row's mere
+    presence: nothing here can adopt (or enforce a lock on) a row some other
+    source contributed."""
+    _install_fake_stamp_helpers(monkeypatch, modalities_by_model={})
+    monkeypatch.setattr(
+        llm_mod,
+        "_sweep_host_loaded_models",
+        lambda: [{"provider": "vllm", "model": "qwen3", "resident": True, "loaded": True}],
+    )
+    client = _local_client(
+        provider="ollama",
+        model="unrelated",
+        provider_instance=_FakeOllamaProvider(model="unrelated"),
+    )
+
+    result = client.list_model_residency(task="text_generation")
+
+    by_model = {record["model"]: record for record in result["models"]}
+    assert by_model["qwen3"]["lockable"] is False
+
+
+def test_sweep_merge_fills_missing_memory_fields_on_a_pooled_row(monkeypatch) -> None:
+    """A pool row that knows nothing about its own footprint absorbs the sweep's
+    figures — size pair AND the new est_weights_bytes/cache_bytes — while a
+    figure the row already carries is never overwritten."""
+    _install_fake_stamp_helpers(monkeypatch, modalities_by_model={})
+    monkeypatch.setattr(
+        llm_mod,
+        "_sweep_host_loaded_models",
+        lambda: [
+            {
+                "provider": "ollama",
+                "model": "llama3:latest",
+                "resident": True,
+                "loaded": True,
+                "size_bytes": 5_000_000_000,
+                "size_vram_bytes": 4_000_000_000,
+                "est_weights_bytes": 4_800_000_000,
+                "cache_bytes": 2048,
+            }
+        ],
+    )
+    client = _local_client(
+        provider="ollama",
+        model="llama3",
+        provider_instance=_FakeOllamaProvider(model="llama3"),
+    )
+
+    records = client.list_model_residency(task="text_generation")["models"]
+
+    assert len(records) == 1  # deduped against the sweep row, not doubled
+    record = records[0]
+    assert record["source"] == "abstractruntime.local"
+    assert record["size_bytes"] == 5_000_000_000
+    assert record["size_vram_bytes"] == 4_000_000_000
+    assert record["est_weights_bytes"] == 4_800_000_000
+    assert record["cache_bytes"] == 2048
 
 
 # ---------------------------------------------------------------------------

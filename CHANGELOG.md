@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`Runtime.tick(..., step_gate=callable)` — a host can stop a run mid-tick
+  (2026-09-05).** A tick may execute up to `max_steps` steps and each may be a
+  long LLM or tool call, so a host that merely stops scheduling ticks keeps
+  executing for minutes after it decided to pause. The optional gate is
+  consulted at every step boundary; when it answers `False` the tick returns
+  the persisted state without executing the next node, the run stays
+  `RUNNING`, and a later tick continues exactly where it stopped. A gate that
+  raises counts as open (logged once per runtime) so a broken host hook can
+  never freeze a run. Used by AbstractGateway's pause switch (system tray and
+  console); callers that pass no gate see no change.
+
+### Fixed
+- **Lock adoption no longer claims it never touches the provider.** `_adopt_lock_pair`
+  and the adoption tests documented "never a provider-side load". Adoption itself is
+  client construction only, but the lock step that follows calls ollama's keep-alive
+  knob — `load_model(model, keep_alive=-1)`, which POSTs `/api/generate` with
+  `prompt: ""`, the preload idiom. On an already-verified-resident model (the only kind
+  the lock rule accepts) that is a TTL **refresh**, not a load. Docstrings reworded to the
+  truth, and a new test pins the wire shape: empty prompt, `stream: false`, `keep_alive`
+  of `-1` on lock and `"5m"` on unlock.
+
+### Added
 - **The execution host's configured reasoning effort reaches the call (2026-08-01).**
   When a call names no `thinking`, the LLM client applies the effort configured on
   AbstractCore's text-generation capability route. An explicit `thinking` wins,

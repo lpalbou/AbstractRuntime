@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 26 (9 top-level + 15 in the `runtime_systemic_reliability/` track
+- Planned: 27 (10 top-level + 15 in the `runtime_systemic_reliability/` track
   + 2 in the `runtime_portability/` track)
 - Proposed: 11 (3 top-level + 8 in the `runtime_systemic_reliability/` track)
 - Completed: 33

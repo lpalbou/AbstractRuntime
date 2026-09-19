@@ -336,6 +336,34 @@ def _fingerprint_projection(value: Any) -> Any:
     return f"{type(value).__name__}:{text}"
 
 
+def _has_local_prompt_cache_control_plane(provider: Any) -> bool:
+    """True for providers that keep an IN-PROCESS prompt cache the host can plan into
+    (MLX, HuggingFace) — the same two questions `_maybe_prepare_prompt_cache` asks."""
+    if provider is None:
+        return False
+    try:
+        supports = getattr(provider, "supports_prompt_cache", None)
+        if not callable(supports) or not bool(supports()):
+            return False
+        supports_op = getattr(provider, "prompt_cache_supports_operation", None)
+        return bool(callable(supports_op) and supports_op("prepare_modules"))
+    except Exception:
+        return False
+
+
+def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
+    """True when `fn` can be called with keyword `name` (explicit parameter or **kwargs)."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _prompt_cache_message_fingerprint(message: Any) -> str:
     """ROLE + CONTENT + (canonical) TOOL_CALLS fingerprint (0064 fix 1).
 
@@ -6916,6 +6944,7 @@ class LocalAbstractCoreLLMClient:
         system_prompt: Optional[str],
         tools: Optional[List[Dict[str, Any]]],
         messages: Optional[List[Dict[str, Any]]],
+        thinking: Any = None,
     ) -> None:
         key = str(prompt_cache_key or "").strip()
         if not key:
@@ -6982,10 +7011,34 @@ class LocalAbstractCoreLLMClient:
             ]
             if tools:
                 modules.append({"module_id": "tools", "tools": tools, "add_generation_prompt": False})
+            # THE CHAIN MUST BE PLANNED UNDER THE SAME `thinking` generate() GETS (2026-09-17).
+            # Thinking controls can rewrite the HEAD of the system block — Qwen3.8 renders
+            # "Reasoning effort is set to low. …" before the persona — so a chain planned
+            # without it shares 3 tokens (`<|im_start|>system\n`) with the real prompt and
+            # the whole prefix is unreachable. Measured on the gateway (Qwen3.8-27B-4bit,
+            # thinking=minimal): `rebuilt` cached=0 then `hit_restore` cached=3, two full
+            # ~5.5k prefills per session. AbstractCore owns the rewrite; this only hands it
+            # the request.
+            prep_kwargs: Dict[str, Any] = {}
+            if thinking is not None:
+                if _callable_accepts_kwarg(prep_fn, "thinking"):
+                    prep_kwargs["thinking"] = thinking
+                else:
+                    # One f-string: this module's logger is a StructuredLogger, whose
+                    # `warning()` takes the message only — printf-style args raise, and
+                    # the blanket `except` below would turn that into a silently missing
+                    # prefix cache.
+                    logger.warning(
+                        f"#FALLBACK prompt-cache prefix planned WITHOUT thinking={thinking!r}: this "
+                        f"AbstractCore's prompt_cache_prepare_modules does not accept `thinking`. For "
+                        f"models that render the control into the system block the prepared prefix "
+                        f"will not match the prompt (no prefill savings). Upgrade abstractcore."
+                    )
             prep = prep_fn(
                 namespace="abstractcode",
                 modules=modules,
                 make_default=False,
+                **prep_kwargs,
             )
         except Exception:
             return
@@ -7101,7 +7154,13 @@ class LocalAbstractCoreLLMClient:
                         # to reuse — the key is being built from empty anyway); it exists
                         # only so providers without `prompt_cache_fork` still get a warm
                         # session key.
-                        updater(key, system_prompt=system_prompt, tools=tools, add_generation_prompt=False)
+                        updater(
+                            key,
+                            system_prompt=system_prompt,
+                            tools=tools,
+                            add_generation_prompt=False,
+                            **({"thinking": thinking} if thinking is not None else {}),
+                        )
                         forked = True
                 except Exception:
                     forked = False
@@ -7368,6 +7427,38 @@ class LocalAbstractCoreLLMClient:
                     result["tool_calls"] = []
                     return result
 
+            # A PROMPT-ONLY CALL UNDER A RUNTIME-DERIVED KEY IS STILL FULL-CONTEXT (2026-09-17).
+            #
+            # AbstractCore reads the caller SHAPE to pick a cache discipline: `messages=None`
+            # means "the cache IS my context, this prompt is the next fragment" (KV-mode
+            # sessions) and the prompt is APPENDED to whatever the key holds. That is never
+            # true here — a runtime llm_call re-sends its whole context every time, and the
+            # key was derived by the runtime (the attribution rider is how we know), not
+            # chosen by a caller who wanted append semantics. Measured on the assistant's
+            # `route_call` node: the full system+tools+prompt render was stacked onto the
+            # same key every turn (6790 → 10130 → 13480 cached tokens over three turns),
+            # zero reuse, and the router read every earlier routing request as live context.
+            #
+            # `messages=[]` is AbstractCore's documented spelling of "full context, empty so
+            # far": same rendered bytes (the prompt is the final user turn either way), but
+            # the key now gets prefix/delta discipline instead of append.
+            #
+            # ONLY for providers that HAVE an append lane — an in-process prompt cache
+            # with the local control plane. Everywhere else the rewrite buys nothing and
+            # can change the wire: Ollama picks `/api/chat` over `/api/generate` on
+            # `messages is not None`, so a cache-discipline fix would have switched its
+            # endpoint and template (adversarial find, 2026-09-17).
+            call_messages = _strip_volatile_markers(messages)
+            if (
+                call_messages is None
+                and prompt_cache_attribution is not None
+                and not has_binding
+                and isinstance(params.get("prompt_cache_key"), str)
+                and params.get("prompt_cache_key").strip()
+                and _has_local_prompt_cache_control_plane(getattr(self, "_llm", None))
+            ):
+                call_messages = []
+
             lock = getattr(self, "_generate_lock", None)
             if lock is None:
                 if not has_binding:
@@ -7376,10 +7467,11 @@ class LocalAbstractCoreLLMClient:
                         system_prompt=system_prompt,
                         tools=tools,
                         messages=messages,
+                        thinking=params.get("thinking"),
                     )
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
-                    messages=_strip_volatile_markers(messages),
+                    messages=call_messages,
                     system_prompt=system_prompt,
                     tools=tools,
                     media=media,
@@ -7408,10 +7500,11 @@ class LocalAbstractCoreLLMClient:
                             system_prompt=system_prompt,
                             tools=tools,
                             messages=messages,
+                            thinking=params.get("thinking"),
                         )
                     resp = self._llm.generate(
                         prompt=str(prompt or ""),
-                        messages=_strip_volatile_markers(messages),
+                        messages=call_messages,
                         system_prompt=system_prompt,
                         tools=tools,
                         media=media,
@@ -7918,7 +8011,9 @@ class LocalAbstractCoreLLMClient:
         version: int = 1,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        _ = kwargs
+        # `thinking` is part of the prefix identity (it can rewrite the head of the
+        # system block) — a host that names it must not have it dropped on the floor.
+        thinking = kwargs.get("thinking")
         provider = getattr(self, "_llm", None)
         if provider is None:
             return _prompt_cache_unsupported_payload(
@@ -7933,12 +8028,26 @@ class LocalAbstractCoreLLMClient:
                 error="Provider does not support prompt cache module preparation",
             )
         try:
+            extra: Dict[str, Any] = {}
+            if thinking is not None:
+                if not _callable_accepts_kwarg(provider.prompt_cache_prepare_modules, "thinking"):
+                    return _prompt_cache_unsupported_payload(
+                        provider,
+                        operation="prepare_modules",
+                        error=(
+                            "This AbstractCore's prompt_cache_prepare_modules does not accept "
+                            "`thinking`; a prefix planned without it would not match the prompt. "
+                            "Upgrade abstractcore."
+                        ),
+                    )
+                extra["thinking"] = thinking
             result = provider.prompt_cache_prepare_modules(
                 namespace=namespace,
                 modules=modules,
                 make_default=bool(make_default),
                 ttl_s=ttl_s,
                 version=int(version),
+                **extra,
             )
             if isinstance(result, dict):
                 result.setdefault("operation", "prepare_modules")
@@ -11800,6 +11909,9 @@ class RemoteAbstractCoreLLMClient:
         }
         if ttl_s is not None:
             body["ttl_s"] = ttl_s
+        thinking = kwargs.pop("thinking", None)
+        if thinking is not None:
+            body["thinking"] = thinking
         return self._prompt_cache_post(
             "/acore/prompt_cache/prepare_modules",
             operation="prepare_modules",

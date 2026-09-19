@@ -20,6 +20,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   console); callers that pass no gate see no change.
 
 ### Fixed
+- **The session prompt-cache prefix is planned under the thinking request the call
+  will generate with (2026-09-17).** `_maybe_prepare_prompt_cache` builds a (system,
+  tools) bloc chain and forks it into the session key, then `generate(thinking=…)`
+  runs. For models whose effort level is a sentence at the head of the system block
+  (Qwen3.8: "Reasoning effort is set to low. …") the prepared prefix and the real
+  prompt agreed on 3 tokens, so the whole prefix was unreachable — measured on a live
+  AbstractAssistant session as `rebuilt` cached=0 then `hit_restore` cached=3, two
+  full ~5.5k-token prefills (~17 s each) over an unchanged context. The resolved
+  `thinking` is now passed to `prompt_cache_prepare_modules` (AbstractCore owns the
+  rewrite and folds it into the derived keys) and to the fork-less
+  `prompt_cache_update` fallback. An AbstractCore whose `prepare_modules` does not
+  take `thinking` is detected by signature and gets a `#FALLBACK` warning plus the
+  old behaviour — passing the kwarg blind would raise inside the blanket `except`
+  and drop the prefix cache without a word. The host-facing
+  `prompt_cache_prepare_modules` wrappers carry `thinking` too: the local one
+  discarded its kwargs and the remote one never put it on the wire.
+- **A prompt-only `llm_call` under a runtime-derived key is no longer appended to its
+  own cache.** AbstractCore reads the call shape: `messages=None` means "the cache is
+  my context, append this fragment" (KV-mode sessions). A runtime call re-sends
+  everything, so the assistant's `route_call` stacked its whole system+tools+prompt
+  render onto one key every turn — 6790 → 10130 → 13480 cached tokens over three
+  turns, never a token reused, wall time growing per turn, and the router reading
+  every earlier routing request as live context. When the key was derived by the
+  runtime (the attribution rider is present, no binding) such a call is now sent with
+  `messages=[]`, AbstractCore's spelling of "full context, empty so far": same
+  rendered bytes, prefix/delta discipline instead of append. A caller-chosen key
+  keeps append semantics, and the rewrite applies only to providers with an
+  in-process prompt cache — elsewhere it buys nothing and can change the wire
+  (Ollama picks `/api/chat` over `/api/generate` on `messages is not None`). Replayed on a 4B hybrid: `hit_restore` cached=2749 fed≈100
+  on every turn, cache bounded.
 - **Lock adoption no longer claims it never touches the provider.** `_adopt_lock_pair`
   and the adoption tests documented "never a provider-side load". Adoption itself is
   client construction only, but the lock step that follows calls ollama's keep-alive

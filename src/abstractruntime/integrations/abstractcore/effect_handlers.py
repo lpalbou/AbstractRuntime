@@ -868,6 +868,33 @@ def _coerce_positive_int(value: Any) -> Optional[int]:
     return parsed if parsed > 0 else None
 
 
+_BUNDLE_VERSION_RE = re.compile(r"@\d+(?:\.\d+){1,3}(?=:|$)")
+_SANITIZED_BUNDLE_VERSION_RE = re.compile(r"_\d+_\d+_\d+(?=_)")
+
+
+def _workflow_identity_for_prompt_cache(workflow_id: str) -> str:
+    """`workflow_id` without the BUNDLE VERSION it embeds.
+
+    A session's cache must be found again for as long as the session exists. The key
+    hashed the whole workflow id, and a workflow id names its bundle version —
+    `assistant@0.0.3:c53b1579`, or sanitized inside an agent sub-workflow id as
+    `…_0_0_3_c53b1579_assistant_agent`. Republishing a workflow (a desktop client does
+    it at launch; four times in 17 minutes on 2026-09-17) bumps that version, so the
+    SAME session asked for a DIFFERENT key on its next turn: its cache was still in
+    memory and was never looked up again — a full prefill, observed as
+    `session:75e5050b…` becoming `session:cc044849…` mid-conversation.
+
+    The version tells a session nothing: the session id, provider, model and node id
+    are all in the key, and a workflow whose system prompt or tools really changed is
+    caught where it matters — the prefix identity check re-forks the session cache.
+    """
+    text = str(workflow_id or "")
+    stripped, count = _BUNDLE_VERSION_RE.subn("", text, count=1)
+    if count:
+        return stripped
+    return _SANITIZED_BUNDLE_VERSION_RE.sub("", text, count=1)
+
+
 def _derive_prompt_cache_key(
     *,
     namespace: str,
@@ -879,7 +906,8 @@ def _derive_prompt_cache_key(
     version: int = 1,
 ) -> str:
     ns = str(namespace or "").strip() or "session"
-    raw = f"v{int(version)}|{session_id}|{provider}|{model}|{workflow_id}|{node_id}"
+    workflow_identity = _workflow_identity_for_prompt_cache(workflow_id)
+    raw = f"v{int(version)}|{session_id}|{provider}|{model}|{workflow_identity}|{node_id}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     return f"{ns}:{digest}"
 

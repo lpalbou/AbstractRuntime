@@ -530,8 +530,29 @@ class MappingToolExecutor:
         # index so the returned order is identical to the serial path.
         n = len(tool_calls)
         results = [None] * n  # type: ignore[assignment]
+        # STOP (core.effect_cancellation): a cancel that lands while this batch
+        # runs never STARTS the calls after the one executing now. They are
+        # reported as not started — named, never silently dropped. (A call
+        # already running finishes; the cancelled run never feeds its result
+        # to another model call.)
+        from ...core.effect_cancellation import current_effect_cancel_event
+
+        cancel_event = current_effect_cancel_event()
         i = 0
         while i < n:
+            if cancel_event is not None and cancel_event.is_set():
+                for k in range(i, n):
+                    tc = tool_calls[k] or {}
+                    results[k] = {
+                        "call_id": str(tc.get("call_id") or ""),
+                        "runtime_call_id": tc.get("runtime_call_id"),
+                        "name": str(tc.get("name", "") or ""),
+                        "success": False,
+                        "output": None,
+                        "error": "Tool call not started: the run was cancelled",
+                        "cancelled": True,
+                    }
+                break
             name_i = str((tool_calls[i] or {}).get("name", "") or "")
             if _is_parallel_safe_tool(name_i):
                 # Extend the group over consecutive parallel-safe calls.

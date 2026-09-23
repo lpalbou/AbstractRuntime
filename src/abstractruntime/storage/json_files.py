@@ -61,6 +61,26 @@ class JsonFileRunStore(RunStore):
         self._index_lock = threading.Lock()
         self._children_index: Optional[Dict[str, set[str]]] = None
         self._run_parent_index: Dict[str, Optional[str]] = {}
+        # EVENT-WAIT INDEX (2026-09-22, mission B2): wait_key -> {run_id} for
+        # runs parked in WAITING(EVENT), plus the reverse map used to retract a
+        # run's old key on save. `emit_event` used to find its listeners with a
+        # `list_runs(WAITING, EVENT, limit=10_000)` over the WHOLE directory —
+        # 57ms per call on a 9,326-run store (0.17-0.25s on the operator's
+        # 15GB one) and TWICE per chat turn, on a store that has zero event
+        # waiters. Built lazily from one scan (so a restart heals itself) and
+        # maintained on save/delete, exactly like `_children_index`; a lookup
+        # re-loads and re-verifies every candidate against disk, so a stale
+        # entry costs one load and self-heals, never a wrong resume.
+        # SCOPE, stated plainly: like `_children_index`, this index sees the
+        # saves made through THIS store object. A second PROCESS parking a run
+        # in WAITING(EVENT) is not seen until this process rebuilds — the same
+        # single-writer assumption `save()`'s by-reference serialization and
+        # the ownership contract above already rest on (emit_event RESUMES the
+        # waiters it finds, i.e. it writes them, so the two processes would be
+        # racing the same run file either way).
+        self._event_index_lock = threading.Lock()
+        self._event_wait_index: Optional[Dict[str, set[str]]] = None
+        self._run_event_wait_key: Dict[str, str] = {}
         self._run_cache_lock = threading.Lock()
         # run_id -> (mtime_ns, RunState), LRU-BOUNDED (flow's 2026-07-11
         # incident finding: the unbounded cache retained every RunState a
@@ -396,6 +416,100 @@ class JsonFileRunStore(RunStore):
             if isinstance(new_parent, str) and new_parent:
                 self._children_index.setdefault(new_parent, set()).add(run_id)
 
+    # --- event-wait index (emit_event listener lookup) -------------------
+
+    @staticmethod
+    def _event_wait_key_of(run: RunState) -> Optional[str]:
+        """The wait_key this run is parked on as an EVENT waiter, else None."""
+        if str(getattr(run.status, "value", run.status)) != RunStatus.WAITING.value:
+            return None
+        waiting = getattr(run, "waiting", None)
+        if waiting is None:
+            return None
+        reason = getattr(waiting, "reason", None)
+        if str(getattr(reason, "value", reason)) != WaitReason.EVENT.value:
+            return None
+        wait_key = getattr(waiting, "wait_key", None)
+        if not isinstance(wait_key, str) or not wait_key:
+            return None
+        return wait_key
+
+    def _ensure_event_wait_index(self) -> None:
+        """Build the wait_key -> {run_id} index once, from ONE directory scan.
+
+        Filtering runs off the memo's `wait_reason` field (one stat per
+        unchanged file, the same cost as the scan this index replaces), then
+        parsing only the EVENT waiters — there are typically none, and the
+        operator's 9,326-run store has exactly zero. A restart therefore heals
+        any in-memory drift at the cost of one scan on the first emit."""
+        if self._event_wait_index is not None:
+            return
+        with self._event_index_lock:
+            if self._event_wait_index is not None:
+                return
+            index: Dict[str, set[str]] = {}
+            by_run: Dict[str, str] = {}
+            self._load_scan_sidecar_once()
+            for p in self._base.glob("run_*.json"):
+                fields = self._scan_fields(p)
+                if fields is None:
+                    continue
+                if fields.get("status") != RunStatus.WAITING.value:
+                    continue
+                if fields.get("wait_reason") != WaitReason.EVENT.value:
+                    continue
+                # The memo holds no wait_key (it would change the sidecar row
+                # shape and cost every deployment a cold re-parse on upgrade);
+                # an EVENT waiter is rare enough to parse.
+                run = self._load_from_path(p)
+                if run is None:
+                    continue
+                wait_key = self._event_wait_key_of(run)
+                if wait_key is None:
+                    continue
+                rid = str(run.run_id)
+                index.setdefault(wait_key, set()).add(rid)
+                by_run[rid] = wait_key
+            self._event_wait_index = index
+            self._run_event_wait_key = by_run
+        self._maybe_persist_scan_memo()
+
+    def _drop_from_event_wait_index(self, run_id: str) -> None:
+        with self._event_index_lock:
+            if self._event_wait_index is None:
+                return
+            key = self._run_event_wait_key.pop(run_id, None)
+            if not isinstance(key, str) or not key:
+                return
+            holders = self._event_wait_index.get(key)
+            if holders is not None:
+                holders.discard(run_id)
+                if not holders:
+                    self._event_wait_index.pop(key, None)
+
+    def _update_event_wait_index_on_save(self, run: RunState) -> None:
+        """Retract the run's old key and record its new one (if any).
+
+        The retraction is what makes a status change safe: a run that RESUMES
+        (or completes, or re-parks on a DIFFERENT key) is removed from the key
+        it was parked on, so it can never be resumed twice by the same event.
+        """
+        run_id = str(run.run_id)
+        new_key = self._event_wait_key_of(run)
+        with self._event_index_lock:
+            if self._event_wait_index is None:
+                return  # not built yet: the lazy build will read disk truth
+            old_key = self._run_event_wait_key.pop(run_id, None)
+            if isinstance(old_key, str) and old_key and old_key != new_key:
+                holders = self._event_wait_index.get(old_key)
+                if holders is not None:
+                    holders.discard(run_id)
+                    if not holders:
+                        self._event_wait_index.pop(old_key, None)
+            if new_key is not None:
+                self._event_wait_index.setdefault(new_key, set()).add(run_id)
+                self._run_event_wait_key[run_id] = new_key
+
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
         # Atomic write to prevent corrupted/partial JSON when multiple threads/processes
@@ -418,6 +532,7 @@ class JsonFileRunStore(RunStore):
             except Exception:
                 pass
         self._update_children_index_on_save(run)
+        self._update_event_wait_index_on_save(run)
         try:
             token = self._stat_token(p.stat())
         except Exception:
@@ -442,6 +557,7 @@ class JsonFileRunStore(RunStore):
                 p.unlink()
         finally:
             self._drop_from_children_index(rid)
+            self._drop_from_event_wait_index(rid)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
             with self._scan_memo_lock:
@@ -703,6 +819,97 @@ class JsonFileRunStore(RunStore):
 
         self._maybe_persist_scan_memo()
         return results[:limit]
+
+    def list_event_waiters(
+        self,
+        *,
+        wait_keys: List[str],
+        limit: int = 100,
+    ) -> List[RunState]:
+        """Runs parked in WAITING(EVENT) on any of `wait_keys` — O(waiters).
+
+        The set this returns is exactly the subset of
+        `list_runs(status=WAITING, wait_reason=EVENT, limit=big)` whose
+        `waiting.wait_key` is in `wait_keys`, in the same `updated_at`
+        descending order — that equivalence is the correctness bar, and
+        `tests/test_event_wait_index.py` pins it against the scan.
+
+        Every candidate the index names is re-loaded and re-verified against
+        disk before it is returned, so an index entry that no longer matches
+        (the run resumed, completed, or re-parked on another key) is dropped
+        rather than resumed.
+        """
+        keys = [str(k) for k in (wait_keys or []) if isinstance(k, str) and k]
+        if not keys:
+            return []
+        wanted = set(keys)
+        self._ensure_event_wait_index()
+        with self._event_index_lock:
+            index = self._event_wait_index or {}
+            candidate_ids: List[str] = []
+            seen: set[str] = set()
+            for key in keys:
+                for rid in index.get(key, set()):
+                    if rid not in seen:
+                        seen.add(rid)
+                        candidate_ids.append(rid)
+
+        results: List[RunState] = []
+        for rid in candidate_ids:
+            run = self.load(rid)
+            if run is None:
+                self._drop_from_event_wait_index(rid)
+                continue
+            actual = self._event_wait_key_of(run)
+            if actual is None or actual not in wanted:
+                # Disk disagrees with the index: re-file this run under what
+                # it actually says (or drop it) and skip it for this event.
+                self._update_event_wait_index_on_save(run)
+                continue
+            results.append(run)
+
+        results.sort(key=lambda r: r.updated_at or "", reverse=True)
+        return results[: max(1, int(limit or 100))]
+
+    def list_event_waiters_by_prefix(self, *, prefix: str, limit: int = 100) -> List[RunState]:
+        """Runs parked in WAITING(EVENT) on a wait_key starting with `prefix`.
+
+        Same verification and ordering as `list_event_waiters`; feeds
+        `emit_event`'s `available_listeners_in_session` diagnostic, which the
+        whole-store scan used to produce as a side effect. Callers apply their
+        own run-level filters (e.g. paused) to the RunStates, exactly as they
+        did to the scan's output.
+        """
+        pre = str(prefix or "")
+        if not pre:
+            return []
+        self._ensure_event_wait_index()
+        with self._event_index_lock:
+            index = self._event_wait_index or {}
+            candidate_ids: List[str] = []
+            seen: set[str] = set()
+            for key, rids in index.items():
+                if not key.startswith(pre):
+                    continue
+                for rid in rids:
+                    if rid not in seen:
+                        seen.add(rid)
+                        candidate_ids.append(rid)
+
+        results: List[RunState] = []
+        for rid in candidate_ids:
+            run = self.load(rid)
+            if run is None:
+                self._drop_from_event_wait_index(rid)
+                continue
+            actual = self._event_wait_key_of(run)
+            if actual is None or not actual.startswith(pre):
+                self._update_event_wait_index_on_save(run)
+                continue
+            results.append(run)
+
+        results.sort(key=lambda r: r.updated_at or "", reverse=True)
+        return results[: max(1, int(limit or 100))]
 
     def list_children(
         self,

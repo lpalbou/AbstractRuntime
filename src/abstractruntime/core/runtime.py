@@ -45,6 +45,15 @@ from .models import (
 )
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
+from .progress_channel import effect_progress_callback
+from .effect_cancellation import (
+    EffectKilled,
+    InflightEffect,
+    effect_inflight_scope,
+    request_effect_cancel,
+    run_cancel_requested,
+)
+from .tool_scope import ToolScopeError, resolve_tool_scope
 from ..storage.base import LedgerStore, RunStore, QueryableRunStore
 from ..storage.ledger_slim import (
     build_started_payload_index,
@@ -351,48 +360,22 @@ def _progress_event_payload(
 
 
 def _effect_accepts_progress_callback(effect: Effect) -> bool:
-    if effect.type != EffectType.LLM_CALL:
-        return False
-    payload = effect.payload if isinstance(effect.payload, dict) else {}
-    params = payload.get("params")
-    if isinstance(params, dict) and "output" in params:
-        return _output_request_accepts_progress_callback(params.get("output"))
-    if "output" in payload:
-        return _output_request_accepts_progress_callback(payload.get("output"))
-    if "outputs" in payload:
-        return _output_request_accepts_progress_callback(payload.get("outputs"))
-    return False
+    """Every LLM_CALL gets the durable progress channel offered to it.
 
+    Generated media was the first caller (a 90 s video is unreadable without
+    step/frame progress), but a 6k-token prefill on a local model is the same
+    problem in the small: "Thinking…" cannot say whether the prompt is still
+    being processed or tokens are already coming out. AbstractCore decides per
+    PROVIDER whether it has an honest signal (`supports_text_progress_events`);
+    a provider that has none simply never calls back and this run's ledger
+    gains no progress records at all.
 
-def _output_request_accepts_progress_callback(output: Any) -> bool:
-    """Best-effort generated-media check without importing AbstractCore in the kernel."""
+    The callback itself NEVER enters `effect.payload` (which is JSON to every
+    durable consumer): it travels beside the effect through
+    `core.progress_channel`, whose module docstring holds the design.
+    """
 
-    generated_modalities = {"image", "video", "voice", "audio", "music"}
-    generated_tasks = {
-        "image_generation",
-        "image_edit",
-        "image_to_image",
-        "image_upscale",
-        "upscale_image",
-        "text_to_image",
-        "text_to_video",
-        "image_to_video",
-        "video_generation",
-        "tts",
-        "text_to_speech",
-        "music_generation",
-        "text_to_music",
-    }
-    if isinstance(output, str):
-        raw = output.strip().lower().replace("-", "_")
-        return raw in generated_modalities or raw in generated_tasks
-    if isinstance(output, dict):
-        modality = str(output.get("modality") or "").strip().lower().replace("-", "_")
-        task = str(output.get("task") or "").strip().lower().replace("-", "_")
-        return modality in generated_modalities or task in generated_tasks
-    if isinstance(output, (list, tuple)):
-        return any(_output_request_accepts_progress_callback(item) for item in output)
-    return False
+    return effect.type == EffectType.LLM_CALL
 
 
 def _step_record_effect_payload(effect: Optional[Effect]) -> Optional[Dict[str, Any]]:
@@ -907,7 +890,7 @@ EffectHandler = Callable[[RunState, Effect, Optional[str]], "EffectOutcome"]
 class EffectOutcome:
     """Result of executing an effect."""
 
-    status: str  # "completed" | "waiting" | "failed"
+    status: str  # "completed" | "waiting" | "failed" | "cancelled"
     result: Optional[Dict[str, Any]] = None
     wait: Optional[WaitState] = None
     error: Optional[str] = None
@@ -927,6 +910,15 @@ class EffectOutcome:
     @classmethod
     def failed(cls, error: str, *, retryable: bool = True) -> "EffectOutcome":
         return cls(status="failed", error=error, retryable=retryable)
+
+    @classmethod
+    def cancelled(cls, details: Optional[Dict[str, Any]] = None) -> "EffectOutcome":
+        """The effect was stopped mid-execution by a cancel (core.effect_cancellation).
+
+        Status "cancelled": never retried, never a failure; `result` holds the
+        JSON attribution (cancelled_by, reason, timings) the ledger records.
+        """
+        return cls(status="cancelled", result={"cancelled": True, **dict(details or {})}, retryable=False)
 
 
 class Runtime:
@@ -1387,15 +1379,27 @@ class Runtime:
         self._run_store.save(run)
         return run.run_id
 
-    def cancel_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
+    def cancel_run(
+        self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
+    ) -> RunState:
         """Cancel a run.
 
         Sets the run status to CANCELLED. Only RUNNING or WAITING runs can be cancelled.
         COMPLETED, FAILED, or already CANCELLED runs are returned unchanged.
 
+        STOPS THE EFFECT IN FLIGHT (core.effect_cancellation, 2026-09-23): after the
+        CANCELLED state is persisted, every effect of this run that is executing in
+        this process has its cancel event set — the LLM call stops decoding within
+        one token, the attempt ends as a `cancelled` ledger record naming
+        `cancelled_by`, and no further effect (tool batch, next model call) starts.
+        An already-CANCELLED run is re-signalled too (a second Stop is idempotent
+        and reaches an effect the first one could not).
+
         Args:
             run_id: The run to cancel.
             reason: Optional cancellation reason (stored in error field).
+            cancelled_by: Who asked ("command" for a host command, "reaper", ...);
+                recorded on the cancelled effect's ledger record.
 
         Returns:
             The updated RunState.
@@ -1406,7 +1410,10 @@ class Runtime:
         run = self.get_state(run_id)
 
         # Terminal states cannot be cancelled
-        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+            return run
+        if run.status == RunStatus.CANCELLED:
+            request_effect_cancel(run.run_id, cancelled_by=cancelled_by, reason=run.error or reason)
             return run
 
         run.status = RunStatus.CANCELLED
@@ -1415,10 +1422,14 @@ class Runtime:
         try:
             control = _ensure_control_namespace(run.vars)
             control.pop("paused", None)
+            control["cancelled_by"] = str(cancelled_by or "api")
         except Exception:
             pass
         run.updated_at = utc_now_iso()
         self._run_store.save(run)
+        # Persist FIRST, then signal: the tick thread, woken by its provider's
+        # cancel error, re-probes the store and must find CANCELLED there.
+        request_effect_cancel(run.run_id, cancelled_by=cancelled_by, reason=run.error)
         self._append_terminal_status_event(run)
         return run
 
@@ -2032,7 +2043,7 @@ class Runtime:
         except Exception:
             return
 
-    def _effect_with_runtime_progress_callback(
+    def _runtime_progress_callback(
         self,
         effect: Effect,
         *,
@@ -2041,17 +2052,18 @@ class Runtime:
         step_id: str,
         idempotency_key: str,
         attempt: int,
-    ) -> Effect:
-        if not _effect_accepts_progress_callback(effect):
-            return effect
-        if not isinstance(effect.payload, dict):
-            return effect
+    ) -> Optional[Callable[..., None]]:
+        """The durable progress sink offered to ONE effect attempt, or None.
 
-        payload = copy.deepcopy(effect.payload)
-        params = payload.get("params")
-        params = dict(params) if isinstance(params, dict) else {}
-        if callable(params.get("on_progress")):
-            return effect
+        Returned, not injected: the caller installs it on
+        `core.progress_channel` for the duration of the handler call, so
+        `effect.payload` stays JSON-serialisable end to end (a callable in the
+        payload broke every consumer that `json.dumps` it). It closes over this
+        attempt's step identity, which is why a new one is built per attempt.
+        """
+
+        if not _effect_accepts_progress_callback(effect):
+            return None
 
         def _on_progress(event: Any = None, *args: Any, **kwargs: Any) -> None:
             self._append_progress_event(
@@ -2065,9 +2077,7 @@ class Runtime:
                 kwargs=kwargs,
             )
 
-        params["on_progress"] = _on_progress
-        payload["params"] = params
-        return Effect(type=effect.type, payload=payload, result_key=effect.result_key)
+        return _on_progress
 
     def tick(
         self,
@@ -2095,6 +2105,13 @@ class Runtime:
         t0 = _time.perf_counter()
         try:
             state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
+        except EffectKilled:
+            # A hard-stop injection that landed BETWEEN effects (its target
+            # finished a moment before it was delivered): nothing of this tick's
+            # current step was half-done by it, the persisted state is intact,
+            # and the next tick continues from there.
+            logger.warning(f"tick of run {run_id} interrupted by a kill aimed at an effect that had already finished; resuming from the persisted state")
+            state = self.get_state(run_id)
         except BaseException as e:
             # The ring exists to answer "what broke last" — a raising tick is
             # the dominant breakage class and must reach it (adversary P3).
@@ -2466,6 +2483,28 @@ class Runtime:
             except Exception:
                 pass
 
+            if outcome.status == "cancelled":
+                # STOPPED MID-EFFECT (core.effect_cancellation). Nothing of this
+                # step lands: no result_key write, no transition — so no tool
+                # batch starts and no partial output feeds another model call.
+                # The normal case: the cancel command already persisted
+                # CANCELLED, and the store probe returns it untouched.
+                controlled = _abort_if_externally_controlled()
+                if controlled is not None:
+                    return controlled
+                # A cancel that did not come through `cancel_run` (e.g. a host
+                # signalled the effect directly): end the run CANCELLED here,
+                # with the attribution, rather than leave it RUNNING.
+                details = outcome.result if isinstance(outcome.result, dict) else {}
+                run.status = RunStatus.CANCELLED
+                run.error = str(details.get("reason") or f"Cancelled ({details.get('cancelled_by') or 'unknown'})")
+                run.waiting = None
+                run.updated_at = utc_now_iso()
+                _advance_effect_seq()
+                self._run_store.save(run)
+                self._append_terminal_status_event(run)
+                return run
+
             if outcome.status == "failed":
                 # OPT-IN FAILURE ABSORPTION (`payload._absorb_failure`, the
                 # fdf01e0 rule class generalized): a staged applier over
@@ -2746,18 +2785,36 @@ class Runtime:
                                     }
                                 else:
                                     try:
+                                        # Approval is not authorization to widen a run's tool
+                                        # ceiling. Re-read ancestors: the grant may have narrowed
+                                        # since this wait was persisted (including legacy waits).
+                                        ceiling = resolve_tool_scope(run, run_store=self._run_store)
+                                        allowed_calls = [
+                                            tc for tc in calls
+                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
+                                        ]
                                         exec_approved = getattr(tools, "execute_approved", None)
                                         out = (
-                                            exec_approved(tool_calls=calls)
+                                            exec_approved(tool_calls=allowed_calls)
                                             if callable(exec_approved)
-                                            else tools.execute(tool_calls=calls)
-                                        )
+                                            else tools.execute(tool_calls=allowed_calls)
+                                        ) if allowed_calls else {"mode": "executed", "results": []}
                                         if not isinstance(out, dict):
                                             raise TypeError("ToolExecutor returned non-dict")
                                         out_mode = str(out.get("mode") or "").strip().lower()
                                         if out_mode and out_mode != "executed":
                                             raise ValueError(f"ToolExecutor returned non-executed mode '{out_mode}'")
                                         merged_payload = dict(out)
+                                        executed_results = out.get("results")
+                                        if not isinstance(executed_results, list) or len(executed_results) != len(allowed_calls):
+                                            raise ValueError("ToolExecutor returned a mismatched result count")
+                                        executed_iter = iter(executed_results)
+                                        merged_payload["results"] = [
+                                            next(executed_iter)
+                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
+                                            else _err(tc, f"Tool '{tc.get('name', '')}' is not allowed for this run")
+                                            for tc in calls
+                                        ]
                                     except Exception as e:
                                         merged_payload = {"mode": "executed", "results": [_err(tc, f"Tool execution failed: {e}") for tc in calls]}
 
@@ -3261,6 +3318,18 @@ class Runtime:
 
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
+                # A cancel that arrived during the retry backoff: never start
+                # another attempt of a cancelled run's effect.
+                pending_cancel = run_cancel_requested(run.run_id)
+                if pending_cancel is not None:
+                    return EffectOutcome.cancelled(
+                        {
+                            "cancelled_by": pending_cancel.get("cancelled_by"),
+                            "reason": "run was cancelled during the retry backoff",
+                            "attempt": attempt,
+                            "last_error": last_error,
+                        }
+                    )
                 self._health.increment("effect_retries_total")
             # Record attempt start
             rec = StepRecord.start(
@@ -3286,7 +3355,10 @@ class Runtime:
             except Exception:  # pragma: no cover - capture must never block execution
                 started_digests = None
             self._ledger_store.append(rec)
-            effect_for_execution = self._effect_with_runtime_progress_callback(
+            # Out of band, never in the payload (core.progress_channel): the
+            # handler reads it from the context, the effect it receives stays
+            # JSON.
+            progress_callback = self._runtime_progress_callback(
                 effect_for_attempt,
                 run=run,
                 node_id=node_id,
@@ -3295,11 +3367,85 @@ class Runtime:
                 attempt=attempt,
             )
 
-            # Execute the effect (catch exceptions as failures)
+            # IN-FLIGHT REGISTRATION (core.effect_cancellation): the cancel event
+            # travels beside the effect like the progress callback, and the
+            # process-wide registry is how `cancel_run` (on ANY Runtime object in
+            # this process — hosts build a fresh one per command) reaches it.
+            inflight = InflightEffect(
+                run_id=run.run_id,
+                parent_run_id=getattr(run, "parent_run_id", None),
+                node_id=str(node_id),
+                step_id=str(rec.step_id),
+                effect_type=str(getattr(effect.type, "value", effect.type)),
+                attempt=attempt,
+            )
             try:
-                outcome = self._execute_effect(run, effect_for_execution, default_next_node)
-            except Exception as e:
-                outcome = EffectOutcome.failed(f"Effect handler raised exception: {e}")
+                _payload = effect_for_attempt.payload if isinstance(effect_for_attempt.payload, dict) else {}
+                inflight.provider = _payload.get("provider") if isinstance(_payload.get("provider"), str) else None
+                inflight.model = _payload.get("model") if isinstance(_payload.get("model"), str) else None
+            except Exception:  # pragma: no cover - attribution must never block execution
+                pass
+
+            # Execute the effect (catch exceptions as failures)
+            def _invoke_registered() -> EffectOutcome:
+                with effect_inflight_scope(inflight):
+                    # Race close: a cancel requested between the tick's control probe
+                    # and this registration makes the entry born-cancelled (the
+                    # registry remembers cancelled runs) — the handler never starts.
+                    if inflight.cancelled:
+                        return EffectOutcome.failed("cancelled before the effect started", retryable=False)
+                    try:
+                        with effect_progress_callback(progress_callback):
+                            return self._execute_effect(run, effect_for_attempt, default_next_node)
+                    except Exception as e:
+                        return EffectOutcome.failed(f"Effect handler raised exception: {e}")
+
+            try:
+                outcome = _invoke_registered()
+            except EffectKilled:
+                # HARD STOP (core.effect_cancellation.kill_inflight_effect): the
+                # host injected this into our thread because the effect did not
+                # stop on its cancel event; it unwound the provider through every
+                # `finally`/`with` on the way here. Aimed at THIS attempt when it
+                # carries a `killed_by`. Otherwise it was meant for an effect that
+                # finished a moment before the injection landed on this thread:
+                # this attempt was interrupted by mistake and is re-invoked once,
+                # outside the effect policy's attempt budget.
+                if inflight.killed_by is None:
+                    logger.warning(
+                        f"effect interrupted by a kill aimed at an effect that had already finished: "
+                        f"run={run.run_id} node={node_id} step={rec.step_id} — re-invoking the attempt"
+                    )
+                    try:
+                        outcome = _invoke_registered()
+                    except EffectKilled:
+                        outcome = EffectOutcome.failed(
+                            f"inference killed by {inflight.killed_by or 'an unattributed kill'}", retryable=False
+                        )
+                else:
+                    outcome = EffectOutcome.failed(
+                        f"inference killed by {inflight.killed_by}: the effect did not stop on its cancel event",
+                        retryable=False,
+                    )
+
+            if outcome.status != "completed" and (inflight.cancelled or outcome.status == "cancelled"):
+                # Whatever the provider raised on its way out (a typed cancel, a
+                # closed stream, a native `cancelled` code), an attempt whose
+                # cancel event was set is a CANCELLED attempt: recorded as such,
+                # never retried, never reported as a failure of the effect.
+                # (A handler that COMPLETED despite a late cancel keeps its
+                # true status; the tick loop still discards it for a cancelled run.)
+                outcome = self._cancelled_outcome(inflight, outcome)
+                rec.finish_cancelled(outcome.result)
+                self._ledger_store.append(rec)
+                self._health.increment("effect_cancellations_total")
+                logger.info(
+                    f"effect cancelled mid-execution: run={run.run_id} node={node_id} "
+                    f"step={rec.step_id} type={inflight.effect_type} "
+                    f"cancelled_by={(outcome.result or {}).get('cancelled_by')} "
+                    f"stopped_after_cancel_s={(outcome.result or {}).get('stopped_after_cancel_s')}"
+                )
+                return outcome
 
             if outcome.status == "completed":
                 rec.finish_success(outcome.result)
@@ -3341,6 +3487,40 @@ class Runtime:
         return EffectOutcome.failed(
             f"Effect failed after {max_attempts} attempts: {last_error}"
         )
+
+    @staticmethod
+    def _cancelled_outcome(inflight: InflightEffect, outcome: EffectOutcome) -> EffectOutcome:
+        """The JSON attribution of an attempt stopped by a cancel (ledger + outcome)."""
+
+        import time as _time
+
+        now = _time.monotonic()
+        details: Dict[str, Any] = {}
+        if isinstance(outcome.result, dict) and outcome.status == "cancelled":
+            details.update(outcome.result)
+        details.setdefault("cancelled_by", inflight.cancelled_by or "unknown")
+        details.setdefault("reason", inflight.cancel_reason)
+        details["effect_type"] = inflight.effect_type
+        details["provider"] = inflight.provider
+        details["model"] = inflight.model
+        details["effect_elapsed_s"] = round(max(0.0, now - inflight.started_monotonic), 3)
+        if inflight.cancel_requested_at is not None:
+            details["cancel_requested_at"] = inflight.cancel_requested_at
+        if inflight.cancel_requested_monotonic is not None:
+            # The soft-stop latency: cancel requested -> handler returned.
+            details["stopped_after_cancel_s"] = round(max(0.0, now - inflight.cancel_requested_monotonic), 3)
+        if inflight.killed_by is not None:
+            # The hard stop: the effect ignored its cancel event and was
+            # unwound in process by the host (never a process kill).
+            details["killed_by"] = inflight.killed_by
+            details["killed_at"] = inflight.killed_at
+            if inflight.kill_requested_monotonic is not None:
+                details["stopped_after_kill_s"] = round(max(0.0, now - inflight.kill_requested_monotonic), 3)
+        if outcome.status == "failed" and outcome.error:
+            # What the provider raised on its way out, kept for diagnosis only.
+            details["stop_error"] = str(outcome.error)
+        details.pop("cancelled", None)
+        return EffectOutcome.cancelled(details)
 
     def _execute_effect(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         if effect.type not in self._handlers:
@@ -3472,6 +3652,60 @@ class Runtime:
         )
         return EffectOutcome.waiting(wait)
 
+    def _list_event_waiters(self, wait_keys: list[str]) -> tuple[list[RunState], bool]:
+        """(candidate waiters, used_index) for an emit.
+
+        Prefers the store's O(waiters) lookup (EventWaiterQueryableRunStore)
+        and falls back to the O(store) scan for any store that does not serve
+        it — including a decorator that declares the method but wraps an inner
+        store without it (OffloadingRunStore raises NotImplementedError there,
+        by design: an explicit passthrough, never a silent one).
+        """
+        lookup = getattr(self._run_store, "list_event_waiters", None)
+        if callable(lookup):
+            try:
+                return list(lookup(wait_keys=list(wait_keys), limit=10_000) or []), True
+            except (NotImplementedError, AttributeError, TypeError) as e:
+                logger.debug(f"emit_event: store cannot serve list_event_waiters ({e}); scanning")
+        return (
+            list(
+                self._run_store.list_runs(
+                    status=RunStatus.WAITING,
+                    wait_reason=WaitReason.EVENT,
+                    limit=10_000,
+                )
+                or []
+            ),
+            False,
+        )
+
+    def _event_listener_names_in_session(self, prefix: str) -> list[str]:
+        """`available_listeners_in_session` under an indexed lookup.
+
+        Same output the scan produced as a side effect (up to 15 event names
+        parked in this session, paused runs excluded, newest first) — computed
+        only when an emit found no listener and is about to say so.
+        """
+        lookup = getattr(self._run_store, "list_event_waiters_by_prefix", None)
+        if not callable(lookup):
+            return []
+        try:
+            runs = list(lookup(prefix=prefix, limit=64) or [])
+        except (NotImplementedError, AttributeError, TypeError):
+            return []
+        names: list[str] = []
+        for r in runs:
+            if _is_paused_run_vars(getattr(r, "vars", None)):
+                continue
+            w = getattr(r, "waiting", None)
+            wk = getattr(w, "wait_key", None) if w is not None else None
+            if not isinstance(wk, str) or not wk.startswith(prefix):
+                continue
+            suffix = wk[len(prefix) :]
+            if suffix and suffix not in names and len(names) < 15:
+                names.append(suffix)
+        return names
+
     def _handle_emit_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Emit a durable event and resume matching WAIT_EVENT runs.
 
@@ -3542,12 +3776,16 @@ class Runtime:
                 "Use InMemoryRunStore/JsonFileRunStore or provide a queryable store."
             )
 
-        # Find all runs waiting for this event key.
-        candidates = self._run_store.list_runs(
-            status=RunStatus.WAITING,
-            wait_reason=WaitReason.EVENT,
-            limit=10_000,
-        )
+        # Find all runs waiting for this event key. The whole-store scan is
+        # the FALLBACK: it is O(store) (57ms at 9,326 run files, 0.17-0.25s on
+        # the operator's 15GB one) and an agent chat turn emits twice, so a
+        # store that can answer "who waits on this key" directly is asked
+        # instead (mission B2). Same runs, same order — see
+        # EventWaiterQueryableRunStore.
+        event_keys = [wait_key]
+        if wildcard_wait_key and wildcard_wait_key != wait_key:
+            event_keys.append(wildcard_wait_key)
+        candidates, indexed_lookup = self._list_event_waiters(event_keys)
 
         delivered_to: list[str] = []
         resumed: list[Dict[str, Any]] = []
@@ -3580,8 +3818,11 @@ class Runtime:
             if w is None:
                 continue
             wk = getattr(w, "wait_key", None)
-            if isinstance(wk, str) and wk.startswith(prefix):
-                # Help users debug name mismatches (best-effort).
+            if not indexed_lookup and isinstance(wk, str) and wk.startswith(prefix):
+                # Help users debug name mismatches (best-effort). Under an
+                # indexed lookup `candidates` are key-matched already, so the
+                # same diagnostic is gathered below — and ONLY when it is
+                # about to be reported, never on the delivery path.
                 suffix = wk[len(prefix) :]
                 if suffix and suffix not in available_in_session and len(available_in_session) < 15:
                     available_in_session.append(suffix)
@@ -3594,6 +3835,8 @@ class Runtime:
         # for hosts (ledger observability, UI events). In that case, do not require
         # a workflow_registry.
         if not matched:
+            if indexed_lookup:
+                available_in_session = self._event_listener_names_in_session(prefix)
             out0: Dict[str, Any] = {
                 "wait_key": wait_key,
                 "name": str(name),
@@ -3823,6 +4066,8 @@ class Runtime:
 
         sub_vars_raw = effect.payload.get("vars")
         sub_vars: Dict[str, Any] = dict(sub_vars_raw) if isinstance(sub_vars_raw, dict) else {}
+        if isinstance(sub_vars.get("_runtime"), dict):
+            sub_vars["_runtime"] = dict(sub_vars["_runtime"])
 
         # Inherit workspace policy into child runs by default.
         #
@@ -3936,8 +4181,35 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("thinking", thinking)
+            # Execution policy follows the same run tree. None means inherit;
+            # False is an explicit Off. Keep Core's bool/dict vocabulary intact
+            # and do not share mutable controls between parent and child.
+            speculation = (parent_rt or {}).get("speculation") if isinstance(parent_rt, dict) else None
+            if speculation is not None:
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                if sub_rt.get("speculation") is None:
+                    sub_rt["speculation"] = copy.deepcopy(speculation)
         except Exception:
             pass
+        # A child may narrow, never widen, an explicit run tool grant. Keep
+        # this security check outside the best-effort inheritance block above.
+        sub_rt = sub_vars.get("_runtime")
+        try:
+            ceiling = resolve_tool_scope(
+                run, run_store=self._run_store,
+                local_scope=sub_rt if isinstance(sub_rt, dict) else None,
+            )
+        except ToolScopeError as exc:
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(_tool_result(success=False, output=None, error=str(exc)))
+            return EffectOutcome.failed(str(exc))
+        if ceiling is not None:
+            sub_rt = dict(sub_rt) if isinstance(sub_rt, dict) else {}
+            sub_rt["allowed_tools"] = sorted(ceiling)
+            sub_vars["_runtime"] = sub_rt
         is_async = bool(effect.payload.get("async", False))
         wait_for_completion = bool(effect.payload.get("wait", False))
         include_traces = bool(effect.payload.get("include_traces", False))
@@ -4060,6 +4332,37 @@ class Runtime:
                     wait.details["tool_name"] = tool_name or "start_subworkflow"
                     wait.details["call_id"] = call_id or "subworkflow"
             return EffectOutcome.waiting(wait)
+
+        if sub_state.status == RunStatus.CANCELLED:
+            # A child stopped mid-tick (core.effect_cancellation). If THIS run's
+            # own effect was cancelled too (a Stop on the root cancels the tree),
+            # the parent step ends cancelled. A child cancelled ON ITS OWN must
+            # not strand the parent: it gets the same stable shape the gateway
+            # hands an async parent when its child ends cancelled
+            # ({success: False, cancelled: True, error}) and proceeds.
+            from .effect_cancellation import current_effect_cancel_event
+
+            own = current_effect_cancel_event()
+            if own is not None and own.is_set():
+                return EffectOutcome.cancelled(
+                    {"reason": f"subworkflow '{workflow_id}' cancelled", "sub_run_id": sub_run_id}
+                )
+            child_out: Dict[str, Any] = (
+                dict(sub_state.output) if isinstance(sub_state.output, dict) else {"result": sub_state.output}
+            )
+            child_out.setdefault("success", False)
+            child_out.setdefault("cancelled", True)
+            if isinstance(sub_state.error, str) and sub_state.error.strip():
+                child_out.setdefault("error", sub_state.error.strip())
+            if wrap_as_tool_result:
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=False,
+                        output=None,
+                        error=f"Subworkflow '{workflow_id}' was cancelled: {child_out.get('error') or 'Cancelled'}",
+                    )
+                )
+            return EffectOutcome.completed({"sub_run_id": sub_run_id, "output": child_out})
 
         # Unexpected status
         return EffectOutcome.failed(f"Unexpected subworkflow status: {sub_state.status.value}")

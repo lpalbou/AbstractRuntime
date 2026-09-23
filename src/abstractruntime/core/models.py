@@ -243,6 +243,10 @@ class StepStatus(str, Enum):
     COMPLETED = "completed"
     WAITING = "waiting"
     FAILED = "failed"
+    # The effect was STOPPED by a cancel while it was executing (Stop button,
+    # cancel command, kill switch): not a failure of the effect, never
+    # retried. `result.cancelled_by` names who stopped it (core.effect_cancellation).
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -328,6 +332,16 @@ class StepRecord:
     def finish_failure(self, error: str) -> "StepRecord":
         self.status = StepStatus.FAILED
         self.error = error
+        self.ended_at = utc_now().isoformat()
+        return self
+
+    def finish_cancelled(self, details: Optional[Dict[str, Any]] = None) -> "StepRecord":
+        """Terminal record of an effect stopped mid-execution by a cancel.
+
+        `details` must be JSON (cancelled_by, reason, timings, provider/model).
+        """
+        self.status = StepStatus.CANCELLED
+        self.result = {"cancelled": True, **dict(details or {})}
         self.ended_at = utc_now().isoformat()
         return self
 

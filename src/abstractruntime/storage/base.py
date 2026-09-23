@@ -98,6 +98,31 @@ class QueryableRunStore(Protocol):
 
 
 @runtime_checkable
+class EventWaiterQueryableRunStore(Protocol):
+    """Optional fast-path for `emit_event`'s listener lookup.
+
+    Without it, delivering an event means `list_runs(status=WAITING,
+    wait_reason=EVENT, limit=big)` — a whole-store scan per emit (57ms at
+    9,326 run files, twice per agent chat turn, on a store whose event-waiter
+    count is usually zero). A store implementing this answers in O(waiters).
+
+    CONTRACT: `list_event_waiters(wait_keys=K)` must return exactly the runs
+    `list_runs(status=WAITING, wait_reason=EVENT, limit=big)` would return
+    whose `waiting.wait_key` is in K, in the same `updated_at`-descending
+    order. Callers keep their own run-level filters (paused, workflow
+    resolvable, ...); this is a lookup, not a policy.
+    """
+
+    def list_event_waiters(self, *, wait_keys: List[str], limit: int = 100) -> List[RunState]:
+        """Runs parked in WAITING(EVENT) on any of `wait_keys`."""
+        ...
+
+    def list_event_waiters_by_prefix(self, *, prefix: str, limit: int = 100) -> List[RunState]:
+        """Runs parked in WAITING(EVENT) on a wait_key starting with `prefix`."""
+        ...
+
+
+@runtime_checkable
 class QueryableRunIndexStore(Protocol):
     """Optional fast-path for listing run summaries without loading full RunState payloads."""
 

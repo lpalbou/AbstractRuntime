@@ -439,6 +439,27 @@ class OffloadingRunStore(RunStore):
             raise NotImplementedError("Inner RunStore does not support list_children")
         return fn(parent_run_id=parent_run_id, status=status)
 
+    # --- event-wait lookup passthrough ---
+    #
+    # EXPLICIT, like every other method on this wrapper (the P1-4 lesson on
+    # `probe_control`): without these two, the gateway's production wiring —
+    # OffloadingRunStore(JsonFileRunStore) — would hide the index behind a
+    # missing attribute and emit_event would silently keep its whole-store
+    # scan. Inner stores that do not implement them raise AttributeError,
+    # which is what the runtime's capability check looks for.
+
+    def list_event_waiters(self, *, wait_keys, limit: int = 100):  # type: ignore[override]
+        fn = getattr(self._inner, "list_event_waiters", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner RunStore does not support list_event_waiters")
+        return fn(wait_keys=wait_keys, limit=limit)
+
+    def list_event_waiters_by_prefix(self, *, prefix: str, limit: int = 100):  # type: ignore[override]
+        fn = getattr(self._inner, "list_event_waiters_by_prefix", None)
+        if not callable(fn):
+            raise NotImplementedError("Inner RunStore does not support list_event_waiters_by_prefix")
+        return fn(prefix=prefix, limit=limit)
+
 
 class OffloadingLedgerStore(LedgerStore):
     """LedgerStore decorator that offloads oversized effect/result payloads to the ArtifactStore."""

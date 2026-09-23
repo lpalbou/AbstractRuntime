@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1099,18 +1099,18 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="n">name</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;World&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;greet&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">!&quot;</span><span class="p">})</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"name"</span><span class="p">,</span> <span class="s2">"World"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"greet"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"message"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">!"</span><span class="p">})</span>
 
 
 <span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span>
-    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span>
-    <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;greet&quot;</span><span class="p">,</span>
-    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;greet&quot;</span><span class="p">:</span> <span class="n">greet</span><span class="p">},</span>
+    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">"hello"</span><span class="p">,</span>
+    <span class="n">entry_node</span><span class="o">=</span><span class="s2">"greet"</span><span class="p">,</span>
+    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"greet"</span><span class="p">:</span> <span class="n">greet</span><span class="p">},</span>
 <span class="p">)</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">()</span>
-<span class="n">run_id</span><span class="p">,</span> <span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">workflow</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Alice&quot;</span><span class="p">})</span>
+<span class="n">run_id</span><span class="p">,</span> <span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">workflow</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"Alice"</span><span class="p">})</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
@@ -1127,25 +1127,25 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 
 <span class="k">def</span><span class="w"> </span><span class="nf">ask_name</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">ASK_USER</span><span class="p">,</span>
-            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;What is your name?&quot;</span><span class="p">},</span>
-            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;user_input&quot;</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"What is your name?"</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">"user_input"</span><span class="p">,</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;greet&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"greet"</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="n">name</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;user_input&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;text&quot;</span><span class="p">,</span> <span class="s2">&quot;Unknown&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;greet&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;greeting&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">!&quot;</span><span class="p">})</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"user_input"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"text"</span><span class="p">,</span> <span class="s2">"Unknown"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"greet"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"greeting"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">!"</span><span class="p">})</span>
 
 
 <span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span>
-    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;ask_and_greet&quot;</span><span class="p">,</span>
-    <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span>
-    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ask&quot;</span><span class="p">:</span> <span class="n">ask_name</span><span class="p">,</span> <span class="s2">&quot;greet&quot;</span><span class="p">:</span> <span class="n">greet</span><span class="p">},</span>
+    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">"ask_and_greet"</span><span class="p">,</span>
+    <span class="n">entry_node</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span>
+    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"ask"</span><span class="p">:</span> <span class="n">ask_name</span><span class="p">,</span> <span class="s2">"greet"</span><span class="p">:</span> <span class="n">greet</span><span class="p">},</span>
 <span class="p">)</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">()</span>
@@ -1153,7 +1153,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">WAITING</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">prompt</span><span class="p">)</span>
 
-<span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">respond</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Bob&quot;</span><span class="p">})</span>
+<span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">respond</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">"text"</span><span class="p">:</span> <span class="s2">"Bob"</span><span class="p">})</span>
 <span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
 
@@ -1173,26 +1173,26 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <span class="k">def</span><span class="w"> </span><span class="nf">schedule_task</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="n">until</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;schedule&quot;</span><span class="p">,</span>
-        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="n">until</span><span class="p">}),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;execute&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"schedule"</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"until"</span><span class="p">:</span> <span class="n">until</span><span class="p">}),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"execute"</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">execute_task</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;execute&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ok&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"execute"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"ok"</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
 
 
 <span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span>
-    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;scheduled_task&quot;</span><span class="p">,</span>
-    <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;schedule&quot;</span><span class="p">,</span>
-    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;schedule&quot;</span><span class="p">:</span> <span class="n">schedule_task</span><span class="p">,</span> <span class="s2">&quot;execute&quot;</span><span class="p">:</span> <span class="n">execute_task</span><span class="p">},</span>
+    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">"scheduled_task"</span><span class="p">,</span>
+    <span class="n">entry_node</span><span class="o">=</span><span class="s2">"schedule"</span><span class="p">,</span>
+    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"schedule"</span><span class="p">:</span> <span class="n">schedule_task</span><span class="p">,</span> <span class="s2">"execute"</span><span class="p">:</span> <span class="n">execute_task</span><span class="p">},</span>
 <span class="p">)</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">(</span><span class="n">poll_interval_s</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>
 <span class="n">run_id</span><span class="p">,</span> <span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">workflow</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">WAITING</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;waiting until:&quot;</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">until</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"waiting until:"</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">until</span><span class="p">)</span>
 
 <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">20</span><span class="p">):</span>
     <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.2</span><span class="p">)</span>
@@ -1225,19 +1225,19 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 
 <span class="k">def</span><span class="w"> </span><span class="nf">ask</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span>
-        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">ASK_USER</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Continue?&quot;</span><span class="p">},</span> <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;answer&quot;</span><span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">ASK_USER</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Continue?"</span><span class="p">},</span> <span class="n">result_key</span><span class="o">=</span><span class="s2">"answer"</span><span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">done</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="n">answer</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;answer&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
-    <span class="n">text</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;text&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;answer&quot;</span><span class="p">:</span> <span class="n">text</span><span class="p">})</span>
+    <span class="n">answer</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"answer"</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"text"</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"answer"</span><span class="p">:</span> <span class="n">text</span><span class="p">})</span>
 
 
-<span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;persistent_wf&quot;</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ask&quot;</span><span class="p">:</span> <span class="n">ask</span><span class="p">,</span> <span class="s2">&quot;done&quot;</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
+<span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">"persistent_wf"</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"ask"</span><span class="p">:</span> <span class="n">ask</span><span class="p">,</span> <span class="s2">"done"</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
 <span class="n">data_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">tempfile</span><span class="o">.</span><span class="n">mkdtemp</span><span class="p">())</span>
 
 <span class="c1"># Session 1: start + block</span>
@@ -1254,7 +1254,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <span class="p">)</span>
 <span class="n">state</span> <span class="o">=</span> <span class="n">sr2</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">run_id</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">WAITING</span>
-<span class="n">state</span> <span class="o">=</span> <span class="n">sr2</span><span class="o">.</span><span class="n">respond</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;yes&quot;</span><span class="p">})</span>
+<span class="n">state</span> <span class="o">=</span> <span class="n">sr2</span><span class="o">.</span><span class="n">respond</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">"text"</span><span class="p">:</span> <span class="s2">"yes"</span><span class="p">})</span>
 <span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
 <span class="n">sr2</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
@@ -1268,10 +1268,10 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">wait_for_event</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span> <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_EVENT</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;wait_key&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;event_</span><span class="si">{</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">[:</span><span class="mi">8</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">}))</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span> <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_EVENT</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"wait_key"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"event_</span><span class="si">{</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">[:</span><span class="mi">8</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">}))</span>
 
 
-<span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;event_wf&quot;</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;wait&quot;</span><span class="p">:</span> <span class="n">wait_for_event</span><span class="p">})</span>
+<span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">"event_wf"</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"wait"</span><span class="p">:</span> <span class="n">wait_for_event</span><span class="p">})</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">()</span>
 <span class="n">ids</span> <span class="o">=</span> <span class="p">[</span><span class="n">sr</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">workflow</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)]</span>
@@ -1279,7 +1279,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <span class="n">waiting</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">find_waiting_runs</span><span class="p">()</span>
 <span class="n">waiting_events</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">find_waiting_runs</span><span class="p">(</span><span class="n">wait_reason</span><span class="o">=</span><span class="n">WaitReason</span><span class="o">.</span><span class="n">EVENT</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;waiting:&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">waiting</span><span class="p">),</span> <span class="s2">&quot;events:&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">waiting_events</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"waiting:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">waiting</span><span class="p">),</span> <span class="s2">"events:"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">waiting_events</span><span class="p">))</span>
 <span class="k">assert</span> <span class="nb">all</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">WAITING</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">waiting_events</span><span class="p">)</span>
 
 <span class="n">sr</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
@@ -1356,7 +1356,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

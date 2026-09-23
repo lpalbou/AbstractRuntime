@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1070,14 +1070,14 @@
 <p>Remote-light runtime:</p>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>This installs AbstractCore 2.13.38 or newer with remote provider, vision,
+<p>This installs AbstractCore 2.13.41 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
 HuggingFace/Torch, Diffusers, or sentence-transformer embeddings.</p>
 <p>Use hardware profiles only when this Runtime host should execute local engines:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[apple]&quot;</span>
-pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[gpu]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"abstractruntime[apple]"</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"abstractruntime[gpu]"</span>
 </code></pre></div>
 <h2 id="mental-model-source-of-truth">Mental model (source of truth)<a class="headerlink" href="#mental-model-source-of-truth" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1096,27 +1096,27 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 
 <span class="k">def</span><span class="w"> </span><span class="nf">ask</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span>
-        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">ASK_USER</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Continue?&quot;</span><span class="p">},</span> <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;answer&quot;</span><span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">ASK_USER</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Continue?"</span><span class="p">},</span> <span class="n">result_key</span><span class="o">=</span><span class="s2">"answer"</span><span class="p">),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">done</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="n">answer</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;answer&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
-    <span class="n">text</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;text&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;answer&quot;</span><span class="p">:</span> <span class="n">text</span><span class="p">})</span>
+    <span class="n">answer</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"answer"</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"text"</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"answer"</span><span class="p">:</span> <span class="n">text</span><span class="p">})</span>
 
 
-<span class="n">wf</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;demo&quot;</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ask&quot;</span><span class="p">:</span> <span class="n">ask</span><span class="p">,</span> <span class="s2">&quot;done&quot;</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
+<span class="n">wf</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">"demo"</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">"ask"</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"ask"</span><span class="p">:</span> <span class="n">ask</span><span class="p">,</span> <span class="s2">"done"</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
 <span class="n">rt</span> <span class="o">=</span> <span class="n">Runtime</span><span class="p">(</span><span class="n">run_store</span><span class="o">=</span><span class="n">InMemoryRunStore</span><span class="p">(),</span> <span class="n">ledger_store</span><span class="o">=</span><span class="n">InMemoryLedgerStore</span><span class="p">())</span>
 
 <span class="n">run_id</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">)</span>
 <span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">&quot;waiting&quot;</span>
+<span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">"waiting"</span>
 
-<span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">resume</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">,</span> <span class="n">wait_key</span><span class="o">=</span><span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">wait_key</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;yes&quot;</span><span class="p">})</span>
-<span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span>
+<span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">resume</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">,</span> <span class="n">wait_key</span><span class="o">=</span><span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">wait_key</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"text"</span><span class="p">:</span> <span class="s2">"yes"</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">"completed"</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="recommended-use-the-built-in-scheduler-wrapper">Recommended: use the built-in scheduler wrapper<a class="headerlink" href="#recommended-use-the-built-in-scheduler-wrapper" title="Permanent link">&para;</a></h2>
@@ -1133,15 +1133,15 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 <span class="k">def</span><span class="w"> </span><span class="nf">wait</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="n">until</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span>
-        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="n">until</span><span class="p">}),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"until"</span><span class="p">:</span> <span class="n">until</span><span class="p">}),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">done</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ok&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"ok"</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
 
-<span class="n">wf</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;demo_wait_until&quot;</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;wait&quot;</span><span class="p">:</span> <span class="n">wait</span><span class="p">,</span> <span class="s2">&quot;done&quot;</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
+<span class="n">wf</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span><span class="n">workflow_id</span><span class="o">=</span><span class="s2">"demo_wait_until"</span><span class="p">,</span> <span class="n">entry_node</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span> <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"wait"</span><span class="p">:</span> <span class="n">wait</span><span class="p">,</span> <span class="s2">"done"</span><span class="p">:</span> <span class="n">done</span><span class="p">})</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">(</span><span class="n">poll_interval_s</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>  <span class="c1"># in-memory stores, scheduler auto-starts</span>
 <span class="n">run_id</span><span class="p">,</span> <span class="n">state</span> <span class="o">=</span> <span class="n">sr</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">wf</span><span class="p">)</span>
@@ -1158,8 +1158,8 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_scheduled_runtime</span><span class="p">,</span> <span class="n">JsonFileRunStore</span><span class="p">,</span> <span class="n">JsonlLedgerStore</span>
 
 <span class="n">sr</span> <span class="o">=</span> <span class="n">create_scheduled_runtime</span><span class="p">(</span>
-    <span class="n">run_store</span><span class="o">=</span><span class="n">JsonFileRunStore</span><span class="p">(</span><span class="s2">&quot;./data&quot;</span><span class="p">),</span>
-    <span class="n">ledger_store</span><span class="o">=</span><span class="n">JsonlLedgerStore</span><span class="p">(</span><span class="s2">&quot;./data&quot;</span><span class="p">),</span>
+    <span class="n">run_store</span><span class="o">=</span><span class="n">JsonFileRunStore</span><span class="p">(</span><span class="s2">"./data"</span><span class="p">),</span>
+    <span class="n">ledger_store</span><span class="o">=</span><span class="n">JsonlLedgerStore</span><span class="p">(</span><span class="s2">"./data"</span><span class="p">),</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Notes:
@@ -1173,7 +1173,7 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 <p>Typical local mode:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_local_runtime</span>
 
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="next-reading">Next reading<a class="headerlink" href="#next-reading" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1242,7 +1242,7 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

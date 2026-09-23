@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1595,11 +1595,11 @@
 <h3 id="runstatuscancelled">RunStatus.CANCELLED<a class="headerlink" href="#runstatuscancelled" title="Permanent link">&para;</a></h3>
 <p>Added <code>CANCELLED</code> status for explicit run cancellation (distinct from <code>FAILED</code>).</p>
 <h3 id="cancel_run">cancel_run()<a class="headerlink" href="#cancel_run" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;User requested&quot;</span><span class="p">)</span>
+<p><div class="highlight"><pre><span></span><code><span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"User requested"</span><span class="p">)</span>
 </code></pre></div>
 Cancels a single run. Only RUNNING or WAITING runs can be cancelled.</p>
 <h3 id="cancel_with_children">cancel_with_children()<a class="headerlink" href="#cancel_with_children" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><span class="n">scheduler</span><span class="o">.</span><span class="n">cancel_with_children</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Parent cancelled&quot;</span><span class="p">)</span>
+<p><div class="highlight"><pre><span></span><code><span class="n">scheduler</span><span class="o">.</span><span class="n">cancel_with_children</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"Parent cancelled"</span><span class="p">)</span>
 <span class="c1"># Returns list of all cancelled runs</span>
 </code></pre></div>
 Cascading cancellation that traverses the parent-child tree.</p>
@@ -1610,58 +1610,58 @@ Cascading cancellation that traverses the parent-child tree.</p>
 <p>Use <code>WAIT_UNTIL</code> combined with async subworkflow:</p>
 <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">start_with_timeout</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="n">deadline</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
-    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;deadline&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">deadline</span>
+    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"deadline"</span><span class="p">]</span> <span class="o">=</span> <span class="n">deadline</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"start"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">START_SUBWORKFLOW</span><span class="p">,</span>
-            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;workflow_id&quot;</span><span class="p">:</span> <span class="s2">&quot;slow_task&quot;</span><span class="p">,</span> <span class="s2">&quot;async&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;task_info&quot;</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"workflow_id"</span><span class="p">:</span> <span class="s2">"slow_task"</span><span class="p">,</span> <span class="s2">"async"</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">"task_info"</span><span class="p">,</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;wait_for_deadline&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"wait_for_deadline"</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">wait_for_deadline</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span>
-            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;deadline&quot;</span><span class="p">]},</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"until"</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"deadline"</span><span class="p">]},</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;check_result&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"check_result"</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">check_result</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
-    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;task_info&quot;</span><span class="p">][</span><span class="s2">&quot;sub_run_id&quot;</span><span class="p">]</span>
+    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"task_info"</span><span class="p">][</span><span class="s2">"sub_run_id"</span><span class="p">]</span>
     <span class="n">child_state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">sub_run_id</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">child_state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;check&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="n">child_state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"check"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="n">child_state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="c1"># Timeout - cancel child and return error</span>
-        <span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">sub_run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timeout&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;check&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;timeout&quot;</span><span class="p">})</span>
+        <span class="n">runtime</span><span class="o">.</span><span class="n">cancel_run</span><span class="p">(</span><span class="n">sub_run_id</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"Timeout"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"check"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"error"</span><span class="p">:</span> <span class="s2">"timeout"</span><span class="p">})</span>
 </code></pre></div>
 <h3 id="pattern-2-parallel-fan-out">Pattern 2: Parallel Fan-Out<a class="headerlink" href="#pattern-2-parallel-fan-out" title="Permanent link">&para;</a></h3>
 <p>Start multiple async subworkflows, then poll for completion:</p>
 <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">fan_out</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="c1"># Start multiple children async</span>
     <span class="n">sub_ids</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;web&quot;</span><span class="p">,</span> <span class="s2">&quot;docs&quot;</span><span class="p">,</span> <span class="s2">&quot;knowledge_graph&quot;</span><span class="p">]:</span>
+    <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"web"</span><span class="p">,</span> <span class="s2">"docs"</span><span class="p">,</span> <span class="s2">"knowledge_graph"</span><span class="p">]:</span>
         <span class="n">sub_id</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">(</span>
             <span class="n">workflow</span><span class="o">=</span><span class="n">search_workflow</span><span class="p">,</span>
-            <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="n">source</span><span class="p">,</span> <span class="s2">&quot;query&quot;</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;query&quot;</span><span class="p">]},</span>
+            <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">"source"</span><span class="p">:</span> <span class="n">source</span><span class="p">,</span> <span class="s2">"query"</span><span class="p">:</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"query"</span><span class="p">]},</span>
             <span class="n">parent_run_id</span><span class="o">=</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">sub_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">sub_id</span><span class="p">)</span>
-    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;sub_ids&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sub_ids</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;fan_out&quot;</span><span class="p">,</span> <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;poll_children&quot;</span><span class="p">)</span>
+    <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"sub_ids"</span><span class="p">]</span> <span class="o">=</span> <span class="n">sub_ids</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"fan_out"</span><span class="p">,</span> <span class="n">next_node</span><span class="o">=</span><span class="s2">"poll_children"</span><span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">poll_children</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="c1"># Check if all children completed</span>
     <span class="n">all_done</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">sub_id</span> <span class="ow">in</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;sub_ids&quot;</span><span class="p">]:</span>
+    <span class="k">for</span> <span class="n">sub_id</span> <span class="ow">in</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"sub_ids"</span><span class="p">]:</span>
         <span class="n">state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">sub_id</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
             <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
@@ -1669,13 +1669,13 @@ Cascading cancellation that traverses the parent-child tree.</p>
             <span class="n">all_done</span> <span class="o">=</span> <span class="kc">False</span>
 
     <span class="k">if</span> <span class="n">all_done</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;poll&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;results&quot;</span><span class="p">:</span> <span class="n">results</span><span class="p">})</span>
+        <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"poll"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"results"</span><span class="p">:</span> <span class="n">results</span><span class="p">})</span>
 
     <span class="c1"># Wait briefly then poll again</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;poll&quot;</span><span class="p">,</span>
-        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;until&quot;</span><span class="p">:</span> <span class="o">...</span><span class="p">}),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;poll_children&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"poll"</span><span class="p">,</span>
+        <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_UNTIL</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"until"</span><span class="p">:</span> <span class="o">...</span><span class="p">}),</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"poll_children"</span><span class="p">,</span>
     <span class="p">)</span>
 </code></pre></div>
 <h3 id="pattern-3-distributed-execution">Pattern 3: Distributed Execution<a class="headerlink" href="#pattern-3-distributed-execution" title="Permanent link">&para;</a></h3>
@@ -1683,30 +1683,30 @@ Cascading cancellation that traverses the parent-child tree.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Server A: Start subworkflow async</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">start_remote_task</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;start&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"start"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">START_SUBWORKFLOW</span><span class="p">,</span>
-            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;workflow_id&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu_task&quot;</span><span class="p">,</span> <span class="s2">&quot;async&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;task_info&quot;</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"workflow_id"</span><span class="p">:</span> <span class="s2">"gpu_task"</span><span class="p">,</span> <span class="s2">"async"</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">"task_info"</span><span class="p">,</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;wait_for_completion&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"wait_for_completion"</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">wait_for_completion</span><span class="p">(</span><span class="n">run</span><span class="p">:</span> <span class="n">RunState</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepPlan</span><span class="p">:</span>
     <span class="c1"># Return WAITING - external system will resume when child completes</span>
-    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;task_info&quot;</span><span class="p">][</span><span class="s2">&quot;sub_run_id&quot;</span><span class="p">]</span>
+    <span class="n">sub_run_id</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"task_info"</span><span class="p">][</span><span class="s2">"sub_run_id"</span><span class="p">]</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;wait&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"wait"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">WAIT_EVENT</span><span class="p">,</span>
-            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;wait_key&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;subworkflow:</span><span class="si">{</span><span class="n">sub_run_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">},</span>
-            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;child_output&quot;</span><span class="p">,</span>
+            <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"wait_key"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"subworkflow:</span><span class="si">{</span><span class="n">sub_run_id</span><span class="si">}</span><span class="s2">"</span><span class="p">},</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">"child_output"</span><span class="p">,</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="c1"># Server B (GPU worker): Poll for pending child runs and execute</span>
-<span class="n">pending</span> <span class="o">=</span> <span class="n">run_store</span><span class="o">.</span><span class="n">list_runs</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="n">RunStatus</span><span class="o">.</span><span class="n">RUNNING</span><span class="p">,</span> <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;gpu_task&quot;</span><span class="p">)</span>
+<span class="n">pending</span> <span class="o">=</span> <span class="n">run_store</span><span class="o">.</span><span class="n">list_runs</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="n">RunStatus</span><span class="o">.</span><span class="n">RUNNING</span><span class="p">,</span> <span class="n">workflow_id</span><span class="o">=</span><span class="s2">"gpu_task"</span><span class="p">)</span>
 <span class="k">for</span> <span class="n">run</span> <span class="ow">in</span> <span class="n">pending</span><span class="p">:</span>
     <span class="n">state</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">gpu_workflow</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run</span><span class="o">.</span><span class="n">run_id</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="n">RunStatus</span><span class="o">.</span><span class="n">COMPLETED</span><span class="p">:</span>
@@ -1752,33 +1752,33 @@ Cascading cancellation that traverses the parent-child tree.</p>
 <hr />
 <h2 id="effect-payload-schema">Effect Payload Schema<a class="headerlink" href="#effect-payload-schema" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_workflow_id&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;vars&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;value&quot;</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;async&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="nt">"workflow_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"child_workflow_id"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"vars"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"value"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"async"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="response-sync-completed">Response (Sync, Completed)<a class="headerlink" href="#response-sync-completed" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;child_output&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}</span>
+<span class="w">  </span><span class="nt">"sub_run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"uuid"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"output"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"child_output"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="response-async">Response (Async)<a class="headerlink" href="#response-async" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;async&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">  </span><span class="nt">"sub_run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"uuid"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"async"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="waitstate-sync-child-waiting">WaitState (Sync, Child Waiting)<a class="headerlink" href="#waitstate-sync-child-waiting" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subworkflow&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;wait_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subworkflow:{sub_run_id}&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;sub_run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;sub_workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_workflow_id&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;sub_waiting&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;wait_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;child_prompt&quot;</span>
+<span class="w">  </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"subworkflow"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"wait_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"subworkflow:{sub_run_id}"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"details"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"sub_run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"uuid"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sub_workflow_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"child_workflow_id"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sub_waiting"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"wait_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"child_prompt"</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
@@ -1815,10 +1815,10 @@ Cascading cancellation that traverses the parent-child tree.</p>
 <p>The scheduler already uses this. For subworkflows, we can reuse the same registry.</p>
 <h4 id="b-effect-payload-schema">B) Effect payload schema<a class="headerlink" href="#b-effect-payload-schema" title="Permanent link">&para;</a></h4>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;workflow_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;deepsearch_v1&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;vars&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sync&quot;</span><span class="w"> </span><span class="err">|</span><span class="w"> </span><span class="s2">&quot;async&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;result_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional.override&quot;</span><span class="w"> </span>
+<span class="w">  </span><span class="nt">"workflow_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"deepsearch_v1"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"vars"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"query"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sync"</span><span class="w"> </span><span class="err">|</span><span class="w"> </span><span class="s2">"async"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"result_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional.override"</span><span class="w"> </span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Notes:
@@ -1923,7 +1923,7 @@ Cascading cancellation that traverses the parent-child tree.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

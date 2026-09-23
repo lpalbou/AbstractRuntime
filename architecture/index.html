@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -425,6 +425,17 @@
     <span class="md-ellipsis">
       
         RunState and the ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#crash-ordering-invariant-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Crash-ordering invariant (reliability)
       
     </span>
   </a>
@@ -1144,6 +1155,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#crash-ordering-invariant-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Crash-ordering invariant (reliability)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1287,8 +1309,8 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-06-13
-Version: 0.4.29
+<p>Updated: 2026-08-27
+Version: 0.4.32
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1298,9 +1320,9 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - AbstractCore (LLM + tools): <a href="https://github.com/lpalbou/abstractcore">lpalbou/abstractcore</a></p>
 <p>The runtime stays dependency-light and delegates LLM/tool execution to integrations (notably AbstractCore): <code>src/abstractruntime/integrations/abstractcore/*</code>. Runtime also depends on the light AbstractMemory contract so <code>MEMORY_KG_*</code> effects always have the TripleStore model types available; hosts still choose the concrete memory backend.</p>
 <div class="highlight"><pre><span></span><code>flowchart LR
-  Host[&quot;Host app / AbstractFlow / service&quot;] --&gt;|&quot;WorkflowSpec&quot;| RT[&quot;AbstractRuntime&quot;]
-  RT --&gt;|&quot;LLM_CALL / TOOL_CALLS&quot;| AC[&quot;AbstractCore&quot;]
-  AC --&gt;|&quot;results / waits&quot;| RT
+  Host["Host app / AbstractFlow / service"] --&gt;|"WorkflowSpec"| RT["AbstractRuntime"]
+  RT --&gt;|"LLM_CALL / TOOL_CALLS"| AC["AbstractCore"]
+  AC --&gt;|"results / waits"| RT
 </code></pre></div>
 <p>Key invariants (enforced by code, not convention):
 - <strong>Durable state is JSON-safe</strong>: <code>RunState.vars</code> must remain JSON-serializable (<code>src/abstractruntime/core/models.py</code>). Large payloads should be stored as artifacts and referenced (<code>src/abstractruntime/storage/artifacts.py</code>, <code>src/abstractruntime/storage/offloading.py</code>).
@@ -1313,46 +1335,46 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - <code>media</code> inputs remain JSON-safe in the effect payload. Artifact refs are materialized into temporary provider-ready files for the call, then cleaned up.
 - Generated binary outputs are written to <code>ArtifactStore</code> and returned as <code>artifact_id</code> / <code>artifact_ref</code>, keeping <code>RunState.vars</code> and ledger records bounded and JSON-safe.
 - Remote chat media is sent to AbstractCore Server as provider-ready content arrays, but persisted provider-request metadata redacts data URLs so checkpoints and ledgers do not embed media bytes.
-- Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches.
+- Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches. Runtime stamps session attribution onto the session-derived cache keys it injects so hosts can list and clear caches per session through the host facade; caller-owned keys stay unstamped, and completing a run does not clear session caches.
 - Hosts should use Runtime-owned AbstractCore facades for discovery snapshots, prompt-cache/model-residency control operations, and durable run-scoped media/comms child runs instead of reaching through private runtime attachments or importing Core internals directly.
 - Local execution can use richer AbstractCore capability plugins. Remote and hybrid execution map the common media cases to AbstractCore Server endpoints and OpenAI-compatible content arrays, while hybrid keeps tool execution local.
-- Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool capability integration, Runtime-owned permissive PDF read/write support, and the MCP worker entry point, but not backend extras such as LanceDB, Core media document stacks, or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add <code>abstractruntime[apple]</code> or <code>abstractruntime[gpu]</code>.
+- Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool capability integration, Runtime-owned permissive PDF read/write and standard-library DOCX write support, and the MCP worker entry point, but not backend extras such as LanceDB, Core media document stacks, or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add <code>abstractruntime[apple]</code> or <code>abstractruntime[gpu]</code>.
 - Remote and hybrid clients use explicit Core server URLs and auth headers supplied by the host. Runtime does not read Gateway auth environment variables for provider/model/auth decisions or treat Gateway bearer tokens as Core server/provider credentials.</p>
 <p>This keeps the runtime usable by <code>../abstractgateway</code> and application layers such as <code>../abstractflow</code>, <code>../abstractassistant</code>, <code>../abstractobserver</code>, and <code>../abstractcode</code> without embedding provider-specific model logic in the durable kernel.</p>
 <h2 id="component-map">Component map<a class="headerlink" href="#component-map" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>flowchart TB
-  subgraph Core[&quot;core/ (execution kernel)&quot;]
-    Models[&quot;models.py\nRunState / StepPlan / Effect / WaitState / StepRecord&quot;]
-    Runtime[&quot;runtime.py\nRuntime.start / tick / resume&quot;]
-    Spec[&quot;spec.py\nWorkflowSpec&quot;]
-    Policy[&quot;policy.py\nEffectPolicy + idempotency&quot;]
-    Vars[&quot;vars.py\nnamespaces + _limits + node_traces&quot;]
-    Config[&quot;config.py\nRuntimeConfig&quot;]
+  subgraph Core["core/ (execution kernel)"]
+    Models["models.py\nRunState / StepPlan / Effect / WaitState / StepRecord"]
+    Runtime["runtime.py\nRuntime.start / tick / resume"]
+    Spec["spec.py\nWorkflowSpec"]
+    Policy["policy.py\nEffectPolicy + idempotency"]
+    Vars["vars.py\nnamespaces + _limits + node_traces"]
+    Config["config.py\nRuntimeConfig"]
   end
 
-  subgraph Storage[&quot;storage/ (durability)&quot;]
-    RunStore[&quot;RunStore\nin_memory / json_files / sqlite&quot;]
-    LedgerStore[&quot;LedgerStore\n(+observable + hash_chain)&quot;]
-    Commands[&quot;commands.py\nCommandStore / CommandCursorStore&quot;]
-    Artifacts[&quot;ArtifactStore\nin_memory / file&quot;]
-    Offload[&quot;Offloading* wrappers\nstore large values by ref&quot;]
-    Snapshots[&quot;SnapshotStore\nin_memory / json&quot;]
+  subgraph Storage["storage/ (durability)"]
+    RunStore["RunStore\nin_memory / json_files / sqlite"]
+    LedgerStore["LedgerStore\n(+observable + hash_chain)"]
+    Commands["commands.py\nCommandStore / CommandCursorStore"]
+    Artifacts["ArtifactStore\nin_memory / file"]
+    Offload["Offloading* wrappers\nstore large values by ref"]
+    Snapshots["SnapshotStore\nin_memory / json"]
   end
 
-  subgraph Scheduler[&quot;scheduler/ (drivers)&quot;]
-    Registry[&quot;WorkflowRegistry&quot;]
-    SchedulerMod[&quot;Scheduler\npoll + resume&quot;]
-    SR[&quot;ScheduledRuntime\nconvenience&quot;]
+  subgraph Scheduler["scheduler/ (drivers)"]
+    Registry["WorkflowRegistry"]
+    SchedulerMod["Scheduler\npoll + resume"]
+    SR["ScheduledRuntime\nconvenience"]
   end
 
-  subgraph Distribution[&quot;workflow_bundle/ + visualflow_compiler/&quot;]
-    Bundles[&quot;WorkflowBundles (.flow)\nmanifest + flows/*.json&quot;]
-    Compiler[&quot;VisualFlow compiler\nVisualFlow JSON -&gt; WorkflowSpec&quot;]
+  subgraph Distribution["workflow_bundle/ + visualflow_compiler/"]
+    Bundles["WorkflowBundles (.flow)\nmanifest + flows/*.json"]
+    Compiler["VisualFlow compiler\nVisualFlow JSON -&gt; WorkflowSpec"]
   end
 
-  subgraph Integrations[&quot;integrations/ (optional wiring)&quot;]
-    AC[&quot;abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker&quot;]
-    AM[&quot;abstractmemory/\nMEMORY_KG_* handlers&quot;]
+  subgraph Integrations["integrations/ (optional wiring)"]
+    AC["abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker"]
+    AM["abstractmemory/\nMEMORY_KG_* handlers"]
   end
 
   Runtime --&gt; RunStore
@@ -1386,6 +1408,30 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 <li>Each executed step appends a <code>StepRecord</code> to a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).</li>
 </ul>
 <p><strong>Invariant:</strong> values stored in <code>RunState.vars</code> must be JSON-serializable. Use artifact references for large values (<code>src/abstractruntime/storage/artifacts.py</code>) or wrap stores with <code>OffloadingRunStore</code> / <code>OffloadingLedgerStore</code> (<code>src/abstractruntime/storage/offloading.py</code>).</p>
+<h3 id="crash-ordering-invariant-reliability">Crash-ordering invariant (reliability)<a class="headerlink" href="#crash-ordering-invariant-reliability" title="Permanent link">&para;</a></h3>
+<p>The run store is truth; the ledger is evidence. Every state transition obeys
+ONE ordering law (backlog 0045; every durable feature is a consumer):</p>
+<ol>
+<li><strong>State save is the commit point.</strong> A transition is true when — and only
+   when — <code>RunStore.save(run)</code> returns. Everything before the save must be
+   safe to repeat; everything after must be pure observation.</li>
+<li><strong>Ledger records for a transition append BEFORE the save that makes the
+   transition true.</strong> A crash between append and save leaves the ledger
+   <em>ahead</em> of the state — the recoverable direction: replay re-executes from
+   the last saved state and idempotency keys (<code>_runtime.effect_seq</code>-scoped)
+   deduplicate both effect results and terminal records. The reverse order
+   (save-then-append) leaves a truth the evidence never recorded — e.g. a
+   COMPLETED run whose ledger never terminates, which stalls ledger-following
+   clients forever.</li>
+<li><strong>Terminal-path append failures are never silent.</strong> A failed append on a
+   completion/resume path increments <code>RuntimeHealth</code> (<code>record_error</code>) and
+   logs a warning. Best-effort observability records (progress events,
+   status events) may stay quiet; records that replay depends on may not.</li>
+</ol>
+<p>Kill-and-replay coverage for this law lives in the crash harness
+(<code>tests/harness.py</code>, backlog 0045): for every persistence point, kill →
+restart → assert terminal-output equivalence, ledger convergence (terminal
+record exactly once), and no doubled side effects.</p>
 <h2 id="runtime-loop-start-tick-resume">Runtime loop (start / tick / resume)<a class="headerlink" href="#runtime-loop-start-tick-resume" title="Permanent link">&para;</a></h2>
 <p>Implemented in <code>src/abstractruntime/core/runtime.py</code>:</p>
 <ul>
@@ -1437,7 +1483,7 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - inspection: <code>VARS_QUERY</code> (read-only access to <code>RunState.vars</code> paths; parsing helpers in <code>src/abstractruntime/core/vars.py</code>)</p>
 <h3 id="host-wired-effects">Host-wired effects<a class="headerlink" href="#host-wired-effects" title="Permanent link">&para;</a></h3>
 <p>The kernel defines the protocol; concrete integrations provide handlers:
-- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control, discovery/catalog snapshots, model residency, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
 - <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
 <h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1469,15 +1515,17 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 <li>API: <code>Runtime.list_evidence(...)</code> / <code>Runtime.load_evidence(...)</code> (<code>src/abstractruntime/core/runtime.py</code>)</li>
 <li>Run history bundle export (portable replay artifact):</li>
 <li><code>export_run_history_bundle(...)</code> (<code>src/abstractruntime/history_bundle.py</code>)</li>
+<li><code>history_bundle["resolved_actions"]</code> is the portable capability/action summary layer built from
+    Runtime/Core execution metadata</li>
 </ul>
 <h2 id="visualflow-workflowbundles">VisualFlow + WorkflowBundles<a class="headerlink" href="#visualflow-workflowbundles" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime includes a compiler and a portable bundle format:
 - VisualFlow compiler: <code>src/abstractruntime/visualflow_compiler/*</code> (VisualFlow JSON -&gt; <code>WorkflowSpec</code>)
 - Multi-entry VisualFlow authoring routes are lowered into internal <code>join_exec</code> and <code>path_mux</code> nodes when a target has multiple incoming <code>exec-in</code> edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See <code>workflow-bundles.md</code> for the concrete metadata shape.
-- VisualFlow document nodes include <code>read_pdf</code> and <code>write_pdf</code>. They use
-  workspace-scoped paths, keep PDF bytes out of checkpoints, and store only
-  JSON-safe extracted text, metadata, hashes, content types, and file paths in
-  node outputs.
+- VisualFlow document nodes include <code>read_pdf</code>, <code>write_pdf</code>, and <code>write_docx</code>.
+  They use workspace-scoped paths, keep document bytes out of checkpoints, and
+  store only JSON-safe extracted text, metadata, hashes, content types, and file
+  paths in node outputs.
 - WorkflowBundles (<code>.flow</code>): <code>src/abstractruntime/workflow_bundle/*</code> (manifest + flows + assets)
   - pack/unpack helpers: <code>pack_workflow_bundle(...)</code>, <code>open_workflow_bundle(...)</code></p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
@@ -1553,7 +1601,7 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

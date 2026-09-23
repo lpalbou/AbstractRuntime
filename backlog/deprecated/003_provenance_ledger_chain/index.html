@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1075,20 +1075,20 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">canonical_json</span><span class="p">(</span><span class="n">obj</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">),</span> <span class="n">ensure_ascii</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">","</span><span class="p">,</span> <span class="s2">":"</span><span class="p">),</span> <span class="n">ensure_ascii</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">sha256_hex</span><span class="p">(</span><span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">))</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">compute_record_hash</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">record</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">prev_hash</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="c1"># Ensure we don&#39;t recursively include our own hash fields.</span>
+    <span class="c1"># Ensure we don't recursively include our own hash fields.</span>
     <span class="n">clean</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">record</span><span class="p">)</span>
-    <span class="n">clean</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;record_hash&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-    <span class="n">clean</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;signature&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">clean</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">"record_hash"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">clean</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">"signature"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
-    <span class="n">clean</span><span class="p">[</span><span class="s2">&quot;prev_hash&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">prev_hash</span>
+    <span class="n">clean</span><span class="p">[</span><span class="s2">"prev_hash"</span><span class="p">]</span> <span class="o">=</span> <span class="n">prev_hash</span>
     <span class="k">return</span> <span class="n">sha256_hex</span><span class="p">(</span><span class="n">canonical_json</span><span class="p">(</span><span class="n">clean</span><span class="p">))</span>
 </code></pre></div>
 <p>Important:
@@ -1114,12 +1114,12 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">append</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">record</span><span class="p">:</span> <span class="n">StepRecord</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">prev</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_head_by_run</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">run_id</span><span class="p">)</span>
         <span class="n">d</span> <span class="o">=</span> <span class="n">asdict</span><span class="p">(</span><span class="n">record</span><span class="p">)</span>
-        <span class="n">d</span><span class="p">[</span><span class="s2">&quot;prev_hash&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">prev</span>
-        <span class="n">d</span><span class="p">[</span><span class="s2">&quot;record_hash&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">compute_record_hash</span><span class="p">(</span><span class="n">record</span><span class="o">=</span><span class="n">d</span><span class="p">,</span> <span class="n">prev_hash</span><span class="o">=</span><span class="n">prev</span><span class="p">)</span>
+        <span class="n">d</span><span class="p">[</span><span class="s2">"prev_hash"</span><span class="p">]</span> <span class="o">=</span> <span class="n">prev</span>
+        <span class="n">d</span><span class="p">[</span><span class="s2">"record_hash"</span><span class="p">]</span> <span class="o">=</span> <span class="n">compute_record_hash</span><span class="p">(</span><span class="n">record</span><span class="o">=</span><span class="n">d</span><span class="p">,</span> <span class="n">prev_hash</span><span class="o">=</span><span class="n">prev</span><span class="p">)</span>
 
         <span class="c1"># Mutate record if StepRecord has these fields.</span>
-        <span class="n">record</span><span class="o">.</span><span class="n">prev_hash</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;prev_hash&quot;</span><span class="p">]</span>
-        <span class="n">record</span><span class="o">.</span><span class="n">record_hash</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;record_hash&quot;</span><span class="p">]</span>
+        <span class="n">record</span><span class="o">.</span><span class="n">prev_hash</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">"prev_hash"</span><span class="p">]</span>
+        <span class="n">record</span><span class="o">.</span><span class="n">record_hash</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">"record_hash"</span><span class="p">]</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_inner</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">record</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_head_by_run</span><span class="p">[</span><span class="n">record</span><span class="o">.</span><span class="n">run_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">record_hash</span>
@@ -1137,12 +1137,12 @@
 </code></pre></div>
 <p>Return a structured report (not just boolean):</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;errors&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
-<span class="w">  </span><span class="nt">&quot;first_bad_index&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;head_hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;computed_head_hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+<span class="w">  </span><span class="nt">"ok"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">  </span><span class="nt">"first_bad_index"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"head_hash"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"computed_head_hash"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Validation steps:
@@ -1231,7 +1231,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -850,6 +850,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#topic-tracks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topic tracks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#next-recommended-work" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -904,6 +915,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#planning-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Planning notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -934,29 +956,61 @@
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="counts">Counts<a class="headerlink" href="#counts" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Planned: 5</li>
-<li>Proposed: 3</li>
-<li>Completed: 33</li>
+<li>Planned: 28</li>
+<li>Proposed: 12</li>
+<li>Completed: 34</li>
 <li>Deprecated: 13</li>
 <li>Recurrent: 0</li>
 </ul>
+<p>2026-09-20: counts reconciled to disk (28 planned and 12 proposed before this
+addition). <a href="completed/0846_mlx_instance_scheduling_and_execution_controls/">0846</a>
+repairs existing MLX instance scheduling and remote speculation/boolean-reasoning
+forwarding; it does not add another provider. Core's deferred backend/capability
+and pressure-eviction work is tracked separately by its planned 0848–0853.</p>
+<h2 id="topic-tracks">Topic tracks<a class="headerlink" href="#topic-tracks" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>planned/runtime_systemic_reliability/</code> + <code>proposed/runtime_systemic_reliability/</code>
+  — the 2026-07-12 maintainer-requested two-adversary meta-analysis of the
+  whole package, split into executable items: converting reliability from
+  artisanal per-feature rigor into systemic guarantees before the 24/7
+  resident fleet and before 1.0. Source record: <code>planned/runtime_systemic_reliability/0044_meta_analysis_record.md</code>.
+  Keystone item (do first): <code>0045_crash_replay_harness_and_ordering_invariant.md</code>.
+  New (2026-07-13, performance adversary): <code>0067_durable_write_discipline.md</code>
+  (P1, ships WITH 0047), <code>0068_hot_path_store_reads.md</code> (P1).</li>
+<li><code>planned/runtime_portability/</code> — the 2026-07-13 maintainer-requested
+  "portable, any-OS" survey (two adversaries: portability + performance).
+  The entity substrate's process/lease/kill-switch primitives are POSIX-only
+  and DESTRUCTIVE on Windows (a status read kills the loop). Items:
+  <code>0065_portable_process_and_lock_layer.md</code> (P0, do first),
+  <code>0066_portable_io_and_media_reader.md</code> (P1). See the track README.</li>
+</ul>
 <h2 id="next-recommended-work">Next recommended work<a class="headerlink" href="#next-recommended-work" title="Permanent link">&para;</a></h2>
 <ol>
+<li><code>planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md</code>
+   The keystone: kill-and-replay harness + ONE written crash-ordering
+   invariant + the two ordering-inversion fixes. Every other track item is a
+   consumer.</li>
+<li><code>planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md</code>
+   Correctness-grade: two drivers can race one run over aliased state today.</li>
+<li><code>planned/runtime_systemic_reliability/0047_indexed_idempotency_lookup.md</code>
+   The deterministic 24/7 scale cliff (O(ledger) scan per effect step).</li>
+<li><code>planned/runtime_systemic_reliability/0048_durable_io_unification.md</code> +
+   <code>0049_llm_client_mechanical_split.md</code>
+   Round out the P0 band (fsync discipline; the 11.8k-line module).
+4a. <code>planned/runtime_portability/0065_portable_process_and_lock_layer.md</code>
+   NEW P0 (2026-07-13): on Windows a <code>read_loop_status</code> GET terminates the
+   entity loop (<code>os.kill(pid,0)</code> = TerminateProcess) and the lease is
+   advisory-only. Blocks any Windows deployment of the keystone feature.
+   Portable stdlib fix + a Windows CI smoke lane.
+4b. <code>planned/runtime_systemic_reliability/0067_durable_write_discipline.md</code>
+   NEW P1 — ships WITH 0047 (index kills count-scaling, 0067 kills the
+   O(turns²) ledger byte-growth; either alone leaves half the scale cliff).</li>
 <li><code>planned/018_workspace_access_policy_for_media_and_tools.md</code>
    Keep workspace and tool policy explicit while Gateway extracts its local
    workspace helpers.</li>
 <li><code>planned/014_remote_tool_worker_executor.md</code>
    The public ToolExecutor path is still the larger follow-on after the current
    Gateway boundary cleanup.</li>
-<li><code>proposed/0036_local_media_residency_bridge_to_core_residency.md</code>
-   Local Runtime media residency should relay live Core-owned truth for image/TTS/STT or stay unsupported when no
-   Core-owned local media residency facade is wired.</li>
-<li><code>proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md</code>
-   The comms/Telegram boundary cleanup is now complete; the remaining lower
-   pressure follow-up is a Runtime-owned tool-spec surface if Gateway or the
-   MCP worker still need one after adoption.</li>
-<li><code>proposed/0038_core_server_pool_residency_affinity.md</code>
-   Future-only topology item for multiple AbstractCore servers, server identity, and residency routing affinity.</li>
 </ol>
 <h2 id="completed">Completed<a class="headerlink" href="#completed" title="Permanent link">&para;</a></h2>
 <table>
@@ -967,6 +1021,10 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>0846</td>
+<td><a href="completed/0846_mlx_instance_scheduling_and_execution_controls/">Existing MLX instance scheduling and execution controls</a>: completed 2026-09-20; moved from planned, 237 Runtime tests + 616 Core tests and four real-model integration cases; independent review approved, unreleased.</td>
+</tr>
 <tr>
 <td>001</td>
 <td><code>completed/001_runtime_kernel.md</code></td>
@@ -1130,8 +1188,96 @@
 <td>025</td>
 <td><code>planned/025_runtime_retention_and_purge_contract.md</code></td>
 </tr>
+<tr>
+<td>026*</td>
+<td><code>planned/026_context_checkpoint_self_compression.md</code></td>
+</tr>
+<tr>
+<td>027*</td>
+<td><code>planned/027_quote_provenance_discipline.md</code></td>
+</tr>
+<tr>
+<td>028*</td>
+<td><code>planned/028_selective_artifact_rehydration.md</code></td>
+</tr>
+<tr>
+<td>0070</td>
+<td><code>planned/0070_standalone_wui_browser_session_security_contract.md</code></td>
+</tr>
+<tr>
+<td>0044</td>
+<td><code>planned/runtime_systemic_reliability/0044_meta_analysis_record.md</code> (track source record)</td>
+</tr>
+<tr>
+<td>0045</td>
+<td><code>planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md</code></td>
+</tr>
+<tr>
+<td>0046</td>
+<td><code>planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md</code></td>
+</tr>
+<tr>
+<td>0047</td>
+<td><code>planned/runtime_systemic_reliability/0047_indexed_idempotency_lookup.md</code></td>
+</tr>
+<tr>
+<td>0048</td>
+<td><code>planned/runtime_systemic_reliability/0048_durable_io_unification.md</code></td>
+</tr>
+<tr>
+<td>0049</td>
+<td><code>planned/runtime_systemic_reliability/0049_llm_client_mechanical_split.md</code></td>
+</tr>
+<tr>
+<td>0050</td>
+<td><code>planned/runtime_systemic_reliability/0050_control_sidecar_all_writers.md</code></td>
+</tr>
+<tr>
+<td>0051</td>
+<td><code>planned/runtime_systemic_reliability/0051_runtime_owned_durable_event_mailbox.md</code></td>
+</tr>
+<tr>
+<td>0052</td>
+<td><code>planned/runtime_systemic_reliability/0052_sync_store_event_loop_tripwire.md</code></td>
+</tr>
+<tr>
+<td>0053</td>
+<td><code>planned/runtime_systemic_reliability/0053_bounded_run_vars_growth.md</code></td>
+</tr>
+<tr>
+<td>0054</td>
+<td><code>planned/runtime_systemic_reliability/0054_runtime_health_counters.md</code></td>
+</tr>
+<tr>
+<td>0055</td>
+<td><code>planned/runtime_systemic_reliability/0055_jsonl_store_honesty.md</code></td>
+</tr>
+<tr>
+<td>0064</td>
+<td><code>planned/runtime_systemic_reliability/0064_prompt_cache_fingerprint_stability.md</code></td>
+</tr>
+<tr>
+<td>0065</td>
+<td><code>planned/runtime_portability/0065_portable_process_and_lock_layer.md</code> (P0)</td>
+</tr>
+<tr>
+<td>0066</td>
+<td><code>planned/runtime_portability/0066_portable_io_and_media_reader.md</code></td>
+</tr>
+<tr>
+<td>0067</td>
+<td><code>planned/runtime_systemic_reliability/0067_durable_write_discipline.md</code></td>
+</tr>
+<tr>
+<td>0068</td>
+<td><code>planned/runtime_systemic_reliability/0068_hot_path_store_reads.md</code></td>
+</tr>
 </tbody>
 </table>
+<p>* 026/027/028 numerically collide with completed items of the same prefix
+(legacy three-digit numbering; they predate the four-digit convention).
+Flagged for the next hygiene pass — renumber the PLANNED trio into the
+four-digit space rather than the completed records.</p>
 <h2 id="proposed">Proposed<a class="headerlink" href="#proposed" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1153,12 +1299,56 @@
 <td>0038</td>
 <td><code>proposed/0038_core_server_pool_residency_affinity.md</code></td>
 </tr>
+<tr>
+<td>0056</td>
+<td><code>proposed/runtime_systemic_reliability/0056_schema_version_and_quarantine_loading.md</code></td>
+</tr>
+<tr>
+<td>0057</td>
+<td><code>proposed/runtime_systemic_reliability/0057_trust_boundary_stamp_registry.md</code></td>
+</tr>
+<tr>
+<td>0058</td>
+<td><code>proposed/runtime_systemic_reliability/0058_terminal_run_archival_helper.md</code></td>
+</tr>
+<tr>
+<td>0059</td>
+<td><code>proposed/runtime_systemic_reliability/0059_memory_span_handler_extraction.md</code></td>
+</tr>
+<tr>
+<td>0060</td>
+<td><code>proposed/runtime_systemic_reliability/0060_visualflow_compiler_decomposition.md</code></td>
+</tr>
+<tr>
+<td>0061</td>
+<td><code>proposed/runtime_systemic_reliability/0061_root_api_deprecation_machinery.md</code></td>
+</tr>
+<tr>
+<td>0062</td>
+<td><code>proposed/runtime_systemic_reliability/0062_dependency_honesty_extras.md</code></td>
+</tr>
+<tr>
+<td>0063</td>
+<td><code>proposed/runtime_systemic_reliability/0063_b3_envelope_lane_unification.md</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="deprecated">Deprecated<a class="headerlink" href="#deprecated" title="Permanent link">&para;</a></h2>
 <p>See <code>deprecated/DEPRECATED_README.md</code> for context on the deprecated backlog set.
 Recent deprecation:
 - <code>deprecated/0034_agent_runtime_convenience_constructor.md</code></p>
+<h2 id="planning-notes">Planning notes<a class="headerlink" href="#planning-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>2026-07-12: the <code>runtime_systemic_reliability</code> track landed from the
+  maintainer-requested two-adversary meta-analysis (planned 0044-0055,
+  proposed 0056-0063). The analysis record was originally committed as
+  <code>planned/029_runtime_meta_analysis_2026_07_12.md</code> and was renumbered to
+  <code>0044_meta_analysis_record.md</code> in the same pass (029 collides with a
+  completed item; dates do not belong in filenames). The track README
+  carries the unanimous DO-NOT-BUILD list (no async kernel, no tick-loop
+  decomposition, no new eventing abstraction, no ledger auto-pruning, no
+  client-class merge) — treat it as binding unless the maintainer overrules.</li>
+</ul>
 
 
 
@@ -1217,7 +1407,7 @@ Recent deprecation:
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

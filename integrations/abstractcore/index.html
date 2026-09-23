@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -436,6 +436,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#execution-controls-and-local-concurrency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution controls and local concurrency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-grounding" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -454,6 +465,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Multimodal generation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#text-phase-feedback-prefill-vs-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Text phase feedback (prefill vs generation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -507,6 +535,56 @@
     <span class="md-ellipsis">
       
         Lifecycle operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-prompt-cache-attribution-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session prompt-cache attribution and lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-residency-listings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency listings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-residency-locks-and-context-estimates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency locks and context estimates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model residency locks and context estimates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#model_residency-effect-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MODEL_RESIDENCY effect operations
       
     </span>
   </a>
@@ -1127,6 +1205,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#execution-controls-and-local-concurrency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution controls and local concurrency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-grounding" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1145,6 +1234,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Multimodal generation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#text-phase-feedback-prefill-vs-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Text phase feedback (prefill vs generation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1198,6 +1304,56 @@
     <span class="md-ellipsis">
       
         Lifecycle operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-prompt-cache-attribution-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session prompt-cache attribution and lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-residency-listings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency listings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-residency-locks-and-context-estimates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency locks and context estimates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model residency locks and context estimates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#model_residency-effect-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MODEL_RESIDENCY effect operations
       
     </span>
   </a>
@@ -1307,13 +1463,13 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.13.38 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.13.41 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
 capability backends and hardware profiles:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[apple]&quot;</span>
-pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;abstractruntime[gpu]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"abstractruntime[apple]"</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"abstractruntime[gpu]"</span>
 </code></pre></div>
 <p>With <code>abstractmusic&gt;=0.1.12</code>, the base music integration includes the lightweight remote ACE Music backend without local model-runtime extras. The MCP worker entrypoint is included in the base Runtime install.</p>
 <h2 id="execution-modes">Execution modes<a class="headerlink" href="#execution-modes" title="Permanent link">&para;</a></h2>
@@ -1337,31 +1493,31 @@ the current process. Remote model execution is a separate topology exposed throu
 
 <span class="k">def</span><span class="w"> </span><span class="nf">ask_model</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span>
-        <span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;ask_model&quot;</span><span class="p">,</span>
+        <span class="n">node_id</span><span class="o">=</span><span class="s2">"ask_model"</span><span class="p">,</span>
         <span class="n">effect</span><span class="o">=</span><span class="n">Effect</span><span class="p">(</span>
             <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
             <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-                <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Answer in one sentence: what is durable workflow state?&quot;</span><span class="p">,</span>
-                <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="s2">&quot;max_tokens&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">},</span>
+                <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Answer in one sentence: what is durable workflow state?"</span><span class="p">,</span>
+                <span class="s2">"params"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"temperature"</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="s2">"max_tokens"</span><span class="p">:</span> <span class="mi">128</span><span class="p">},</span>
             <span class="p">},</span>
-            <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;llm&quot;</span><span class="p">,</span>
+            <span class="n">result_key</span><span class="o">=</span><span class="s2">"llm"</span><span class="p">,</span>
         <span class="p">),</span>
-        <span class="n">next_node</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span>
+        <span class="n">next_node</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">done</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">ctx</span><span class="p">):</span>
-    <span class="n">llm</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;llm&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
-    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">&quot;done&quot;</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;answer&quot;</span><span class="p">:</span> <span class="n">llm</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;content&quot;</span><span class="p">)})</span>
+    <span class="n">llm</span> <span class="o">=</span> <span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"llm"</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="k">return</span> <span class="n">StepPlan</span><span class="p">(</span><span class="n">node_id</span><span class="o">=</span><span class="s2">"done"</span><span class="p">,</span> <span class="n">complete_output</span><span class="o">=</span><span class="p">{</span><span class="s2">"answer"</span><span class="p">:</span> <span class="n">llm</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"content"</span><span class="p">)})</span>
 
 
 <span class="n">workflow</span> <span class="o">=</span> <span class="n">WorkflowSpec</span><span class="p">(</span>
-    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">&quot;abstractcore_llm_demo&quot;</span><span class="p">,</span>
-    <span class="n">entry_node</span><span class="o">=</span><span class="s2">&quot;ask_model&quot;</span><span class="p">,</span>
-    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ask_model&quot;</span><span class="p">:</span> <span class="n">ask_model</span><span class="p">,</span> <span class="s2">&quot;done&quot;</span><span class="p">:</span> <span class="n">done</span><span class="p">},</span>
+    <span class="n">workflow_id</span><span class="o">=</span><span class="s2">"abstractcore_llm_demo"</span><span class="p">,</span>
+    <span class="n">entry_node</span><span class="o">=</span><span class="s2">"ask_model"</span><span class="p">,</span>
+    <span class="n">nodes</span><span class="o">=</span><span class="p">{</span><span class="s2">"ask_model"</span><span class="p">:</span> <span class="n">ask_model</span><span class="p">,</span> <span class="s2">"done"</span><span class="p">:</span> <span class="n">done</span><span class="p">},</span>
 <span class="p">)</span>
 
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">)</span>
 <span class="n">run_id</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">workflow</span><span class="p">)</span>
 <span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">workflow</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">output</span><span class="p">)</span>
@@ -1369,21 +1525,28 @@ the current process. Remote model execution is a separate topology exposed throu
 <h2 id="llm_call-payload-recommended-shape"><code>LLM_CALL</code> payload (recommended shape)<a class="headerlink" href="#llm_call-payload-recommended-shape" title="Permanent link">&para;</a></h2>
 <p><code>Effect(type=EffectType.LLM_CALL, payload=...)</code></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional text alias, useful for TTS&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}],</span>
-<span class="w">  </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;media&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;path/or/artifact-ref&quot;</span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text|image|video|voice|music&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional&quot;</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;parameters&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}],</span>
-<span class="w">  </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"request"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"messages"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span><span class="w"> </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">}],</span>
+<span class="w">    </span><span class="nt">"media"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"path/or/artifact-ref"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional text alias, useful for TTS"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"messages"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span><span class="w"> </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"system_prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"media"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"path/or/artifact-ref"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"output"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"modality"</span><span class="p">:</span><span class="w"> </span><span class="s2">"text|image|video|voice|sound|music"</span><span class="p">,</span><span class="w"> </span><span class="nt">"task"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"tools"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"parameters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}],</span>
+<span class="w">  </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"temperature"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"max_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"base_url"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Notes:
+- <code>request</code> is the lower-level Core semantic request shape. Legacy top-level <code>prompt</code>, <code>text</code>,
+  <code>messages</code>, and <code>media</code> fields still work and normalize to the same Core request contract.
 - Remote mode supports per-request dynamic routing by forwarding <code>params.base_url</code> to the AbstractCore server request body (<code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>).
 - Remote mode sends per-request provider key overrides from <code>params.api_key</code> / <code>params.provider_api_key</code> as <code>X-AbstractCore-Provider-API-Key</code> headers. Server/master auth should be supplied separately through the client's configured headers, usually <code>Authorization: Bearer &lt;ABSTRACTCORE_SERVER_API_KEY&gt;</code>.
 - Local mode treats <code>base_url</code> and provider API keys as provider-construction concerns. <code>MultiLocalAbstractCoreLLMClient</code> can construct a per-call client when a host injects <code>params.base_url</code> plus <code>params.api_key</code> or <code>params.provider_api_key</code> (for example from a Gateway provider endpoint profile), then strips those fields before calling the provider.
@@ -1391,10 +1554,40 @@ the current process. Remote model execution is a separate topology exposed throu
 - <code>output</code> may be top-level or inside <code>params</code>; top-level <code>outputs</code> is accepted as a runtime alias for AbstractCore's <code>output</code>.
 - <code>output.tags</code>, when present, are merged into the generated artifact metadata. Runtime metadata such as <code>run_id</code> and <code>tags</code> is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as <code>run.vars["_runtime"]["provider"]</code> and <code>run.vars["_runtime"]["model"]</code> are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.</p>
+<h2 id="execution-controls-and-local-concurrency">Execution controls and local concurrency<a class="headerlink" href="#execution-controls-and-local-concurrency" title="Permanent link">&para;</a></h2>
+<p>For text/chat calls, pass <code>params.thinking</code> as a boolean or reasoning level and
+<code>params.speculation</code> as <code>False</code>, <code>True</code>, or a Core speculation object, for example
+<code>{"mode": "native_mtp", "num_draft_tokens": 3, "require_acceleration": true}</code>.
+Explicit <code>False</code> overrides the loaded provider's default; omission leaves that
+default available. Core owns support validation and actual inference behavior.
+For native MLX, configure the head and <code>mlx_batching=True</code> when constructing/loading
+the provider; a per-call parameter alone does not enable an unloaded head/scheduler.</p>
+<p>Local Runtime clients allow concurrent submission only when the loaded MLX instance
+explicitly advertises safe scheduling. Ordinary instances retain serialization
+through completion, including streamed iteration. Scheduler admission is not a
+promise that every request batches: MTP uses fixed cohorts, and separate prefix-cache
+managers remain separate scheduling groups. Token callbacks on one client can
+interleave; use request results for attribution.</p>
+<p>Remote text/chat clients forward these controls and expose Core's returned
+<code>execution</code>, <code>speculation</code>, <code>performance</code>, and <code>prompt_cache</code> fields in result
+<code>metadata</code>, without replacing Runtime-owned request/trace provenance. Remote chat
+still returns an aggregated response. These controls require a compatible Core
+backend; they do not implement HF/GGUF native MTP by themselves.</p>
+<p>Set <code>_runtime.speculation</code> for a run-wide preference. Subworkflows, Agent loops,
+delegated children and structured-output follow-up calls inherit it unless an
+explicit call/node/child setting overrides it. Missing or <code>None</code> inherits; <code>False</code>
+means Off and survives every boundary. Dictionaries are copied between scopes.</p>
+<p>Core owns the configured default at <code>input.text.options.speculation</code> in capability
+routes (<code>output.text</code> is the same route). Fresh Core configurations use depth 2
+where native MTP is supported; existing configurations are preserved. Applications
+should leave the control unset to follow that default. Scoped Core configuration
+is supplied before local provider construction, so cached head preparation uses
+the correct policy. Remote discovery queries the actual Core execution host and
+does not substitute local model-registry assumptions.</p>
 <h2 id="runtime-grounding">Runtime grounding<a class="headerlink" href="#runtime-grounding" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime records per-call grounding as structured response metadata under <code>metadata.runtime_grounding</code>. The current fields include local datetime, timezone when detectable, country, source, whether prompt injection occurred, and an optional user identity when supplied by trace metadata or local environment.</p>
 <p>For text/chat LLM calls only, the same grounding is rendered into the current user turn as a tagged runtime envelope:</p>
-<div class="highlight"><pre><span></span><code>&lt;runtime_metadata&gt;{&quot;country&quot;:&quot;FR&quot;,&quot;local_datetime&quot;:&quot;2026-05-13T18:00:00+02:00&quot;}&lt;/runtime_metadata&gt;
+<div class="highlight"><pre><span></span><code>&lt;runtime_metadata&gt;{"country":"FR","local_datetime":"2026-05-13T18:00:00+02:00"}&lt;/runtime_metadata&gt;
 hello
 </code></pre></div>
 <p>This makes time/location/user context visible to the LLM without mutating the durable human message into a natural-language prefix. If a model echoes the runtime-owned envelope, AbstractRuntime removes that envelope from user-facing response text while preserving <code>metadata.runtime_grounding</code> for audit.</p>
@@ -1405,99 +1598,120 @@ hello
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;A red ceramic mug on a white table.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span> <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span> <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">},</span>
+        <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"A red ceramic mug on a white table."</span><span class="p">,</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"image"</span><span class="p">,</span> <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"png"</span><span class="p">,</span> <span class="s2">"width"</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span> <span class="s2">"height"</span><span class="p">:</span> <span class="mi">1024</span><span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;image_result&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"image_result"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Generate speech:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello from AbstractRuntime.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;voice&quot;</span><span class="p">,</span> <span class="s2">&quot;voice&quot;</span><span class="p">:</span> <span class="s2">&quot;coral&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">},</span>
+        <span class="s2">"text"</span><span class="p">:</span> <span class="s2">"Hello from AbstractRuntime."</span><span class="p">,</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"voice"</span><span class="p">,</span> <span class="s2">"voice"</span><span class="p">:</span> <span class="s2">"coral"</span><span class="p">,</span> <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"wav"</span><span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;speech_result&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"speech_result"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Generate music:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;Warm lo-fi piano with brushed drums.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;music&quot;</span><span class="p">,</span> <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;acemusic&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;ace-step&quot;</span><span class="p">,</span> <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;wav&quot;</span><span class="p">},</span>
+        <span class="s2">"text"</span><span class="p">:</span> <span class="s2">"Warm lo-fi piano with brushed drums."</span><span class="p">,</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"music"</span><span class="p">,</span> <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"acemusic"</span><span class="p">,</span> <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"ace-step"</span><span class="p">,</span> <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"wav"</span><span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;music_result&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"music_result"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Generate video:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Glowing data streams converge into a geometric logo.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span>
-            <span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;video&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;task&quot;</span><span class="p">:</span> <span class="s2">&quot;text_to_video&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;Wan-AI/Wan2.2-TI2V-5B-Diffusers&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;mp4&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;num_frames&quot;</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span>
-            <span class="s2">&quot;fps&quot;</span><span class="p">:</span> <span class="mi">24</span><span class="p">,</span>
-            <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>
+        <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Glowing data streams converge into a geometric logo."</span><span class="p">,</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"video"</span><span class="p">,</span>
+            <span class="s2">"task"</span><span class="p">:</span> <span class="s2">"text_to_video"</span><span class="p">,</span>
+            <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"mlx-gen"</span><span class="p">,</span>
+            <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"Wan-AI/Wan2.2-TI2V-5B-Diffusers"</span><span class="p">,</span>
+            <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"mp4"</span><span class="p">,</span>
+            <span class="s2">"num_frames"</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span>
+            <span class="s2">"fps"</span><span class="p">:</span> <span class="mi">24</span><span class="p">,</span>
+            <span class="s2">"steps"</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>
         <span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;video_result&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"video_result"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Image to video:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Add a slow camera orbit.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;media&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;$artifact&quot;</span><span class="p">:</span> <span class="s2">&quot;source_image_artifact_id&quot;</span><span class="p">,</span> <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">,</span> <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;source&quot;</span><span class="p">},</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span>
-            <span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="s2">&quot;video&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;task&quot;</span><span class="p">:</span> <span class="s2">&quot;image_to_video&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;Wan-AI/Wan2.2-TI2V-5B-Diffusers&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;mp4&quot;</span><span class="p">,</span>
+        <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Add a slow camera orbit."</span><span class="p">,</span>
+        <span class="s2">"media"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"$artifact"</span><span class="p">:</span> <span class="s2">"source_image_artifact_id"</span><span class="p">,</span> <span class="s2">"type"</span><span class="p">:</span> <span class="s2">"image"</span><span class="p">,</span> <span class="s2">"role"</span><span class="p">:</span> <span class="s2">"source"</span><span class="p">},</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"video"</span><span class="p">,</span>
+            <span class="s2">"task"</span><span class="p">:</span> <span class="s2">"image_to_video"</span><span class="p">,</span>
+            <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"mlx-gen"</span><span class="p">,</span>
+            <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"Wan-AI/Wan2.2-TI2V-5B-Diffusers"</span><span class="p">,</span>
+            <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"mp4"</span><span class="p">,</span>
         <span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;video_result&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"video_result"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Transcribe/analyze audio:</p>
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;media&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;$artifact&quot;</span><span class="p">:</span> <span class="s2">&quot;audio_artifact_id&quot;</span><span class="p">,</span> <span class="s2">&quot;filename&quot;</span><span class="p">:</span> <span class="s2">&quot;speech.wav&quot;</span><span class="p">},</span>
-        <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
+        <span class="s2">"media"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"$artifact"</span><span class="p">:</span> <span class="s2">"audio_artifact_id"</span><span class="p">,</span> <span class="s2">"filename"</span><span class="p">:</span> <span class="s2">"speech.wav"</span><span class="p">},</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="s2">"text"</span><span class="p">,</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;transcript&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"transcript"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Generated binary media requires a runtime <code>ArtifactStore</code> and is stored there. The persisted result contains artifact references:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;outputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;image&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="nt">"outputs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"image"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">      </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image_generation&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;artifact_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;artifact_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;$artifact&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image/png&quot;</span><span class="p">}</span>
+<span class="w">        </span><span class="nt">"modality"</span><span class="p">:</span><span class="w"> </span><span class="s2">"image"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"task"</span><span class="p">:</span><span class="w"> </span><span class="s2">"image_generation"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"artifact_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"artifact_ref"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"$artifact"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"content_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"image/png"</span><span class="p">}</span>
 <span class="w">      </span><span class="p">}</span>
 <span class="w">    </span><span class="p">]</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>LLM-call results that flow through the Core request/output path now also expose a replay-safe
+<code>metadata._runtime_resolved_action</code> summary. <code>history_bundle</code> collects those into top-level
+<code>resolved_actions</code>, so another client can replay which capability family, task, normalized
+request/output summary, and effective route actually ran.</p>
 <p>Media-only normalized results now distinguish orchestration identity from the actual media backend:</p>
 <ul>
 <li><code>runtime_provider</code> / <code>runtime_model</code>: the runtime-side orchestration identity, when relevant</li>
 <li><code>media_provider</code> / <code>media_model</code>: the actual image/video/voice/music backend identity surfaced from the generated output</li>
 </ul>
 <p>For local one-shot subprocess image generation, runtime metadata also records <code>execution_mode="local_one_shot_subprocess"</code>.</p>
-<p>Long-running generated media may expose provider progress callbacks. Runtime injects a transient <code>on_progress</code> callback during <code>LLM_CALL</code> execution and persists each callback as an <code>EMIT_EVENT</code> ledger record named <code>abstract.progress</code>. The callback itself is never stored in the effect payload or run vars.</p>
+<p>Long-running generated media may expose provider progress callbacks. Runtime offers a transient <code>on_progress</code> callback during <code>LLM_CALL</code> execution and persists each callback as an <code>EMIT_EVENT</code> ledger record named <code>abstract.progress</code>. The callback itself is never stored in the effect payload or run vars.</p>
+<p><strong>It is not carried in the payload either.</strong> <code>Effect.payload</code> is JSON to every consumer downstream (ledger, SSE stream, host handlers that <code>json.dumps</code> it), so the callback travels BESIDE the effect: <code>Runtime._execute_effect_with_retry</code> installs it on the <code>contextvars.ContextVar</code> in <code>abstractruntime/core/progress_channel.py</code> for the duration of the handler call, and <code>make_llm_call_handler</code> reads it there into its own params dict — which is what becomes provider kwargs. An explicit <code>params["on_progress"]</code> from the caller always wins; an effect with no progress channel is offered <code>None</code>, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — <code>params</code> holds it), not re-read the ContextVar.</p>
+<h3 id="text-phase-feedback-prefill-vs-generation">Text phase feedback (prefill vs generation)<a class="headerlink" href="#text-phase-feedback-prefill-vs-generation" title="Permanent link">&para;</a></h3>
+<p>The callback is injected for <strong>every</strong> <code>LLM_CALL</code>, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (<code>BaseProvider.supports_text_progress_events()</code>, default <code>False</code>); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.</p>
+<p>Text phase payloads carry <code>kind: "llm"</code> — the discriminator that separates them from the media shapes on the same event name — plus <code>phase</code> (<code>prefill</code> | <code>generate</code> | <code>complete</code>), <code>prompt_tokens</code>, <code>cached_tokens</code>, <code>fed_tokens</code>, <code>generated_tokens</code>, <code>ttft_s</code>, <code>tokens_per_second</code> and <code>elapsed_s</code>, on top of the runtime identity (<code>run_id</code>, <code>workflow_id</code>, <code>node_id</code>, <code>step_id</code>, <code>idempotency_key</code>, <code>attempt</code>) every progress payload gets. Keys with no measured value are absent, never zero.</p>
+<p>One real record, from a <code>basic-agent</code> chat turn on <code>mlx/Qwen3.5-4B-4bit</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"6ef69750-…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"node_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reason"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"effect"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"emit_event"</span><span class="p">,</span><span class="w"> </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"abstract.progress"</span><span class="p">,</span><span class="w"> </span><span class="nt">"scope"</span><span class="p">:</span><span class="w"> </span><span class="s2">"run"</span><span class="p">,</span>
+<span class="w">   </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"6ef69750-…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"workflow_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"visual_react_agent_basic-agent_0_0_4_81795ea9_node-2"</span><span class="p">,</span>
+<span class="w">               </span><span class="nt">"node_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reason"</span><span class="p">,</span><span class="w"> </span><span class="nt">"step_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1cdb2c55-…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"attempt"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">               </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"llm"</span><span class="p">,</span><span class="w"> </span><span class="nt">"phase"</span><span class="p">:</span><span class="w"> </span><span class="s2">"prefill"</span><span class="p">,</span><span class="w"> </span><span class="nt">"event_index"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"elapsed_s"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.045</span><span class="p">,</span>
+<span class="w">               </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mlx"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mlx-community/Qwen3.5-4B-4bit"</span><span class="p">,</span>
+<span class="w">               </span><span class="nt">"prompt_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">808</span><span class="p">,</span><span class="w"> </span><span class="nt">"cached_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">690</span><span class="p">,</span><span class="w"> </span><span class="nt">"fed_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">118</span><span class="p">,</span>
+<span class="w">               </span><span class="nt">"generated_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">}}},</span>
+<span class="w"> </span><span class="nt">"idempotency_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"system:progress:1cdb2c55-…:c9c572d067aa"</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>Cost.</strong> AbstractCore, not Runtime, bounds the volume: <code>prefill</code>, the first-token event and the terminal <code>complete</code> always fire, cadence events no closer than 0.5 s apart, for the whole call, never capped by count (ADR-0026). A 3.7 s answer produced 9 records. Runtime appends each already-completed with a uuid suffix, so no progress tick re-parses the ledger.</p>
+<p><strong>Scope.</strong> These records are <code>scope: "run"</code> and land in the ledger of the run that made the call. In a chat bundle the <code>llm_call</code> runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the <code>abstract.status</code> "Thinking…" event (<code>result.wait.details.sub_run_id</code> on the parent's waiting record).</p>
 <p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
 <p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>image_upscale</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> return:</p>
@@ -1512,31 +1726,31 @@ hello
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_remote_runtime</span>
 
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_remote_runtime</span><span class="p">(</span>
-    <span class="n">server_base_url</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8000&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o-mini&quot;</span><span class="p">,</span>
-    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer server-master-key&quot;</span><span class="p">},</span>
+    <span class="n">server_base_url</span><span class="o">=</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"openai/gpt-4o-mini"</span><span class="p">,</span>
+    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">"Authorization"</span><span class="p">:</span> <span class="s2">"Bearer server-master-key"</span><span class="p">},</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Then pass a per-request upstream provider key through <code>params.provider_api_key</code> only when the AbstractCore server is acting as a provider proxy for that request:</p>
 <div class="highlight"><pre><span></span><code><span class="n">payload</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Summarize this in one sentence.&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span>
-        <span class="s2">&quot;provider_api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;sk-provider-key&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;base_url&quot;</span><span class="p">:</span> <span class="s2">&quot;http://127.0.0.1:1234/v1&quot;</span><span class="p">,</span>
+    <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Summarize this in one sentence."</span><span class="p">,</span>
+    <span class="s2">"params"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"provider_api_key"</span><span class="p">:</span> <span class="s2">"sk-provider-key"</span><span class="p">,</span>
+        <span class="s2">"base_url"</span><span class="p">:</span> <span class="s2">"http://127.0.0.1:1234/v1"</span><span class="p">,</span>
     <span class="p">},</span>
 <span class="p">}</span>
 </code></pre></div>
 <h2 id="tool_calls-payload"><code>TOOL_CALLS</code> payload<a class="headerlink" href="#tool_calls-payload" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tool_calls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="nt">"tool_calls"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_name&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;x&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
-<span class="w">      </span><span class="nt">&quot;call_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional (provider id)&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;runtime_call_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional (stable; runtime-generated)&quot;</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tool_name"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"arguments"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"x"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"call_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional (provider id)"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"runtime_call_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional (stable; runtime-generated)"</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;allowed_tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;optional allowlist (order-insensitive)&quot;</span><span class="p">]</span>
+<span class="w">  </span><span class="nt">"allowed_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"optional allowlist (order-insensitive)"</span><span class="p">]</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Notes:
@@ -1564,16 +1778,16 @@ hello
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">write_file</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">path</span><span class="p">,</span> <span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">content</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">))}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"path"</span><span class="p">:</span> <span class="n">path</span><span class="p">,</span> <span class="s2">"bytes"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">content</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">))}</span>
 
 
 <span class="n">tools</span> <span class="o">=</span> <span class="n">ApprovalToolExecutor</span><span class="p">(</span>
-    <span class="n">delegate</span><span class="o">=</span><span class="n">MappingToolExecutor</span><span class="p">({</span><span class="s2">&quot;write_file&quot;</span><span class="p">:</span> <span class="n">write_file</span><span class="p">}),</span>
+    <span class="n">delegate</span><span class="o">=</span><span class="n">MappingToolExecutor</span><span class="p">({</span><span class="s2">"write_file"</span><span class="p">:</span> <span class="n">write_file</span><span class="p">}),</span>
     <span class="n">policy</span><span class="o">=</span><span class="n">ToolApprovalPolicy</span><span class="p">(),</span>
 <span class="p">)</span>
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="prompt-cache-control-plane-and-durable-blocs">Prompt-cache control plane and durable blocs<a class="headerlink" href="#prompt-cache-control-plane-and-durable-blocs" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:</p>
@@ -1604,11 +1818,17 @@ hello
 <li><code>list_model_residency(...)</code></li>
 <li><code>load_model_residency(...)</code></li>
 <li><code>unload_model_residency(...)</code></li>
+<li><code>lock_model_residency(...)</code></li>
+<li><code>unlock_model_residency(...)</code></li>
+<li><code>get_context_estimate(...)</code></li>
+<li><code>get_memory_snapshot(...)</code></li>
+<li><code>list_session_prompt_caches(...)</code></li>
+<li><code>clear_session_prompt_caches(...)</code></li>
 </ul>
 <p>Behavior by execution mode:</p>
 <ul>
 <li><strong>Local</strong> (<code>MultiLocalAbstractCoreLLMClient</code> / <code>LocalAbstractCoreLLMClient</code>): delegates to the in-process AbstractCore provider and normalizes responses into the same JSON-safe shape used by the endpoint.</li>
-<li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/acore/prompt_cache/*</code> and <code>/acore/models/*</code> on the configured AbstractCore server.</li>
+<li><strong>Remote / Hybrid</strong> (<code>RemoteAbstractCoreLLMClient</code>): proxies <code>/acore/prompt_cache/*</code>, <code>/acore/models/*</code>, and <code>/acore/memory</code> on the configured AbstractCore server.</li>
 <li>When the remote target is the multi-provider AbstractCore server proxy rather than a direct AbstractEndpoint, callers can forward upstream <code>base_url</code> through these prompt-cache methods. Per-request provider key overrides supplied as <code>api_key</code> / <code>provider_api_key</code> are converted to <code>X-AbstractCore-Provider-API-Key</code> headers, not request bodies or query strings.</li>
 <li>For durable bloc/KV methods, <code>base_url</code> takes precedence over local loaded-runtime selectors. Runtime omits <code>provider</code>, <code>model</code>, and <code>runtime_id</code> when <code>base_url</code> is supplied so Core takes the upstream endpoint branch cleanly.</li>
 </ul>
@@ -1632,6 +1852,8 @@ hello
 <li>host-local prompt-cache export/import admin: optional operator tooling
     around live local provider cache state, separate from durable workflow
     memory</li>
+<li><code>get_memory_snapshot(...)</code>, <code>list_session_prompt_caches(...)</code>, <code>clear_session_prompt_caches(...)</code>, <code>lock_model_residency(...)</code>, <code>unlock_model_residency(...)</code>, and <code>get_context_estimate(...)</code> are optional in the LLM-client contract. A configured client that does not implement one still binds to the facade; the facade answers <code>{"ok": false, "supported": false, "operation": ...}</code> for that call instead of failing at construction time.</li>
+<li><code>lock_model_residency(...)</code>, <code>unlock_model_residency(...)</code>, and <code>get_context_estimate(...)</code> accept an optional payload mapping and/or keyword arguments. Keyword arguments merge over a copy of the payload and win on key conflicts; the first positional argument is only ever the payload mapping, and a non-mapping positional raises <code>TypeError</code>.</li>
 </ul>
 <p>Host-side prompt-cache example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -1639,16 +1861,16 @@ hello
     <span class="n">get_abstractcore_host_facade</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"mlx"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"mlx-community/Qwen3-4B-4bit"</span><span class="p">)</span>
 <span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
 
 <span class="n">caps</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_prompt_cache_capabilities</span><span class="p">()</span>
-<span class="k">if</span> <span class="n">caps</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;capabilities&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;supports_prepare_modules&quot;</span><span class="p">):</span>
+<span class="k">if</span> <span class="n">caps</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"capabilities"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"supports_prepare_modules"</span><span class="p">):</span>
     <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_prepare_modules</span><span class="p">(</span>
-        <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
+        <span class="n">namespace</span><span class="o">=</span><span class="s2">"assistant"</span><span class="p">,</span>
         <span class="n">modules</span><span class="o">=</span><span class="p">[</span>
-            <span class="p">{</span><span class="s2">&quot;module_id&quot;</span><span class="p">:</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="s2">&quot;system_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;You are concise.&quot;</span><span class="p">},</span>
-            <span class="p">{</span><span class="s2">&quot;module_id&quot;</span><span class="p">:</span> <span class="s2">&quot;tools&quot;</span><span class="p">,</span> <span class="s2">&quot;tools&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;read_file&quot;</span><span class="p">,</span> <span class="s2">&quot;parameters&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">}}]},</span>
+            <span class="p">{</span><span class="s2">"module_id"</span><span class="p">:</span> <span class="s2">"system"</span><span class="p">,</span> <span class="s2">"system_prompt"</span><span class="p">:</span> <span class="s2">"You are concise."</span><span class="p">},</span>
+            <span class="p">{</span><span class="s2">"module_id"</span><span class="p">:</span> <span class="s2">"tools"</span><span class="p">,</span> <span class="s2">"tools"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"read_file"</span><span class="p">,</span> <span class="s2">"parameters"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"object"</span><span class="p">}}]},</span>
         <span class="p">],</span>
     <span class="p">)</span>
 </code></pre></div>
@@ -1659,39 +1881,39 @@ hello
 <span class="p">)</span>
 
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_file_runtime</span><span class="p">(</span>
-    <span class="n">base_dir</span><span class="o">=</span><span class="s2">&quot;./runtime-data&quot;</span><span class="p">,</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
+    <span class="n">base_dir</span><span class="o">=</span><span class="s2">"./runtime-data"</span><span class="p">,</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">"mlx"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"mlx-community/Qwen3-4B-4bit"</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
 
 <span class="n">record</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">upsert_text_bloc</span><span class="p">(</span>
-    <span class="n">path</span><span class="o">=</span><span class="s2">&quot;assistant/system.txt&quot;</span><span class="p">,</span>
-    <span class="n">content</span><span class="o">=</span><span class="s2">&quot;Long-lived system prompt or memory text&quot;</span><span class="p">,</span>
+    <span class="n">path</span><span class="o">=</span><span class="s2">"assistant/system.txt"</span><span class="p">,</span>
+    <span class="n">content</span><span class="o">=</span><span class="s2">"Long-lived system prompt or memory text"</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">artifact</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">ensure_bloc_kv_artifact</span><span class="p">(</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
-    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;sha256&quot;</span><span class="p">],</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">"mlx"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"mlx-community/Qwen3-4B-4bit"</span><span class="p">,</span>
+    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"sha256"</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="n">loaded</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">load_bloc_kv_artifact</span><span class="p">(</span>
-    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mlx-community/Qwen3-4B-4bit&quot;</span><span class="p">,</span>
-    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;sha256&quot;</span><span class="p">],</span>
+    <span class="n">provider</span><span class="o">=</span><span class="s2">"mlx"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"mlx-community/Qwen3-4B-4bit"</span><span class="p">,</span>
+    <span class="n">sha256</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"sha256"</span><span class="p">],</span>
 <span class="p">)</span>
 
-<span class="n">binding</span> <span class="o">=</span> <span class="n">loaded</span><span class="p">[</span><span class="s2">&quot;artifact&quot;</span><span class="p">][</span><span class="s2">&quot;prompt_cache_binding&quot;</span><span class="p">]</span>
+<span class="n">binding</span> <span class="o">=</span> <span class="n">loaded</span><span class="p">[</span><span class="s2">"artifact"</span><span class="p">][</span><span class="s2">"prompt_cache_binding"</span><span class="p">]</span>
 </code></pre></div>
 <p>Host-local prompt-cache export/import example:</p>
 <div class="highlight"><pre><span></span><code><span class="n">saved</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_export</span><span class="p">(</span>
-    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;orbit-cache&quot;</span><span class="p">,</span>
-    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;sess:orbit&quot;</span><span class="p">,</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">"orbit-cache"</span><span class="p">,</span>
+    <span class="n">key</span><span class="o">=</span><span class="s2">"sess:orbit"</span><span class="p">,</span>
     <span class="n">q8</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">listed</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_prompt_cache_exports</span><span class="p">()</span>
 <span class="n">loaded_cache</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">prompt_cache_import</span><span class="p">(</span>
-    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;orbit-cache&quot;</span><span class="p">,</span>
-    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;loaded:orbit&quot;</span><span class="p">,</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">"orbit-cache"</span><span class="p">,</span>
+    <span class="n">key</span><span class="o">=</span><span class="s2">"loaded:orbit"</span><span class="p">,</span>
     <span class="n">clear_existing</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
@@ -1713,25 +1935,25 @@ hello
 </ul>
 <p>Host-side durable bloc lifecycle example:</p>
 <div class="highlight"><pre><span></span><code><span class="n">records</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_blocs</span><span class="p">()</span>
-<span class="n">artifacts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_bloc_kv_artifacts</span><span class="p">(</span><span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">])</span>
+<span class="n">artifacts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_bloc_kv_artifacts</span><span class="p">(</span><span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"record"</span><span class="p">][</span><span class="s2">"bloc_id"</span><span class="p">])</span>
 
 <span class="c1"># Preview a safe delete first.</span>
 <span class="n">preview</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc_kv_artifact</span><span class="p">(</span>
-    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
-    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">&quot;artifacts&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_path&quot;</span><span class="p">],</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"record"</span><span class="p">][</span><span class="s2">"bloc_id"</span><span class="p">],</span>
+    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">"artifacts"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_path"</span><span class="p">],</span>
     <span class="n">dry_run</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="c1"># Remove one derived KV artifact but keep the durable text bloc.</span>
 <span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc_kv_artifact</span><span class="p">(</span>
-    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
-    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">&quot;artifacts&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_path&quot;</span><span class="p">],</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"record"</span><span class="p">][</span><span class="s2">"bloc_id"</span><span class="p">],</span>
+    <span class="n">artifact_path</span><span class="o">=</span><span class="n">artifacts</span><span class="p">[</span><span class="s2">"artifacts"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_path"</span><span class="p">],</span>
     <span class="n">clear_loaded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="c1"># Remove the whole bloc and all derived artifacts under it.</span>
 <span class="n">facade</span><span class="o">.</span><span class="n">delete_bloc</span><span class="p">(</span>
-    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">&quot;record&quot;</span><span class="p">][</span><span class="s2">&quot;bloc_id&quot;</span><span class="p">],</span>
+    <span class="n">bloc_id</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"record"</span><span class="p">][</span><span class="s2">"bloc_id"</span><span class="p">],</span>
     <span class="n">clear_loaded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
@@ -1739,10 +1961,10 @@ hello
 <div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
     <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
     <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;Use the durable cached prefix.&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;prompt_cache_binding&quot;</span><span class="p">:</span> <span class="n">binding</span><span class="p">},</span>
+        <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Use the durable cached prefix."</span><span class="p">,</span>
+        <span class="s2">"params"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"prompt_cache_binding"</span><span class="p">:</span> <span class="n">binding</span><span class="p">},</span>
     <span class="p">},</span>
-    <span class="n">result_key</span><span class="o">=</span><span class="s2">&quot;llm&quot;</span><span class="p">,</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"llm"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <h3 id="storage-semantics">Storage semantics<a class="headerlink" href="#storage-semantics" title="Permanent link">&para;</a></h3>
@@ -1772,6 +1994,66 @@ hello
 <li><code>delete_bloc_kv_artifact(...)</code> deletes exactly one artifact. If the selector matches several provider/model artifacts, Runtime returns a structured error rather than guessing.</li>
 <li><code>delete_bloc(...)</code> removes the durable text bloc itself. By default it also removes derived KV artifacts under that bloc; pass <code>delete_kv=False</code> only if you intentionally want to leave those artifacts behind.</li>
 </ul>
+<h3 id="session-prompt-cache-attribution-and-lifecycle">Session prompt-cache attribution and lifecycle<a class="headerlink" href="#session-prompt-cache-attribution-and-lifecycle" title="Permanent link">&para;</a></h3>
+<p>When Runtime derives the session-scoped prompt-cache key for a text/chat <code>LLM_CALL</code>, the LLM client stamps session attribution — <code>session_id</code>, <code>run_id</code>, <code>workflow_id</code>, <code>node_id</code>, and <code>namespace</code> — into the cache entry's metadata after each generate that used the derived key. Local clients stamp through the provider's public key-meta contract; remote clients post <code>POST /acore/prompt_cache/key_meta</code> to the configured AbstractCore server, and skip the stamp when the server does not expose that route. Stamping is best-effort and never affects the LLM call result.</p>
+<p>Caller-owned keys are deliberately never stamped: an explicit <code>LLM_CALL.params.prompt_cache_key</code>, a <code>prompt_cache_binding</code> key, or a <code>_runtime.prompt_cache.key</code> override may be shared across sessions, so session-scoped clearing never touches them.</p>
+<p>Hosts inspect and manage session caches through the facade:</p>
+<ul>
+<li><code>list_session_prompt_caches(session_id=None)</code> returns <code>{"ok": true, "caches": [...]}</code> with one row per live cache key: <code>key</code>, <code>provider</code>, <code>model</code>, <code>runtime_id</code>, <code>session_id</code>, <code>token_count</code>, <code>bytes</code>, <code>created_at_s</code>, <code>last_used_at_s</code>, and the raw <code>meta</code>. Fields the backend does not report are <code>null</code> (<code>last_used_at_s</code> currently is). Without a filter, all live keys are listed; keys without attribution carry <code>session_id: null</code>.</li>
+<li><code>clear_session_prompt_caches(session_id)</code> enumerates the session's keys and clears them one by one. It returns <code>{"ok": true, "cleared": [...], "count": &lt;successes&gt;}</code> with a per-row <code>cleared</code> flag; per-key failures are reported in the rows rather than raised. A <code>session_id</code> is required.</li>
+<li><code>get_memory_snapshot()</code> returns the Core-owned host memory snapshot: <code>ram</code> (total/available/used), <code>process</code> (<code>rss_bytes</code>), and <code>device</code> (backend, allocated/total/free bytes; <code>null</code> where the backend has no query). To confirm that an unload released memory, compare <code>device.allocated_bytes</code>; process RSS is not a reliable release signal because freed device buffers can return to the process heap.</li>
+</ul>
+<p>Session caches outlive runs by design: completing a run does not clear the session's caches, so later runs in the same session keep their warm prefixes. Caches go away when a host clears them explicitly, when the owning model is unloaded (<code>unload_model_residency</code> clears the provider's cache stores and Runtime's client-side mirrors), or when the provider evicts them.</p>
+<div class="highlight"><pre><span></span><code><span class="n">snapshot</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_memory_snapshot</span><span class="p">()</span>
+<span class="n">caches</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_session_prompt_caches</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="s2">"support-session-1"</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">clear_session_prompt_caches</span><span class="p">(</span><span class="s2">"support-session-1"</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="model-residency-listings">Model residency listings<a class="headerlink" href="#model-residency-listings" title="Permanent link">&para;</a></h2>
+<p><code>list_model_residency(...)</code> relays Core-owned residency truth (ADR-0007) and, for text-generation listings, includes the whole host:</p>
+<ul>
+<li>Local and multi-local runtimes merge AbstractCore's host-wide loaded-model sweep into the listing, so models resident on host-local provider servers (for example Ollama or LM Studio) appear even when they were not loaded through this runtime. Sweep-only rows carry <code>source: "provider_server"</code> and no <code>task</code> label — Runtime relays what the sweep reports and does not invent task assignments. Remote runtimes receive the same host-wide view from the Core server.</li>
+<li>Rows for models this runtime loaded win deduplication against sweep rows and absorb the sweep's <code>size_bytes</code> / <code>size_vram_bytes</code> when they lack their own.</li>
+<li>Provider-reported size extras are normalized across local and remote listings: <code>size</code> is surfaced as <code>size_bytes</code> and <code>size_vram</code> as <code>size_vram_bytes</code>, with the original fields kept.</li>
+<li>Local text rows carry AbstractCore's registry-declared <code>modalities</code> (capability route keys such as <code>input.text</code>, <code>input.image</code>, <code>output.text</code>). When the registry has no entry for the model, the field is omitted rather than guessed. When the provider instance reports its vision lane unusable, <code>input.image</code> is removed and <code>modalities_note: "vision_unusable"</code> records the divergence.</li>
+<li>Local rows also carry the serving host's identity (<code>host_id</code>, <code>host_name</code>) from AbstractCore's host-info utility; rows already carrying another host's attribution — for example sweep rows — are not overwritten. Remote listings relay the Core server's rows verbatim, including the server's host identity; Runtime never re-stamps them with the client's identity.</li>
+<li>Rows report lock truth: rows for models this runtime manages carry <code>locked</code> and <code>lockable: true</code>, while sweep-only provider-server rows carry <code>lockable: false</code> because this runtime cannot enforce a lock on them. Lock state is runtime-owned — provider claims cannot supply or override <code>locked</code>, <code>lockable</code>, or <code>locked_at</code>. <code>pinned</code> is a truthful alias of <code>locked</code> (same value, Core parity), never the default-identity flag: <code>default</code> alone marks the client's default pair, so a configured capability default is never presented as pinned or loaded.</li>
+</ul>
+<h2 id="model-residency-locks-and-context-estimates">Model residency locks and context estimates<a class="headerlink" href="#model-residency-locks-and-context-estimates" title="Permanent link">&para;</a></h2>
+<p>The host facade and all execution modes expose model-residency lock controls and a context-fit estimate relay:</p>
+<ul>
+<li><code>lock_model_residency(payload=None, **kwargs)</code></li>
+<li><code>unlock_model_residency(payload=None, **kwargs)</code></li>
+<li><code>get_context_estimate(payload=None, **kwargs)</code></li>
+</ul>
+<p>Each accepts an optional payload mapping and/or keyword arguments; keyword arguments win on conflicts. Locks apply to text-generation runtimes only — a request naming another task returns a structured <code>model_residency_unsupported</code> payload instead of being relayed onto a text runtime.</p>
+<p><strong>Lock rule (all execution modes): lock requires provider-verified residency.</strong> A lock is a promise the model stays in memory, so it only applies to a model the provider verifies as resident (<code>provider_resident: true</code>). A warm client or configured default alone is configuration, not memory — locking a non-resident pair refuses with <code>{"ok": false, "error": "model_not_resident", ...}</code>; load the model first (load with <code>lock: true</code>) to lock it at load time. Unlock never requires residency, so a locked-but-since-evicted pair can always be released.</p>
+<p>Lock behavior by execution mode:</p>
+<ul>
+<li><strong>Local / multi-local</strong>: the lock is enforced client-side per <code>(provider, model)</code> pair. <code>unload_model_residency</code> refuses a locked pair with a soft <code>{"ok": false, "error": "model_locked", ...}</code> payload — never an exception. Passing <code>force=true</code> unloads the pair, and the lock is released only after the provider unload succeeds; a failed forced unload leaves the pair resident and locked. For Ollama, lock and unlock also apply the server-side <code>keep_alive</code> knob best-effort (<code>-1</code> on lock, the <code>"5m"</code> default on unlock) and report the outcome under <code>provider_side</code> (<code>supported</code> / <code>applied</code> / optional <code>detail</code>); the client-side flag remains the enforcement truth for every provider, so a knob failure does not fail the lock. Because the knob rides Ollama's native load request, unlocking a pair whose model was since evicted skips the keep-alive restore (<code>applied: false</code> with a detail) — unlock never loads a model back as a side effect, and the residency-required lock rule prevents the lock-side equivalent.</li>
+<li><strong>Remote / hybrid</strong>: <code>lock_model_residency</code> and <code>unlock_model_residency</code> relay <code>POST /acore/models/lock</code> and <code>POST /acore/models/unlock</code> on the configured AbstractCore server, which owns the lock (and enforces the same residency-required rule). When the server refuses to unload a locked runtime with HTTP 409, <code>unload_model_residency</code> converts that refusal into the same structured <code>{"ok": false, "error": "model_locked", "status_code": 409, ...}</code> payload instead of raising; a lock refused for a non-resident model (HTTP 409) is likewise converted to <code>{"ok": false, "error": "model_not_resident", "status_code": 409, ...}</code>. <code>force</code> rides the unload request body only when true. Transport or server errors from these residency operations report <code>supported: true</code>; <code>supported: false</code> is reserved for a client that does not implement the operation at all.</li>
+</ul>
+<p>Request selectors:</p>
+<ul>
+<li>Address the runtime with explicit <code>provider</code> / <code>model</code> fields or with a <code>runtime_id</code>. Local clients accept <code>local:text_generation:&lt;provider&gt;:&lt;model&gt;</code> runtime ids; a runtime id that does not address a local text runtime returns a not-found payload rather than acting on a runtime the caller did not name. A request with no selector at all applies to the client's own default identity.</li>
+<li>Locking requires the pair to be warm in the local client or pool AND provider-verified resident (the lock rule above). Unlocking additionally reaches a locked pair whose pooled client is no longer warm, so a lock can always be released.</li>
+</ul>
+<p>When a multi-local pool re-points its default provider/model, locked pairs are exempt from the pool eviction so their in-process weights stay resident behind the lock. The one exception is a locked pair that becomes the new default identity itself: its pooled client is rebuilt with the new connection settings and its lock is cleared (logged as a warning); re-lock to pin the rebuilt client.</p>
+<p><code>get_context_estimate(...)</code> relays AbstractCore's analytical context-fit estimator. Local and multi-local clients call the estimator in-process, defaulting <code>provider</code> / <code>model</code> to the client's identity when omitted; remote clients relay <code>GET /acore/models/context_estimate</code> with <code>provider</code>, <code>model</code>, and an optional integer-coerced <code>context_length</code>. The estimator response is relayed verbatim — including the tri-state <code>fits_weights</code> / <code>fits_requested_context</code> split, <code>predicted_max_context</code> (the context that fits beside the weights), and <code>budget_bytes</code> (real-ceiling budget; basis and reserve stated in <code>notes</code>); it is advisory only — no Runtime load path gates on it. When the local estimator utility is unavailable, the call degrades to <code>{"ok": false, "supported": false, "operation": "context_estimate", ...}</code>.</p>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code><span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+
+<span class="n">locked</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">lock_model_residency</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">)</span>
+<span class="n">refused</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">unload_model_residency</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">)</span>  <span class="c1"># model_locked payload</span>
+<span class="n">unloaded</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">unload_model_residency</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">fit</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_context_estimate</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">,</span> <span class="n">context_length</span><span class="o">=</span><span class="mi">32768</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="model_residency-effect-operations"><code>MODEL_RESIDENCY</code> effect operations<a class="headerlink" href="#model_residency-effect-operations" title="Permanent link">&para;</a></h3>
+<p>The <code>MODEL_RESIDENCY</code> effect supports the operations <code>list_loaded</code>, <code>load</code>, <code>unload</code>, <code>lock</code>, and <code>unlock</code>, so workflows can author residency control durably:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"lock"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ollama"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"qwen3:4b"</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"unlock"</span><span class="p">,</span><span class="w"> </span><span class="nt">"runtime_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"local:text_generation:ollama:qwen3:4b"</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"unload"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ollama"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"qwen3:4b"</span><span class="p">,</span><span class="w"> </span><span class="nt">"force"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"required"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+</code></pre></div>
+<p><code>lock</code> / <code>unlock</code> accept the same selector fields as the client methods (<code>task</code>, <code>provider</code>, <code>model</code>, <code>runtime_id</code>, plus <code>base_url</code> / <code>timeout_s</code> / provider-key overrides for remote relays). On <code>unload</code>, <code>force</code> is forwarded only when it is authored in the effect payload. All residency operations keep soft-fail semantics: unless the payload sets <code>required: true</code>, a refusal such as <code>model_locked</code> completes the step with <code>status_hint: "warning"</code> and <code>degraded: true</code> instead of failing the run.</p>
 <h2 id="host-local-comms-and-telegram-wrappers">Host-local comms and Telegram wrappers<a class="headerlink" href="#host-local-comms-and-telegram-wrappers" title="Permanent link">&para;</a></h2>
 <p>Runtime also exposes the remaining Gateway-facing host/operator wrappers for
 email and Telegram:</p>
@@ -1822,22 +2104,22 @@ email and Telegram:</p>
     <span class="n">send_telegram_message</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen3:4b&quot;</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">)</span>
 <span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_host_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
 
 <span class="n">accounts</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_email_accounts</span><span class="p">()</span>
 <span class="n">sent</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_email</span><span class="p">(</span>
-    <span class="p">[</span><span class="s2">&quot;ops@example.com&quot;</span><span class="p">],</span>
-    <span class="s2">&quot;Runtime status&quot;</span><span class="p">,</span>
-    <span class="n">body_text</span><span class="o">=</span><span class="s2">&quot;All green.&quot;</span><span class="p">,</span>
+    <span class="p">[</span><span class="s2">"ops@example.com"</span><span class="p">],</span>
+    <span class="s2">"Runtime status"</span><span class="p">,</span>
+    <span class="n">body_text</span><span class="o">=</span><span class="s2">"All green."</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="k">try</span><span class="p">:</span>
     <span class="n">bootstrap</span> <span class="o">=</span> <span class="n">bootstrap_telegram_auth_from_env</span><span class="p">(</span><span class="n">timeout_s</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
 <span class="k">except</span> <span class="n">TelegramTdlibNotAvailable</span><span class="p">:</span>
-    <span class="n">bootstrap</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;TDLib is not installed on this host.&quot;</span><span class="p">}</span>
+    <span class="n">bootstrap</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"success"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">"error"</span><span class="p">:</span> <span class="s2">"TDLib is not installed on this host."</span><span class="p">}</span>
 
-<span class="n">notify</span> <span class="o">=</span> <span class="n">send_telegram_message</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="mi">123456</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s2">&quot;Runtime check complete.&quot;</span><span class="p">)</span>
+<span class="n">notify</span> <span class="o">=</span> <span class="n">send_telegram_message</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="mi">123456</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s2">"Runtime check complete."</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="discovery-snapshots">Discovery snapshots<a class="headerlink" href="#discovery-snapshots" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime's AbstractCore integration also exposes a public host discovery facade for snapshot/query reads:</p>
@@ -1868,10 +2150,10 @@ email and Telegram:</p>
 normalizes route filters before calling AbstractCore's provider registry; remote
 mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="n">models</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_provider_models</span><span class="p">(</span>
-    <span class="s2">&quot;lmstudio&quot;</span><span class="p">,</span>
-    <span class="n">capability_route</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;input.image&quot;</span><span class="p">,</span> <span class="s2">&quot;output.text&quot;</span><span class="p">],</span>
+    <span class="s2">"lmstudio"</span><span class="p">,</span>
+    <span class="n">capability_route</span><span class="o">=</span><span class="p">[</span><span class="s2">"input.image"</span><span class="p">,</span> <span class="s2">"output.text"</span><span class="p">],</span>
 <span class="p">)</span>
-<span class="n">embeddings</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_provider_models</span><span class="p">(</span><span class="s2">&quot;lmstudio&quot;</span><span class="p">,</span> <span class="n">capability_route</span><span class="o">=</span><span class="s2">&quot;embedding.text&quot;</span><span class="p">)</span>
+<span class="n">embeddings</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_provider_models</span><span class="p">(</span><span class="s2">"lmstudio"</span><span class="p">,</span> <span class="n">capability_route</span><span class="o">=</span><span class="s2">"embedding.text"</span><span class="p">)</span>
 </code></pre></div>
 <p>Contract notes:</p>
 <ul>
@@ -1892,20 +2174,20 @@ mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
 <span class="p">)</span>
 
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_remote_runtime</span><span class="p">(</span>
-    <span class="n">server_base_url</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8000&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o-mini&quot;</span><span class="p">,</span>
-    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer server-master-key&quot;</span><span class="p">},</span>
+    <span class="n">server_base_url</span><span class="o">=</span><span class="s2">"http://127.0.0.1:8000"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"openai/gpt-4o-mini"</span><span class="p">,</span>
+    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">"Authorization"</span><span class="p">:</span> <span class="s2">"Bearer server-master-key"</span><span class="p">},</span>
 <span class="p">)</span>
 <span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_discovery_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
 
 <span class="n">providers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_providers</span><span class="p">(</span><span class="n">include_models</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-<span class="n">voices</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_voice_catalog</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;openai&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">music</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_music_providers</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_music&quot;</span><span class="p">)</span>
-<span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_image&quot;</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">upscalers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">&quot;image_upscale&quot;</span><span class="p">)</span>
+<span class="n">voices</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_voice_catalog</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"openai"</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">music</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_music_providers</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">"text_to_music"</span><span class="p">)</span>
+<span class="n">vision</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">"text_to_image"</span><span class="p">,</span> <span class="n">providers_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">upscalers</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_provider_models</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="s2">"image_upscale"</span><span class="p">)</span>
 <span class="n">adapters</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_vision_adapters</span><span class="p">(</span>
-    <span class="n">task</span><span class="o">=</span><span class="s2">&quot;text_to_video&quot;</span><span class="p">,</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit&quot;</span><span class="p">,</span>
+    <span class="n">task</span><span class="o">=</span><span class="s2">"text_to_video"</span><span class="p">,</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit"</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <h2 id="durable-run-scoped-media-and-comms-execution">Durable run-scoped media and comms execution<a class="headerlink" href="#durable-run-scoped-media-and-comms-execution" title="Permanent link">&para;</a></h2>
@@ -1923,85 +2205,90 @@ mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
 <li><code>generate_video(...)</code></li>
 <li><code>image_to_video(...)</code></li>
 <li><code>generate_voice(...)</code></li>
+<li><code>stream_voice(...)</code></li>
 <li><code>generate_music(...)</code></li>
 <li><code>transcribe_audio(...)</code></li>
 <li><code>send_email(...)</code></li>
 <li><code>send_telegram_message(...)</code></li>
 </ul>
-<p>These helpers create child runs under an existing parent run and execute the real <code>LLM_CALL</code> or <code>TOOL_CALLS</code> through Runtime rather than doing external work in host/controller code.</p>
+<p>These helpers create child runs under an existing parent run and execute the real
+<code>LLM_CALL</code>, <code>TOOL_CALLS</code>, or stream finalization through Runtime rather than
+doing external work in host/controller code. <code>stream_voice(...)</code> yields TTS
+stream events for progressive playback and completes the child run with the
+final audio artifact when the stream succeeds.</p>
 <p>Example:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">create_local_runtime</span><span class="p">,</span>
     <span class="n">get_abstractcore_run_facade</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mlx&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;qwen-chat&quot;</span><span class="p">)</span>
+<span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"mlx"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen-chat"</span><span class="p">)</span>
 <span class="n">facade</span> <span class="o">=</span> <span class="n">get_abstractcore_run_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
 
 <span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">generate_image</span><span class="p">(</span>
-    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
-    <span class="n">prompt</span><span class="o">=</span><span class="s2">&quot;A red mug on a white table.&quot;</span><span class="p">,</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
+    <span class="n">prompt</span><span class="o">=</span><span class="s2">"A red mug on a white table."</span><span class="p">,</span>
     <span class="n">output</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AbstractFramework/qwen-image-2512-8bit&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-        <span class="s2">&quot;seeds&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">101</span><span class="p">,</span> <span class="mi">102</span><span class="p">],</span>
-        <span class="s2">&quot;lora_adapters&quot;</span><span class="p">:</span> <span class="p">[</span>
-            <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;pixel-art&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.7</span><span class="p">},</span>
-            <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;cool-grade&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">},</span>
+        <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"mlx-gen"</span><span class="p">,</span>
+        <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"AbstractFramework/qwen-image-2512-8bit"</span><span class="p">,</span>
+        <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"png"</span><span class="p">,</span>
+        <span class="s2">"count"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">"seeds"</span><span class="p">:</span> <span class="p">[</span><span class="mi">101</span><span class="p">,</span> <span class="mi">102</span><span class="p">],</span>
+        <span class="s2">"lora_adapters"</span><span class="p">:</span> <span class="p">[</span>
+            <span class="p">{</span><span class="s2">"id"</span><span class="p">:</span> <span class="s2">"pixel-art"</span><span class="p">,</span> <span class="s2">"scale"</span><span class="p">:</span> <span class="mf">0.7</span><span class="p">},</span>
+            <span class="p">{</span><span class="s2">"id"</span><span class="p">:</span> <span class="s2">"cool-grade"</span><span class="p">,</span> <span class="s2">"scale"</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">},</span>
         <span class="p">],</span>
     <span class="p">},</span>
 <span class="p">)</span>
 
-<span class="k">assert</span> <span class="n">child</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span>
-<span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">]</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;media_model&quot;</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
+<span class="k">assert</span> <span class="n">child</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">"completed"</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">"result"</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">"media_model"</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">"outputs"</span><span class="p">][</span><span class="s2">"image"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_id"</span><span class="p">])</span>
 </code></pre></div>
 <p>Image upscaling uses the same durable child-run boundary and Core-owned <code>image_upscale</code> selector:</p>
 <div class="highlight"><pre><span></span><code><span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">upscale_image</span><span class="p">(</span>
-    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
-    <span class="n">media</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;$artifact&quot;</span><span class="p">:</span> <span class="s2">&quot;source-image-artifact-id&quot;</span><span class="p">,</span> <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;image&quot;</span><span class="p">},</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
+    <span class="n">media</span><span class="o">=</span><span class="p">{</span><span class="s2">"$artifact"</span><span class="p">:</span> <span class="s2">"source-image-artifact-id"</span><span class="p">,</span> <span class="s2">"type"</span><span class="p">:</span> <span class="s2">"image"</span><span class="p">},</span>
     <span class="n">output</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;png&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-        <span class="s2">&quot;resolution&quot;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span>
+        <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"mlx-gen"</span><span class="p">,</span>
+        <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"png"</span><span class="p">,</span>
+        <span class="s2">"scale"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">"resolution"</span><span class="p">:</span> <span class="mi">1024</span><span class="p">,</span>
     <span class="p">},</span>
 <span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">][</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;image&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">"result"</span><span class="p">][</span><span class="s2">"outputs"</span><span class="p">][</span><span class="s2">"image"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_id"</span><span class="p">])</span>
 </code></pre></div>
 <p>For video, use the same child-run boundary:</p>
 <div class="highlight"><pre><span></span><code><span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">generate_video</span><span class="p">(</span>
-    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
-    <span class="n">prompt</span><span class="o">=</span><span class="s2">&quot;Glowing data streams converge into a geometric logo.&quot;</span><span class="p">,</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
+    <span class="n">prompt</span><span class="o">=</span><span class="s2">"Glowing data streams converge into a geometric logo."</span><span class="p">,</span>
     <span class="n">output</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;provider&quot;</span><span class="p">:</span> <span class="s2">&quot;mlx-gen&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;format&quot;</span><span class="p">:</span> <span class="s2">&quot;mp4&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;num_frames&quot;</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span>
-        <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-        <span class="s2">&quot;seeds&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">401</span><span class="p">,</span> <span class="mi">402</span><span class="p">],</span>
-        <span class="s2">&quot;flow_shift&quot;</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">,</span>
-        <span class="s2">&quot;lora_adapters&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;documentary-motion&quot;</span><span class="p">,</span> <span class="s2">&quot;scale&quot;</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">}],</span>
+        <span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"mlx-gen"</span><span class="p">,</span>
+        <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit"</span><span class="p">,</span>
+        <span class="s2">"format"</span><span class="p">:</span> <span class="s2">"mp4"</span><span class="p">,</span>
+        <span class="s2">"num_frames"</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span>
+        <span class="s2">"count"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">"seeds"</span><span class="p">:</span> <span class="p">[</span><span class="mi">401</span><span class="p">,</span> <span class="mi">402</span><span class="p">],</span>
+        <span class="s2">"flow_shift"</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">,</span>
+        <span class="s2">"lora_adapters"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"id"</span><span class="p">:</span> <span class="s2">"documentary-motion"</span><span class="p">,</span> <span class="s2">"scale"</span><span class="p">:</span> <span class="mf">0.6</span><span class="p">}],</span>
     <span class="p">},</span>
 <span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;result&quot;</span><span class="p">][</span><span class="s2">&quot;outputs&quot;</span><span class="p">][</span><span class="s2">&quot;video&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;artifact_id&quot;</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">"result"</span><span class="p">][</span><span class="s2">"outputs"</span><span class="p">][</span><span class="s2">"video"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_id"</span><span class="p">])</span>
 </code></pre></div>
 <p>Outbound comms sends that belong to a run should use the same durable child-run surface:</p>
 <div class="highlight"><pre><span></span><code><span class="n">email_child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_email</span><span class="p">(</span>
-    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
-    <span class="n">to</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ops@example.com&quot;</span><span class="p">],</span>
-    <span class="n">subject</span><span class="o">=</span><span class="s2">&quot;Workflow alert&quot;</span><span class="p">,</span>
-    <span class="n">body_text</span><span class="o">=</span><span class="s2">&quot;The workflow completed.&quot;</span><span class="p">,</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
+    <span class="n">to</span><span class="o">=</span><span class="p">[</span><span class="s2">"ops@example.com"</span><span class="p">],</span>
+    <span class="n">subject</span><span class="o">=</span><span class="s2">"Workflow alert"</span><span class="p">,</span>
+    <span class="n">body_text</span><span class="o">=</span><span class="s2">"The workflow completed."</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="n">telegram_child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_telegram_message</span><span class="p">(</span>
-    <span class="s2">&quot;existing-parent-run-id&quot;</span><span class="p">,</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
     <span class="n">chat_id</span><span class="o">=</span><span class="mi">123456</span><span class="p">,</span>
-    <span class="n">text</span><span class="o">=</span><span class="s2">&quot;Workflow completed.&quot;</span><span class="p">,</span>
+    <span class="n">text</span><span class="o">=</span><span class="s2">"Workflow completed."</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>Contract notes for durable comms sends:</p>
@@ -2090,7 +2377,7 @@ mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

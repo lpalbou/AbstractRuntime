@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -883,6 +883,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tool-output-offload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool-output offload
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#catalog-and-search" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -971,11 +982,11 @@ workspace-scoped paths.</p>
 when the backend supports it, and a <code>run_id</code> scope. JSON state and Gateway APIs
 pass artifacts with refs such as:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;$artifact&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a7050ebc5c8330...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;artifact_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a7050ebc5c8330...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9e19bd6a-ba07-4c2e-86c6-94ec7ca0a373&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;audio/wav&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;size_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5293012</span>
+<span class="w">  </span><span class="nt">"$artifact"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a7050ebc5c8330..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"artifact_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a7050ebc5c8330..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"9e19bd6a-ba07-4c2e-86c6-94ec7ca0a373"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"content_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"audio/wav"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"size_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">5293012</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The ref is a pointer, not authorization. Hosts such as AbstractGateway are
@@ -1025,6 +1036,30 @@ generated-media path should use <code>build_artifact_descriptor_payload(...)</co
 <code>abstractruntime.storage.artifacts</code>. That helper applies the Runtime descriptor
 schema, bounded secret-key redaction, and prompt/text sensitivity labels without
 making Gateway invent a parallel descriptor contract.</p>
+<h2 id="tool-output-offload">Tool-output offload<a class="headerlink" href="#tool-output-offload" title="Permanent link">&para;</a></h2>
+<p>Large tool outputs are stored as session artifacts instead of being carried
+inline in prompts and ledger records. The agent keeps a bounded preview plus an
+<code>open_attachment</code> handle, so full content stays retrievable on demand while the
+durable record stays lean.</p>
+<p>Offload applies to:</p>
+<ul>
+<li><code>read_file</code> content above the inline threshold;</li>
+<li><code>execute_command</code> <code>stdout</code> and <code>stderr</code>, regardless of exit code (verbose
+  failures are offloaded like verbose successes);</li>
+<li>any other host tool whose string output exceeds the inline threshold.</li>
+</ul>
+<p>Thresholds (environment-configurable):</p>
+<ul>
+<li><code>ABSTRACTRUNTIME_MAX_INLINE_BYTES</code> (default 256 KiB): outputs at or below
+  this size stay inline.</li>
+<li><code>ABSTRACTRUNTIME_MAX_ATTACHMENT_BYTES</code> (default 50 MB): the retention cap for
+  offloaded outputs.</li>
+</ul>
+<p>Output above the retention cap is not stored and is never kept inline. The tool
+result carries an explicit notice stating the size, the cap, and how to proceed
+(narrow the command, for example with <code>head</code> or <code>grep</code>, or redirect to a file
+and read a bounded range). The decision on how to proceed belongs to the agent
+or user; the runtime never drops output silently.</p>
 <h2 id="catalog-and-search">Catalog and search<a class="headerlink" href="#catalog-and-search" title="Permanent link">&para;</a></h2>
 <p><code>InMemoryArtifactStore</code> and <code>FileArtifactStore</code> support:</p>
 <ul>
@@ -1129,7 +1164,7 @@ created through descriptor-aware paths.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

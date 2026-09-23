@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1084,16 +1084,16 @@
 <h2 id="what-_limits-contains">What <code>_limits</code> contains<a class="headerlink" href="#what-_limits-contains" title="Permanent link">&para;</a></h2>
 <p><code>Runtime.start(...)</code> initializes <code>_limits</code> from <code>RuntimeConfig.to_limits_dict()</code> when missing. (<code>src/abstractruntime/core/runtime.py</code>, <code>src/abstractruntime/core/config.py</code>)</p>
 <p>Shape (keys are stable; values may be <code>None</code> when unknown):</p>
-<div class="highlight"><pre><span></span><code><span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">&quot;_limits&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;max_iterations&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">,</span>
-    <span class="s2">&quot;current_iteration&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
-    <span class="s2">&quot;max_tokens&quot;</span><span class="p">:</span> <span class="mi">32768</span><span class="p">,</span>          <span class="c1"># context window (fallback when unknown)</span>
-    <span class="s2">&quot;max_output_tokens&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>    <span class="c1"># provider/model dependent</span>
-    <span class="s2">&quot;max_input_tokens&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>     <span class="c1"># optional budget cap for inputs</span>
-    <span class="s2">&quot;estimated_tokens_used&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>   <span class="c1"># best-effort (see below)</span>
-    <span class="s2">&quot;max_history_messages&quot;</span><span class="p">:</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span>   <span class="c1"># -1 = unlimited</span>
-    <span class="s2">&quot;warn_iterations_pct&quot;</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span>
-    <span class="s2">&quot;warn_tokens_pct&quot;</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><code><span class="n">run</span><span class="o">.</span><span class="n">vars</span><span class="p">[</span><span class="s2">"_limits"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"max_iterations"</span><span class="p">:</span> <span class="mi">20</span><span class="p">,</span>
+    <span class="s2">"current_iteration"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="s2">"max_tokens"</span><span class="p">:</span> <span class="mi">32768</span><span class="p">,</span>          <span class="c1"># context window (fallback when unknown)</span>
+    <span class="s2">"max_output_tokens"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>    <span class="c1"># provider/model dependent</span>
+    <span class="s2">"max_input_tokens"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>     <span class="c1"># optional budget cap for inputs</span>
+    <span class="s2">"estimated_tokens_used"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>   <span class="c1"># best-effort (see below)</span>
+    <span class="s2">"max_history_messages"</span><span class="p">:</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span>   <span class="c1"># -1 = unlimited</span>
+    <span class="s2">"warn_iterations_pct"</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span>
+    <span class="s2">"warn_tokens_pct"</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Notes (as implemented today):
@@ -1126,7 +1126,7 @@
 <h3 id="runtimeupdate_limitsrun_id-updates"><code>Runtime.update_limits(run_id, updates)</code><a class="headerlink" href="#runtimeupdate_limitsrun_id-updates" title="Permanent link">&para;</a></h3>
 <p>Updates selected keys in <code>_limits</code> durably (saved via the configured <code>RunStore</code>). Unknown keys are ignored. (<code>src/abstractruntime/core/runtime.py</code>)</p>
 <p>Example:</p>
-<div class="highlight"><pre><span></span><code><span class="n">rt</span><span class="o">.</span><span class="n">update_limits</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;max_tokens&quot;</span><span class="p">:</span> <span class="mi">131072</span><span class="p">,</span> <span class="s2">&quot;warn_tokens_pct&quot;</span><span class="p">:</span> <span class="mi">85</span><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><span class="n">rt</span><span class="o">.</span><span class="n">update_limits</span><span class="p">(</span><span class="n">run_id</span><span class="p">,</span> <span class="p">{</span><span class="s2">"max_tokens"</span><span class="p">:</span> <span class="mi">131072</span><span class="p">,</span> <span class="s2">"warn_tokens_pct"</span><span class="p">:</span> <span class="mi">85</span><span class="p">})</span>
 </code></pre></div>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1192,7 +1192,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

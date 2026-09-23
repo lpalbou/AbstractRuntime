@@ -1,0 +1,1205 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/runtime_systemic_reliability/0044_meta_analysis_record/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>0044 — Runtime meta-analysis record (2026-07-12): from artisanal to systemic reliability - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#0044-runtime-meta-analysis-record-2026-07-12-from-artisanal-to-systemic-reliability" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              0044 — Runtime meta-analysis record (2026-07-12): from artisanal to systemic reliability
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#combined-verdict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combined verdict
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-correctness-grade-findings-both-adversaries-converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two correctness-grade findings (both adversaries converged)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#also-found-new-serious" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Also found (new, serious)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ranked-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ranked plan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ranked plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#this-week-p0" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        This week (P0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#before-the-fleet-runs-247-p1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before the fleet runs 24/7 (P1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#before-10-p2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before 1.0 (P2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-one-highest-leverage-investment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ONE highest-leverage investment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicitly-do-not-do-unanimous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicitly DO NOT do (unanimous)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-observations-the-seats-own-for-the-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session observations (the seat's own, for the record)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="0044-runtime-meta-analysis-record-2026-07-12-from-artisanal-to-systemic-reliability">0044 — Runtime meta-analysis record (2026-07-12): from artisanal to systemic reliability<a class="headerlink" href="#0044-runtime-meta-analysis-record-2026-07-12-from-artisanal-to-systemic-reliability" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>TRACK SOURCE DOCUMENT — the analysis and ranked R-plan below were split
+into executable backlog items in this folder (planned 0045-0055) and
+<code>../../proposed/runtime_systemic_reliability/</code> (0056-0063). Mapping:
+R1→0046, R2→0045, R3→0047, R4→0048, R5→0049, R6→0050, R7→0051, R8→0053,
+R9→0052, R10→0054, R11→0055, R12→0056, R13→0057, R14→0058,
+R15→0059/0060/0061/0062/0063. This file stays as the evidence record;
+execute from the items.</p>
+</blockquote>
+<p>Maintainer ask (Laurent, 2026-07-12 18:18): "can you do a deep meta analysis
+with 2 adversarial sub agents and see if there is anything we could do to
+improve the runtime as a whole? you have a huge responsibility, as everything
+goes through you."</p>
+<p>Method: two fable5 adversaries over the whole package — one attacking
+structural integrity (module cohesion, layering, concurrency ownership,
+storage surface), one attacking operational reliability (crash-replay
+completeness, 24/7 scale, sync-store contract, observability) — synthesized
+with the runtime seat's own session observations. All findings line-verified
+against the tree at commit 5f81ab7.</p>
+<h2 id="combined-verdict">Combined verdict<a class="headerlink" href="#combined-verdict" title="Permanent link">&para;</a></h2>
+<p>The package is structurally sound where it matters: durable-core semantics
+(idempotency keys, recheck-before-save, watermark-deduped sidecars,
+hash-chained appends, read-side recovery) are consistently designed and
+unusually well pinned (~1,145 tests). BUT its reliability today is the
+product of ARTISANAL per-feature rigor (the steer drain, the chain-fork fix,
+criterion-7), not SYSTEMIC guarantees — and artisanal rigor does not survive
+the next ten features or the next contributor. No redesign is needed; the
+debt is concentrated and specific.</p>
+<h2 id="the-two-correctness-grade-findings-both-adversaries-converged">The two correctness-grade findings (both adversaries converged)<a class="headerlink" href="#the-two-correctness-grade-findings-both-adversaries-converged" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>No per-run driver exclusion.</strong> Zero locks in core/runtime.py; tick()
+   and resume() can drive the SAME run concurrently (scheduler poll thread,
+   emit_event fan-out, gateway runner, MultiStoreScheduler), and
+   JsonFileRunStore.load() returns ALIASED objects — so it is a data race,
+   not just a save clobber. B8 as filed is UNDER-SCOPED: five non-tick-thread
+   RunState writers exist (pause/cancel; cross-run memory-owner saves in
+   _handle_memory_tag/note/compact/rehydrate; emit_event inline resume;
+   history_bundle.persist_workflow_snapshot; active_context.rehydrate).</li>
+<li><strong>O(entire ledger) idempotency lookup per effect step.</strong>
+   _find_prior_completed_result lists the FULL ledger on every effectful
+   step; resume() does two more full lists. A 24/7 resident at 100k records
+   pays a full-file parse per step — the deterministic scale cliff for the
+   fleet, charged to the tick thread.</li>
+</ol>
+<h2 id="also-found-new-serious">Also found (new, serious)<a class="headerlink" href="#also-found-new-serious" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Crash-ordering is four different orderings, two silent-on-failure</strong>:
+   completion saves state THEN appends the terminal record (crash between →
+   terminal run with a never-terminating ledger — the poller-busy-loop shape,
+   produced runtime-side); resume() appends records BEFORE saving, inside
+   <code>except Exception: pass</code> (ledger claims a step the durable state denies).</li>
+<li><strong>The RunState checkpoint is the least-protected file in the system</strong>:
+   five hand-rolled tmp+replace writers with NO fsync (run checkpoint,
+   artifacts, commands); the one hardened fsync writer (utils/atomic_files)
+   is used only by two config files. Corrupt-line recovery differs per store
+   (ledger recovers+warns; run store silently Nones; command store silently
+   skips).</li>
+<li><strong>No schema versioning on run files/records</strong>: a v-next enum in one run
+   file RAISES OUT of every list_runs/scheduler scan on the JSON store
+   (blast radius = the whole directory); SQLite silently returns None (a
+   zombie run). Two stores, two failure modes, both wrong.</li>
+</ol>
+<h2 id="ranked-plan">Ranked plan<a class="headerlink" href="#ranked-plan" title="Permanent link">&para;</a></h2>
+<h3 id="this-week-p0">This week (P0)<a class="headerlink" href="#this-week-p0" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>R1. Per-run tick guard + concurrent-driver detection</strong> — per-run_id
+  in-process lock taken by tick()/resume(); second entrant refuses loudly;
+  save() warns when persisted updated_at is newer than the loaded snapshot
+  (cross-process detector). Closes the two-drivers-one-run class at the
+  kernel.</li>
+<li><strong>R2. ONE written crash-ordering invariant + fix the two inversions</strong> —
+  rule: state save is the commit point; transition records append BEFORE the
+  save that makes them true; terminal-path append failures are never silent.
+  One page in docs/architecture.md (which currently has zero occurrences of
+  "thread"/"concurrency"/"single-writer").</li>
+<li><strong>R3. Indexed idempotency lookup</strong> — SQLite: idempotency_key column +
+  index (ledger_heads-style backfill precedent); JSONL: bounded reverse-tail
+  scan + per-run key cache invalidated on append.</li>
+<li><strong>R4. utils/durable_io.py</strong> — one atomic_write (fsync) + one
+  append_jsonl + one recovering-iterator; point all five hand-rolled copies
+  at it; fsync run checkpoints on status transitions at minimum.</li>
+<li><strong>R5. Mechanical llm_client split</strong> — 11,825 lines → package
+  integrations/abstractcore/llm/ (grounding / residency / blocs /
+  prompt_cache / media_artifacts / normalize / protocol / local / multilocal
+  / remote), llm_client.py stays as a pure re-export facade (private-name
+  imports keep working; core/runtime.py:562's four grounding imports move
+  DOWN to core, killing the core→integrations inversion).</li>
+</ul>
+<h3 id="before-the-fleet-runs-247-p1">Before the fleet runs 24/7 (P1)<a class="headerlink" href="#before-the-fleet-runs-247-p1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>R6. B8 executed as designed, scoped to ALL FIVE writers</strong> — signal-only
+  control sidecar (the proven steer pattern) for pause/cancel; memory-owner
+  cross-run writes through a per-run-id lock or owner-mutation queue;
+  emit_event signal-only delivery as a host-selectable mode (inline resume
+  stays for single-process hosts).</li>
+<li><strong>R7. Runtime-owned durable event mailbox</strong> — take the gateway's
+  events_inbox copy home (durable append, per-run monotonic seq, 500-cap,
+  event_id dedup, receiver counts — gateway explicitly asked "carry both");
+  generalize the steer sidecar store into a named-mailbox primitive so
+  steer/events share ONE crash-ordering. Also kills the
+  list_runs(limit=10_000) scan per emit.</li>
+<li><strong>R8. Bounded run-vars growth</strong> — byte-cap node-trace entries (digest +
+  artifact ref above threshold), cap _runtime.inbox and warning lists,
+  vars-size gauge with threshold warning.</li>
+<li><strong>R9. Sync-store event-loop tripwire</strong> — get_running_loop() check in hot
+  store methods → warn-once + counter ("sync store called on a running event
+  loop"); optional AsyncRunStoreFacade. Two incidents already; prevents the
+  third structurally.</li>
+<li><strong>R10. RuntimeHealth counters</strong> — one monotonic-counter dict + last-error
+  ring on Runtime (tick durations, drains/failures, replay collapses,
+  recovered lines, guard trips), incremented at existing warning sites,
+  one getter the gateway serves. Counters, not log spam.</li>
+<li><strong>R11. JSONL honesty</strong> — count() through the same recovery decode as
+  list() (the divergence class is structural today); document JSONL as
+  dev-tier, SQLite as the 24/7 default.</li>
+</ul>
+<h3 id="before-10-p2">Before 1.0 (P2)<a class="headerlink" href="#before-10-p2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>R12. Schema-version + quarantine loading</strong> — schema: run.v1 on save;
+  unknown status/reason → per-run quarantine (skip + loud counter), never
+  scan-crash, never silent zombie; split-runner rule documented.</li>
+<li><strong>R13. Declarative trust-boundary stamp registry</strong> — {tool → (arg,
+  source, on_missing)} table consumed by the planner loop + a test that
+  every schema-hidden arg has a stamp entry (shell namespace + agora alias
+  are two hand-rolled copies today; make the third impossible to forget).</li>
+<li><strong>R14. Terminal-run archival helper</strong> — archive_terminal_runs(before=...)
+  moving run+ledger to an archive subdir (host-invoked, marker-recorded);
+  prevents the ~10k-file directory cliff and operator rm-under-live-sidecar.</li>
+<li><strong>R15. Remaining moves</strong>: B3 (chat-shape envelope → the trailing-message
+  lane that tool-loop shape already uses); memory-span handlers out of the
+  Runtime class (~1,700 lines → memory/span_effects.py); visual_to_flow
+  mega-function decomposition (band-by-band, strongest-tested area);
+  root-API <strong>getattr</strong> deprecation machinery + public/internal split;
+  dependency honesty (docs re-scope or [documents]/[media] extras);
+  _jsonable ×3 and _set_nested ×2 dedup.</li>
+</ul>
+<h3 id="the-one-highest-leverage-investment">The ONE highest-leverage investment<a class="headerlink" href="#the-one-highest-leverage-investment" title="Permanent link">&para;</a></h3>
+<p>A generalized KILL-AND-REPLAY HARNESS promoted from criterion-7 into shared
+test infrastructure: SIGKILL at injected persistence point N → restart from
+stores → assert terminal-output/ledger convergence + no doubled side effects
++ run under two concurrent drivers. It converts every crash-window and
+concurrency claim from folklore into a checkable property, is the first
+consumer of R1-R3, and keeps R6-R15 honest as they land.</p>
+<h3 id="explicitly-do-not-do-unanimous">Explicitly DO NOT do (unanimous)<a class="headerlink" href="#explicitly-do-not-do-unanimous" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No async kernel rewrite (the sync one-writer tick is why crash windows are
+  analyzable; facades + tripwires only).</li>
+<li>No tick/resume/wait state-machine decomposition (one state machine; after
+  R15's memory extraction, ~3,200 lines of coherent kernel).</li>
+<li>No new eventing abstraction (the hooks thin-layer ruling paid off all
+  week; named mailboxes over the existing primitive, R7).</li>
+<li>No deep-copy/frozen stores (hot-path tax; R1's guard addresses the risk).</li>
+<li>No auto-pruning/compacting ledgers in place (append-only is the audit and
+  identity posture; archival is explicit and marker-recorded).</li>
+<li>No merging the three LLM client classes (genuinely different transports).</li>
+</ul>
+<h2 id="session-observations-the-seats-own-for-the-record">Session observations (the seat's own, for the record)<a class="headerlink" href="#session-observations-the-seats-own-for-the-record" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Same-hour reactive shipping works BECAUSE the adversary pass is mandatory:
+  the seat's own P0 this session (steer ack-before-save) was caught there.</li>
+<li>Accretion lands where asks point, not where architecture wants: llm_client
+  absorbed four unrelated features this session alone.</li>
+<li>Drift pins are alarms, not fixes: visit-id literal, alias tables, and
+  gateway pattern-copies each carry one; R5/R7/R12 retire the causes.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

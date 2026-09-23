@@ -20,7 +20,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.13.40`.
+- The current AbstractCore integration expects `abstractcore>=2.13.41`.
 
 Verify:
 

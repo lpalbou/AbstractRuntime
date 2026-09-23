@@ -15,7 +15,7 @@ Shape (keys are stable; values may be `None` when unknown):
 
 ```python
 run.vars["_limits"] = {
-    "max_iterations": 50,
+    "max_iterations": 20,
     "current_iteration": 0,
     "max_tokens": 32768,          # context window (fallback when unknown)
     "max_output_tokens": None,    # provider/model dependent

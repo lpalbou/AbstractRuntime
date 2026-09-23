@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.4.31"
+version = "0.4.32"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,7 +36,7 @@ classifiers = [
 dependencies = [
   # Required to resolve stable structured-output schema refs like:
   # {"$ref":"abstractsemantics:kg_assertion_schema_v0"}
-  "abstractsemantics>=0.0.3",
+  "abstractsemantics>=0.0.5",
   # The visual Code-node sandbox and the pin-expression tier (2026-07-25).
   # This was always the INTENDED sandbox (code_executor guards import it),
   # but it was never declared, so deployments silently fell back to the
@@ -46,11 +46,11 @@ dependencies = [
   # Required for the Runtime-owned MEMORY_KG_* effect contract and TripleStore
   # model types. Durable/vector backend dependencies such as LanceDB remain
   # package extras owned by AbstractMemory and selected by hosts such as Gateway.
-  "AbstractMemory>=0.2.6",
+  "AbstractMemory>=0.3.0",
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing are available without selecting
   # local inference engines.
-  "abstractcore[remote,tools,vision,voice,audio,music]>=2.13.40",
+  "abstractcore[remote,tools,vision,voice,audio,music]>=2.13.41",
   "openai<2.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -67,13 +67,14 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[all-apple]>=2.13.40",
+  "abstractcore[all-apple]>=2.13.41",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[all-gpu]>=2.13.40",
-  "setuptools<82.0.0,>=80.10.2",
+  "abstractcore[all-gpu]>=2.13.41",
+  # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
+  "setuptools<82.0.0,>=77.0.3",
 ]
 
 # CI/test dependencies. The workflow runs the basic contract suite plus focused

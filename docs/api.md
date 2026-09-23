@@ -64,12 +64,24 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 
 - `Runtime.start(workflow, vars=..., actor_id=..., session_id=...) -> run_id`
   - creates and persists a new `RunState`
-- `Runtime.tick(workflow, run_id, max_steps=...) -> RunState`
+- `Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
+  - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
   - host-facing read APIs for checkpoints and the append-only ledger
+- `Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -> RunState`
+  - persists `CANCELLED`, then signals every effect of that run (and its in-flight descendants) executing in this process; the running attempt is recorded as `cancelled` (`StepStatus.CANCELLED`, never retried) with `cancelled_by` and `reason`, and no further effect starts
+- `Runtime.set_default_provider_model(provider=..., model=...)`
+  - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
+
+Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
+- `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
+- `request_model_effects_cancel(provider, model, cancelled_by="model_eject")` stops the effects using a model before it is unloaded; local `unload_model_residency` calls it for you
+- `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)
+
+Tool scope: an explicit `allowed_tools` list in `run.vars["_runtime"]`, in a child run's `_runtime`, or in a `TOOL_CALLS` payload is a ceiling intersected across the run tree (`src/abstractruntime/core/tool_scope.py`). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.
 
 For the execution model (ledger records, effect outcomes, waits), see `architecture.md`.
 
@@ -204,7 +216,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.13.40 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.13.41 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -228,6 +240,13 @@ Entry points:
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
   subprocess isolation stays within the same public contract.
+
+Execution controls and cancellation:
+- `params.thinking` (bool or reasoning level) and `params.speculation` (`False`, `True`, or a Core speculation object such as `{"mode": "native_mtp", "num_draft_tokens": 2}`) are forwarded locally and remotely; `run.vars["_runtime"]["speculation"]` sets a run-wide preference inherited by subworkflows, Agent loops and delegated calls, and `False` stays Off across every boundary (see `integrations/abstractcore.md#execution-controls-and-local-concurrency`)
+- `get_abstractcore_discovery_facade(...).get_execution_capabilities(model_name=None, provider=None)` asks the actual execution host (local or remote) what it supports, without loading a model
+- the `LLM_CALL` handler hands the effect's cancel event to AbstractCore (`generate(..., cancel_event=...)`); remote clients close the request to the AbstractCore server on Stop, which the server treats as a cancel
+- every `LLM_CALL` is offered a progress callback; providers that report text phases (prefill / generate / complete) produce `abstract.progress` ledger events with `kind: "llm"`
+- `abstractruntime.turn_grounding.stamp_user_turn_grounding(messages, grounding=...)` writes the grounding envelope once into the stored user turn, so the prompt sent to the model stays a byte prefix of the next turn's prompt
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
 - `prompt`, `messages`, `system_prompt`, and convenience `text`

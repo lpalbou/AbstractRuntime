@@ -13,7 +13,7 @@ It is generated from `llms.txt` in first-link order, de-duplicated, with repo-ro
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.31 • **Python:** 3.10+
+**Version:** 0.4.32 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -21,7 +21,7 @@ It is designed for long-running workflows that must survive restarts and explici
 
 AbstractRuntime is one component of the wider [AbstractFramework](https://github.com/lpalbou/AbstractFramework) ecosystem:
 - **AbstractRuntime** (this repo) — durable workflow kernel (`src/abstractruntime/core/*`)
-- **AbstractCore** — LLM + tools integration (wired via `src/abstractruntime/integrations/abstractcore/*`)  
+- **AbstractCore** — LLM + tools integration (wired via `src/abstractruntime/integrations/abstractcore/*`)
   Repo: [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
 
 At a high level, hosts define workflow graphs (`WorkflowSpec`) and AbstractRuntime executes them durably. When nodes request LLM/tool work (`EffectType.LLM_CALL`, `EffectType.TOOL_CALLS`), those effects are typically handled via AbstractCore.
@@ -41,7 +41,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.40 or newer with remote provider,
+The base install includes AbstractCore 2.13.41 or newer with remote provider,
 tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -105,7 +105,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.31)
+## What’s included (v0.4.32)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -113,7 +113,10 @@ Kernel (import-light):
 - durable waits/events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - append-only ledger (`StepRecord`) + node traces (`vars["_runtime"]["node_traces"]`)
 - retries/idempotency hooks: `src/abstractruntime/core/policy.py`
-- runtime-aware limits (`_limits`) with a default iteration budget of 50 (`docs/limits.md`)
+- runtime-aware limits (`_limits`) with a default iteration budget of 20 (`docs/limits.md`)
+- Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
+- host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
+- run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
 
 Durability + storage:
 - stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
@@ -127,7 +130,8 @@ Drivers + distribution:
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
 - VisualFlow multi-entry execution lowering for fan-in routes and per-entry input overrides (`docs/workflow-bundles.md`)
 - VisualFlow LLM Call and Agent nodes propagate Core generation params such as
-  `thinking` through Runtime effects. Provider Models nodes can apply Core
+  `thinking` and `speculation` through Runtime effects; `_runtime.speculation`
+  sets a run-wide MTP preference that nested workflows and Agent loops inherit. Provider Models nodes can apply Core
   `capability_route` filters so run-time model discovery matches Gateway/Flow
   authoring.
 - VisualFlow image/video nodes and Runtime media helpers preserve task-specific
@@ -230,7 +234,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.13.40 or newer with remote provider, vision,
+This installs AbstractCore 2.13.41 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -437,12 +441,24 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 
 - `Runtime.start(workflow, vars=..., actor_id=..., session_id=...) -> run_id`
   - creates and persists a new `RunState`
-- `Runtime.tick(workflow, run_id, max_steps=...) -> RunState`
+- `Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
+  - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
   - host-facing read APIs for checkpoints and the append-only ledger
+- `Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -> RunState`
+  - persists `CANCELLED`, then signals every effect of that run (and its in-flight descendants) executing in this process; the running attempt is recorded as `cancelled` (`StepStatus.CANCELLED`, never retried) with `cancelled_by` and `reason`, and no further effect starts
+- `Runtime.set_default_provider_model(provider=..., model=...)`
+  - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
+
+Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
+- `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
+- `request_model_effects_cancel(provider, model, cancelled_by="model_eject")` stops the effects using a model before it is unloaded; local `unload_model_residency` calls it for you
+- `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)
+
+Tool scope: an explicit `allowed_tools` list in `run.vars["_runtime"]`, in a child run's `_runtime`, or in a `TOOL_CALLS` payload is a ceiling intersected across the run tree (`src/abstractruntime/core/tool_scope.py`). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.
 
 For the execution model (ledger records, effect outcomes, waits), see `architecture.md`.
 
@@ -577,7 +593,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.13.40 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.13.41 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -601,6 +617,13 @@ Entry points:
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
   subprocess isolation stays within the same public contract.
+
+Execution controls and cancellation:
+- `params.thinking` (bool or reasoning level) and `params.speculation` (`False`, `True`, or a Core speculation object such as `{"mode": "native_mtp", "num_draft_tokens": 2}`) are forwarded locally and remotely; `run.vars["_runtime"]["speculation"]` sets a run-wide preference inherited by subworkflows, Agent loops and delegated calls, and `False` stays Off across every boundary (see `integrations/abstractcore.md#execution-controls-and-local-concurrency`)
+- `get_abstractcore_discovery_facade(...).get_execution_capabilities(model_name=None, provider=None)` asks the actual execution host (local or remote) what it supports, without loading a model
+- the `LLM_CALL` handler hands the effect's cancel event to AbstractCore (`generate(..., cancel_event=...)`); remote clients close the request to the AbstractCore server on Stop, which the server treats as a cancel
+- every `LLM_CALL` is offered a progress callback; providers that report text phases (prefill / generate / complete) produce `abstract.progress` ledger events with `kind: "llm"`
+- `abstractruntime.turn_grounding.stamp_user_turn_grounding(messages, grounding=...)` writes the grounding envelope once into the stored user turn, so the prompt sent to the model stays a byte prefix of the next turn's prompt
 
 `LLM_CALL` payloads are JSON-safe effect payloads. Common fields:
 - `prompt`, `messages`, `system_prompt`, and convenience `text`
@@ -660,7 +683,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 # AbstractRuntime — Architecture
 
 > Updated: 2026-08-27
-> Version: 0.4.31
+> Version: 0.4.32
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1333,7 +1356,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.13.40`.
+- The current AbstractCore integration expects `abstractcore>=2.13.41`.
 
 Verify:
 
@@ -1719,7 +1742,7 @@ Shape (keys are stable; values may be `None` when unknown):
 
 ```python
 run.vars["_limits"] = {
-    "max_iterations": 50,
+    "max_iterations": 20,
     "current_iteration": 0,
     "max_tokens": 32768,          # context window (fallback when unknown)
     "max_output_tokens": None,    # provider/model dependent
@@ -1808,7 +1831,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.40 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.13.41 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -1916,6 +1939,42 @@ Notes:
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
+
+## Execution controls and local concurrency
+
+For text/chat calls, pass `params.thinking` as a boolean or reasoning level and
+`params.speculation` as `False`, `True`, or a Core speculation object, for example
+`{"mode": "native_mtp", "num_draft_tokens": 3, "require_acceleration": true}`.
+Explicit `False` overrides the loaded provider's default; omission leaves that
+default available. Core owns support validation and actual inference behavior.
+For native MLX, configure the head and `mlx_batching=True` when constructing/loading
+the provider; a per-call parameter alone does not enable an unloaded head/scheduler.
+
+Local Runtime clients allow concurrent submission only when the loaded MLX instance
+explicitly advertises safe scheduling. Ordinary instances retain serialization
+through completion, including streamed iteration. Scheduler admission is not a
+promise that every request batches: MTP uses fixed cohorts, and separate prefix-cache
+managers remain separate scheduling groups. Token callbacks on one client can
+interleave; use request results for attribution.
+
+Remote text/chat clients forward these controls and expose Core's returned
+`execution`, `speculation`, `performance`, and `prompt_cache` fields in result
+`metadata`, without replacing Runtime-owned request/trace provenance. Remote chat
+still returns an aggregated response. These controls require a compatible Core
+backend; they do not implement HF/GGUF native MTP by themselves.
+
+Set `_runtime.speculation` for a run-wide preference. Subworkflows, Agent loops,
+delegated children and structured-output follow-up calls inherit it unless an
+explicit call/node/child setting overrides it. Missing or `None` inherits; `False`
+means Off and survives every boundary. Dictionaries are copied between scopes.
+
+Core owns the configured default at `input.text.options.speculation` in capability
+routes (`output.text` is the same route). Fresh Core configurations use depth 2
+where native MTP is supported; existing configurations are preserved. Applications
+should leave the control unset to follow that default. Scoped Core configuration
+is supplied before local provider construction, so cached head preparation uses
+the correct policy. Remote discovery queries the actual Core execution host and
+does not substitute local model-registry assumptions.
 
 ## Runtime grounding
 
@@ -2059,7 +2118,33 @@ Media-only normalized results now distinguish orchestration identity from the ac
 
 For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
 
-Long-running generated media may expose provider progress callbacks. Runtime injects a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
+Long-running generated media may expose provider progress callbacks. Runtime offers a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
+
+**It is not carried in the payload either.** `Effect.payload` is JSON to every consumer downstream (ledger, SSE stream, host handlers that `json.dumps` it), so the callback travels BESIDE the effect: `Runtime._execute_effect_with_retry` installs it on the `contextvars.ContextVar` in `abstractruntime/core/progress_channel.py` for the duration of the handler call, and `make_llm_call_handler` reads it there into its own params dict — which is what becomes provider kwargs. An explicit `params["on_progress"]` from the caller always wins; an effect with no progress channel is offered `None`, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — `params` holds it), not re-read the ContextVar.
+
+### Text phase feedback (prefill vs generation)
+
+The callback is injected for **every** `LLM_CALL`, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (`BaseProvider.supports_text_progress_events()`, default `False`); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.
+
+Text phase payloads carry `kind: "llm"` — the discriminator that separates them from the media shapes on the same event name — plus `phase` (`prefill` | `generate` | `complete`), `prompt_tokens`, `cached_tokens`, `fed_tokens`, `generated_tokens`, `ttft_s`, `tokens_per_second` and `elapsed_s`, on top of the runtime identity (`run_id`, `workflow_id`, `node_id`, `step_id`, `idempotency_key`, `attempt`) every progress payload gets. Keys with no measured value are absent, never zero.
+
+One real record, from a `basic-agent` chat turn on `mlx/Qwen3.5-4B-4bit`:
+
+```json
+{"run_id": "6ef69750-…", "node_id": "reason", "status": "completed",
+ "effect": {"type": "emit_event", "payload": {"name": "abstract.progress", "scope": "run",
+   "payload": {"run_id": "6ef69750-…", "workflow_id": "visual_react_agent_basic-agent_0_0_4_81795ea9_node-2",
+               "node_id": "reason", "step_id": "1cdb2c55-…", "attempt": 1,
+               "kind": "llm", "phase": "prefill", "event_index": 0, "elapsed_s": 0.045,
+               "provider": "mlx", "model": "mlx-community/Qwen3.5-4B-4bit",
+               "prompt_tokens": 808, "cached_tokens": 690, "fed_tokens": 118,
+               "generated_tokens": 0}}},
+ "idempotency_key": "system:progress:1cdb2c55-…:c9c572d067aa"}
+```
+
+**Cost.** AbstractCore, not Runtime, bounds the volume: `prefill`, the first-token event and the terminal `complete` always fire, cadence events no closer than 0.5 s apart, for the whole call, never capped by count (ADR-0026). A 3.7 s answer produced 9 records. Runtime appends each already-completed with a uuid suffix, so no progress tick re-parses the ledger.
+
+**Scope.** These records are `scope: "run"` and land in the ledger of the run that made the call. In a chat bundle the `llm_call` runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the `abstract.status` "Thinking…" event (`result.wait.details.sub_run_id` on the parent's waiting record).
 
 Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
@@ -3506,7 +3591,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.32] - 2026-09-23
+
+This release also contains everything listed under 0.4.31, which was never
+published on its own.
+
+### Added
+- **Stop reaches the running effect.** `Runtime.cancel_run(...)` now signals the
+  effect that is executing for the run (and for its in-flight descendants), not
+  only the stored status. The `LLM_CALL` handler passes the signal to
+  AbstractCore as `cancel_event=`, so a local provider stops within one token,
+  and the remote client closes its request to the AbstractCore server, which
+  treats the disconnect as a cancel. The stopped attempt is recorded as
+  `cancelled` (new `StepStatus.CANCELLED`, `EffectOutcome.cancelled`) with
+  `cancelled_by`, `reason` and timing fields, is never retried, and nothing
+  after it runs. Remaining calls of a tool batch are reported as not started.
+  `cancel_run(..., cancelled_by=...)` is a new keyword (default `"api"`).
+- `core/effect_cancellation.py`: `inflight_effects()` lists executing effects;
+  `request_model_effects_cancel(provider, model)` stops the effects using a
+  model; `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard
+  stop for a call that ignores its cancel event.
+- **Model eject stops its calls first.** Local `unload_model_residency`
+  cancels the effects using the unloaded model before unloading it, and the
+  ledger records `cancelled_by: "model_eject"` with the model named.
+- **Speculation (MTP) controls.** `LLM_CALL.params.speculation` (`False`,
+  `True`, or a Core speculation object) and boolean or string `thinking` are
+  forwarded by local and remote clients. `_runtime.speculation` sets a
+  run-wide preference inherited by subworkflows, Agent loops, delegated
+  children and structured-output follow-up calls; an explicit `False` stays
+  Off across every boundary. VisualFlow LLM Call and Agent nodes accept a
+  `speculation` input. Scoped AbstractCore defaults reach provider
+  construction, and `config_facade.normalize_speculation_control()` validates
+  host values with Core's vocabulary.
+- **Native MLX execution controls.** Local clients admit concurrent calls only
+  when the loaded MLX instance advertises safe scheduling; other instances
+  stay serialized through streamed completion. Remote results expose Core's
+  `execution`, `speculation`, `performance` and `prompt_cache` metadata.
+  New `get_execution_capabilities(model_name=None, provider=None)` on the
+  clients and the discovery facade asks the actual execution host without
+  loading a model.
+- **Text phase progress.** Every `LLM_CALL` is offered the durable progress
+  channel. Providers that report prefill/generation phases produce
+  `abstract.progress` ledger events with `kind: "llm"` (`phase`,
+  `prompt_tokens`, `cached_tokens`, `fed_tokens`, `generated_tokens`,
+  `ttft_s`, `tokens_per_second`). The callback travels beside the effect
+  (`core/progress_channel.py`), so `effect.payload` stays JSON-serializable.
+- **Run-tree tool ceiling.** An explicit `allowed_tools` list in `_runtime`, in
+  a child run, or in a tool payload is intersected across the run tree
+  (`core/tool_scope.py`). Approval policy can remove a prompt but never grant
+  a tool outside the ceiling; malformed lists and broken ancestry fail closed.
+- `Runtime.tick(..., step_gate=callable)` lets a host pause a run at the next
+  step boundary; the run stays `RUNNING` and a later tick continues.
+- `Runtime.set_default_provider_model(...)` and the pooled client's
+  `set_default_provider_model(...)` / `set_capability_defaults(...)` re-point
+  the default provider/model without a restart.
+- `abstractruntime.turn_grounding`: `stamp_user_turn_grounding()` writes the
+  grounding envelope once into the stored user turn, so each turn's prompt is
+  a byte prefix of the next one and provider prompt caches survive across
+  turns. Session replay returns the stored bytes.
+- `JsonFileRunStore.list_event_waiters(...)` / `list_event_waiters_by_prefix(...)`
+  (optional `EventWaiterQueryableRunStore` protocol, also forwarded by
+  `OffloadingRunStore`). `emit_event` uses this index instead of scanning
+  every run file.
+- The model receives a description of its workspace scope (default directory,
+  access mode, extra roots and exclusions), and out-of-scope path errors list
+  the authorized roots.
+- VisualFlow: inline pin expressions (`node.data.pinExpressions`, sandboxed
+  with RestrictedPython), `continueOnError` on effect nodes, a `write_chart`
+  node, a `write_docx` node, image embedding and branded exports in PDF/DOCX
+  renderers, and `shq` / `text_of` sandbox helpers.
+- `abstractruntime.__version__`.
+- The configured reasoning effort on AbstractCore's text capability route is
+  applied when a call names no `thinking`.
+- `config_facade.read_email_settings()` and `read_maintenance_settings()`.
+- LLM results carry `route` (the provider, model and `base_url` that actually
+  served the call, with a `mismatch` flag).
+- In-process `on_token` streaming callbacks (`set_on_token`) on local and
+  pooled clients; `read_idle_timeout_s` for LLM calls.
+- `WAIT_EVENT` accepts a deadline; `_runtime.wait_until_streak` counts
+  consecutive `WAIT_UNTIL` parks.
+- `RuntimeHealth` counters, bounded run-vars growth for long-running runs,
+  an indexed idempotency lookup, fair scheduling across several run stores
+  (`scheduler/multi_store.py`), a steer sidecar store, and durable session
+  conversation replay.
+- `history_bundle`: a `detail="replay"` profile and in-band `warnings[]` when a
+  bundle cannot be complete.
+- Entity runtime (`abstractruntime.identity`): the per-entity home runtime,
+  chat driver, visit workflow, life loop, diary and memory effects
+  (`MEMORY_CONSOLIDATE`, `MEMORY_PROBE`, `MEMORY_TEND`, `LIFE_QUERY`,
+  `ENTITY_TOOLS_QUERY`, `ENTITY_TOOLS_EXECUTE`), phase graph and entity tools.
+  See `docs/entity-runtime.md`.
+- Tool surfaces: `browser_probe` in the `web` toolset (asks for approval by
+  default), a camera toolset registered when `abstractcamera` is installed,
+  a `git_read_only@v1` approval refiner, and agora hub tools.
+
+### Changed
+- Dependency floors: `abstractcore[remote,tools,vision,voice,audio,music]>=2.13.41`,
+  `abstractcore[all-apple]>=2.13.41` (`apple` extra),
+  `abstractcore[all-gpu]>=2.13.41` (`gpu` extra), `AbstractMemory>=0.3.0`,
+  `abstractsemantics>=0.0.5`. `RestrictedPython>=7.0` and `pyyaml>=6.0` are
+  declared dependencies.
+- Migration: with RestrictedPython installed, VisualFlow Code nodes always run
+  under its policy. Augmented assignment on subscripts (`d["k"] += 1`) is
+  refused; rewrite it as read, modify, write.
+- The default iteration budget (`RuntimeConfig.max_iterations` and the
+  Agent-node fallback) is 20. Workflow-declared values still win.
+- LLM calls default to `read_idle_timeout_s=300`: a stream that delivers
+  nothing for 5 minutes is aborted. Pass `read_idle_timeout_s: None` in
+  `llm_kwargs` to disable it.
+- Tool approval waits use a unique, replay-stable key per approval
+  (`tool_approval:{run_id}:{node_id}:{effect_identity}`). Runs already
+  waiting on an older key can still be approved.
+- A connected VisualFlow node of an unknown type fails compilation with
+  `UnknownNodeTypeError` instead of running as a no-op.
+- Terminal ledger records are slimmer, the offloading ledger store is used by
+  the durable factories, and hot-path store reads avoid full-document parses.
+- Deterministic LLM client errors and prompt-cache binding failures are not
+  retried.
+
+### Fixed
+- A per-call provider pin reaches the provider it names: pooled clients no
+  longer hand the default endpoint's `base_url` / `api_key` to other providers.
+- Catalog discovery works when the default text client cannot be built.
+- A fresh install with no provider configured constructs its runtime; calls
+  without a provider fail with a message naming what to configure.
+- The session prompt-cache prefix is prepared with the `thinking` value the
+  call generates with, and prompt-only calls under a runtime-derived key no
+  longer append to their own cache.
+- The remote client forwards `thinking`; streamed reasoning keeps the complete
+  final text.
+- Effect-only paths into a VisualFlow End node no longer copy runtime
+  bookkeeping into the result.
+- Visual `llm_call` nodes forward provider and model independently.
+- Native tool calls are kept by the chat driver.
+- `JsonlCommandStore.append` fsyncs before returning.
+- Run-output offload reduces the largest children first, so a small answer
+  stays inline next to a large scratchpad.
+- The JSON run store cache is LRU-bounded; hash-chained ledgers no longer fork
+  under concurrent handles.
+- Entity-lane `execute_command` kills its whole process tree on timeout.
+- PDF export renders scientific and typographic glyphs.
+
 ## [0.4.31] - 2026-08-27
+
+Never published separately; these changes ship in 0.4.32.
 
 ### Added
 - Host facade methods `get_memory_snapshot()`, `list_session_prompt_caches(session_id=None)`, and
@@ -3531,13 +3759,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each accepting an optional payload mapping and/or keyword arguments (keyword arguments win on
   conflicts). A locked model refuses `unload_model_residency` with a structured
   `{"ok": false, "error": "model_locked", ...}` payload instead of an exception; `force=true`
-  unloads it, and the lock is released only after the unload succeeds. Local clients enforce the
+  unloads it, and the lock is released only after the unload succeeds. Lock requires
+  provider-verified residency: a warm client or configured default alone is configuration, not
+  memory, and locking a non-resident pair refuses with
+  `{"ok": false, "error": "model_not_resident", ...}` (load with `lock: true` instead); unlock
+  never requires residency, so a locked-but-since-evicted pair can always be released, and the
+  Ollama keep-alive restore is skipped for a non-resident model so unlock never loads it back as
+  a side effect. Local clients enforce the
   lock per `(provider, model)` pair, reinforce it best-effort with Ollama's `keep_alive` knob
   (reported under `provider_side`), refuse foreign runtime ids with a not-found payload, and
   exempt locked pairs from the multi-local pool eviction when the default provider/model is
   re-pointed (a locked pair that becomes the new default identity is rebuilt and its lock cleared,
   with a logged warning). Remote clients relay `POST /acore/models/lock|unlock` and convert the
-  server's HTTP 409 unload refusal into the same `model_locked` payload. The three methods are
+  server's HTTP 409 refusals into the same structured payloads (`model_locked` on unload,
+  `model_not_resident` on lock). The three methods are
   optional in the LLM-client contract, degrading to `{"ok": false, "supported": false, ...}` at
   the facade; locks apply to text-generation runtimes only.
 - `MODEL_RESIDENCY` effect operations `lock` and `unlock`, with the same soft-fail semantics as
@@ -3550,7 +3785,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registry miss; `input.image` is stripped with `modalities_note: "vision_unusable"` when the
   provider reports its vision lane unusable), the serving host's identity (`host_id` /
   `host_name`), and runtime-owned lock truth (`locked` / `lockable`); provider claims cannot
-  supply lock state. Remote listings keep the Core server's row identity and are never re-stamped
+  supply lock state. `pinned` on local rows is a truthful alias of `locked` (same value, Core
+  parity), never the default-identity flag — `default` alone marks the client's default pair, so
+  a configured capability default is no longer presented as pinned. Remote listings keep the
+  Core server's row identity and are never re-stamped
   with the client's.
 
 ### Changed
@@ -4313,34 +4551,68 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 5
-- Proposed: 3
-- Completed: 33
+- Planned: 28
+- Proposed: 12
+- Completed: 34
 - Deprecated: 13
 - Recurrent: 0
 
+2026-09-20: counts reconciled to disk (28 planned and 12 proposed before this
+addition). [0846](docs/backlog/completed/0846_mlx_instance_scheduling_and_execution_controls.md)
+repairs existing MLX instance scheduling and remote speculation/boolean-reasoning
+forwarding; it does not add another provider. Core's deferred backend/capability
+and pressure-eviction work is tracked separately by its planned 0848–0853.
+
+## Topic tracks
+
+- `planned/runtime_systemic_reliability/` + `proposed/runtime_systemic_reliability/`
+  — the 2026-07-12 maintainer-requested two-adversary meta-analysis of the
+  whole package, split into executable items: converting reliability from
+  artisanal per-feature rigor into systemic guarantees before the 24/7
+  resident fleet and before 1.0. Source record: `planned/runtime_systemic_reliability/0044_meta_analysis_record.md`.
+  Keystone item (do first): `0045_crash_replay_harness_and_ordering_invariant.md`.
+  New (2026-07-13, performance adversary): `0067_durable_write_discipline.md`
+  (P1, ships WITH 0047), `0068_hot_path_store_reads.md` (P1).
+- `planned/runtime_portability/` — the 2026-07-13 maintainer-requested
+  "portable, any-OS" survey (two adversaries: portability + performance).
+  The entity substrate's process/lease/kill-switch primitives are POSIX-only
+  and DESTRUCTIVE on Windows (a status read kills the loop). Items:
+  `0065_portable_process_and_lock_layer.md` (P0, do first),
+  `0066_portable_io_and_media_reader.md` (P1). See the track README.
+
 ## Next recommended work
 
-1. `planned/018_workspace_access_policy_for_media_and_tools.md`
+1. `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md`
+   The keystone: kill-and-replay harness + ONE written crash-ordering
+   invariant + the two ordering-inversion fixes. Every other track item is a
+   consumer.
+2. `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md`
+   Correctness-grade: two drivers can race one run over aliased state today.
+3. `planned/runtime_systemic_reliability/0047_indexed_idempotency_lookup.md`
+   The deterministic 24/7 scale cliff (O(ledger) scan per effect step).
+4. `planned/runtime_systemic_reliability/0048_durable_io_unification.md` +
+   `0049_llm_client_mechanical_split.md`
+   Round out the P0 band (fsync discipline; the 11.8k-line module).
+4a. `planned/runtime_portability/0065_portable_process_and_lock_layer.md`
+   NEW P0 (2026-07-13): on Windows a `read_loop_status` GET terminates the
+   entity loop (`os.kill(pid,0)` = TerminateProcess) and the lease is
+   advisory-only. Blocks any Windows deployment of the keystone feature.
+   Portable stdlib fix + a Windows CI smoke lane.
+4b. `planned/runtime_systemic_reliability/0067_durable_write_discipline.md`
+   NEW P1 — ships WITH 0047 (index kills count-scaling, 0067 kills the
+   O(turns²) ledger byte-growth; either alone leaves half the scale cliff).
+5. `planned/018_workspace_access_policy_for_media_and_tools.md`
    Keep workspace and tool policy explicit while Gateway extracts its local
    workspace helpers.
-2. `planned/014_remote_tool_worker_executor.md`
+6. `planned/014_remote_tool_worker_executor.md`
    The public ToolExecutor path is still the larger follow-on after the current
    Gateway boundary cleanup.
-3. `proposed/0036_local_media_residency_bridge_to_core_residency.md`
-   Local Runtime media residency should relay live Core-owned truth for image/TTS/STT or stay unsupported when no
-   Core-owned local media residency facade is wired.
-4. `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md`
-   The comms/Telegram boundary cleanup is now complete; the remaining lower
-   pressure follow-up is a Runtime-owned tool-spec surface if Gateway or the
-   MCP worker still need one after adoption.
-5. `proposed/0038_core_server_pool_residency_affinity.md`
-   Future-only topology item for multiple AbstractCore servers, server identity, and residency routing affinity.
 
 ## Completed
 
 | ID | Item |
 |----|------|
+| 0846 | [Existing MLX instance scheduling and execution controls](docs/backlog/completed/0846_mlx_instance_scheduling_and_execution_controls.md): completed 2026-09-20; moved from planned, 237 Runtime tests + 616 Core tests and four real-model integration cases; independent review approved, unreleased. |
 | 001 | `completed/001_runtime_kernel.md` |
 | 002 | `completed/002_persistence_and_ledger.md` |
 | 003 | `completed/003_wait_primitives.md` |
@@ -4384,6 +4656,32 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 017 | `planned/017_limit_warnings_and_observability.md` |
 | 018 | `planned/018_workspace_access_policy_for_media_and_tools.md` |
 | 025 | `planned/025_runtime_retention_and_purge_contract.md` |
+| 026* | `planned/026_context_checkpoint_self_compression.md` |
+| 027* | `planned/027_quote_provenance_discipline.md` |
+| 028* | `planned/028_selective_artifact_rehydration.md` |
+| 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
+| 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
+| 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
+| 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |
+| 0047 | `planned/runtime_systemic_reliability/0047_indexed_idempotency_lookup.md` |
+| 0048 | `planned/runtime_systemic_reliability/0048_durable_io_unification.md` |
+| 0049 | `planned/runtime_systemic_reliability/0049_llm_client_mechanical_split.md` |
+| 0050 | `planned/runtime_systemic_reliability/0050_control_sidecar_all_writers.md` |
+| 0051 | `planned/runtime_systemic_reliability/0051_runtime_owned_durable_event_mailbox.md` |
+| 0052 | `planned/runtime_systemic_reliability/0052_sync_store_event_loop_tripwire.md` |
+| 0053 | `planned/runtime_systemic_reliability/0053_bounded_run_vars_growth.md` |
+| 0054 | `planned/runtime_systemic_reliability/0054_runtime_health_counters.md` |
+| 0055 | `planned/runtime_systemic_reliability/0055_jsonl_store_honesty.md` |
+| 0064 | `planned/runtime_systemic_reliability/0064_prompt_cache_fingerprint_stability.md` |
+| 0065 | `planned/runtime_portability/0065_portable_process_and_lock_layer.md` (P0) |
+| 0066 | `planned/runtime_portability/0066_portable_io_and_media_reader.md` |
+| 0067 | `planned/runtime_systemic_reliability/0067_durable_write_discipline.md` |
+| 0068 | `planned/runtime_systemic_reliability/0068_hot_path_store_reads.md` |
+
+\* 026/027/028 numerically collide with completed items of the same prefix
+(legacy three-digit numbering; they predate the four-digit convention).
+Flagged for the next hygiene pass — renumber the PLANNED trio into the
+four-digit space rather than the completed records.
 
 ## Proposed
 
@@ -4392,12 +4690,32 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 | 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
 | 0036 | `proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0038 | `proposed/0038_core_server_pool_residency_affinity.md` |
+| 0056 | `proposed/runtime_systemic_reliability/0056_schema_version_and_quarantine_loading.md` |
+| 0057 | `proposed/runtime_systemic_reliability/0057_trust_boundary_stamp_registry.md` |
+| 0058 | `proposed/runtime_systemic_reliability/0058_terminal_run_archival_helper.md` |
+| 0059 | `proposed/runtime_systemic_reliability/0059_memory_span_handler_extraction.md` |
+| 0060 | `proposed/runtime_systemic_reliability/0060_visualflow_compiler_decomposition.md` |
+| 0061 | `proposed/runtime_systemic_reliability/0061_root_api_deprecation_machinery.md` |
+| 0062 | `proposed/runtime_systemic_reliability/0062_dependency_honesty_extras.md` |
+| 0063 | `proposed/runtime_systemic_reliability/0063_b3_envelope_lane_unification.md` |
 
 ## Deprecated
 
 See `deprecated/DEPRECATED_README.md` for context on the deprecated backlog set.
 Recent deprecation:
 - `deprecated/0034_agent_runtime_convenience_constructor.md`
+
+## Planning notes
+
+- 2026-07-12: the `runtime_systemic_reliability` track landed from the
+  maintainer-requested two-adversary meta-analysis (planned 0044-0055,
+  proposed 0056-0063). The analysis record was originally committed as
+  `planned/029_runtime_meta_analysis_2026_07_12.md` and was renumbered to
+  `0044_meta_analysis_record.md` in the same pass (029 collides with a
+  completed item; dates do not belong in filenames). The track README
+  carries the unanimous DO-NOT-BUILD list (no async kernel, no tick-loop
+  decomposition, no new eventing abstraction, no ledger auto-pruning, no
+  client-class merge) — treat it as binding unless the maintainer overrules.
 
 ---
 

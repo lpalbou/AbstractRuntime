@@ -3,10 +3,10 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.4.31
+- Version: 0.4.32
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.13.40`
+- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.13.41`
 - Install profiles: base `abstractruntime` is remote-light with MCP, generated media routing, and Runtime-owned permissive PDF read/write nodes; `abstractruntime[apple]` and `abstractruntime[gpu]` add local inferencer stacks.
 - Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned config should be translated into explicit Runtime inputs or Runtime-owned env names. Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM client; Runtime treats it as an optional resolver hook, injects transient provider/base URL/key params for the call, and redacts secret-like params from persisted observability.
 
@@ -34,6 +34,9 @@
 - [Limits](docs/limits.md): `_limits` namespace and RuntimeConfig
 
 ## Integrations
+
+- [Cancellation, pause and tool ceiling](docs/api.md#runtime-start-tick-resume): `Runtime.cancel_run(...)` stops the in-flight effect (recorded `cancelled`, never retried), a model unload cancels the calls using it first, `tick(..., step_gate=...)` pauses at step boundaries, and an explicit `allowed_tools` list is a run-tree ceiling approval policy cannot widen.
+- [Execution controls](docs/integrations/abstractcore.md#execution-controls-and-local-concurrency): inherited run/node MTP controls, scoped Core defaults, actual-host execution discovery, instance-aware scheduling, per-response outcomes and cache-group batching limits.
 
 - [AbstractCore integration](docs/integrations/abstractcore.md): `LLM_CALL` / `TOOL_CALLS` / `MODEL_RESIDENCY`, local/remote/hybrid, prompt-cache and residency host controls, host memory snapshots and per-session prompt-cache listing/clearing, host-wide provider-server rows in residency listings, model-residency locks (residency-required: locking a non-resident pair refuses with `model_not_resident`; unlock never requires residency) with `force`-gated unload and context-estimate relays, modality/host-identity fields and truthful `pinned`-aliases-`locked` lock state on local residency rows, local-only prompt-cache export/import admin, durable bloc/KV prompt-cache controls, discovery snapshot queries including `list_provider_models(..., capability_route=...)` and `list_vision_adapters(...)`, durable run-scoped image/edit-image/upscale-image/text-to-video/image-to-video/voice/streamed-voice/music/STT execution, batch `count`/`n`, `seeds`, ordered `lora_adapters`, video `flow_shift`, media inputs, generated media outputs, progress ledger events, provider-key headers, host endpoint-profile resolver hooks, and tool approval waits
 - VisualFlow LLM Call and Agent nodes forward Core generation controls such as `thinking`; Provider Models nodes can apply Core `capability_route` filters during runtime discovery.

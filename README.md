@@ -4,7 +4,7 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.31 • **Python:** 3.10+
+**Version:** 0.4.32 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -32,7 +32,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.40 or newer with remote provider,
+The base install includes AbstractCore 2.13.41 or newer with remote provider,
 tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -96,7 +96,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.31)
+## What’s included (v0.4.32)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -104,7 +104,10 @@ Kernel (import-light):
 - durable waits/events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
 - append-only ledger (`StepRecord`) + node traces (`vars["_runtime"]["node_traces"]`)
 - retries/idempotency hooks: `src/abstractruntime/core/policy.py`
-- runtime-aware limits (`_limits`) with a default iteration budget of 50 (`docs/limits.md`)
+- runtime-aware limits (`_limits`) with a default iteration budget of 20 (`docs/limits.md`)
+- Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
+- host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
+- run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
 
 Durability + storage:
 - stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
@@ -118,7 +121,8 @@ Drivers + distribution:
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
 - VisualFlow multi-entry execution lowering for fan-in routes and per-entry input overrides (`docs/workflow-bundles.md`)
 - VisualFlow LLM Call and Agent nodes propagate Core generation params such as
-  `thinking` through Runtime effects. Provider Models nodes can apply Core
+  `thinking` and `speculation` through Runtime effects; `_runtime.speculation`
+  sets a run-wide MTP preference that nested workflows and Agent loops inherit. Provider Models nodes can apply Core
   `capability_route` filters so run-time model discovery matches Gateway/Flow
   authoring.
 - VisualFlow image/video nodes and Runtime media helpers preserve task-specific

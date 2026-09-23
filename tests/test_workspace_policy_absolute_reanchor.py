@@ -1,9 +1,9 @@
 """Absolute-path re-anchoring (2026-07-12, adversarially reviewed).
 
 Live incident: with workspace root `<root>` (real tree `<root>/mnemosyne/...`),
-the model called read_file("/Users/albou/projects/mnemosyne/...") — a
+the model called read_file("/Users/example/projects/mnemosyne/...") — a
 fabricated absolute prefix for a file genuinely INSIDE the workspace
-(/Users/albou/projects/mnemosyne does not exist). The absolute form refused;
+(/Users/example/projects/mnemosyne does not exist). The absolute form refused;
 the relative retry succeeded. Rule shipped in `resolve_user_path`:
 
 - nonexistent absolute path: recover by suffix (longest first, depth ≥2,

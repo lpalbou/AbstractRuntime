@@ -90,3 +90,22 @@ venv.bak/
 
 # Agent session artifacts
 .cursor/
+
+# ---------------------------------------------------------------------------
+# Agent harness and local tooling
+#
+# This repository is worked on with coding agents, and their configuration
+# embeds absolute local paths, hook commands, seat identities and empty API-key
+# slots. None of it belongs in a public repository.
+# ---------------------------------------------------------------------------
+.claude/
+.codex/
+.cursor/
+.agora/
+.abstractcode/
+.mcp.json
+CLAUDE.md
+/AGENTS.md
+abstractcode-export-*.md
+untracked/
+.venv/

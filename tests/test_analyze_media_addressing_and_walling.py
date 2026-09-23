@@ -303,7 +303,7 @@ def test_system_produced_media_paths_are_not_walled(tmp_path: Path) -> None:
 # token character-for-character. On 2026-08-22 qwen3.5-35b-a3b dropped ONE
 # character from it (`…_browser_probe_hqlzfin` for the real `…_hqlkzfin`) and
 # got the containment refusal — "retry with a path relative to
-# '/Users/albou/tt-35-35b'" — advice that can never reach a file in a temp
+# '/Users/example/tt-35-35b'" — advice that can never reach a file in a temp
 # dir. The run ended without the model ever seeing its own screenshot.
 
 

@@ -558,6 +558,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#models-engines-and-host-jobs-config-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Models, engines and host jobs (config facade)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#model-residency-listings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1327,6 +1338,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#models-engines-and-host-jobs-config-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Models, engines and host jobs (config facade)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#model-residency-listings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1463,7 +1485,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.13.41 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.14.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -2007,6 +2029,106 @@ request/output summary, and effective route actually ran.</p>
 <div class="highlight"><pre><span></span><code><span class="n">snapshot</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">get_memory_snapshot</span><span class="p">()</span>
 <span class="n">caches</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">list_session_prompt_caches</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="s2">"support-session-1"</span><span class="p">)</span>
 <span class="n">result</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">clear_session_prompt_caches</span><span class="p">(</span><span class="s2">"support-session-1"</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="models-engines-and-host-jobs-config-facade">Models, engines and host jobs (config facade)<a class="headerlink" href="#models-engines-and-host-jobs-config-facade" title="Permanent link">&para;</a></h2>
+<p>AbstractCore 2.14.0 implements the model browser, the local-engine installer and
+a host job registry. <code>abstractruntime.integrations.abstractcore.config_facade</code>
+passes them through unchanged, so a host such as AbstractGateway serves the same
+payloads as <code>abstractcore models|engines … --json</code> and the <code>/acore/*</code> routes
+without importing AbstractCore itself.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host_profile(refresh=False)</code></td>
+<td><code>host_profile_v1</code>: OS, accelerator, memory ceiling, free disk per model store</td>
+</tr>
+<tr>
+<td><code>engine_inventory(probe=False)</code></td>
+<td><code>engines_status_v1</code>: Ollama, LM Studio, MLX, llama.cpp, vLLM, Hugging Face; installed, running, install plan</td>
+</tr>
+<tr>
+<td><code>engine_status(engine_id, probe=False)</code></td>
+<td>one engine row</td>
+</tr>
+<tr>
+<td><code>engine_install_plan(engine_id)</code></td>
+<td>the fixed install command (<code>argv</code>), method, download URL and notes for this host</td>
+</tr>
+<tr>
+<td><code>engine_download_url(engine_id)</code></td>
+<td>the vendor download page</td>
+</tr>
+<tr>
+<td><code>engine_install(engine_id, dry_run=False, force=False, allow=None)</code></td>
+<td>a <code>host_job_v1</code> job of kind <code>engine_install</code></td>
+</tr>
+<tr>
+<td><code>model_catalog(q=None, engine=None, fits_only=False, hub=False)</code></td>
+<td><code>model_catalog_v1</code>: downloadable models with presence and a fit verdict</td>
+</tr>
+<tr>
+<td><code>list_installed_models(provider=None)</code></td>
+<td><code>models_installed_v1</code>: installed models per engine, with sizes</td>
+</tr>
+<tr>
+<td><code>model_delete_blockers(provider, artifact)</code></td>
+<td>what would stop a delete (reads only)</td>
+</tr>
+<tr>
+<td><code>delete_model_artifact(provider, artifact, dry_run=False, force=False)</code></td>
+<td>a <code>host_job_v1</code> job of kind <code>delete</code></td>
+</tr>
+<tr>
+<td><code>start_model_download_job(provider, artifact, dry_run=False)</code></td>
+<td>a <code>host_job_v1</code> job of kind <code>download</code> (single-flight per artifact)</td>
+</tr>
+<tr>
+<td><code>host_jobs_list(kind=None, status=None)</code></td>
+<td><code>{"schema": "host_jobs_v1", "jobs": [...]}</code>, newest first, including jobs started by other processes on the host</td>
+</tr>
+<tr>
+<td><code>host_job(job_id)</code> / <code>host_job_cancel(job_id)</code></td>
+<td>one job, or <code>None</code> when the id is unknown</td>
+</tr>
+<tr>
+<td><code>console_fragment(kind)</code></td>
+<td>AbstractCore's embeddable web screen (<code>models</code> or <code>engines</code>): <code>{"html", "js", "css"}</code></td>
+</tr>
+<tr>
+<td><code>models_engines_support()</code></td>
+<td><code>{"available", "abstractcore_version", "required", "missing"}</code>; never raises</td>
+</tr>
+</tbody>
+</table>
+<p>Job-starting calls run in the background and return the queued job; a dry run
+(and <code>run_inline=True</code>) finishes on the calling thread and returns the finished
+job.</p>
+<p>Errors a host can map to HTTP statuses:</p>
+<ul>
+<li><code>AbstractCoreTooOld</code> (a <code>NotImplementedError</code>): the installed AbstractCore
+  predates these modules. The message names the installed version and the
+  upgrade command. Map it to 501.</li>
+<li><code>RuntimeError</code>: AbstractCore is not installed. Map it to 503.</li>
+<li><code>HostActionRefused</code>: a refusal with <code>status_code</code> and <code>payload()</code>. Examples:
+  403 <code>not_allowed</code> (engine installs disabled by the host's policy), 404
+  <code>not_found</code> / <code>unknown_engine</code>, 409 <code>busy</code> (an engine install is already
+  running), 409 <code>refused</code> with <code>delete_blockers</code> (the model is loaded or shares
+  a cache; pass <code>force=True</code> to override).</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">config_facade</span> <span class="k">as</span> <span class="n">core</span>
+
+<span class="n">core</span><span class="o">.</span><span class="n">engine_inventory</span><span class="p">(</span><span class="n">probe</span><span class="o">=</span><span class="kc">True</span><span class="p">)[</span><span class="s2">"engines"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"install"</span><span class="p">][</span><span class="s2">"argv"</span><span class="p">]</span>  <span class="c1"># e.g. ["brew", "install", "ollama"]</span>
+<span class="n">job</span> <span class="o">=</span> <span class="n">core</span><span class="o">.</span><span class="n">engine_install</span><span class="p">(</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">dry_run</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>                    <span class="c1"># finished job, nothing runs</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">core</span><span class="o">.</span><span class="n">delete_model_artifact</span><span class="p">(</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="s2">"qwen3:8b"</span><span class="p">,</span> <span class="n">dry_run</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">core</span><span class="o">.</span><span class="n">HostActionRefused</span> <span class="k">as</span> <span class="n">refused</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">refused</span><span class="o">.</span><span class="n">status_code</span><span class="p">,</span> <span class="n">refused</span><span class="o">.</span><span class="n">payload</span><span class="p">())</span>
 </code></pre></div>
 <h2 id="model-residency-listings">Model residency listings<a class="headerlink" href="#model-residency-listings" title="Permanent link">&para;</a></h2>
 <p><code>list_model_residency(...)</code> relays Core-owned residency truth (ADR-0007) and, for text-generation listings, includes the whole host:</p>

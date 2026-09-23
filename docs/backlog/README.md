@@ -12,12 +12,17 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 27 (10 top-level + 15 in the `runtime_systemic_reliability/` track
-  + 2 in the `runtime_portability/` track)
-- Proposed: 11 (3 top-level + 8 in the `runtime_systemic_reliability/` track)
-- Completed: 33
+- Planned: 28
+- Proposed: 12
+- Completed: 34
 - Deprecated: 13
 - Recurrent: 0
+
+2026-09-20: counts reconciled to disk (28 planned and 12 proposed before this
+addition). [0846](completed/0846_mlx_instance_scheduling_and_execution_controls.md)
+repairs existing MLX instance scheduling and remote speculation/boolean-reasoning
+forwarding; it does not add another provider. Core's deferred backend/capability
+and pressure-eviction work is tracked separately by its planned 0848–0853.
 
 ## Topic tracks
 
@@ -68,6 +73,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 | ID | Item |
 |----|------|
+| 0846 | [Existing MLX instance scheduling and execution controls](completed/0846_mlx_instance_scheduling_and_execution_controls.md): completed 2026-09-20; moved from planned, 237 Runtime tests + 616 Core tests and four real-model integration cases; independent review approved, unreleased. |
 | 001 | `completed/001_runtime_kernel.md` |
 | 002 | `completed/002_persistence_and_ledger.md` |
 | 003 | `completed/003_wait_primitives.md` |

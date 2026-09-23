@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.40 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.13.41 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -124,6 +124,42 @@ Notes:
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
+
+## Execution controls and local concurrency
+
+For text/chat calls, pass `params.thinking` as a boolean or reasoning level and
+`params.speculation` as `False`, `True`, or a Core speculation object, for example
+`{"mode": "native_mtp", "num_draft_tokens": 3, "require_acceleration": true}`.
+Explicit `False` overrides the loaded provider's default; omission leaves that
+default available. Core owns support validation and actual inference behavior.
+For native MLX, configure the head and `mlx_batching=True` when constructing/loading
+the provider; a per-call parameter alone does not enable an unloaded head/scheduler.
+
+Local Runtime clients allow concurrent submission only when the loaded MLX instance
+explicitly advertises safe scheduling. Ordinary instances retain serialization
+through completion, including streamed iteration. Scheduler admission is not a
+promise that every request batches: MTP uses fixed cohorts, and separate prefix-cache
+managers remain separate scheduling groups. Token callbacks on one client can
+interleave; use request results for attribution.
+
+Remote text/chat clients forward these controls and expose Core's returned
+`execution`, `speculation`, `performance`, and `prompt_cache` fields in result
+`metadata`, without replacing Runtime-owned request/trace provenance. Remote chat
+still returns an aggregated response. These controls require a compatible Core
+backend; they do not implement HF/GGUF native MTP by themselves.
+
+Set `_runtime.speculation` for a run-wide preference. Subworkflows, Agent loops,
+delegated children and structured-output follow-up calls inherit it unless an
+explicit call/node/child setting overrides it. Missing or `None` inherits; `False`
+means Off and survives every boundary. Dictionaries are copied between scopes.
+
+Core owns the configured default at `input.text.options.speculation` in capability
+routes (`output.text` is the same route). Fresh Core configurations use depth 2
+where native MTP is supported; existing configurations are preserved. Applications
+should leave the control unset to follow that default. Scoped Core configuration
+is supplied before local provider construction, so cached head preparation uses
+the correct policy. Remote discovery queries the actual Core execution host and
+does not substitute local model-registry assumptions.
 
 ## Runtime grounding
 
@@ -267,7 +303,33 @@ Media-only normalized results now distinguish orchestration identity from the ac
 
 For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
 
-Long-running generated media may expose provider progress callbacks. Runtime injects a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
+Long-running generated media may expose provider progress callbacks. Runtime offers a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
+
+**It is not carried in the payload either.** `Effect.payload` is JSON to every consumer downstream (ledger, SSE stream, host handlers that `json.dumps` it), so the callback travels BESIDE the effect: `Runtime._execute_effect_with_retry` installs it on the `contextvars.ContextVar` in `abstractruntime/core/progress_channel.py` for the duration of the handler call, and `make_llm_call_handler` reads it there into its own params dict — which is what becomes provider kwargs. An explicit `params["on_progress"]` from the caller always wins; an effect with no progress channel is offered `None`, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — `params` holds it), not re-read the ContextVar.
+
+### Text phase feedback (prefill vs generation)
+
+The callback is injected for **every** `LLM_CALL`, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (`BaseProvider.supports_text_progress_events()`, default `False`); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.
+
+Text phase payloads carry `kind: "llm"` — the discriminator that separates them from the media shapes on the same event name — plus `phase` (`prefill` | `generate` | `complete`), `prompt_tokens`, `cached_tokens`, `fed_tokens`, `generated_tokens`, `ttft_s`, `tokens_per_second` and `elapsed_s`, on top of the runtime identity (`run_id`, `workflow_id`, `node_id`, `step_id`, `idempotency_key`, `attempt`) every progress payload gets. Keys with no measured value are absent, never zero.
+
+One real record, from a `basic-agent` chat turn on `mlx/Qwen3.5-4B-4bit`:
+
+```json
+{"run_id": "6ef69750-…", "node_id": "reason", "status": "completed",
+ "effect": {"type": "emit_event", "payload": {"name": "abstract.progress", "scope": "run",
+   "payload": {"run_id": "6ef69750-…", "workflow_id": "visual_react_agent_basic-agent_0_0_4_81795ea9_node-2",
+               "node_id": "reason", "step_id": "1cdb2c55-…", "attempt": 1,
+               "kind": "llm", "phase": "prefill", "event_index": 0, "elapsed_s": 0.045,
+               "provider": "mlx", "model": "mlx-community/Qwen3.5-4B-4bit",
+               "prompt_tokens": 808, "cached_tokens": 690, "fed_tokens": 118,
+               "generated_tokens": 0}}},
+ "idempotency_key": "system:progress:1cdb2c55-…:c9c572d067aa"}
+```
+
+**Cost.** AbstractCore, not Runtime, bounds the volume: `prefill`, the first-token event and the terminal `complete` always fire, cadence events no closer than 0.5 s apart, for the whole call, never capped by count (ADR-0026). A 3.7 s answer produced 9 records. Runtime appends each already-completed with a uuid suffix, so no progress tick re-parses the ledger.
+
+**Scope.** These records are `scope: "run"` and land in the ledger of the run that made the call. In a chat bundle the `llm_call` runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the `abstract.status` "Thinking…" event (`result.wait.details.sub_run_id` on the parent's waiting record).
 
 Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 

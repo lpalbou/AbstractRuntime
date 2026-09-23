@@ -236,6 +236,7 @@ def test_default_constructed_policy_carries_the_fold(monkeypatch: pytest.MonkeyP
     every test green before this pin. Never skips: when abstractcamera is
     absent the core surface is stubbed (P1-2 - all camera pins skipped in
     CI, so a future regression would ship green)."""
+    import abstractruntime.integrations.abstractcore.default_tools as dt
     from abstractruntime.integrations.abstractcore.tool_executor import ToolApprovalPolicy
 
     if not HAS_ABSTRACTCAMERA:
@@ -245,6 +246,18 @@ def test_default_constructed_policy_carries_the_fold(monkeypatch: pytest.MonkeyP
                 "auto_approve": ["camera_status"],
                 "require_approval": ["camera_capture_photo"],
             },
+        )
+        # The fold is scoped to the names the capability actually serves
+        # (containment pin below), so the stub must serve those tools too.
+        import types
+
+        monkeypatch.setattr(
+            dt,
+            "_camera_capability_tools",
+            lambda: [
+                types.SimpleNamespace(name="camera_status"),
+                types.SimpleNamespace(name="camera_capture_photo"),
+            ],
         )
         expected_auto = {"camera_status"}
         expected_req = {"camera_capture_photo"}

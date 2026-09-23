@@ -26,11 +26,12 @@ def registry_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
     return tmp_path
 
 
-def test_surface_is_exactly_three_callables() -> None:
+def test_surface_is_exactly_four_callables() -> None:
     assert facade.__all__ == [
         "ensure_data_home_registered",
         "list_data_homes",
         "purge_data_home",
+        "unregister_data_home",
     ]
     for name in facade.__all__:
         assert callable(getattr(facade, name))

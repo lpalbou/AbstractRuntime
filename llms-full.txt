@@ -13,7 +13,7 @@ It is generated from `llms.txt` in first-link order, de-duplicated, with repo-ro
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.32 • **Python:** 3.10+
+**Version:** 0.4.33 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -41,7 +41,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.41 or newer with remote provider,
+The base install includes AbstractCore 2.14.0 or newer with remote provider,
 tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -105,7 +105,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.32)
+## What’s included (v0.4.33)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -148,6 +148,7 @@ Drivers + distribution:
 
 Runtime-owned integrations:
 - AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore models and engines for hosts (AbstractCore 2.14.0+): `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends
@@ -234,7 +235,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.13.41 or newer with remote provider, vision,
+This installs AbstractCore 2.14.0 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -593,7 +594,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.13.41 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.14.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -683,7 +684,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 # AbstractRuntime — Architecture
 
 > Updated: 2026-08-27
-> Version: 0.4.32
+> Version: 0.4.33
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1356,7 +1357,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.13.41`.
+- The current AbstractCore integration expects `abstractcore>=2.14.0`.
 
 Verify:
 
@@ -1831,7 +1832,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.13.41 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.14.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -2480,6 +2481,59 @@ Session caches outlive runs by design: completing a run does not clear the sessi
 snapshot = facade.get_memory_snapshot()
 caches = facade.list_session_prompt_caches(session_id="support-session-1")
 result = facade.clear_session_prompt_caches("support-session-1")
+```
+
+## Models, engines and host jobs (config facade)
+
+AbstractCore 2.14.0 implements the model browser, the local-engine installer and
+a host job registry. `abstractruntime.integrations.abstractcore.config_facade`
+passes them through unchanged, so a host such as AbstractGateway serves the same
+payloads as `abstractcore models|engines … --json` and the `/acore/*` routes
+without importing AbstractCore itself.
+
+| Function | Returns |
+|---|---|
+| `host_profile(refresh=False)` | `host_profile_v1`: OS, accelerator, memory ceiling, free disk per model store |
+| `engine_inventory(probe=False)` | `engines_status_v1`: Ollama, LM Studio, MLX, llama.cpp, vLLM, Hugging Face; installed, running, install plan |
+| `engine_status(engine_id, probe=False)` | one engine row |
+| `engine_install_plan(engine_id)` | the fixed install command (`argv`), method, download URL and notes for this host |
+| `engine_download_url(engine_id)` | the vendor download page |
+| `engine_install(engine_id, dry_run=False, force=False, allow=None)` | a `host_job_v1` job of kind `engine_install` |
+| `model_catalog(q=None, engine=None, fits_only=False, hub=False)` | `model_catalog_v1`: downloadable models with presence and a fit verdict |
+| `list_installed_models(provider=None)` | `models_installed_v1`: installed models per engine, with sizes |
+| `model_delete_blockers(provider, artifact)` | what would stop a delete (reads only) |
+| `delete_model_artifact(provider, artifact, dry_run=False, force=False)` | a `host_job_v1` job of kind `delete` |
+| `start_model_download_job(provider, artifact, dry_run=False)` | a `host_job_v1` job of kind `download` (single-flight per artifact) |
+| `host_jobs_list(kind=None, status=None)` | `{"schema": "host_jobs_v1", "jobs": [...]}`, newest first, including jobs started by other processes on the host |
+| `host_job(job_id)` / `host_job_cancel(job_id)` | one job, or `None` when the id is unknown |
+| `console_fragment(kind)` | AbstractCore's embeddable web screen (`models` or `engines`): `{"html", "js", "css"}` |
+| `models_engines_support()` | `{"available", "abstractcore_version", "required", "missing"}`; never raises |
+
+Job-starting calls run in the background and return the queued job; a dry run
+(and `run_inline=True`) finishes on the calling thread and returns the finished
+job.
+
+Errors a host can map to HTTP statuses:
+
+- `AbstractCoreTooOld` (a `NotImplementedError`): the installed AbstractCore
+  predates these modules. The message names the installed version and the
+  upgrade command. Map it to 501.
+- `RuntimeError`: AbstractCore is not installed. Map it to 503.
+- `HostActionRefused`: a refusal with `status_code` and `payload()`. Examples:
+  403 `not_allowed` (engine installs disabled by the host's policy), 404
+  `not_found` / `unknown_engine`, 409 `busy` (an engine install is already
+  running), 409 `refused` with `delete_blockers` (the model is loaded or shares
+  a cache; pass `force=True` to override).
+
+```python
+from abstractruntime.integrations.abstractcore import config_facade as core
+
+core.engine_inventory(probe=True)["engines"][0]["install"]["argv"]  # e.g. ["brew", "install", "ollama"]
+job = core.engine_install("ollama", dry_run=True)                    # finished job, nothing runs
+try:
+    core.delete_model_artifact("ollama", "qwen3:8b", dry_run=True)
+except core.HostActionRefused as refused:
+    print(refused.status_code, refused.payload())
 ```
 
 ## Model residency listings

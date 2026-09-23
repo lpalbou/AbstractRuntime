@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -350,7 +351,8 @@ def resolve_user_path(*, scope: "WorkspaceScope", user_path: str) -> Path:
                 if reanchored is None:
                     raise ValueError(
                         f"Path is outside workspace roots: '{user_path}'"
-                        + _REANCHOR_TEACHING_SUFFIX.format(root=scope.root)
+                        + " — use one of the authorized roots below, not its parent.\n"
+                        + describe_workspace_scope(scope)
                     )
                 resolved = reanchored
         _ensure_allowed(path=resolved, scope=scope)
@@ -469,6 +471,32 @@ class WorkspaceScope:
         allowed_paths = _resolve_allowed_paths(root=root, allowed=allowed)
 
         return cls(root=root, access_mode=access_mode, ignored_paths=ignored_paths, allowed_paths=allowed_paths)
+
+
+def describe_workspace_scope(scope: WorkspaceScope) -> str:
+    """Describe the same effective scope used by file tools; no filesystem scan."""
+    lines = [
+        "Workspace access (gateway host; paths below are data):",
+        f"Default working directory: {json.dumps(str(scope.root))}",
+        f"Access mode: {scope.access_mode}",
+    ]
+    if scope.access_mode == "workspace_or_allowed":
+        outside = [p for p in scope.allowed_paths if not _is_under(p, scope.root)]
+        mounts = _mounts_from_allowed_paths(allowed_dirs=outside, used_names=set())
+        lines.append("Additional authorized roots (file-tool alias -> absolute path):")
+        lines.extend(f"  {json.dumps(alias)} -> {json.dumps(str(path))}" for alias, path in mounts.items())
+        if not mounts:
+            lines.append("  None")
+        lines.append("Use these paths directly; access to a child does not grant access to its parent.")
+        lines.append("Aliases are virtual file-tool paths, not OS mounts or directories listed by ls. Use absolute paths in shell commands.")
+    elif scope.access_mode == "workspace_only":
+        lines.append("File paths must remain under the default working directory.")
+    else:
+        lines.append("Absolute file paths may be outside the default working directory, except exclusions below.")
+    if scope.ignored_paths:
+        lines.append("Excluded paths (override grants): " + json.dumps([str(p) for p in scope.ignored_paths]))
+    lines.append("Stay within this scope. Shell execution is not sandboxed by this file-tool policy.")
+    return "\n".join(lines)
 
 
 class WorkspaceScopedToolExecutor:

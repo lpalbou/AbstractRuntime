@@ -18,12 +18,16 @@ import mimetypes
 import re
 import tempfile
 import datetime
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
+from ...core.progress_channel import current_effect_progress_callback
+from ...core.effect_cancellation import annotate_current_effect, current_effect_cancel_event
 from ...core.runtime import EffectOutcome, EffectHandler
+from ...core.tool_scope import ToolScopeError, resolve_tool_scope
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient, _models_agree
@@ -44,7 +48,7 @@ from .session_attachments import (
     render_session_attachments_system_message,
     session_memory_owner_run_id,
 )
-from .workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
+from .workspace_scoped_tools import WorkspaceScope, describe_workspace_scope, rewrite_tool_arguments
 
 logger = get_logger(__name__)
 
@@ -203,7 +207,9 @@ def _is_sensitive_observability_key(key: str) -> bool:
 def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return params safe for persisted runtime observability traces."""
 
-    callback_keys = {"on_progress", "progress_callback", "progress_event_callback"}
+    # `cancel_event` is the runtime's live threading.Event (core.effect_cancellation):
+    # an in-process handle like the progress callback, never persisted.
+    callback_keys = {"on_progress", "progress_callback", "progress_event_callback", "cancel_event"}
     out: Dict[str, Any] = {}
     for key, value in dict(params or {}).items():
         key_s = str(key)
@@ -1003,6 +1009,18 @@ def _maybe_inject_runtime_thinking(*, run: RunState, params: Dict[str, Any]) -> 
         params["thinking"] = thinking
 
 
+def _maybe_inject_runtime_speculation(*, run: RunState, params: Dict[str, Any]) -> None:
+    """Carry an explicit run policy; Core alone resolves support and defaults."""
+    value = params.get("speculation")
+    if value is None:
+        runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        value = runtime_ns.get("speculation") if isinstance(runtime_ns, dict) else None
+    if value is not None:
+        params["speculation"] = deepcopy(value)
+    else:
+        params.pop("speculation", None)
+
+
 def _maybe_inject_prompt_cache_key(
     *,
     run: RunState,
@@ -1444,11 +1462,51 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         model = payload.get("model")
         tools_raw = payload.get("tools")
         tools = tools_raw if isinstance(tools_raw, list) and len(tools_raw) > 0 else None
+        # Ground tool-using models in the same server-validated run scope as
+        # enforcement. Rebuild from run vars, never client prompt text; do not
+        # persist it in the transcript or accumulate it across ReAct calls.
+        if tools:
+            try:
+                scope = WorkspaceScope.from_input_data(run.vars)
+            except Exception as exc:
+                return EffectOutcome.failed(str(exc), retryable=False)
+            if scope is not None:
+                system_prompt = "\n\n".join(
+                    part for part in (system_prompt, describe_workspace_scope(scope)) if part
+                )
         response_schema = _normalize_response_schema(payload.get("response_schema"))
         response_schema_name = payload.get("response_schema_name")
         structured_output_fallback = payload.get("structured_output_fallback")
         raw_params = payload.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        # PROGRESS CHANNEL, OUT OF BAND (see core/progress_channel.py).
+        # The runtime offers a durable progress sink for this effect through a
+        # ContextVar it sets around this call — never inside `effect.payload`,
+        # which stays JSON for the ledger, the SSE stream and every host that
+        # `json.dumps` it. Picked up HERE, into this handler's private params
+        # dict, which is what becomes provider kwargs (`on_progress=`) on both
+        # the text lane and the generated-media lanes in llm_client. An
+        # explicit caller callable always wins; `_observability_params` strips
+        # it again from anything persisted.
+        if not callable(params.get("on_progress")):
+            runtime_progress_callback = current_effect_progress_callback()
+            if runtime_progress_callback is not None:
+                params["on_progress"] = runtime_progress_callback
+
+        # CANCEL CHANNEL, OUT OF BAND (core/effect_cancellation.py), same
+        # discipline: the runtime's per-attempt threading.Event becomes the
+        # provider kwarg `cancel_event=`, so a Stop reaches the call that is
+        # decoding right now (AbstractCore stops within one token on MLX and
+        # between chunks on any stream). Stripped from every persisted copy.
+        runtime_cancel_event = current_effect_cancel_event()
+        if runtime_cancel_event is not None and params.get("cancel_event") is None:
+            params["cancel_event"] = runtime_cancel_event
+        # Name what is running, for the gateway kill switch's attribution.
+        annotate_current_effect(
+            provider=provider if isinstance(provider, str) and provider.strip() else getattr(llm, "_provider", None),
+            model=model if isinstance(model, str) and model.strip() else getattr(llm, "_model", None),
+        )
 
         output_request = _payload_output_request(payload, params)
         if output_request is not _MISSING:
@@ -1760,6 +1818,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
         # was struggling (adversary defect A, 2026-08-04). Same presence
         # gate: an explicit pin (including False) survives untouched.
         _maybe_inject_runtime_thinking(run=run, params=base_params)
+        _maybe_inject_runtime_speculation(run=run, params=base_params)
 
         try:
             # View-time dedup of repeated document reads (keeps LLM-visible context lean).
@@ -1812,6 +1871,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             # ABSENT-effort calls inside medium runs). Explicit params win,
             # including False.
             _maybe_inject_runtime_thinking(run=run, params=params_for_call)
+            _maybe_inject_runtime_speculation(run=run, params=params_for_call)
 
             if structured_requested:
                 structured_model_name = (
@@ -2429,6 +2489,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 pass
             return EffectOutcome.completed(result=result)
         except Exception as e:
+            if runtime_cancel_event is not None and runtime_cancel_event.is_set():
+                # Stopped by a cancel (core.effect_cancellation): the runtime
+                # records this attempt as `cancelled`, not as a failure.
+                logger.info("LLM_CALL stopped by cancel", detail=str(e))
+                return EffectOutcome.failed(str(e), retryable=False)
             logger.error("LLM_CALL failed", error=str(e))
             return EffectOutcome.failed(str(e), retryable=_llm_error_is_retryable(e))
 
@@ -2876,11 +2941,11 @@ def make_tool_calls_handler(
         tool_calls = payload.get("tool_calls")
         if not isinstance(tool_calls, list):
             return EffectOutcome.failed("tool_calls requires payload.tool_calls (list)", retryable=False)
-        allowed_tools_raw = payload.get("allowed_tools")
-        allowlist_enabled = isinstance(allowed_tools_raw, list)
-        allowed_tools: Set[str] = set()
-        if allowlist_enabled:
-            allowed_tools = {str(t) for t in allowed_tools_raw if isinstance(t, str) and t.strip()}
+        try:
+            allowed_tools = resolve_tool_scope(run, run_store=run_store, local_scope=payload)
+        except ToolScopeError as exc:
+            return EffectOutcome.failed(str(exc), retryable=False)
+        allowlist_enabled = allowed_tools is not None
 
         if tools is None:
             return EffectOutcome.failed(
@@ -3702,7 +3767,7 @@ def make_tool_calls_handler(
                         "name": name,
                         "success": False,
                         "output": None,
-                        "error": f"Tool '{name}' is not allowed for this node",
+                        "error": f"Tool '{name}' is not allowed for this node or run",
                     }
                     # Do not leak arguments for disallowed tools into the durable wait payload.
                     tool_calls_for_evidence.append(

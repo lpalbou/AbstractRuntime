@@ -21,7 +21,9 @@ Contract (agora channel `durable-sessions`, v1):
   never silently.
 - The reconstruction rides `_best_effort_session_turns` (history bundles),
   so what a replayed model sees is exactly what thin clients already
-  display as session history.
+  display as session history — except for the runtime grounding envelope,
+  which replay must carry VERBATIM where display strips it (see the
+  `prompt_verbatim` note at the fold below; mission A, 2026-09-22).
 
 Known v1 limits (documented, not silent): turns are dropped whole, never
 split. The original limit here — "$artifact-offloaded answers extract as
@@ -163,6 +165,17 @@ def session_chat_messages(
         answer = str(turn.get("answer") or "").strip()
         if not prompt or not answer:
             continue
+        # BYTE-EXACT REPLAY (mission A, 2026-09-22). `prompt` is the DISPLAY form —
+        # the runtime's `<runtime_metadata>` envelope stripped off so UIs show what
+        # the human typed. Replaying that form re-sends a user turn with different
+        # bytes than it was sent with, and turn N's prompt then stops being a byte-
+        # prefix of turn N+1's, which is the one precondition every prefix cache
+        # (provider prompt cache, KV reuse, mlx-vlm APC) needs. `prompt_verbatim`
+        # carries the stored bytes when the turn was stamped; absent, `prompt` is
+        # already the exact bytes.
+        verbatim = str(turn.get("prompt_verbatim") or "").strip()
+        if verbatim:
+            prompt = verbatim
         ts = str(turn.get("created_at") or turn.get("updated_at") or "").strip()
         meta: Dict[str, Any] = {"kind": SESSION_TURN_KIND, "run_id": rid}
         if ts:

@@ -30,6 +30,13 @@ from typing import Any, Dict, List, Optional, Union
 _PathLike = Union[str, Path]
 
 
+def normalize_speculation_control(value: Any) -> Any:
+    """Validate host controls before persistence using Core's one vocabulary."""
+    from abstractcore.providers.speculation import normalize_speculation_value
+
+    return normalize_speculation_value(value)
+
+
 def _configuration_manager(
     config_file: Optional[_PathLike] = None,
     *,
@@ -596,6 +603,7 @@ def download_model_artifact(
 
 
 __all__ = [
+    "normalize_speculation_control",
     "list_capability_defaults",
     "capability_default_config_file",
     "capability_default_config_path",

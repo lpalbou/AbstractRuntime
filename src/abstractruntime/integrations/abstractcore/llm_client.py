@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import base64
+from copy import deepcopy
 import hashlib
 import io
 import json
@@ -351,6 +352,36 @@ def _has_local_prompt_cache_control_plane(provider: Any) -> bool:
         return False
 
 
+def _uses_local_full_context_prompt_cache(provider: Any, *, provider_name: str) -> bool:
+    """Whether a runtime-derived key needs explicit full-history call shape.
+
+    Native MLX has keyed APC without the legacy prepare/fork control plane.
+    It still requires messages=[] for a standalone, full-context prompt.
+    Keep this bridge narrow: changing None to [] on unrelated transports can
+    change their endpoint/template (notably Ollama's generate versus chat).
+    """
+    if _has_local_prompt_cache_control_plane(provider):
+        return True
+    if str(provider_name or "").strip().lower() != "mlx":
+        return False
+    try:
+        # Do not use the legacy helper's inferred keyed mode: only an
+        # explicitly advertised profile identifies this native APC contract.
+        getter = getattr(provider, "get_prompt_cache_capabilities", None)
+        if not callable(getter):
+            return False
+        capabilities = getter()
+        if callable(getattr(capabilities, "to_dict", None)):
+            capabilities = capabilities.to_dict()
+        return (
+            isinstance(capabilities, dict)
+            and capabilities.get("supported") is True
+            and capabilities.get("mode") == "keyed"
+        )
+    except Exception:
+        return False
+
+
 def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
     """True when `fn` can be called with keyword `name` (explicit parameter or **kwargs)."""
     import inspect
@@ -435,6 +466,57 @@ class _Unset:
 
 
 _UNSET = _Unset()
+
+
+def _speculation_construction_request(params: Mapping[str, Any]) -> Any:
+    """The speculation request that must reach `create_llm`, or None.
+
+    Speculation is a LOAD-TIME property: MLX binds the MTP drafter to the
+    target while the weights are loaded, so AbstractCore refuses a per-call
+    request on a provider whose lane was never prepared -- "speculation must
+    be requested when the provider is created -- it selects the runtime that
+    loads the weights".
+
+    The runtime carried the request as a generate PARAM only (see
+    `visual/executor.py` and `compiler.py`, which set `params["speculation"]`),
+    and pooled clients are keyed by provider/model alone. So a run that asked
+    for a depth could never get one: the pooled provider had been built
+    without speculation, and a brand-new run built one the same way
+    microseconds before failing with that message -- which reads as a caller
+    error when the caller never had a way to ask.
+
+    "Off" and absent return None on purpose: constructing a separate provider
+    for "no speculation" would split the pool for nothing.
+    """
+    value = params.get("speculation")
+    if value is None or value is False:
+        return None
+    if value is True:
+        return True
+    if isinstance(value, Mapping):
+        mode = str(value.get("mode") or "").strip().lower()
+        if mode in {"", "off", "none", "disabled"}:
+            return None
+        if value.get("enabled") is False:
+            return None
+        return dict(value)
+    return None
+
+
+def _speculation_fingerprint(value: Any) -> str:
+    """Stable short digest of a speculation request, for the client cache key.
+
+    Two depths are two different LOADS of the model -- one pooled instance
+    cannot serve both, so the request has to be part of the key that selects
+    the instance.
+    """
+    if value is None:
+        return ""
+    try:
+        canonical = json.dumps(value, sort_keys=True, default=str)
+    except Exception:
+        canonical = repr(value)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def _split_connection_scoped_llm_kwargs(
@@ -563,9 +645,9 @@ def _set_header_case_insensitive(headers: Dict[str, str], name: str, value: str)
 def _local_generate_lock(*, provider: str, model: str) -> Optional[threading.Lock]:
     """Return a process-wide generation lock for providers that are not thread-safe.
 
-    MLX/Metal can crash the process when concurrent generations occur from multiple threads
-    (e.g. gateway ticking multiple runs concurrently). We serialize MLX generation per model
-    as a safety contract.
+    Ordinary MLX/Metal can crash when generations run on competing threads.
+    Keep a per-model fallback lock; only an instance advertising its own safe
+    scheduler may bypass it at call time.
     """
 
     prov = str(provider or "").strip().lower()
@@ -578,6 +660,19 @@ def _local_generate_lock(*, provider: str, model: str) -> Optional[threading.Loc
             lock = threading.Lock()
             _LOCAL_GENERATE_LOCKS[key] = lock
         return lock
+
+
+def _local_instance_schedules_generation(provider: Any) -> bool:
+    """Only an explicit instance guarantee permits bypassing the safety lock."""
+    try:
+        capability = getattr(provider, "supports_concurrent_generation", None)
+        return callable(capability) and capability() is True
+    except Exception as exc:
+        logger.warning(
+            "#FALLBACK concurrency capability probe failed; retaining the local "
+            f"generation safety lock: {exc}"
+        )
+        return False
 
 
 def _warn_local_generate_lock_once(*, provider: str, model: str) -> None:
@@ -677,6 +772,105 @@ def _strip_volatile_markers(messages: Optional[List[Dict[str, Any]]]) -> Optiona
         else:
             out.append(m)
     return out
+
+
+# ---------------------------------------------------------------------------
+# SYNTHESIZED CARRIERS (mission A3, 2026-09-22) — the same STRUCTURAL-marker
+# discipline as `volatile` above, for a different failure.
+#
+# A payload-boundary repair may have to invent a `user`-role message: abstractagent's
+# `sanitize_transcript_messages` folds a tool result whose call id no announced call
+# owns into `[unpaired tool result]: …`, because strict providers 400 on an orphan
+# `tool` message. That carrier is NOT a turn — it is re-derived from the durable
+# transcript every time a payload is built. On the operator's live run 081d8daa it
+# was also the LAST message of a tool-loop payload, so `_normalize_turn_grounding`
+# read the payload as "chat shape" and injected the grounding envelope into it; the
+# next iteration rebuilt it without the envelope and stamped the NEW carrier. The
+# two consecutive prompts were identical for messages 0..12 and differed by exactly
+# 118 chars (one envelope) at index 13 of 21 — thousands of tokens before the end of
+# a 13k-token prompt, outside every checkpoint window — so iterations 3, 4 and the
+# whole next run went COLD.
+#
+# The marker is never pattern-matched from the prose: the producer declares it and
+# it is STRIPPED before the provider call, exactly like `volatile`.
+# ---------------------------------------------------------------------------
+
+SYNTHETIC_MESSAGE_KEY = "_af_synthetic"
+SYNTHETIC_TOOL_RESULT = "tool_result"
+
+
+def _message_is_synthetic_carrier(message: Any) -> bool:
+    """True when a payload-boundary repair synthesized this message."""
+    if not isinstance(message, dict):
+        return False
+    return bool(str(message.get(SYNTHETIC_MESSAGE_KEY) or "").strip())
+
+
+def _strip_synthetic_message_markers(
+    messages: Optional[List[Dict[str, Any]]]
+) -> Optional[List[Dict[str, Any]]]:
+    """Remove the carrier marker before the provider boundary (unknown field = 400 risk)."""
+    if not isinstance(messages, list):
+        return messages
+    if not any(_message_is_synthetic_carrier(m) for m in messages):
+        return messages
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        if _message_is_synthetic_carrier(m):
+            clean = dict(m)
+            clean.pop(SYNTHETIC_MESSAGE_KEY, None)
+            out.append(clean)
+        else:
+            out.append(m)
+    return out
+
+
+def _transcript_carries_grounding_envelope(messages: Any) -> bool:
+    """True when ANY non-synthetic user message of the transcript is already stamped.
+
+    "Is this turn grounded?" is a question about the transcript, not about its last
+    message: once a carrier or an operator interjection sits after the task, the
+    stamped message is several positions back. Checking only the last one appended a
+    fresh envelope on every iteration, which is the entropy the cache cannot absorb.
+    """
+    if not isinstance(messages, list):
+        return False
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        if _message_is_synthetic_carrier(m) or _is_volatile_message(m):
+            continue
+        if _content_carries_grounding_envelope(m.get("content")):
+            return True
+        # A stamped durable message the payload MERGED behind another user
+        # message (alternation-strict adjacency repair: task + operator guidance
+        # drained before the first reply) carries its envelope at a paragraph
+        # boundary, not at the head. It is still the turn's grounding.
+        if _content_has_merged_grounding_envelope(m.get("content")):
+            return True
+    return False
+
+
+_MERGED_RUNTIME_METADATA_ENVELOPE_RE = re.compile(
+    r"\n\n<runtime_metadata>\s*\{.*?\}\s*</runtime_metadata>",
+    re.DOTALL,
+)
+
+
+def _content_has_merged_grounding_envelope(content: Any) -> bool:
+    if isinstance(content, str):
+        return bool(_MERGED_RUNTIME_METADATA_ENVELOPE_RE.search(content))
+    if isinstance(content, list):
+        return any(
+            isinstance(item, dict)
+            and str(item.get("type") or "").strip().lower() == "text"
+            and bool(_MERGED_RUNTIME_METADATA_ENVELOPE_RE.search(str(item.get("text") or "")))
+            for item in content
+        )
+    return False
+
 
 _ZONEINFO_TAB_CANDIDATES = [
     "/usr/share/zoneinfo/zone.tab",
@@ -1036,9 +1230,10 @@ def _runtime_grounding_metadata(trace_metadata: Optional[Dict[str, Any]] = None)
 # The contract is stable text (no per-turn entropy) so prompt/KV caching is
 # unaffected.
 _RUNTIME_GROUNDING_CONTRACT = (
-    "RUNTIME GROUNDING: the latest user message may begin with a machine-generated "
-    "<runtime_metadata>{...}</runtime_metadata> envelope carrying the current local "
-    "date/time (and optionally timezone, country, or OS user) for grounding. It is not "
+    "RUNTIME GROUNDING: a user message may begin with a machine-generated "
+    "<runtime_metadata>{...}</runtime_metadata> envelope carrying the local "
+    "date/time that message was sent (and optionally timezone, country, or OS user) "
+    "for grounding; the newest one is the current time. It is not "
     "written by the user and it is not a language or locale preference. Always respond "
     "in the language of the user's request itself unless the user explicitly asks "
     "otherwise."
@@ -1130,7 +1325,63 @@ def _strip_runtime_grounding_prefix(text: str) -> str:
     return ""
 
 
+def _head_runtime_grounding_envelope(text: Any) -> Optional[str]:
+    """Return the message's own head `<runtime_metadata>` envelope, or None.
+
+    "Own" means exactly one well-formed envelope at the head, with no second
+    envelope or legacy `Grounding:` header stacked behind it (that shape is a
+    pre-0212 artifact and must still be normalized away).
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    match = _RUNTIME_METADATA_ENVELOPE_RE.match(text)
+    if not match:
+        return None
+    rest = text[match.end() :]
+    if _strip_runtime_grounding_prefix(rest) != rest.strip():
+        return None  # stacked artifacts behind the head envelope
+    return text[: match.end()]
+
+
+def _content_carries_grounding_envelope(content: Any) -> bool:
+    """True when this message content already carries its own head envelope.
+
+    Handles both content shapes the payload boundary accepts: a plain string and
+    an OpenAI-style content-part list (the first text part is the head).
+    """
+    if isinstance(content, str):
+        return _head_runtime_grounding_envelope(content) is not None
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip().lower() != "text":
+                continue
+            return _head_runtime_grounding_envelope(item.get("text")) is not None
+    return False
+
+
 def _inject_runtime_grounding_into_text(text: str, grounding: Dict[str, Any]) -> str:
+    """Stamp the grounding envelope ONCE, then keep it byte-for-byte.
+
+    BYTE-STABILITY CONTRACT (mission A, 2026-09-22). The envelope carries a
+    per-second timestamp. Stripping an envelope that is already there and
+    re-injecting a fresh one made the SAME user turn render differently on every
+    pass (runtime ledger pass, then client pass) and — far worse — differently
+    from the bytes that turn was durably stored with, so the next conversational
+    turn's prompt diverged at the START of the previous user message and no
+    prefix cache could restore past it. Measured on the MLX native lane (4B pair,
+    8-turn chat, untracked/missionA): 185-388 tokens re-prefilled EVERY turn, and
+    the divergence grows with the conversation.
+
+    An envelope already present is therefore the FINAL word for that message: its
+    timestamp means "when this turn was sent", which is what it should have meant
+    all along. Only a message that carries none gets a fresh stamp. Legacy
+    `Grounding:` headers and stacked artifacts are still normalized away.
+    """
+    existing = _head_runtime_grounding_envelope(text)
+    if existing is not None:
+        return str(text)
     cleaned = _strip_runtime_grounding_prefix(text)
     envelope = _runtime_grounding_prompt_envelope(grounding)
     return f"{envelope}\n{cleaned}" if cleaned else envelope
@@ -1181,8 +1432,7 @@ def _normalize_turn_grounding(
 
     Placement (prompt-prefix cache stability, backlog 0212):
     - Chat shape (the last `user` message is the FINAL message): the envelope is
-      injected at the head of that final user turn — the turn is fresh bytes
-      anyway, so the cacheable prefix (all earlier messages) is untouched.
+      injected at the head of that final user turn.
     - Tool-loop shape (messages continue past the last `user` message, e.g.
       `user task, assistant tool_calls, tool, ...`): rewriting the last user
       message would mutate message[0] with per-second timestamp entropy on every
@@ -1190,6 +1440,19 @@ def _normalize_turn_grounding(
       a TRAILING, envelope-only `user` message appended after the transcript.
       Stale envelope-only messages from a previous pass are dropped first, so
       double normalization (runtime ledger pass + client pass) stays idempotent.
+
+    STAMP ONCE (mission A, 2026-09-22). Both rules above now apply only to a user
+    turn that carries NO envelope yet. A turn that already carries one keeps it
+    byte-for-byte, and the tool-loop shape then appends no trailer at all. The
+    envelope's timestamp therefore means "when this turn was sent", and the bytes
+    a turn is sent with are the bytes it can be replayed with — which is the whole
+    precondition for a conversational prompt cache: turn N's prompt must be an
+    exact byte-prefix of turn N+1's. Adapters that own a durable transcript stamp
+    it there once (`abstractruntime.turn_grounding.stamp_user_turn_grounding`,
+    called by abstractagent's react/codeact/memact `reason` boundary) and the
+    session replay path returns that stamped content verbatim
+    (`abstractruntime.session_history`). Hosts that stamp nothing keep the old
+    per-call behaviour, one pass later.
     """
 
     def _clean_or_inject_text(value: str) -> str:
@@ -1233,12 +1496,36 @@ def _normalize_turn_grounding(
                 continue
             out.append(entry)
 
+        # SYNTHESIZED CARRIERS ARE NOT THE TURN (mission A3, 2026-09-22).
+        # abstractagent's payload-boundary repair folds a tool result whose call id
+        # nothing announced into a `user` message (`[unpaired tool result]: …`),
+        # marked `_af_synthetic`. In a tool loop that carrier is the LAST message,
+        # so the scan below used to classify the payload as "chat shape" and inject
+        # the envelope at its head — into a message the NEXT iteration rebuilds
+        # from the durable transcript without it, stamping the newer carrier
+        # instead. Measured on live run 081d8daa: consecutive prompts identical for
+        # messages 0..12 and 118 chars apart (exactly one envelope) at index 13 of
+        # 21 — thousands of tokens before the prompt's end, so nothing restored.
+        # Skipping carriers puts `last_user_idx` back on the durable turn, which
+        # the adapter already stamped, and the tool-loop branch then leaves the
+        # whole transcript byte-for-byte alone.
         last_user_idx: Optional[int] = None
         for i in range(len(out) - 1, -1, -1):
             role = str(out[i].get("role") or "").strip().lower()
-            if role == "user":
-                last_user_idx = i
-                break
+            if role != "user":
+                continue
+            if _message_is_synthetic_carrier(out[i]):
+                continue
+            # A `volatile` message is per-call BY DECLARATION (the loops' old
+            # trailing position line; hosts may still emit one). It is gone from
+            # the next call's payload, so an envelope written into it is written
+            # into bytes the next call will not have — measured on the hermetic
+            # gateway (mission A3): `[loop] iteration N of 8.` was the last user
+            # message, was read as "chat shape" and stamped on every iteration.
+            if _is_volatile_message(out[i]):
+                continue
+            last_user_idx = i
+            break
 
         if last_user_idx is None:
             if grounding:
@@ -1252,12 +1539,49 @@ def _normalize_turn_grounding(
             )
             return prompt_str, out
 
-        # Tool-loop shape: keep the transcript prefix byte-stable — strip any legacy
-        # envelope prefix from the (earlier) user turn and carry fresh grounding in a
-        # trailing envelope-only user message instead.
+        # Tool-loop shape.
+        #
+        # When the durable user turn ALREADY carries its own envelope (stamped once,
+        # when the turn was created — see `_inject_runtime_grounding_into_text`), it
+        # is the grounding for this turn: leave it exactly as stored and append
+        # nothing. That is what makes iteration N's prompt an exact byte-prefix of
+        # iteration N+1's for hosts with no volatile tail, and it removes the ~50
+        # trailing tokens of per-iteration entropy for hosts that have one. The cost
+        # is that "now" inside a long tool loop is the time the TURN was sent, not
+        # the time this iteration started — seconds to minutes, on a field whose
+        # resolution is the second and whose purpose is "what day/time is it".
+        #
+        # When it carries none (a host that never stamped one, or a legacy
+        # `Grounding:` header), the pre-0212 behaviour stands: strip the artifact
+        # from the earlier user turn — rewriting it with per-second entropy on every
+        # iteration would mutate message[0] and defeat prompt caching — and carry
+        # fresh grounding in a TRAILING envelope-only user message instead.
+        # `grounding=None` (media-only calls) still means CLEAN: a stamped turn is
+        # kept only while grounding is active — the strip path below is the one
+        # that removes envelope artifacts when the caller asked for none.
+        #
+        # ANY stamped user message grounds the turn (mission A3). The old test
+        # looked only at `out[last_user_idx]`; after an operator interjection is
+        # drained mid-loop the newest durable user message is that interjection,
+        # which `stamp_user_turn_grounding` stamps, while the ORIGINAL task
+        # several messages back carries the turn's envelope. Either way the model
+        # has the local time, so a trailer would only add per-iteration entropy at
+        # the one place the cache cannot afford it — the end of the prompt.
+        if grounding and _transcript_carries_grounding_envelope(out):
+            return prompt_str, out
         out[last_user_idx]["content"] = _apply_to_content(out[last_user_idx].get("content"), text_fn=_strip_text)
         if grounding:
-            out.append({"role": "user", "content": _runtime_grounding_prompt_envelope(grounding)})
+            if str(out[-1].get("role") or "").strip().lower() == "user":
+                # The payload already ends with an adapter-authored user message (a
+                # loop tail or a tool-result carrier, mission A3). A second trailing
+                # user message would be a user,user pair, which alternation-strict
+                # templates reject; ride the head of that message instead. Per-call
+                # bytes either way — this legacy path is for hosts that never stamp.
+                last = dict(out[-1])
+                last["content"] = _apply_to_content(last.get("content"), text_fn=_clean_or_inject_text)
+                out[-1] = last
+            else:
+                out.append({"role": "user", "content": _runtime_grounding_prompt_envelope(grounding)})
         return prompt_str, out
 
     return prompt_str, messages
@@ -1402,6 +1726,11 @@ class AbstractCoreLLMClient(Protocol):
 
     def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Return model capability metadata for a specific model or the default client model."""
+
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return execution-host capabilities without constructing/loading a provider."""
 
     def get_prompt_cache_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         """Return a JSON-safe prompt-cache capability payload."""
@@ -3894,6 +4223,28 @@ def _unload_local_provider_residency(
     method = getattr(provider_instance, "unload_model", None)
     if not callable(method):
         return None, "AbstractCore provider does not expose unload_model(model_name)."
+    # EJECT = STOP FIRST (2026-09-23): the runtime effects running this model
+    # are cancelled with an attribution (`cancelled_by="model_eject"`) before
+    # the provider frees anything; the provider's own unload then waits for
+    # them to unwind (AbstractCore `InflightGenerations`) and refuses to free
+    # memory under a call that did not stop.
+    try:
+        from ...core.effect_cancellation import request_model_effects_cancel
+
+        provider_label = str(getattr(provider_instance, "provider", "") or "").strip()
+        stopped = request_model_effects_cancel(
+            provider_label,
+            str(model or "").strip(),
+            cancelled_by="model_eject",
+            reason=f"model {provider_label}/{str(model or '').strip()} ejected (model residency unload)",
+        )
+        if stopped:
+            logger.warning(
+                f"model eject: cancelled {len(stopped)} in-flight effect(s) using "
+                f"{provider_label}/{str(model or '').strip()} before unloading it"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"model eject: could not cancel in-flight effects before unload: {exc}")
     try:
         unload_options = dict(options or {}) if isinstance(options, dict) else {}
         if unload_options:
@@ -6295,7 +6646,7 @@ def _attach_core_execution_context_to_client(
                 pass
         if capability_defaults is not None:
             try:
-                setattr(target, "_abstractcore_capability_defaults", dict(capability_defaults))
+                setattr(target, "_abstractcore_capability_defaults", deepcopy(capability_defaults))
             except Exception:
                 pass
 
@@ -6336,9 +6687,13 @@ class LocalAbstractCoreLLMClient:
         self._core_config_file = _coerce_core_config_file(core_config_file)
         self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
         self._generate_lock = _local_generate_lock(provider=self._provider, model=self._model)
-        if self._generate_lock is not None:
-            _warn_local_generate_lock_once(provider=self._provider, model=self._model)
         kwargs = dict(llm_kwargs or {})
+        # Native model loading may need the scoped default (e.g. whether to
+        # prepare its MTP head). Attaching this only after create_llm is too late.
+        if self._core_config_file:
+            kwargs["_abstractcore_config_file"] = self._core_config_file
+        if capability_defaults is not None:
+            kwargs["_abstractcore_capability_defaults"] = deepcopy(self._capability_defaults)
         kwargs.setdefault("enable_tracing", True)
         if kwargs.get("enable_tracing"):
             # Keep a small in-memory ring buffer for exact request/response observability.
@@ -6349,7 +6704,7 @@ class LocalAbstractCoreLLMClient:
         _attach_core_execution_context_to_client(
             self,
             core_config_file=self._core_config_file,
-            capability_defaults=self._capability_defaults,
+            capability_defaults=self._capability_defaults if capability_defaults is not None else None,
         )
         self._tool_handler = UniversalToolHandler(model)
         self._prompt_cache_state_lock = threading.Lock()
@@ -7443,23 +7798,30 @@ class LocalAbstractCoreLLMClient:
             # far": same rendered bytes (the prompt is the final user turn either way), but
             # the key now gets prefix/delta discipline instead of append.
             #
-            # ONLY for providers that HAVE an append lane — an in-process prompt cache
-            # with the local control plane. Everywhere else the rewrite buys nothing and
-            # can change the wire: Ollama picks `/api/chat` over `/api/generate` on
+            # Apply to the legacy local append lane AND native MLX's full-history
+            # keyed APC lane (which does not offer prepare/fork). Elsewhere the
+            # rewrite can change the wire: Ollama picks `/api/chat` over `/api/generate` on
             # `messages is not None`, so a cache-discipline fix would have switched its
             # endpoint and template (adversarial find, 2026-09-17).
-            call_messages = _strip_volatile_markers(messages)
+            call_messages = _strip_synthetic_message_markers(_strip_volatile_markers(messages))
             if (
                 call_messages is None
                 and prompt_cache_attribution is not None
                 and not has_binding
                 and isinstance(params.get("prompt_cache_key"), str)
                 and params.get("prompt_cache_key").strip()
-                and _has_local_prompt_cache_control_plane(getattr(self, "_llm", None))
+                and _uses_local_full_context_prompt_cache(
+                    getattr(self, "_llm", None), provider_name=self._provider,
+                )
             ):
                 call_messages = []
 
             lock = getattr(self, "_generate_lock", None)
+            # Query the loaded instance on each call, not the provider name or
+            # constructor options: only its internal scheduler guarantees safe
+            # admission, and that guarantee can disappear after an unload.
+            if lock is not None and _local_instance_schedules_generation(self._llm):
+                lock = None
             if lock is None:
                 if not has_binding:
                     self._maybe_prepare_prompt_cache(
@@ -7493,6 +7855,7 @@ class LocalAbstractCoreLLMClient:
                 result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
             else:
                 # Serialize generation for non-thread-safe providers (e.g. MLX).
+                _warn_local_generate_lock_once(provider=self._provider, model=self._model)
                 with lock:
                     if not has_binding:
                         self._maybe_prepare_prompt_cache(
@@ -7564,7 +7927,23 @@ class LocalAbstractCoreLLMClient:
                         payload["tools"] = tools
 
                     # Include generation params for debugging; keep JSON-safe (e.g. response_model).
-                    payload["params"] = _jsonable(params) if params else {}
+                    # Host callbacks (`on_progress`, injected by the runtime for
+                    # every LLM_CALL) are dropped rather than stringified: a
+                    # `<bound method ...>` repr in every persisted provider
+                    # request is noise no reader can act on.
+                    # The runtime's `cancel_event` (a live threading.Event) is the
+                    # same class of in-process handle and is dropped the same way.
+                    payload["params"] = (
+                        _jsonable(
+                            {
+                                k: v
+                                for k, v in params.items()
+                                if not callable(v) and not isinstance(v, threading.Event)
+                            }
+                        )
+                        if params
+                        else {}
+                    )
 
                     meta["_provider_request"] = {
                         "transport": "local",
@@ -7614,6 +7993,16 @@ class LocalAbstractCoreLLMClient:
         from .discovery_queries import local_get_model_capabilities
 
         return local_get_model_capabilities(target_model)
+
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from abstractcore.providers.speculation import get_execution_capabilities
+
+        target_model = str(model_name or self._model or "").strip()
+        target_provider = str(provider or self._provider or "").strip().lower()
+        instance = self._llm if (target_model == self._model and target_provider == self._provider) else None
+        return get_execution_capabilities(target_model, provider=target_provider, instance=instance)
 
     def list_providers(
         self,
@@ -8571,8 +8960,9 @@ class MultiLocalAbstractCoreLLMClient:
         self._prompt_cache_export_root_dir = _coerce_prompt_cache_export_root_dir(prompt_cache_export_root_dir)
         self._core_config_file = _coerce_core_config_file(core_config_file)
         self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
+        self._capability_defaults_explicit = capability_defaults is not None
         self._clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
-        self._override_clients: Dict[Tuple[str, str, str, str], LocalAbstractCoreLLMClient] = {}
+        self._override_clients: Dict[Tuple[str, ...], LocalAbstractCoreLLMClient] = {}
         self._capability_residency_core = None
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
@@ -8677,9 +9067,14 @@ class MultiLocalAbstractCoreLLMClient:
         capability_changed = False
         if capability_defaults is not _UNSET:
             normalized_defaults = _normalize_core_capability_defaults(capability_defaults)
-            capability_changed = normalized_defaults != getattr(self, "_capability_defaults", {})
+            explicit_defaults = capability_defaults is not None
+            capability_changed = (
+                normalized_defaults != getattr(self, "_capability_defaults", {})
+                or explicit_defaults != getattr(self, "_capability_defaults_explicit", False)
+            )
             if capability_changed:
                 self._capability_defaults = normalized_defaults
+                self._capability_defaults_explicit = explicit_defaults
 
         identity_changed = (
             provider_s != str(getattr(self, "_default_provider", "") or "")
@@ -8721,7 +9116,7 @@ class MultiLocalAbstractCoreLLMClient:
             logger.info(f"🔒 pool eviction skipped (locked): {pool_key[0]}/{pool_key[1]}")
         self._clients = kept_clients
         if capability_changed:
-            kept_overrides: Dict[Tuple[str, str, str, str], LocalAbstractCoreLLMClient] = {}
+            kept_overrides: Dict[Tuple[str, ...], LocalAbstractCoreLLMClient] = {}
             for override_key, override_client in dict(getattr(self, "_override_clients", {}) or {}).items():
                 if (override_key[0], override_key[1]) not in locked_pairs:
                     continue
@@ -8750,17 +9145,17 @@ class MultiLocalAbstractCoreLLMClient:
             capability_defaults=capability_defaults,
         )
 
-    def _require_default_client(self) -> "LocalAbstractCoreLLMClient":
-        """Capability lookups route through the default client; a fresh
-        install has none until the operator chooses. Ask for configuration
-        instead of crashing on None (release gap 1, 2026-07-27)."""
-        client = getattr(self, "_default_client", None)
-        if client is None:
+    def _capability_lookup_model(self, model_name: Optional[str]) -> str:
+        """The model a capability lookup is about: the one named, else the
+        configured default's NAME (metadata needs no weights). With neither,
+        refuse with the fresh-install message -- the one case it is true for."""
+        target = str(model_name or getattr(self, "_default_model", "") or "").strip()
+        if not target:
             raise no_default_provider_configured_error(
                 core_config_file=getattr(self, "_core_config_file", None),
                 what="model capability lookup",
             )
-        return client
+        return target
 
     def _create_client(
         self,
@@ -8808,7 +9203,8 @@ class MultiLocalAbstractCoreLLMClient:
                 "bloc_root_dir": self._bloc_root_dir,
                 "prompt_cache_export_root_dir": self._prompt_cache_export_root_dir,
                 "core_config_file": self._core_config_file,
-                "capability_defaults": self._capability_defaults,
+                "capability_defaults": self._capability_defaults
+                if getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)) else None,
             }.items()
             if value is not None
         }
@@ -8841,11 +9237,12 @@ class MultiLocalAbstractCoreLLMClient:
             if last_exc is not None:
                 raise last_exc
             raise TypeError("Failed to construct LocalAbstractCoreLLMClient")
-        if self._core_config_file or self._capability_defaults:
+        if self._core_config_file or getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)):
             _attach_core_execution_context_to_client(
                 client,
                 core_config_file=self._core_config_file,
-                capability_defaults=self._capability_defaults,
+                capability_defaults=self._capability_defaults
+                if getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)) else None,
             )
         resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
         if callable(resolver):
@@ -8888,7 +9285,11 @@ class MultiLocalAbstractCoreLLMClient:
             base_url = str(llm_kwargs_override.get("base_url") or "").strip()
             api_key = str(llm_kwargs_override.get("api_key") or "").strip()
             api_key_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16] if api_key else ""
-            override_key = (key[0], key[1], base_url, api_key_fp)
+            # Speculation is part of the key because it is part of the LOAD:
+            # a provider built for depth 3 cannot serve a depth-5 request, and
+            # one built without speculation cannot serve either.
+            spec_fp = _speculation_fingerprint(llm_kwargs_override.get("speculation"))
+            override_key = (key[0], key[1], base_url, api_key_fp, spec_fp)
             override_clients = getattr(self, "_override_clients", None)
             if override_clients is None:
                 override_clients = {}
@@ -8943,8 +9344,14 @@ class MultiLocalAbstractCoreLLMClient:
     def list_loaded_clients(self) -> List[Tuple[str, str]]:
         """Return (provider, model) pairs loaded in this process (best-effort)."""
         out = list(getattr(self, "_clients", {}).keys())
-        for provider, model, _base_url, _api_key_fp in getattr(self, "_override_clients", {}).keys():
-            pair = (provider, model)
+        # Read the pair positionally: the override key grows an axis whenever a
+        # new construction-time property has to select the instance (base_url,
+        # api key, now the speculation request). Destructuring the whole tuple
+        # made this raise `too many values to unpack` the moment it did.
+        for key in getattr(self, "_override_clients", {}).keys():
+            if not isinstance(key, tuple) or len(key) < 2:
+                continue
+            pair = (key[0], key[1])
             if pair not in out:
                 out.append(pair)
         return out
@@ -9502,6 +9909,14 @@ class MultiLocalAbstractCoreLLMClient:
         if provider_api_key:
             llm_kwargs_override["api_key"] = provider_api_key
 
+        # A speculation request has to reach `create_llm`, not just `generate`:
+        # it selects the runtime that loads the weights. The param is LEFT in
+        # place as well so Core still validates it and reports the outcome --
+        # once the lane is loaded, the per-call request matches and is a no-op.
+        speculation_request = _speculation_construction_request(params)
+        if speculation_request is not None:
+            llm_kwargs_override["speculation"] = deepcopy(speculation_request)
+
         client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
         result = client.generate(
             prompt=prompt,
@@ -9545,12 +9960,45 @@ class MultiLocalAbstractCoreLLMClient:
         client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
         return client.stream_tts(text=text, output=output, params=stream_params)
 
+    # CATALOG QUERIES NEVER GO THROUGH A LOADED CLIENT (defect 2026-09-22).
+    # They used to be routed via the DEFAULT pooled client, so the moment the
+    # configured default could not be built (its weights not downloaded --
+    # the warm-up above soft-fails that on purpose so the host still boots)
+    # every provider's model list, every capability lookup and every
+    # voice/music/vision catalog raised "no provider/model is configured",
+    # which was both wrong (one WAS configured) and total (every picker in
+    # every UI was empty, for providers unrelated to the broken default).
+    # `LocalAbstractCoreLLMClient` answers these with the stateless
+    # `discovery_queries.local_*` helpers; the pool delegates the same way,
+    # exactly as `list_providers` below already did.
+
     def get_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
-        # Best-effort: use requested model name or the default client model.
-        return self._require_default_client().get_model_capabilities(model_name=model_name)
+        from .discovery_queries import local_get_model_capabilities
+
+        payload = local_get_model_capabilities(self._capability_lookup_model(model_name))
+        capabilities = payload.get("capabilities") if isinstance(payload, dict) else None
+        if isinstance(capabilities, dict):
+            return capabilities
+        from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
+
+        return {"max_tokens": DEFAULT_MAX_TOKENS}
 
     def lookup_model_capabilities(self, model_name: Optional[str] = None) -> Dict[str, Any]:
-        return self._require_default_client().lookup_model_capabilities(model_name=model_name)
+        from .discovery_queries import local_get_model_capabilities
+
+        return local_get_model_capabilities(self._capability_lookup_model(model_name))
+
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from abstractcore.providers.speculation import get_execution_capabilities
+
+        target_model = str(model_name or self._default_model or "").strip()
+        target_provider = str(provider or self._default_provider or "").strip().lower()
+        # Discovery must not call _get_client: that could load tens of GB.
+        client = self._clients.get((target_provider, target_model))
+        instance = getattr(client, "_llm", None) if client is not None else None
+        return get_execution_capabilities(target_model, provider=target_provider, instance=instance)
 
     def list_providers(
         self,
@@ -9572,7 +10020,19 @@ class MultiLocalAbstractCoreLLMClient:
         provider_name: str,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_provider_models(provider_name, **kwargs)
+        from .discovery_queries import local_list_provider_models
+
+        call_kwargs = dict(kwargs)
+        provider_api_key = _pop_provider_api_key(call_kwargs)
+        return local_list_provider_models(
+            provider_name,
+            base_url=call_kwargs.get("base_url"),
+            provider_api_key=provider_api_key,
+            input_type=call_kwargs.get("input_type"),
+            output_type=call_kwargs.get("output_type"),
+            capability_route=call_kwargs.get("capability_route", call_kwargs.get("capability_routes")),
+            timeout_s=call_kwargs.get("timeout_s"),
+        )
 
     def list_embedding_models(
         self,
@@ -9583,12 +10043,16 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_embedding_models(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_embedding_models
+
+        return local_list_embedding_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
             providers_only=providers_only,
-            **kwargs,
+            timeout_s=call_kwargs.get("timeout_s"),
         )
 
     def get_voice_catalog(
@@ -9601,13 +10065,16 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().get_voice_catalog(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_get_voice_catalog
+
+        return local_get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
             model=model,
             providers_only=providers_only,
-            **kwargs,
         )
 
     def list_tts_models(
@@ -9618,11 +10085,14 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_tts_models(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_tts_models
+
+        return local_list_tts_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
-            **kwargs,
         )
 
     def list_stt_models(
@@ -9633,11 +10103,14 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_stt_models(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_stt_models
+
+        return local_list_stt_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
-            **kwargs,
         )
 
     def list_music_providers(
@@ -9648,11 +10121,14 @@ class MultiLocalAbstractCoreLLMClient:
         provider_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_music_providers(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_music_providers
+
+        return local_list_music_providers(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
-            **kwargs,
         )
 
     def list_music_models(
@@ -9664,12 +10140,15 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_music_models(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_music_models
+
+        return local_list_music_models(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
-            **kwargs,
         )
 
     def list_vision_provider_models(
@@ -9682,13 +10161,16 @@ class MultiLocalAbstractCoreLLMClient:
         providers_only: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_vision_provider_models(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_vision_provider_models
+
+        return local_list_vision_provider_models(
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
             providers_only=providers_only,
-            **kwargs,
         )
 
     def list_cached_vision_models(
@@ -9700,13 +10182,10 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_cached_vision_models(
-            task=task,
-            base_url=base_url,
-            provider_api_key=provider_api_key,
-            provider=provider,
-            **kwargs,
-        )
+        _ = (base_url, provider_api_key, kwargs)
+        from .discovery_queries import local_list_cached_vision_models
+
+        return local_list_cached_vision_models(task=task, provider=provider)
 
     def list_vision_adapters(
         self,
@@ -9718,13 +10197,16 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self._require_default_client().list_vision_adapters(
+        call_kwargs = dict(kwargs)
+        provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
+        from .discovery_queries import local_list_vision_adapters
+
+        return local_list_vision_adapters(
             model=model,
             task=task,
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
-            **kwargs,
         )
 
     def get_prompt_cache_capabilities(
@@ -10410,13 +10892,92 @@ class MultiLocalAbstractCoreLLMClient:
         return deleted
 
 
+class RemoteGenerationCancelled(RuntimeError):
+    """The effect's cancel event severed an in-flight request to a remote
+    AbstractCore server (the server sees the disconnect and cancels the
+    generation; see `HttpxRequestSender.post(cancel_event=)`)."""
+
+
 class HttpxRequestSender:
     """Default request sender based on httpx (sync)."""
+
+    #: `post(..., cancel_event=)` is honoured: the request runs on its own
+    #: connection and a set event SEVERS it (socket shutdown), which is the
+    #: wire form of a Stop for a remote AbstractCore server — the server's
+    #: client-disconnect watcher cancels the generation. Custom senders
+    #: without this attribute are never handed the event.
+    supports_cancel_event = True
 
     def __init__(self):
         import httpx
 
         self._httpx = httpx
+
+    def _post_cancellable(self, url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: Any,
+                          cancel_event: "threading.Event") -> Any:
+        """POST on a dedicated connection that `cancel_event` severs.
+
+        The TCP socket is captured through httpcore's `trace` extension
+        (`connection.connect_tcp.complete` fires for a NEW connection, hence
+        the un-pooled client); a watcher thread waits on the event and shuts
+        the socket down (`shutdown(SHUT_RDWR)` wakes a thread blocked in
+        recv; `close()` does not). Same mechanism as AbstractCore's
+        `providers/generation_cancel.HttpCancelGuard`, kept self-contained so
+        a thin remote runtime does not depend on a newer AbstractCore."""
+        import socket as _socket
+
+        streams: List[Any] = []
+        lock = threading.Lock()
+        done = threading.Event()
+        severed = {"n": 0}
+
+        def _sever() -> None:
+            with lock:
+                targets = list(streams)
+            for stream in targets:
+                try:
+                    sock = stream.get_extra_info("socket")
+                    if sock is not None:
+                        sock.shutdown(_socket.SHUT_RDWR)
+                        severed["n"] += 1
+                except OSError:
+                    pass
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _trace(name: str, info: Any) -> None:
+            if name == "connection.connect_tcp.complete" and isinstance(info, dict):
+                stream = info.get("return_value")
+                if stream is not None:
+                    with lock:
+                        streams.append(stream)
+                    if cancel_event.is_set():
+                        _sever()
+
+        def _watch() -> None:
+            # 0.05 s is only how long an idle watcher lingers after its
+            # request ended; the cancel itself wakes `wait` immediately.
+            while not done.is_set():
+                if cancel_event.wait(0.05):
+                    if not done.is_set():
+                        _sever()
+                    return
+
+        watcher = threading.Thread(target=_watch, name="abstractruntime-remote-cancel", daemon=True)
+        watcher.start()
+        try:
+            with self._httpx.Client(timeout=timeout) as client:
+                try:
+                    return client.post(url, headers=headers, json=json, extensions={"trace": _trace})
+                except Exception as exc:
+                    if cancel_event.is_set():
+                        raise RemoteGenerationCancelled(
+                            f"remote AbstractCore request to {url} severed by the run's cancel "
+                            f"({severed['n']} connection(s) cut; the server cancels on disconnect)"
+                        ) from exc
+                    raise
+        finally:
+            done.set()
 
     def get(
         self,
@@ -10436,8 +10997,12 @@ class HttpxRequestSender:
         headers: Dict[str, str],
         json: Dict[str, Any],
         timeout: float,
+        cancel_event: Optional["threading.Event"] = None,
     ) -> HttpResponse:
-        resp = self._httpx.post(url, headers=headers, json=json, timeout=timeout)
+        if cancel_event is not None:
+            resp = self._post_cancellable(url, headers=headers, json=json, timeout=timeout, cancel_event=cancel_event)
+        else:
+            resp = self._httpx.post(url, headers=headers, json=json, timeout=timeout)
         resp.raise_for_status()
         return HttpResponse(body=resp.json(), headers=dict(resp.headers))
 
@@ -10905,18 +11470,60 @@ class RemoteAbstractCoreLLMClient:
         self._sender = request_sender or HttpxRequestSender()
         self._artifact_store = artifact_store
         self._core_config_file = _coerce_core_config_file(core_config_file)
-        self._capability_defaults = _normalize_core_capability_defaults(capability_defaults)
+        self._capability_defaults = deepcopy(_normalize_core_capability_defaults(capability_defaults))
+        self._capability_defaults_explicit = capability_defaults is not None
+        self._capability_defaults_lock = threading.RLock()
         # Negative cache: set once the server unambiguously reports the
         # key_meta route missing (older core); transient failures keep retrying.
         self._prompt_cache_key_meta_route_unsupported = False
         _attach_core_execution_context_to_client(
             self,
             core_config_file=self._core_config_file,
-            capability_defaults=self._capability_defaults,
+            capability_defaults=self._capability_defaults if capability_defaults is not None else None,
         )
 
     def default_prompt_cache_identity(self) -> Tuple[Optional[str], Optional[str]]:
         return "remote", self._model
+
+    def set_capability_defaults(self, capability_defaults: Optional[Any]) -> bool:
+        """Refresh caller-owned policy without changing the remote endpoint/model.
+
+        Replace snapshots instead of editing dictionaries used by in-flight
+        requests. None releases the scope; an empty mapping explicitly clears
+        its policies and must not inherit the server's configured MTP default.
+        """
+        routes = deepcopy(_normalize_core_capability_defaults(capability_defaults))
+        explicit = capability_defaults is not None
+        with self._capability_defaults_lock:
+            if routes == self._capability_defaults and explicit == self._capability_defaults_explicit:
+                return False
+            self._capability_defaults = routes
+            self._capability_defaults_explicit = explicit
+            self._abstractcore_capability_defaults = deepcopy(routes) if explicit else None
+        return True
+
+    def _scoped_speculation_default(self) -> Any:
+        """Resolve caller-owned scope; otherwise leave policy at the remote host.
+
+        The existing speculation wire is sufficient: scoped absence is Off,
+        whereas absence of a scope must not suppress the remote host's policy.
+        No backend support/head decisions are made on this client machine.
+        """
+        with self._capability_defaults_lock:
+            routes = getattr(self, "_abstractcore_capability_defaults", None)
+            has_routes = routes is not None or self._capability_defaults_explicit
+            if routes is None and has_routes:
+                routes = self._capability_defaults
+            routes = deepcopy(routes)
+            config_file = getattr(self, "_abstractcore_config_file", None) or self._core_config_file
+        if not has_routes and not config_file:
+            return _UNSET
+        from abstractcore.providers.speculation import configured_speculation_default
+
+        policy = configured_speculation_default(
+            config_file=config_file, capability_defaults=routes if has_routes else None,
+        )
+        return False if policy is None else deepcopy(policy)
 
     def get_model_residency_capabilities(self, **kwargs: Any) -> Dict[str, Any]:
         _ = kwargs
@@ -11103,6 +11710,23 @@ class RemoteAbstractCoreLLMClient:
         from .discovery_queries import local_get_model_capabilities
 
         return local_get_model_capabilities(target_model)
+
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # The remote host's installed backend and loaded instance are the
+        # authority. Never substitute this client's local model registry.
+        payload = self._discovery_get(
+            "/models/execution-capabilities", source="abstractcore.remote",
+            query={"model_name": model_name or self._model, "provider": provider},
+        )
+        policy = self._scoped_speculation_default()
+        if policy is not _UNSET and isinstance(payload.get("speculation"), dict):
+            speculation = dict(payload["speculation"])
+            speculation["default"] = deepcopy(policy)
+            speculation["effective_default"] = deepcopy(policy) if speculation.get("supported") is True else False
+            payload["speculation"] = speculation
+        return payload
 
     def list_providers(
         self,
@@ -13952,7 +14576,7 @@ class RemoteAbstractCoreLLMClient:
             return result
 
         # Build OpenAI-like messages for AbstractCore server.
-        messages = _strip_volatile_markers(messages)
+        messages = _strip_synthetic_message_markers(_strip_volatile_markers(messages))
         out_messages: List[Dict[str, Any]] = []
         if system_prompt:
             out_messages.append({"role": "system", "content": system_prompt})
@@ -14007,8 +14631,24 @@ class RemoteAbstractCoreLLMClient:
         # agent's cycle-1 P0). `thinking` was already read above for route
         # resolution; now it rides the POST body too.
         thinking = params.get("thinking")
-        if isinstance(thinking, str) and thinking.strip():
+        if isinstance(thinking, bool):
+            body["thinking"] = thinking
+        elif isinstance(thinking, str) and thinking.strip():
             body["thinking"] = thinking.strip()
+        elif thinking is not None and not isinstance(thinking, str):
+            raise ValueError("thinking must be a bool or a reasoning-effort string")
+
+        # Core owns speculation validation/execution. Transport an explicit
+        # False unchanged: it is an override, not an absent request/default.
+        speculation = params.get("speculation")
+        if speculation is None:
+            policy = self._scoped_speculation_default()
+            if policy is not _UNSET:
+                speculation = policy
+        if speculation is not None:
+            if not isinstance(speculation, (bool, dict)):
+                raise ValueError("Remote speculation must be a bool or a dict")
+            body["speculation"] = _jsonable(speculation)
 
         # Pass through common OpenAI-compatible parameters.
         for key in (
@@ -14040,7 +14680,22 @@ class RemoteAbstractCoreLLMClient:
             body["tools"] = tools
 
         url = _join_core_v1_url(self._server_base_url, "/chat/completions")
-        raw = self._sender.post(url, headers=req_headers, json=body, timeout=self._timeout_s)
+        # Stop (2026-09-23): the effect's cancel event severs this request; the
+        # AbstractCore server's client-disconnect watcher then cancels the
+        # generation (and severs ITS upstream model request in turn).
+        remote_cancel = params.get("cancel_event")
+        if isinstance(remote_cancel, threading.Event) and getattr(self._sender, "supports_cancel_event", False):
+            raw = self._sender.post(
+                url, headers=req_headers, json=body, timeout=self._timeout_s, cancel_event=remote_cancel
+            )
+        else:
+            if isinstance(remote_cancel, threading.Event) and not getattr(self, "_remote_cancel_unsupported_warned", False):
+                self._remote_cancel_unsupported_warned = True
+                logger.warning(
+                    "Remote AbstractCore request sender does not support cancel_event: a Stop cannot "
+                    "sever in-flight remote generations (sender=%s)" % type(self._sender).__name__
+                )
+            raw = self._sender.post(url, headers=req_headers, json=body, timeout=self._timeout_s)
         resp, resp_headers = _unwrap_http_response(raw)
         lower_headers = {str(k).lower(): str(v) for k, v in resp_headers.items()}
         trace_id = lower_headers.get("x-abstractcore-trace-id") or lower_headers.get("x-trace-id")
@@ -14059,6 +14714,13 @@ class RemoteAbstractCoreLLMClient:
             meta: Dict[str, Any] = {
                 "_provider_request": {"url": url, "payload": observable_body}
             }
+            # Preserve Core's actual execution outcomes just as the local
+            # adapter does, without accepting remote trace/request provenance.
+            core_metadata = resp.get("abstractcore")
+            if isinstance(core_metadata, dict):
+                for key in ("execution", "speculation", "performance", "prompt_cache"):
+                    if isinstance(core_metadata.get(key), dict):
+                        meta[key] = _jsonable(core_metadata[key])
             if runtime_grounding:
                 meta["runtime_grounding"] = dict(runtime_grounding)
             if trace_id:

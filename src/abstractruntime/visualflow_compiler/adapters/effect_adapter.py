@@ -7,6 +7,7 @@ events, delays, etc.).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -777,6 +778,7 @@ def create_llm_call_handler(
     temperature: float = 0.7,
     seed: int = -1,
     thinking: Any = None,
+    speculation: Any = None,
 ) -> Callable:
     """Create a node handler that makes an LLM call.
 
@@ -790,6 +792,7 @@ def create_llm_call_handler(
         temperature: Temperature parameter
         seed: Seed parameter (-1 means random/unset)
         thinking: Optional reasoning/thinking control for supported models
+        speculation: Optional Core execution control (None inherits; False disables)
 
     Returns:
         A node handler that produces LLM_CALL effect
@@ -841,6 +844,11 @@ def create_llm_call_handler(
             effect.payload["params"]["thinking"] = thinking
         elif isinstance(thinking, str) and thinking.strip():
             effect.payload["params"]["thinking"] = thinking.strip()
+        value = input_data.get("speculation") if isinstance(input_data, dict) else None
+        if value is None:
+            value = speculation
+        if value is not None:
+            effect.payload["params"]["speculation"] = deepcopy(value)
 
         return StepPlan(
             node_id=node_id,

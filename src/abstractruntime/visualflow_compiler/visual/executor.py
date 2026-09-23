@@ -13,6 +13,7 @@ import json
 import keyword
 import re
 import textwrap
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from ..flow import Flow
@@ -1868,6 +1869,9 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 out["temperature"] = input_data.get("temperature")
             if isinstance(input_data, dict) and "seed" in input_data:
                 out["seed"] = input_data.get("seed")
+            for control in ("thinking", "speculation"):
+                if isinstance(input_data, dict) and control in input_data:
+                    out[control] = deepcopy(input_data[control])
             if isinstance(input_data, dict) and "prompt_cache_binding" in input_data:
                 binding = input_data.get("prompt_cache_binding")
                 if isinstance(binding, dict) and binding:
@@ -3365,6 +3369,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         temperature = config.get("temperature", 0.7)
         seed_default = config.get("seed", -1)
         thinking_default = config.get("thinking")
+        speculation_default = config.get("speculation")
         tools_default_raw = config.get("tools")
         include_context_cfg = config.get("include_context")
         if include_context_cfg is None:
@@ -3637,6 +3642,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 params["seed"] = seed_value
             if thinking_value is not None:
                 params["thinking"] = thinking_value
+            speculation = input_data.get("speculation") if isinstance(input_data, dict) else None
+            if speculation is None:
+                speculation = speculation_default
+            if speculation is not None:
+                params["speculation"] = deepcopy(speculation)
             if isinstance(max_output_tokens_value, int) and max_output_tokens_value > 0:
                 params["max_output_tokens"] = int(max_output_tokens_value)
             if isinstance(input_data, dict) and "prompt_cache_binding" in input_data:

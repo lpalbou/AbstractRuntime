@@ -118,6 +118,73 @@ def _extract_user_prompt_from_input(raw: Any) -> Tuple[str, Optional[Dict[str, A
     return ("", None)
 
 
+def _verbatim_message_lanes(raw: Any, output: Any) -> List[Any]:
+    """Every place a turn's own durable transcript can be found on ITS run.
+
+    Two shapes, both already loaded — this costs no extra I/O:
+
+    - `vars.context.messages`: a run whose loop owns the transcript directly
+      (a react/codeact/memact workflow started with the turn's context).
+    - `output.scratchpad.messages` / `output.messages`: the BUNDLE shape. The
+      gateway's basic-agent flow runs its react loop in a SUBRUN, so the root's
+      `vars.context.messages` holds only the seeded history and the current
+      turn never appears there — but the agent node folds the loop's durable
+      transcript back into the root's output, and that copy carries the turn as
+      it was sent.
+    """
+    lanes: List[Any] = []
+    if isinstance(raw, dict):
+        input_data = raw.get("input_data") if isinstance(raw.get("input_data"), dict) else raw
+        ctx = input_data.get("context") if isinstance(input_data.get("context"), dict) else None
+        if isinstance(ctx, dict) and isinstance(ctx.get("messages"), list):
+            lanes.append(ctx["messages"])
+    if isinstance(output, dict):
+        scratch = output.get("scratchpad")
+        if isinstance(scratch, dict) and isinstance(scratch.get("messages"), list):
+            lanes.append(scratch["messages"])
+        if isinstance(output.get("messages"), list):
+            lanes.append(output["messages"])
+    return lanes
+
+
+def _extract_user_prompt_verbatim_from_input(raw: Any, *, display_prompt: str, output: Any = None) -> str:
+    """The turn's user message exactly as it was SENT, envelope included.
+
+    `_extract_user_prompt_from_input` above is the DISPLAY channel: it strips the
+    runtime's `<runtime_metadata>` envelope so UIs show what the human typed. The
+    REPLAY channel (`abstractruntime.session_history`) needs the opposite — the
+    exact bytes, because turn N's prompt must stay an exact byte-prefix of turn
+    N+1's for any prefix cache to restore it (mission A, 2026-09-22). Replaying a
+    stripped copy of a stamped message is what made every conversational turn
+    re-prefill from the previous user message onward.
+
+    Conservative by construction: the durable `context.messages` entry is returned
+    only when stripping its envelope yields EXACTLY the display prompt this turn
+    already resolved to — so this can never substitute a different message (an
+    `ask_user` reply, an operator-guidance interjection) for the turn's question.
+    Returns "" when there is no such message, and the caller falls back to the
+    display prompt.
+    """
+    wanted = str(display_prompt or "").strip()
+    if not wanted:
+        return ""
+    for msgs in _verbatim_message_lanes(raw, output):
+        for m in reversed(msgs):
+            if not isinstance(m, dict):
+                continue
+            if str(m.get("role") or "").strip() != "user":
+                continue
+            content = m.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            stripped, _meta = _split_runtime_metadata_envelope(content)
+            if stripped.strip() != wanted:
+                continue
+            # Already envelope-free: the display prompt IS the bytes.
+            return content if content.strip() != wanted else ""
+    return ""
+
+
 def _extract_context_attachments_from_input(raw: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw, dict):
         return []
@@ -875,6 +942,11 @@ def _best_effort_session_turns(
         wid = str(getattr(r, "workflow_id", "") or "").strip()
         kind = _classify_turn(workflow_id=wid, vars_obj=vars_obj)
         prompt, prompt_metadata = _extract_user_prompt_from_input(input_data)
+        # Replay channel (see `_extract_user_prompt_verbatim_from_input`): the exact
+        # bytes this turn was sent with. Display consumers keep reading `prompt`.
+        prompt_verbatim = _extract_user_prompt_verbatim_from_input(
+            input_data, display_prompt=prompt, output=getattr(r, "output", None)
+        )
         attachments = _extract_context_attachments_from_input(input_data)
         status = getattr(getattr(r, "status", None), "value", None) or str(getattr(r, "status", "") or "")
         created_at = str(getattr(r, "created_at", "") or "").strip() or None
@@ -920,6 +992,7 @@ def _best_effort_session_turns(
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "prompt": prompt or None,
+                "prompt_verbatim": prompt_verbatim or None,
                 "prompt_metadata": prompt_metadata,
                 "attachments": attachments,
                 "answer": answer or None,

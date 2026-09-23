@@ -74,6 +74,11 @@ class AbstractCoreDiscoveryClient(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        ...
+
     def get_voice_catalog(
         self,
         *,
@@ -260,6 +265,15 @@ class AbstractCoreDiscoveryFacade:
             "model": resolved_model,
             "capabilities": dict(result) if isinstance(result, dict) else {},
         }
+
+    def get_execution_capabilities(
+        self, model_name: Optional[str] = None, *, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Ask the execution host, without loading a model or probing weights."""
+        query = getattr(self._client, "get_execution_capabilities", None)
+        if not callable(query):
+            raise RuntimeError("Execution capability discovery requires an updated AbstractCore Runtime client.")
+        return query(model_name=model_name, provider=provider)
 
     def get_voice_catalog(
         self,

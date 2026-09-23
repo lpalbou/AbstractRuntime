@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ..storage.artifacts import is_artifact_ref
@@ -481,6 +482,7 @@ def _create_effect_node_handler(
             temperature=effect_config.get("temperature", 0.7),
             seed=effect_config.get("seed", -1),
             thinking=effect_config.get("thinking"),
+            speculation=effect_config.get("speculation"),
         )
     elif effect_type == "model_residency":
         base_handler = create_model_residency_handler(
@@ -1335,6 +1337,7 @@ def _create_visual_agent_effect_handler(
         max_input_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         thinking: Any = None,
+        speculation: Any = None,
         prompt_cache_binding: Any = None,
         extra_messages: Optional[list[Dict[str, Any]]] = None,
         include_session_attachments_index: Optional[bool] = None,
@@ -1519,6 +1522,9 @@ def _create_visual_agent_effect_handler(
         thinking_value = _normalize_thinking(thinking)
         if thinking_value is None and isinstance(parent_runtime, dict):
             thinking_value = _normalize_thinking(parent_runtime.get("thinking"))
+        speculation_value = speculation
+        if speculation_value is None and isinstance(parent_runtime, dict):
+            speculation_value = parent_runtime.get("speculation")
 
         # Sampling controls:
         # - Do NOT force default values into the child runtime vars.
@@ -1534,6 +1540,8 @@ def _create_visual_agent_effect_handler(
             runtime_ns["seed"] = int(seed)
         if thinking_value is not None:
             runtime_ns["thinking"] = thinking_value
+        if speculation_value is not None:
+            runtime_ns["speculation"] = deepcopy(speculation_value)
         if include_session_attachments_index is not None:
             control = runtime_ns.get("control")
             if not isinstance(control, dict):
@@ -1826,6 +1834,10 @@ def _create_visual_agent_effect_handler(
             thinking = _normalize_thinking(resolved_inputs.get("thinking"))
         else:
             thinking = _normalize_thinking(agent_config.get("thinking"))
+
+        speculation = resolved_inputs.get("speculation") if isinstance(resolved_inputs, dict) else None
+        if speculation is None:
+            speculation = agent_config.get("speculation")
 
         prompt_cache_binding: Any = None
         if isinstance(resolved_inputs, dict) and "prompt_cache_binding" in resolved_inputs:
@@ -2162,6 +2174,7 @@ def _create_visual_agent_effect_handler(
                             temperature=temperature,
                             seed=seed,
                             thinking=thinking,
+                            speculation=speculation,
                             include_context=include_context,
                             max_iterations=max_iterations_override,
                             max_input_tokens=max_input_tokens_override,
@@ -2577,6 +2590,8 @@ def _create_visual_agent_effect_handler(
                 params: Dict[str, Any] = {"temperature": temperature, "seed": seed} if seed >= 0 else {"temperature": temperature}
                 if thinking is not None:
                     params["thinking"] = thinking
+                if speculation is not None:
+                    params["speculation"] = deepcopy(speculation)
                 if isinstance(prompt_cache_binding, dict) and prompt_cache_binding:
                     params["prompt_cache_binding"] = dict(prompt_cache_binding)
                 elif isinstance(prompt_cache_binding, str) and prompt_cache_binding.strip():
@@ -2777,7 +2792,19 @@ def _create_visual_function_handler(
                 # previous node's output (the original behavior — a pin-less
                 # end must not swallow e.g. a switch's branch; landing-audit
                 # regression fix).
-                input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
+                if "_last_output" in run.vars:
+                    input_data = run.vars["_last_output"]
+                else:
+                    # Effect-only/event entry paths may have no previous pure
+                    # output. Match On Flow Start's public-input projection:
+                    # passing live runtime namespaces here leaks bookkeeping
+                    # and creates a cycle when this result is cached under
+                    # run.vars['_temp']['node_outputs'][node_id]. Authored
+                    # previous outputs and connected pins are left untouched.
+                    input_data = {
+                        key: value for key, value in run.vars.items()
+                        if isinstance(key, str) and not key.startswith("_")
+                    }
         else:
             input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
 

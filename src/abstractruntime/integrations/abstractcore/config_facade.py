@@ -13,6 +13,10 @@ Scope:
 - enumerate capability-default route specs (the catalog of known routes)
 - read a provider API key from a specific AbstractCore config file
 - read AbstractCore's stored mail (IMAP/SMTP) and maintenance-triage settings
+- model weights: availability probes and single downloads (`model_materializer`)
+- models & engines (AbstractCore >= 2.14.0): host profile, local-engine status and
+  installs, the model catalog with fit verdicts, installed models, deletes, host jobs,
+  and the embeddable console screens -- see the section near the end of this module
 
 Non-goals:
 - durable Runtime effect execution (use `AbstractCoreRunFacade`)
@@ -602,6 +606,417 @@ def download_model_artifact(
     return dict(outcome.to_dict())
 
 
+# ---------------------------------------------------------------------------
+# Models & engines: the host profile, local engines, the model catalog,
+# installed models, deletes and host jobs (AbstractCore >= 2.14.0)
+# ---------------------------------------------------------------------------
+#
+# AbstractCore implements the model browser, the engine installer and the job
+# registry ONCE (`abstractcore.utils.host_profile`, `abstractcore.config.engines`,
+# `.model_catalog`, `.model_materializer`, `.host_jobs`, `abstractcore.console.web`).
+# A host (the Gateway) re-exposes those payloads unchanged through these
+# passthroughs, so its routes, CLI and console show the same shapes as
+# `abstractcore models|engines ... --json` and the `/acore/*` routes.
+#
+# FEATURE DETECTION, NOT VERSION PARSING: each passthrough imports the Core
+# module it needs. When that import fails because the installed AbstractCore
+# predates these modules, the call raises `AbstractCoreTooOld` (a
+# `NotImplementedError`), which names the installed version and the upgrade
+# command; a host maps it to HTTP 501. When AbstractCore is missing entirely it
+# raises `RuntimeError`, like the other facades in this module.
+#
+# REFUSALS ARE DATA: an engine install that policy forbids, a delete blocked by
+# a loaded model, or a second engine install while one runs raise
+# `HostActionRefused` carrying `status_code` (403 / 404 / 409) and the
+# structured body Core's own server answers with, so a host never imports an
+# AbstractCore exception type to tell them apart.
+
+MODELS_ENGINES_MIN_ABSTRACTCORE = "2.14.0"
+
+
+class AbstractCoreTooOld(NotImplementedError):
+    """The installed AbstractCore predates the models & engines modules."""
+
+    def __init__(self, feature: str, installed: Optional[str] = None, *, missing: Optional[str] = None):
+        self.feature = str(feature)
+        self.installed = installed
+        self.required = MODELS_ENGINES_MIN_ABSTRACTCORE
+        self.missing = missing
+        have = f"AbstractCore {installed} is installed" if installed else "the installed AbstractCore is too old"
+        super().__init__(
+            f"{self.feature} requires abstractcore>={self.required}; {have}. "
+            f"Upgrade it with: pip install -U \"abstractcore>={self.required}\""
+        )
+
+
+class HostActionRefused(RuntimeError):
+    """A host action AbstractCore refused, as data.
+
+    `status_code` is the HTTP status a host should answer with; `payload()` is
+    the body (`{ok: false, status, reason?, message, ...}`), the same shape
+    AbstractCore's server returns for the same refusal.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        status: str = "refused",
+        reason: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message)
+        self.message = str(message)
+        self.status_code = int(status_code)
+        self.status = str(status)
+        self.reason = reason
+        self.extra = dict(extra or {})
+
+    def payload(self) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"ok": False, "status": self.status, "message": self.message}
+        if self.reason:
+            body["reason"] = self.reason
+        body.update(self.extra)
+        return body
+
+
+def _installed_abstractcore_version() -> Optional[str]:
+    try:
+        from importlib.metadata import version
+
+        return str(version("abstractcore"))
+    except Exception:
+        return None
+
+
+def _core_module(dotted: str, feature: str) -> Any:
+    """Import `abstractcore.<dotted>`, telling "missing" from "too old" apart."""
+
+    import importlib
+
+    try:
+        importlib.import_module("abstractcore")
+    except Exception as exc:  # pragma: no cover - exercised through facade behavior tests
+        raise RuntimeError(
+            f"{feature} needs AbstractCore, which is not installed. Install a Runtime environment "
+            f"with abstractcore>={MODELS_ENGINES_MIN_ABSTRACTCORE}."
+        ) from exc
+    try:
+        return importlib.import_module(f"abstractcore.{dotted}")
+    except ImportError as exc:
+        raise AbstractCoreTooOld(feature, _installed_abstractcore_version(), missing=f"abstractcore.{dotted}") from exc
+
+
+def models_engines_support() -> Dict[str, Any]:
+    """Can this environment serve the models & engines surfaces? Never raises.
+
+    `{"available", "abstractcore_version", "required", "missing": [...]}`,
+    where `missing` names the Core modules that could not be imported.
+    """
+
+    import importlib
+
+    modules = (
+        "utils.host_profile",
+        "config.engines",
+        "config.model_catalog",
+        "config.model_materializer",
+        "config.host_jobs",
+        "console.web",
+    )
+    missing: List[str] = []
+    for name in modules:
+        try:
+            importlib.import_module(f"abstractcore.{name}")
+        except Exception:
+            missing.append(f"abstractcore.{name}")
+    materializer_ok = "abstractcore.config.model_materializer" not in missing
+    if materializer_ok:
+        mm = importlib.import_module("abstractcore.config.model_materializer")
+        for attr in ("list_installed", "delete_blockers", "delete_artifact"):
+            if not hasattr(mm, attr):
+                missing.append(f"abstractcore.config.model_materializer.{attr}")
+    return {
+        "available": not missing,
+        "abstractcore_version": _installed_abstractcore_version(),
+        "required": MODELS_ENGINES_MIN_ABSTRACTCORE,
+        "missing": missing,
+    }
+
+
+def _materializer_verb(name: str, feature: str) -> Any:
+    mm = _core_module("config.model_materializer", feature)
+    fn = getattr(mm, name, None)
+    if fn is None:
+        # 2.13.x ships the materializer but not the list/delete verbs.
+        raise AbstractCoreTooOld(feature, _installed_abstractcore_version(), missing=f"abstractcore.config.model_materializer.{name}")
+    return fn
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def host_profile(*, refresh: bool = False) -> Dict[str, Any]:
+    """Contract A (`host_profile_v1`): OS, accelerator, memory ceiling, free disk per store."""
+
+    return dict(_core_module("utils.host_profile", "The host profile").host_profile(refresh=bool(refresh)))
+
+
+def engine_inventory(probe: bool = False) -> Dict[str, Any]:
+    """Contract B (`engines_status_v1`): every local engine, installed/running/installable.
+
+    `probe=True` GETs each local server once (short timeouts); without it the
+    rows say what is installed but not whether it answers.
+    """
+
+    return dict(_core_module("config.engines", "Engine detection").engine_inventory(bool(probe)))
+
+
+def engine_status(engine_id: str, *, probe: bool = False) -> Dict[str, Any]:
+    """One contract-B row. Raises `HostActionRefused` (404) for an unknown engine id."""
+
+    engines = _core_module("config.engines", "Engine detection")
+    try:
+        return dict(engines.engine_status(str(engine_id), probe=bool(probe)))
+    except KeyError as exc:
+        raise HostActionRefused(str(exc.args[0] if exc.args else exc), status_code=404, status="not_found") from exc
+
+
+def engine_install_plan(engine_id: str) -> Dict[str, Any]:
+    """The contract-B `install` block for this host: the fixed argv, method, URL and notes."""
+
+    engines = _core_module("config.engines", "Engine install plans")
+    try:
+        return dict(engines.engine_install_plan(str(engine_id)))
+    except KeyError as exc:
+        raise HostActionRefused(
+            str(exc.args[0] if exc.args else exc), status_code=404, status="refused", reason="unknown_engine"
+        ) from exc
+
+
+def engine_download_url(engine_id: str) -> str:
+    """The vendor download page for an engine (what `engines open` opens)."""
+
+    engines = _core_module("config.engines", "Engine download pages")
+    try:
+        return str(engines.engine_download_url(str(engine_id)))
+    except KeyError as exc:
+        raise HostActionRefused(
+            str(exc.args[0] if exc.args else exc), status_code=404, status="refused", reason="unknown_engine"
+        ) from exc
+
+
+def engine_install(
+    engine_id: str,
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+    allow: Optional[bool] = None,
+    run_inline: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Run an engine's install plan as a `host_job_v1` job (kind `engine_install`).
+
+    `allow` is the HOST's policy (`allow_engine_install`); `None` defers to
+    AbstractCore's own knob. A dry run never needs permission and finishes at
+    once with the command it would run. `run_inline` defaults to `dry_run`.
+
+    Raises `HostActionRefused`: 403 `not_allowed`, 404 `unknown_engine`,
+    409 `unsupported` / `no_plan` (with the `install` plan), 409 `busy` (with
+    the running `job`).
+    """
+
+    engines = _core_module("config.engines", "Engine installs")
+    host_jobs = _core_module("config.host_jobs", "Engine installs")
+    inline = bool(dry_run) if run_inline is None else bool(run_inline)
+    try:
+        return dict(
+            engines.engine_install(
+                str(engine_id), dry_run=bool(dry_run), force=bool(force), allow=allow, run_inline=inline
+            )
+        )
+    except engines.EngineInstallRefused as exc:
+        reason = str(getattr(exc, "reason", "refused") or "refused")
+        code = {"not_allowed": 403, "unknown_engine": 404}.get(reason, 409)
+        raise HostActionRefused(
+            str(exc), status_code=code, status="refused", reason=reason, extra={"install": getattr(exc, "plan", None)}
+        ) from exc
+    except host_jobs.JobBusy as exc:
+        raise HostActionRefused(
+            str(exc), status_code=409, status="busy", reason="busy", extra={"job": getattr(exc, "job", None)}
+        ) from exc
+
+
+def model_catalog(
+    q: Optional[str] = None,
+    *,
+    engine: Optional[str] = None,
+    fits_only: bool = False,
+    hub: bool = False,
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Contract C (`model_catalog_v1`): downloadable models with presence and a fit verdict.
+
+    `fits_only` keeps artifacts whose verdict is `fits` or `tight` on this host;
+    `hub` enriches from the Hugging Face API (cached 24 h) and adds hub search rows.
+    """
+
+    catalog = _core_module("config.model_catalog", "The model catalog")
+    return dict(catalog.catalog(q or None, engine=engine or None, fits=bool(fits_only), hub=bool(hub), tags=tags or None))
+
+
+def list_installed_models(provider: Optional[str] = None) -> Dict[str, Any]:
+    """Contract D (`models_installed_v1`): every model the local engines hold, with sizes."""
+
+    fn = _materializer_verb("list_installed", "Listing installed models")
+    return dict(fn(provider or None))
+
+
+def model_delete_blockers(provider: str, artifact: str) -> Dict[str, Any]:
+    """What would stop a delete: `{found, row, delete_blockers, error}`. Reads only."""
+
+    fn = _materializer_verb("delete_blockers", "Deleting models")
+    return dict(fn(provider, artifact))
+
+
+def delete_model_artifact(
+    provider: str,
+    artifact: str,
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+    run_inline: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Delete one installed artifact as a `host_job_v1` job (kind `delete`).
+
+    The blockers are checked FIRST, so a refusal is an immediate answer rather
+    than a job that fails a second later (the same rule as AbstractCore's
+    `POST /acore/models/delete`): 404 `not_found` when the artifact is not
+    installed; 409 `refused` with `delete_blockers` when it is loaded or shares
+    a cache, unless `force`; 409 whatever `force` says when its location is
+    unknown or its engine is not running. `run_inline` defaults to `dry_run`.
+    """
+
+    host_jobs = _core_module("config.host_jobs", "Deleting models")
+    check = model_delete_blockers(provider, artifact)
+    blockers = list(check.get("delete_blockers") or [])
+    if not check.get("found"):
+        detail = f" ({check['error']})" if check.get("error") else ""
+        raise HostActionRefused(
+            f"{artifact} is not installed for {provider}{detail}",
+            status_code=409 if blockers else 404,
+            status="refused" if blockers else "not_found",
+            extra={"delete_blockers": blockers},
+        )
+    hard = [b for b in blockers if b in {"unknown_location", "engine_not_running"}]
+    if hard or (blockers and not force):
+        raise HostActionRefused(
+            "refusing to delete: " + ", ".join(blockers) + ("" if hard else " (send force=true to override)"),
+            status_code=409,
+            status="refused",
+            extra={"delete_blockers": blockers},
+        )
+    inline = bool(dry_run) if run_inline is None else bool(run_inline)
+    try:
+        return dict(
+            host_jobs.start_delete_job(provider, artifact, dry_run=bool(dry_run), force=bool(force), run_inline=inline)
+        )
+    except ValueError as exc:
+        raise HostActionRefused(str(exc), status_code=400, status="invalid") from exc
+
+
+def start_model_download_job(
+    provider: str,
+    artifact: str,
+    *,
+    dry_run: bool = False,
+    expected_bytes: Optional[int] = None,
+    run_inline: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Download one artifact as a `host_job_v1` job (kind `download`) in AbstractCore's registry.
+
+    Single-flight per provider/artifact: a second request joins the running
+    job (`joined` counts the extra requests). `expected_bytes` (from the
+    catalog) arms Core's disk pre-check. `run_inline` defaults to `dry_run`.
+    Raises `HostActionRefused` (400 `invalid`) when provider or artifact is empty.
+    """
+
+    host_jobs = _core_module("config.host_jobs", "Model download jobs")
+    inline = bool(dry_run) if run_inline is None else bool(run_inline)
+    try:
+        return dict(
+            host_jobs.start_download_job(
+                provider, artifact, dry_run=bool(dry_run), expected_bytes=expected_bytes, run_inline=inline
+            )
+        )
+    except ValueError as exc:
+        raise HostActionRefused(str(exc), status_code=400, status="invalid") from exc
+
+
+def host_jobs_list(kind: Optional[str] = None, status: Optional[str] = None) -> Dict[str, Any]:
+    """`{"schema": "host_jobs_v1", "jobs": [...], "generated_at"}`, newest first.
+
+    Merges this process's jobs with the snapshots AbstractCore persists for
+    jobs started elsewhere on the host (the `abstractcore` CLI, another server).
+    """
+
+    host_jobs = _core_module("config.host_jobs", "Host jobs")
+    registry = host_jobs.default_registry()
+    by_id: Dict[str, Dict[str, Any]] = {}
+    if registry.persist_dir is not None:
+        for job in host_jobs.read_persisted_jobs(registry.persist_dir):
+            by_id[str(job.get("job_id"))] = dict(job)
+    for job in registry.list():
+        by_id[str(job.get("job_id"))] = dict(job)
+    jobs = sorted(by_id.values(), key=lambda j: str(j.get("started_at") or ""), reverse=True)
+    jobs = [j for j in jobs if (not kind or j.get("kind") == kind) and (not status or j.get("status") == status)]
+    return {"schema": "host_jobs_v1", "jobs": jobs, "generated_at": _utc_now_iso()}
+
+
+def host_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """One `host_job_v1` snapshot (this process, else a persisted one), or `None`."""
+
+    host_jobs = _core_module("config.host_jobs", "Host jobs")
+    registry = host_jobs.default_registry()
+    job = registry.get(str(job_id))
+    if job is None and registry.persist_dir is not None:
+        job = host_jobs.read_persisted_job(str(job_id), registry.persist_dir)
+    return dict(job) if job is not None else None
+
+
+def host_job_cancel(job_id: str) -> Optional[Dict[str, Any]]:
+    """Cancel a job (terminates its process tree); `None` when the id is unknown.
+
+    A job owned by another process on this host is cancelled through its
+    persisted cancel marker, which that process honours at its next check.
+    """
+
+    host_jobs = _core_module("config.host_jobs", "Host jobs")
+    registry = host_jobs.default_registry()
+    job = registry.cancel(str(job_id))
+    if job is None and registry.persist_dir is not None:
+        job = host_jobs.request_cancel(str(job_id), registry.persist_dir)
+    return dict(job) if job is not None else None
+
+
+def console_fragment(kind: str) -> Dict[str, str]:
+    """AbstractCore's embeddable web-console screen: `{"html", "js", "css"}`.
+
+    `kind` is `models` or `engines`. The JS registers
+    `window.AbstractCoreConsole.mount(kind, rootEl, options)`; the CSS and JS
+    are identical for both kinds, so a host includes them once.
+    """
+
+    web = _core_module("console.web", "The embeddable console screens")
+    try:
+        return dict(web.fragment(str(kind)))
+    except ValueError as exc:
+        raise HostActionRefused(str(exc), status_code=404, status="not_found") from exc
+
+
 __all__ = [
     "normalize_speculation_control",
     "list_capability_defaults",
@@ -624,4 +1039,23 @@ __all__ = [
     "mark_recommended_route_gaps",
     "recommended_model_downloads",
     "download_model_artifact",
+    "MODELS_ENGINES_MIN_ABSTRACTCORE",
+    "AbstractCoreTooOld",
+    "HostActionRefused",
+    "models_engines_support",
+    "host_profile",
+    "engine_inventory",
+    "engine_status",
+    "engine_install_plan",
+    "engine_download_url",
+    "engine_install",
+    "model_catalog",
+    "list_installed_models",
+    "model_delete_blockers",
+    "delete_model_artifact",
+    "start_model_download_job",
+    "host_jobs_list",
+    "host_job",
+    "host_job_cancel",
+    "console_fragment",
 ]

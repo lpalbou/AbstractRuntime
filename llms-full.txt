@@ -3645,6 +3645,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.33] - 2026-09-23
+
+### Added
+- **Models and engines for hosts.** `config_facade` passes AbstractCore's
+  models and engines features through to hosts, so the Gateway can offer the
+  same model browser and engine installer as `abstractcore models` and
+  `abstractcore engines` without importing AbstractCore:
+  `host_profile`, `engine_inventory`, `engine_status`,
+  `engine_install_plan`, `engine_download_url`, `engine_install`,
+  `model_catalog`, `list_installed_models`, `model_delete_blockers`,
+  `delete_model_artifact`, `start_model_download_job`, `host_jobs_list`,
+  `host_job`, `host_job_cancel` and `console_fragment`. Payloads are
+  AbstractCore's own (`host_profile_v1`, `engines_status_v1`,
+  `model_catalog_v1`, `models_installed_v1`, `host_job_v1`).
+- `models_engines_support()` reports whether the installed AbstractCore has
+  these modules. It never raises.
+- `AbstractCoreTooOld` (a `NotImplementedError`) is raised when the installed
+  AbstractCore predates these modules. The message names the installed
+  version and the upgrade command.
+- `HostActionRefused` carries an HTTP status and a structured body for
+  refusals: engine installs not allowed, unknown engine, an install already
+  running, a delete blocked by a loaded or shared model. Hosts no longer need
+  AbstractCore's exception types to tell refusals apart.
+
+### Changed
+- The AbstractCore floor is now 2.14.0 in the base install and in the `apple`
+  and `gpu` extras.
+
 ## [0.4.32] - 2026-09-23
 
 This release also contains everything listed under 0.4.31, which was never
@@ -4463,7 +4491,9 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.31...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...HEAD
+[0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
+[0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32
 [0.4.31]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.31
 [0.4.29]: https://github.com/lpalbou/abstractruntime/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/lpalbou/abstractruntime/compare/v0.4.27...v0.4.28

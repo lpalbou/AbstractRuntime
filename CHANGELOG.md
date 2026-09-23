@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Target version 0.4.33 (the release coordinator dates it).
+## [0.4.33] - 2026-09-23
 
 ### Added
 - **Models and engines for hosts.** `config_facade` passes AbstractCore's
@@ -855,7 +855,9 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.31...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...HEAD
+[0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
+[0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32
 [0.4.31]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.31
 [0.4.29]: https://github.com/lpalbou/abstractruntime/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/lpalbou/abstractruntime/compare/v0.4.27...v0.4.28

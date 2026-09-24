@@ -49,6 +49,6 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `../CONTRIBUTING.md` — how to build/test and submit changes
 - `../SECURITY.md` — responsible vulnerability reporting
 - `../ACKNOWLEDGMENTS.md` — credits
-- `../ROADMAP.md` — prioritized next steps
+- `../ROADMAP.md` — current status and longer-term direction
 - `adr/README.md` — architectural decisions (why)
 - `backlog/README.md` — implemented and planned work items (what/how)

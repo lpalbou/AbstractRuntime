@@ -198,7 +198,7 @@ sr = create_scheduled_runtime(
 | [Code of Conduct](CODE_OF_CONDUCT.md) | Contributor conduct expectations |
 | [Security](SECURITY.md) | Responsible vulnerability reporting |
 | [Acknowledgments](ACKNOWLEDGMENTS.md) | Credits |
-| [ROADMAP](ROADMAP.md) | Prioritized next steps |
+| [ROADMAP](ROADMAP.md) | Current status and longer-term direction |
 
 ## Development
 

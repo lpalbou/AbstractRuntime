@@ -207,7 +207,7 @@ sr = create_scheduled_runtime(
 | [Code of Conduct](CODE_OF_CONDUCT.md) | Contributor conduct expectations |
 | [Security](SECURITY.md) | Responsible vulnerability reporting |
 | [Acknowledgments](ACKNOWLEDGMENTS.md) | Credits |
-| [ROADMAP](ROADMAP.md) | Prioritized next steps |
+| [ROADMAP](ROADMAP.md) | Current status and longer-term direction |
 
 ## Development
 
@@ -1047,7 +1047,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `../CONTRIBUTING.md` — how to build/test and submit changes
 - `../SECURITY.md` — responsible vulnerability reporting
 - `../ACKNOWLEDGMENTS.md` — credits
-- `../ROADMAP.md` — prioritized next steps
+- `../ROADMAP.md` — current status and longer-term direction
 - `adr/README.md` — architectural decisions (why)
 - `backlog/README.md` — implemented and planned work items (what/how)
 
@@ -2638,8 +2638,8 @@ result = facade.clear_session_prompt_caches("support-session-1")
 ## Models, engines and host jobs (config facade)
 
 AbstractCore implements the model browser, the local-engine installer and a
-host job registry (since AbstractCore 2.14.0; cancel attribution with `by` and
-`user` needs 2.15.1, which is the base-install floor).
+host job registry. These passthroughs need AbstractCore 2.15.1 (the
+base-install floor), the first release that records who cancelled a job.
 `abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as `abstractcore models|engines … --json` and the `/acore/*` routes
@@ -4043,6 +4043,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `models_engines_support()` and the `AbstractCoreTooOld` error now name
+  AbstractCore 2.15.1 as the required version (they said 2.14.0), matching the
+  base-install floor. A host that checked `required` could accept AbstractCore
+  2.14.x, where `host_job_cancel(by=..., user=...)` fails.
+
+### Documentation
+
+- `ROADMAP.md` no longer shows a stale "v0.4.2" status or a priority list; it
+  points to `CHANGELOG.md` and the AbstractFramework backlog.
+
 ## [0.4.34] - 2026-09-24
 
 ### Changed
@@ -4950,7 +4962,9 @@ Initial development version with basic proof-of-concept features.
 
 # AbstractRuntime Roadmap
 
-## Current status (v0.4.2)
+## Current status
+
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md); planned work is tracked in the [AbstractFramework backlog](https://github.com/lpalbou/abstractframework/tree/main/docs/backlog).
 
 AbstractRuntime provides a durable workflow kernel plus optional integrations:
 - durable execution: `Runtime.start/tick/resume`, explicit `WaitState` (`src/abstractruntime/core/runtime.py`)
@@ -4962,22 +4976,6 @@ AbstractRuntime provides a durable workflow kernel plus optional integrations:
 - retries/idempotency hooks (`src/abstractruntime/core/policy.py`)
 - VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
 - AbstractCore integration for `LLM_CALL` / `TOOL_CALLS` (`docs/integrations/abstractcore.md`)
-
-## Near-term priorities
-
-These are tracked in `docs/backlog/planned/`:
-
-1. **Signatures and keys** — non-forgeable provenance (beyond tamper-evidence)
-   `docs/backlog/planned/008_signatures_and_keys.md`
-
-2. **Remote tool worker executor** — first-class worker boundary for tool execution
-   `docs/backlog/planned/014_remote_tool_worker_executor.md`
-
-3. **Limit warnings + observability events** — surface `_limits` warnings durably/streaming
-   `docs/backlog/planned/017_limit_warnings_and_observability.md`
-
-4. **Agent integration improvements** — reduce friction for external agent loops building on runtime
-   `docs/backlog/planned/015_agent_integration_improvements.md`
 
 ## Longer-term (not scheduled)
 

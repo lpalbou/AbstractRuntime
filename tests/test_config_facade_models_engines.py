@@ -1,4 +1,4 @@
-"""Models & engines passthroughs in `config_facade` (AbstractCore >= 2.14.0).
+"""Models & engines passthroughs in `config_facade` (AbstractCore >= 2.15.1).
 
 The Gateway re-exposes AbstractCore's host profile, engines, catalog,
 installed models, deletes and host jobs through these functions. The pins:
@@ -231,7 +231,7 @@ def test_new_surface_is_exported_and_callable() -> None:
     for name in NEW_SURFACE:
         assert name in facade.__all__, name
         assert hasattr(facade, name), name
-    assert facade.MODELS_ENGINES_MIN_ABSTRACTCORE == "2.14.0"
+    assert facade.MODELS_ENGINES_MIN_ABSTRACTCORE == "2.15.1"
     assert issubclass(facade.AbstractCoreTooOld, NotImplementedError)
     assert issubclass(facade.HostActionRefused, RuntimeError)
 
@@ -433,9 +433,9 @@ def test_an_older_abstractcore_raises_too_old_with_the_upgrade_command(monkeypat
     err = info.value
     assert isinstance(err, NotImplementedError)
     assert err.installed == "2.13.42"
-    assert err.required == "2.14.0"
+    assert err.required == "2.15.1"
     assert err.missing == module
-    assert "abstractcore>=2.14.0" in str(err) and "2.13.42" in str(err)
+    assert "abstractcore>=2.15.1" in str(err) and "2.13.42" in str(err)
 
     support = facade.models_engines_support()
     assert support["available"] is False

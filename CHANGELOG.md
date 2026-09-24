@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `models_engines_support()` and the `AbstractCoreTooOld` error now name
+  AbstractCore 2.15.1 as the required version (they said 2.14.0), matching the
+  base-install floor. A host that checked `required` could accept AbstractCore
+  2.14.x, where `host_job_cancel(by=..., user=...)` fails.
+
+### Documentation
+
+- `ROADMAP.md` no longer shows a stale "v0.4.2" status or a priority list; it
+  points to `CHANGELOG.md` and the AbstractFramework backlog.
+
 ## [0.4.34] - 2026-09-24
 
 ### Changed

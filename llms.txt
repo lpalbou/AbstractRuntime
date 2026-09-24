@@ -75,7 +75,7 @@
 - [Security policy](SECURITY.md): responsible vulnerability reporting
 - [Acknowledgments](ACKNOWLEDGMENTS.md): dependency credits (from `pyproject.toml`)
 - [Changelog](CHANGELOG.md): release notes
-- [Roadmap](ROADMAP.md): near-term priorities
+- [Roadmap](ROADMAP.md): current status and longer-term direction
 - [ADRs](docs/adr/README.md): design rationale
 
 ## Optional

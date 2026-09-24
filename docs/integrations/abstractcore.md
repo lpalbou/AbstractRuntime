@@ -670,8 +670,8 @@ result = facade.clear_session_prompt_caches("support-session-1")
 ## Models, engines and host jobs (config facade)
 
 AbstractCore implements the model browser, the local-engine installer and a
-host job registry (since AbstractCore 2.14.0; cancel attribution with `by` and
-`user` needs 2.15.1, which is the base-install floor).
+host job registry. These passthroughs need AbstractCore 2.15.1 (the
+base-install floor), the first release that records who cancelled a job.
 `abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as `abstractcore models|engines … --json` and the `/acore/*` routes

@@ -1485,7 +1485,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.14.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.15.1 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -2093,8 +2093,8 @@ without importing AbstractCore itself.</p>
 <td><code>{"schema": "host_jobs_v1", "jobs": [...]}</code>, newest first, including jobs started by other processes on the host</td>
 </tr>
 <tr>
-<td><code>host_job(job_id)</code> / <code>host_job_cancel(job_id)</code></td>
-<td>one job, or <code>None</code> when the id is unknown</td>
+<td><code>host_job(job_id)</code> / <code>host_job_cancel(job_id, *, by="api", user=None)</code></td>
+<td>one job, or <code>None</code> when the id is unknown; a cancel records <code>by</code> (<code>api</code>, <code>console</code>) and the signed-in <code>user</code> on the job (<code>cancelled_by</code>, <code>cancelled_by_user</code>, <code>ended_reason</code>; AbstractCore 2.15.1+)</td>
 </tr>
 <tr>
 <td><code>console_fragment(kind)</code></td>

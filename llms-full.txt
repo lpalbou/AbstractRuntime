@@ -13,7 +13,7 @@ It is generated from `llms.txt` in first-link order, de-duplicated, with repo-ro
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.33 • **Python:** 3.10+
+**Version:** 0.4.34 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -105,7 +105,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.33)
+## What’s included (v0.4.34)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -684,7 +684,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 # AbstractRuntime — Architecture
 
 > Updated: 2026-08-27
-> Version: 0.4.33
+> Version: 0.4.34
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -3645,6 +3645,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.34] - 2026-09-24
+
+### Changed
+
+- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` passes who asked for a cancel to
+  AbstractCore (needs AbstractCore with `HostJobRegistry.cancel(by=, user=)`), so a cancelled
+  download can say who cancelled it.
+- The AbstractCore floor is now 2.15.1 in the base install and in the `apple`
+  and `gpu` extras (the release whose host-job cancel takes `by` and `user`).
+
 ## [0.4.33] - 2026-09-23
 
 ### Added
@@ -4491,7 +4501,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...HEAD
+[0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
 [0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32
 [0.4.31]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.31

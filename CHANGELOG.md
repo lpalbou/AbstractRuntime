@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.34] - 2026-09-24
+
 ### Changed
 
 - `config_facade.host_job_cancel(job_id, *, by="api", user=None)` passes who asked for a cancel to
@@ -863,7 +865,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...HEAD
+[0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
 [0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32
 [0.4.31]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.31

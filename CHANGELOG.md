@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` passes who asked for a cancel to
+  AbstractCore (needs AbstractCore with `HostJobRegistry.cancel(by=, user=)`), so a cancelled
+  download can say who cancelled it.
+- The AbstractCore floor is now 2.15.1 in the base install and in the `apple`
+  and `gpu` extras (the release whose host-job cancel takes `by` and `user`).
+
 ## [0.4.33] - 2026-09-23
 
 ### Added

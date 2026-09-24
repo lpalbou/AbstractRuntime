@@ -76,6 +76,7 @@ class FakeRegistry:
         self.persist_dir = persist_dir
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.cancelled: List[str] = []
+        self.cancel_by: List[Any] = []
 
     def list(self) -> List[Dict[str, Any]]:
         return list(self.jobs.values())
@@ -83,7 +84,8 @@ class FakeRegistry:
     def get(self, job_id: str) -> Optional[Dict[str, Any]]:
         return self.jobs.get(job_id)
 
-    def cancel(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def cancel(self, job_id: str, *, by: str = "api", user: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        self.cancel_by.append((job_id, by, user))
         job = self.jobs.get(job_id)
         if job is None:
             return None
@@ -196,7 +198,7 @@ def fake_core(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
     jobs_mod.start_download_job = start_download_job
     jobs_mod.read_persisted_jobs = lambda directory: list(persisted.values())
     jobs_mod.read_persisted_job = lambda job_id, directory: persisted.get(job_id)
-    jobs_mod.request_cancel = lambda job_id, directory: (dict(persisted[job_id], cancel_requested=True) if job_id in persisted else None)
+    jobs_mod.request_cancel = lambda job_id, directory, by="other_process", user=None: (dict(persisted[job_id], cancel_requested=True, cancelled_by=by, cancelled_by_user=user) if job_id in persisted else None)
 
     web_mod = types.ModuleType("abstractcore.console.web")
 
@@ -391,6 +393,11 @@ def test_jobs_list_merges_persisted_and_live_jobs_newest_first(fake_core, tmp_pa
     assert fake_core.registry.cancelled == ["eng_new"]
     assert facade.host_job_cancel("dl_old")["cancel_requested"] is True  # another process's job
     assert facade.host_job_cancel("unknown") is None
+    # Who asked travels to AbstractCore (mission KK): the default is `api`; a
+    # console click says `console` and names the signed-in account.
+    assert fake_core.registry.cancel_by[0] == ("eng_new", "api", None)
+    moved = facade.host_job_cancel("dl_old", by="console", user="admin")
+    assert (moved["cancelled_by"], moved["cancelled_by_user"]) == ("console", "admin")
 
 
 def test_jobs_without_persistence_read_only_the_live_registry(fake_core) -> None:

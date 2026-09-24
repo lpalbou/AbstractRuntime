@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.14.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.15.1 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -689,7 +689,7 @@ without importing AbstractCore itself.
 | `delete_model_artifact(provider, artifact, dry_run=False, force=False)` | a `host_job_v1` job of kind `delete` |
 | `start_model_download_job(provider, artifact, dry_run=False)` | a `host_job_v1` job of kind `download` (single-flight per artifact) |
 | `host_jobs_list(kind=None, status=None)` | `{"schema": "host_jobs_v1", "jobs": [...]}`, newest first, including jobs started by other processes on the host |
-| `host_job(job_id)` / `host_job_cancel(job_id)` | one job, or `None` when the id is unknown |
+| `host_job(job_id)` / `host_job_cancel(job_id, *, by="api", user=None)` | one job, or `None` when the id is unknown; a cancel records `by` (`api`, `console`) and the signed-in `user` on the job (`cancelled_by`, `cancelled_by_user`, `ended_reason`; AbstractCore 2.15.1+) |
 | `console_fragment(kind)` | AbstractCore's embeddable web screen (`models` or `engines`): `{"html", "js", "css"}` |
 | `models_engines_support()` | `{"available", "abstractcore_version", "required", "missing"}`; never raises |
 

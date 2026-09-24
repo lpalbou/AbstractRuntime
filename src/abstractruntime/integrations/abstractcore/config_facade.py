@@ -987,8 +987,13 @@ def host_job(job_id: str) -> Optional[Dict[str, Any]]:
     return dict(job) if job is not None else None
 
 
-def host_job_cancel(job_id: str) -> Optional[Dict[str, Any]]:
+def host_job_cancel(job_id: str, *, by: str = "api", user: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Cancel a job (terminates its process tree); `None` when the id is unknown.
+
+    `by` says who asked (`api`, or `console` when a person clicked Cancel in
+    a console) and `user` the signed-in account: AbstractCore records both on
+    the job (`cancelled_by`, `cancelled_by_user`, `ended_reason`), so a
+    cancelled download can say who cancelled it.
 
     A job owned by another process on this host is cancelled through its
     persisted cancel marker, which that process honours at its next check.
@@ -996,9 +1001,9 @@ def host_job_cancel(job_id: str) -> Optional[Dict[str, Any]]:
 
     host_jobs = _core_module("config.host_jobs", "Host jobs")
     registry = host_jobs.default_registry()
-    job = registry.cancel(str(job_id))
+    job = registry.cancel(str(job_id), by=by, user=user)
     if job is None and registry.persist_dir is not None:
-        job = host_jobs.request_cancel(str(job_id), registry.persist_dir)
+        job = host_jobs.request_cancel(str(job_id), registry.persist_dir, by=by, user=user)
     return dict(job) if job is not None else None
 
 

@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.35] - 2026-09-25
+
 ### Fixed
 
 - `models_engines_support()` and the `AbstractCoreTooOld` error now name
   AbstractCore 2.15.1 as the required version (they said 2.14.0), matching the
-  base-install floor. A host that checked `required` could accept AbstractCore
-  2.14.x, where `host_job_cancel(by=..., user=...)` fails.
+  base-install floor. Who is affected: hosts such as AbstractGateway that read
+  `required` to decide whether the models and engines features are usable. They
+  could accept AbstractCore 2.14.x, where `host_job_cancel(by=..., user=...)`
+  fails. No action is needed if you install AbstractRuntime normally: the
+  AbstractCore floor is unchanged at 2.15.1.
 
 ### Documentation
 
@@ -883,7 +888,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...HEAD
+[0.4.35]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...v0.4.35
 [0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
 [0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32

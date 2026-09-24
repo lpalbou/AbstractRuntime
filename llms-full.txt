@@ -13,7 +13,7 @@ It is generated from `llms.txt` in first-link order, de-duplicated, with repo-ro
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.34 • **Python:** 3.10+
+**Version:** 0.4.35 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -105,7 +105,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.34)
+## What’s included (v0.4.35)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -688,7 +688,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 # AbstractRuntime — Architecture
 
 > Updated: 2026-09-25
-> Version: 0.4.34
+> Version: 0.4.35
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -4043,12 +4043,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.35] - 2026-09-25
+
 ### Fixed
 
 - `models_engines_support()` and the `AbstractCoreTooOld` error now name
   AbstractCore 2.15.1 as the required version (they said 2.14.0), matching the
-  base-install floor. A host that checked `required` could accept AbstractCore
-  2.14.x, where `host_job_cancel(by=..., user=...)` fails.
+  base-install floor. Who is affected: hosts such as AbstractGateway that read
+  `required` to decide whether the models and engines features are usable. They
+  could accept AbstractCore 2.14.x, where `host_job_cancel(by=..., user=...)`
+  fails. No action is needed if you install AbstractRuntime normally: the
+  AbstractCore floor is unchanged at 2.15.1.
 
 ### Documentation
 
@@ -4919,7 +4924,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...HEAD
+[0.4.35]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...v0.4.35
 [0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33
 [0.4.32]: https://github.com/lpalbou/abstractruntime/compare/v0.4.29...v0.4.32

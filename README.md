@@ -139,7 +139,7 @@ Drivers + distribution:
 
 Runtime-owned integrations:
 - AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
-- AbstractCore models and engines for hosts (AbstractCore 2.14.0+): `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
+- AbstractCore models and engines for hosts: `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs (with who-cancelled attribution) and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends
@@ -182,7 +182,11 @@ sr = create_scheduled_runtime(
 | [Troubleshooting](docs/troubleshooting.md) | Symptom-oriented setup, runtime, and integration fixes |
 | [Architecture](docs/architecture.md) | Component map + diagrams |
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
-| [Integrations](docs/integrations/) | Integration guides (AbstractCore) |
+| [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
+| [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
+| [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
+| [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |
+| [Entity Runtime](docs/entity-runtime.md) | Per-entity runtimes, homes, leases, visit waits |
 | [Snapshots](docs/snapshots.md) | Named checkpoints for run state |
 | [Provenance](docs/provenance.md) | Tamper-evident ledger documentation |
 | [Evidence](docs/evidence.md) | Artifact-backed evidence capture for web/command tools |

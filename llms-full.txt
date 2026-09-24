@@ -148,7 +148,7 @@ Drivers + distribution:
 
 Runtime-owned integrations:
 - AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
-- AbstractCore models and engines for hosts (AbstractCore 2.14.0+): `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
+- AbstractCore models and engines for hosts: `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs (with who-cancelled attribution) and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
   depends on the light AbstractMemory contract; hosts choose storage backends
@@ -191,7 +191,11 @@ sr = create_scheduled_runtime(
 | [Troubleshooting](docs/troubleshooting.md) | Symptom-oriented setup, runtime, and integration fixes |
 | [Architecture](docs/architecture.md) | Component map + diagrams |
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
-| [Integrations](docs/integrations/) | Integration guides (AbstractCore) |
+| [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
+| [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
+| [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
+| [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |
+| [Entity Runtime](docs/entity-runtime.md) | Per-entity runtimes, homes, leases, visit waits |
 | [Snapshots](docs/snapshots.md) | Named checkpoints for run state |
 | [Provenance](docs/provenance.md) | Tamper-evident ledger documentation |
 | [Evidence](docs/evidence.md) | Artifact-backed evidence capture for web/command tools |
@@ -683,7 +687,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 
 # AbstractRuntime — Architecture
 
-> Updated: 2026-08-27
+> Updated: 2026-09-25
 > Version: 0.4.34
 > Scope: this describes **what is implemented in this repository**.
 
@@ -724,6 +728,49 @@ The boundary is intentionally narrow:
 - Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool capability integration, Runtime-owned permissive PDF read/write and standard-library DOCX write support, and the MCP worker entry point, but not backend extras such as LanceDB, Core media document stacks, or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add `abstractruntime[apple]` or `abstractruntime[gpu]`.
 - Remote and hybrid clients use explicit Core server URLs and auth headers supplied by the host. Runtime does not read Gateway auth environment variables for provider/model/auth decisions or treat Gateway bearer tokens as Core server/provider credentials.
 
+### Host-facing facades
+
+Hosts such as AbstractGateway talk to AbstractCore through Runtime-owned facades, so they never import AbstractCore themselves. Durable model work goes through the runtime (effects, ledger, artifacts); host operations (discovery, residency, prompt caches, configuration, models, engines and host jobs) go through the facades, which call AbstractCore in-process or its server.
+
+```mermaid
+flowchart LR
+  subgraph Host["Host (AbstractGateway, apps)"]
+    HostAPI["HTTP routes / UI"]
+  end
+
+  subgraph RT["AbstractRuntime"]
+    Runtime["Runtime
+start / tick / resume"]
+    Handlers["effect handlers
+LLM_CALL / TOOL_CALLS / MODEL_RESIDENCY"]
+    RunFacade["run_facade
+durable media + comms child runs"]
+    HostFacade["host_facade / discovery_facade
+residency, prompt caches, discovery"]
+    ConfigFacade["config_facade
+capability defaults, models, engines, host jobs"]
+    Stores["RunStore / LedgerStore / ArtifactStore"]
+  end
+
+  subgraph AC["AbstractCore"]
+    Providers["providers + tools
+(local or AbstractCore Server)"]
+    CoreConfig["config, model catalog,
+engine installer, host job registry"]
+  end
+
+  HostAPI -->|"WorkflowSpec, resume, cancel"| Runtime
+  HostAPI --> RunFacade
+  HostAPI --> HostFacade
+  HostAPI --> ConfigFacade
+  RunFacade --> Runtime
+  Runtime --> Handlers
+  Runtime --> Stores
+  Handlers -->|"generate / tools"| Providers
+  HostFacade --> Providers
+  ConfigFacade --> CoreConfig
+```
+
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
 
 ## Component map
@@ -760,7 +807,7 @@ flowchart TB
   end
 
   subgraph Integrations["integrations/ (optional wiring)"]
-    AC["abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker"]
+    AC["abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker,\nhost / run / discovery / config facades"]
     AM["abstractmemory/\nMEMORY_KG_* handlers"]
   end
 
@@ -799,7 +846,7 @@ flowchart TB
 ### Crash-ordering invariant (reliability)
 
 The run store is truth; the ledger is evidence. Every state transition obeys
-ONE ordering law (backlog 0045; every durable feature is a consumer):
+ONE ordering law ([backlog 0045](docs/backlog/planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md); every durable feature is a consumer):
 
 1. **State save is the commit point.** A transition is true when — and only
    when — `RunStore.save(run)` returns. Everything before the save must be
@@ -975,14 +1022,13 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 ## Guides
 
 - `faq.md` — common questions (recommended)
-- `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
-- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings and locks, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
-- run history bundle replay now also exports `resolved_actions` summaries for cross-client capability replay; see `api.md` and `integrations/abstractcore.md`
+- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings and locks, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` self-recipient rule)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
+- `api.md#run-history-bundle-export-portable-replay-artifact` — run history bundles, including `resolved_actions` summaries for cross-client capability replay
 
 ## Features (reference)
 
@@ -1004,6 +1050,112 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `../ROADMAP.md` — prioritized next steps
 - `adr/README.md` — architectural decisions (why)
 - `backlog/README.md` — implemented and planned work items (what/how)
+
+---
+
+## docs/proposal.md
+
+# AbstractRuntime — Overview (v0.4.x)
+
+**AbstractRuntime** is a low-level *durable workflow runtime*:
+- execute workflow graphs (state machines)
+- support **interrupt → checkpoint → resume** without keeping Python stacks alive
+- record an append-only **execution journal** (“ledger”) for observability/audit/debug
+
+**Scope boundary:** AbstractRuntime is not a UI builder and not an agent framework. It is the execution substrate that higher-level orchestration (e.g., visual authoring hosts) and agent loops can build on.
+
+## Ecosystem
+
+AbstractRuntime is part of the wider AbstractFramework ecosystem:
+- AbstractFramework umbrella: [lpalbou/AbstractFramework](https://github.com/lpalbou/AbstractFramework)
+- AbstractCore (LLM + tools): [lpalbou/abstractcore](https://github.com/lpalbou/abstractcore)
+
+In this repo, AbstractCore wiring lives under `src/abstractruntime/integrations/abstractcore/*` and is described in `integrations/abstractcore.md`.
+
+## What problem this solves
+
+Once a workflow can:
+- ask a user and wait hours/days
+- wait until a scheduled time
+- wait for an external job/event
+
+…you need durable semantics: persisted checkpoints + a journal. Keeping a Python stack alive is not reliable across restarts.
+
+## Core concepts (durable model)
+
+All core durable types are stdlib-only and live in `src/abstractruntime/core/models.py`:
+
+- `WorkflowSpec`: in-memory workflow graph (node handlers keyed by id) (`src/abstractruntime/core/spec.py`)
+- `RunState`: durable run checkpoint (`run_id`, `status`, `current_node`, `vars`, `waiting`, `output`, `error`, provenance fields)
+- `StepPlan`: what a node returns (`effect?`, `next_node?`, `complete_output?`)
+- `Effect` + `EffectType`: request for side effects (LLM, tools, waits, memory ops, etc.)
+- `WaitState`: durable blocking state (`reason`, `wait_key`/`until`, `resume_to_node`, `result_key`)
+- `StepRecord`: append-only ledger entry
+
+**Non-negotiable constraint:** values stored in `RunState.vars` must be JSON-serializable. For large payloads, use `ArtifactStore` references (`src/abstractruntime/storage/artifacts.py`) or offloading wrappers (`src/abstractruntime/storage/offloading.py`).
+
+## Minimal runtime API
+
+Implemented in `src/abstractruntime/core/runtime.py`:
+- `start(workflow, vars, actor_id, session_id) -> run_id`
+- `tick(workflow, run_id) -> RunState` (progress until waiting/completed/failed)
+- `resume(workflow, run_id, wait_key, payload) -> RunState`
+- `get_state(run_id) -> RunState`
+- `get_ledger(run_id) -> list[dict]`
+
+Resume semantics (important):
+- when a run blocks, the runtime stores `WaitState.resume_to_node`
+- on resume, execution continues **from that node** (it does not re-run the waiting node)
+
+## Persistence
+
+Interfaces live in `src/abstractruntime/storage/base.py`.
+
+Included backends:
+- `InMemory*` (tests/dev): `src/abstractruntime/storage/in_memory.py`
+- file-based JSON/JSONL: `src/abstractruntime/storage/json_files.py`
+- SQLite: `src/abstractruntime/storage/sqlite.py`
+
+Related features:
+- snapshots/bookmarks: `src/abstractruntime/storage/snapshots.py` (`docs/snapshots.md`)
+- tamper-evident ledger: `src/abstractruntime/storage/ledger_chain.py` (`docs/provenance.md`)
+- in-process ledger subscriptions: `src/abstractruntime/storage/observable.py`
+
+## Scheduling (driver loop)
+
+AbstractRuntime ships a simple in-process scheduler:
+- `Scheduler`, `ScheduledRuntime`, `create_scheduled_runtime()` (`src/abstractruntime/scheduler/*`)
+
+This is a driver loop (polls due waits, resumes runs). It is not a distributed orchestrator.
+
+## Integrations (optional)
+
+AbstractRuntime stays dependency-light at the kernel level; concrete integrations are opt-in:
+- AbstractCore (LLM + tools): `src/abstractruntime/integrations/abstractcore/*` (`integrations/abstractcore.md`)
+- AbstractMemory bridge (KG assertions/queries): `src/abstractruntime/integrations/abstractmemory/*`
+
+## Status (implemented in this repository)
+
+As of v0.4.9:
+- durable kernel: `RunState`, `WaitState`, `Runtime.start/tick/resume`
+- built-in waits + events: `WAIT_EVENT`, `WAIT_UNTIL`, `ASK_USER`, `EMIT_EVENT`
+- persistence backends: in-memory, JSON/JSONL, SQLite
+- artifacts/offloading: store large payloads by reference
+- retries/idempotency policy hooks: `src/abstractruntime/core/policy.py`
+- snapshots, tamper-evident ledger chain, ledger subscriptions
+- VisualFlow compiler + WorkflowBundles (`src/abstractruntime/visualflow_compiler/*`, `src/abstractruntime/workflow_bundle/*`)
+- VisualFlow multi-entry lowering for fan-in execution routes (`join_exec` / `path_mux`)
+- AbstractCore integration with local/remote/hybrid LLM execution, cached sessions/prompt-cache control, media inputs, generated media outputs, tool approval waits, and provider-key header routing (`integrations/abstractcore.md`)
+- evidence capture helpers (`src/abstractruntime/evidence/recorder.py`, `Runtime.list_evidence/load_evidence`)
+- run history bundle export (`src/abstractruntime/history_bundle.py`)
+
+## See also
+
+- `../README.md` — install + quick start
+- `getting-started.md` — first steps
+- `architecture.md` — full component map and diagrams
+- `integrations/abstractcore.md` — AbstractCore wiring
+- `limits.md` — `_limits` / RuntimeConfig
 
 ---
 
@@ -2485,8 +2637,10 @@ result = facade.clear_session_prompt_caches("support-session-1")
 
 ## Models, engines and host jobs (config facade)
 
-AbstractCore 2.14.0 implements the model browser, the local-engine installer and
-a host job registry. `abstractruntime.integrations.abstractcore.config_facade`
+AbstractCore implements the model browser, the local-engine installer and a
+host job registry (since AbstractCore 2.14.0; cancel attribution with `by` and
+`user` needs 2.15.1, which is the base-install floor).
+`abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as `abstractcore models|engines … --json` and the `/acore/*` routes
 without importing AbstractCore itself.
@@ -3226,6 +3380,249 @@ Practical starting points (provided by AbstractCore; see `pyproject.toml` for th
 
 ---
 
+## docs/tool-approval.md
+
+# Tool approval: risk tiers, the run-policy ceiling, and per-call refiners
+
+AbstractRuntime decides, per tool call, whether to **auto-run** a tool or
+**ask** the operator first. This is the runtime enforcement half of the
+framework-wide *tool tiers* concept (operator ruling, tool-tiers wave 2026-07-23):
+the gateway serves defaults and apps override them, but the decision that
+actually gates execution runs here, at the effect boundary.
+
+Implementation pointers (this repo):
+- approval sets + policy: `src/abstractruntime/integrations/abstractcore/tool_executor.py`
+- run-policy consumer + refiner dispatch: `src/abstractruntime/integrations/abstractcore/effect_handlers.py` (`_execute_with_run_policy`)
+- risk facts + the served row shape: `src/abstractruntime/identity/tools.py` (`walled_tool_rows`), `src/abstractruntime/integrations/abstractcore/tool_inventory_facade.py` (`annotate_tool_rows`, `derive_risk_assessment`)
+- the fact→tier mapping is **hosted by AbstractCore** (`abstractcore/tools/risk_facts.py`); runtime imports it (import-never-copy) and degrades to a byte-identical seed only under version skew.
+
+## Two gates, never one
+
+A tool call passes two independent gates:
+
+1. **Availability** — is the tool present in the run's granted set at all?
+   A tool above the run's grant is *absent* (not registered), not merely
+   asked. Life-plane entity tools (memory/diary/reflection) are available by
+   channel structure and are **not on the consent ladder** (`grantable:false`):
+   stripping them is an identity risk the consent surface must be unable to
+   express.
+2. **Approval** — for an available, mutating-or-risky tool, auto-run or ask?
+
+The gateway's grant model expresses both; this page documents the approval
+gate, which is what `_execute_with_run_policy` computes.
+
+## Risk facts and the derived tier
+
+Every served tool row carries declared **facts** (never policy):
+`mutating`, `remote_write_capable`, `comms_send`, `captures_environment`,
+`standing_effect`, `destructive_capable`, plus the band-neutral
+`model_controlled_destination`. A single versioned mapping derives the
+operator-facing risk from those facts (max-wins):
+
+| band (`risk_tier`) | `risk_rank` | facts |
+| --- | --- | --- |
+| `observe` | 1 | every declared fact false (read-only) |
+| `act` | 2 | `mutating` or `remote_write_capable` |
+| `outreach` | 3 | `comms_send` / `captures_environment` / `standing_effect` |
+| `destroy` | 4 | `destructive_capable` (e.g. a shell reaching `rm`/`git reset`) |
+
+Wire shape on every row: `risk_tier` is the **band word** (stable identity),
+`risk_rank` is the **integer** (display/compare ordinal), `risk_presentation`
+is the render word. A **factless** row (no declared facts — e.g. an
+undeclared MCP tool) derives `risk_rank` 4 but `risk_presentation`
+`"unvetted"`: gated at the top, never *rendered* "destroy" (deny-safe, but
+honest that it is unvetted rather than proven-destructive).
+
+## The run-policy ceiling
+
+A run carries an optional policy under the model-unwritable
+`_runtime.tool_policy` key (the gateway injects it; the model cannot set it):
+
+- `auto_approve_tools` / `require_approval_tools` — explicit name lists, the
+  finest grain. **`require` always wins** over any tier ceiling.
+- `auto_approve_max_risk_rank` — a ceiling: a call whose tool derives
+  `risk_rank <= N` auto-runs; above it, asks.
+
+`model_controlled_destination` tools (the model chooses where output goes —
+`fetch_url`, and see the refiner below) are **never silenced by the ceiling**:
+the approval prompt is the exfiltration defense. Only an explicit
+`auto_approve_tools` name — the operator's conscious act — overrides that.
+
+## Per-call refiners (`send_email_recipient@v1`)
+
+Some tools carry a `risk_refiner` id on their row. A refiner may **only lower**
+a single call below its band, at approval time, when it can *prove* the call
+is safe; it can never raise the band, and any call it cannot prove holds the
+ceiling (deny-safe).
+
+`send_email` (band `outreach`) declares `send_email_recipient@v1` (operator
+ruling dm#244): a send to **the registered operator's own address**
+auto-approves; a send to any other recipient asks.
+
+- The operator address arrives as `_runtime.operator_email` — a
+  **model-unwritable** key the gateway injects from the account record at run
+  start (one source of truth; payload-supplied values are dropped).
+- The refiner unions **all** recipient fields (`to`/`cc`/`bcc`); **every**
+  recipient must equal the operator address (normalized strip + NFC +
+  lowercase — no confusable/IDN folding, so a homoglyph domain never matches).
+- Deny-safe at every gap → **ask**: no operator email configured (the feature
+  is simply off — the email is optional), empty/unresolved recipients, a
+  wrapper-nested argument shape, a display-name/group token
+  (`Operator <op@self.com>` is compared verbatim, never bracket-parsed), any
+  parse failure, or a version-skewed runtime with the refiner unregistered.
+
+Until the operator email is configured, `send_email` stays in the
+require-approval set: self and others both ask.
+
+---
+
+## docs/entity-runtime.md
+
+# Per-entity runtime (homes, leases, visit durability)
+
+How AbstractRuntime hosts a **summoned entity**: one self-contained home
+directory per entity, one `Runtime` per home, one writer at a time, and
+visit turns that survive process restarts. This page documents the runtime
+half of the entity-topology consensus plan ("1 gateway + N runtimes");
+the door half (auth, stamps, serving) is AbstractGateway's.
+
+## The home is the unit
+
+An entity home is one directory holding the whole life:
+
+```
+entities/castor/
+  manifest.json            # entity_id (birth marker — never a lookup key)
+  spark.yaml               # the attested seed
+  substrate.yaml           # operator's ONE mind choice (provider+model)
+  memory.sqlite3           # graph + journal (abstractmemory)
+  home.sqlite3             # diary book + command inbox
+  runtime_castor.sqlite3   # run store + ledger (THIS page)
+  artifacts/               # verbatims and run artifacts
+  workspace/               # the entity's own files
+  .writer_lease            # writer lease (see below)
+```
+
+**Copying the directory moves the whole life** — including pending runs,
+durable waits, and commitments. Nothing at rest references the door's
+address (relocation-stable keys).
+
+## One writer per directory: the lease (`storage/lease.py`)
+
+The lease is a **generic one-writer-per-directory mechanism** (entity homes
+are its first consumer; project workplaces are the designed second — the
+2026-07-10 vocabulary sign-off re-homed it from `identity/` to `storage/`).
+It arbitrates *processes*, never principals: visitors' write-rights are
+denied structurally at the deposit gate regardless of the lease.
+
+Four writer windows exist for a home: a visit host, the own-time loop's
+day, the dream window, and maintenance passes. Exactly one may hold the
+directory at a time:
+
+```python
+from abstractruntime.storage.lease import acquire_directory_lease, DirectoryLeaseHeld, read_directory_lease
+
+with acquire_directory_lease(home_dir, holder="visit-host", session_id="visit-1"):
+    ...  # the directory is yours for this window
+
+read_directory_lease(home_dir)   # {"holder": ..., "pid": ..., "held": True/False}
+```
+
+- Mechanics: `flock(LOCK_EX|LOCK_NB)` on `<dir>/.writer_lease`. The flock
+  is the truth; the file's JSON metadata (holder kind, pid, acquired_at,
+  session/run id) is diagnostics for refusal messages and "who holds
+  Castor?".
+- Refusal raises `DirectoryLeaseHeld` **naming the incumbent** — loud,
+  never a silent wait. The own-time loop treats a held home as a *yield*
+  back to its gate; the home-direct chat CLI refuses to double-summon.
+- A crashed holder releases with its process (kernel drops the flock with
+  the fd). A **copied** directory carries stale lease bytes but no lock —
+  `read_directory_lease` answers `held` by a non-destructive flock probe,
+  never by trusting metadata.
+- Release truncates the file to a released record; it never unlinks
+  (unlink races a concurrent acquirer onto a dead inode).
+- The one-lease relay rule: cross-home delivery acquires ONE home's lease
+  at a time, never two.
+
+## One Runtime per entity (`identity/entity_runtime.py`)
+
+```python
+from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: my_llm_handler})
+run_id = ert.runtime.start(workflow=visit_workflow, vars={}, session_id="visit-1")
+ert.runtime.tick(workflow=visit_workflow, run_id=run_id)
+ert.close()   # checkpoints WAL so the directory is copy-clean
+```
+
+- The run store + ledger live in `runtime_<slug>.sqlite3` **inside the
+  home** (slug = the directory name, the registry key).
+- Effect handlers are the home's own seam + diary handlers (strict entity
+  posture): `MEMORY_*` writes land in the home's graph, `DIARY_*` in the
+  book, artifacts in the home's store. Handlers are RAW here — the gateway
+  wraps door-served instances with stamp verification.
+- `extra_handlers` lets the host add `LLM_CALL`/`TOOL_CALLS` at
+  composition. Attempting to shadow a home handler **raises**: identity
+  effects route through the home, never a host override.
+- Every host `LLM_CALL` handler is automatically wrapped with the
+  **act-only dereference** (below) — the privacy boundary cannot be
+  forgotten.
+
+## Act-only content: references at rest, words only in flight (`identity/act_only.py`)
+
+Diary words must never rest outside the book. When an entity reads its own
+diary mid-visit, the **durable transcript carries a typed reference**, not
+the words:
+
+```json
+{"$act_only": {"tool": "diary_read", "entry_id": "diary_ab12", "gist": "one bounded line"}}
+```
+
+- The ref is the tool message's entire `content` (exact JSON, one top-level
+  key). Detection is parse-based, never regex — and only on
+  `role == "tool"` messages, which hosts append: a visitor pasting
+  ref-looking JSON into their message stays inert text.
+- At send time the wrapped `LLM_CALL` handler resolves refs **through the
+  run's own `DIARY_READ` handler** into a wire copy (in-place content
+  substitution; message identity untouched). The original payload — what
+  the ledger and run store hold — keeps the ref.
+- An unresolvable ref fails the effect **loud and non-retryable**; the
+  provider never receives a degraded payload.
+- Consequence for audits: like media `{"$artifact": ...}` refs, the wire
+  payload is not byte-reconstructible from the ledger alone —
+  reconstruction re-resolves refs through doors that enforce authority.
+
+## Durable visit waits: event + deadline
+
+A visit parks on the visitor's next message; the park may carry an idle
+deadline (no reaper daemons):
+
+```python
+Effect(type=EffectType.WAIT_EVENT, payload={
+    "wait_key": "visitor_input",
+    "until": "2026-07-11T09:00:00+00:00",          # optional deadline (UTC-normalized)
+    "details": {"kind": "visitor_message"},         # self-describing for clients
+}, result_key="_temp.resume")
+```
+
+- An event resume before the deadline wins (payload lands in `result_key`).
+- Past the deadline, `tick()` (or the scheduler's due-scan —
+  deadline-carrying EVENT waits join `list_due_wait_until` on every store
+  backend) resolves the wait with `{"timed_out": true}` so the workflow
+  routes to its close path.
+- The ledger wait record carries `wait_key`, `until`, and `details`
+  together, so clients can render a chat composer for visit waits and the
+  deadline without new transport.
+
+## Tests
+
+`tests/test_directory_lease.py`, `tests/test_entity_runtime.py`,
+`tests/test_act_only_dereference.py`, `tests/test_wait_event_deadline.py` —
+including cross-process lease exclusion, waits-traveling-on-home-copy, the
+ledger-keeps-the-ref end-to-end pin, and the three-backend due-scan.
+
+---
+
 ## docs/evidence.md
 
 # Evidence capture
@@ -3614,14 +4011,15 @@ The canonical dependency list lives in `pyproject.toml`.
 
 ## Runtime dependencies (core install)
 
-- **abstractsemantics** (`>=0.0.3`) — structured schema registry support (declared in `pyproject.toml`, used in `src/abstractruntime/integrations/abstractmemory/effect_handlers.py` and VisualFlow execution wiring).
-- **AbstractMemory** (`>=0.2.6`) — TripleStore models and store contract used by Runtime's `MEMORY_KG_*` effects. Durable/vector backend dependencies such as LanceDB remain selected by hosts.
+- **abstractsemantics** (`>=0.0.5`) — structured schema registry support (declared in `pyproject.toml`, used in `src/abstractruntime/integrations/abstractmemory/effect_handlers.py` and VisualFlow execution wiring).
+- **AbstractMemory** (`>=0.3.0`) — TripleStore models and store contract used by Runtime's `MEMORY_KG_*` effects. Durable/vector backend dependencies such as LanceDB remain selected by hosts.
 
 ## Runtime integrations
-- **abstractcore** (`>=2.13.31`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
+- **abstractcore** (`abstractcore[remote,tools,vision,voice,audio,music]>=2.15.1`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install; the `apple` and `gpu` extras select `abstractcore[all-apple]` / `abstractcore[all-gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
   - The AbstractCore integration uses **httpx** for remote mode (`src/abstractruntime/integrations/abstractcore/llm_client.py`) and **pydantic** for structured validation (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). These are provided by AbstractCore’s dependency set.
-- **abstractcore[tools]** (`>=2.13.31`) — toolchain extra used by the base Runtime and `abstractruntime-mcp-worker` entry point (declared in `pyproject.toml`) and intended to include HTML parsing dependencies (see comments in `pyproject.toml`).
-- **RestrictedPython** (optional) — used for sandboxed execution of VisualFlow “Code” nodes when available (`src/abstractruntime/visualflow_compiler/visual/code_executor.py`).
+  - The `tools` extra of AbstractCore backs the base Runtime toolset and the `abstractruntime-mcp-worker` entry point.
+- **RestrictedPython** (`>=7.0`, core install) — sandbox for VisualFlow “Code” nodes and pin expressions (`src/abstractruntime/visualflow_compiler/visual/code_executor.py`).
+- **pypdf** and **reportlab** — VisualFlow `Read PDF` / `Write PDF` nodes in the base install.
 
 ## Build & test tooling
 
@@ -3649,11 +4047,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` passes who asked for a cancel to
-  AbstractCore (needs AbstractCore with `HostJobRegistry.cancel(by=, user=)`), so a cancelled
-  download can say who cancelled it.
-- The AbstractCore floor is now 2.15.1 in the base install and in the `apple`
-  and `gpu` extras (the release whose host-job cancel takes `by` and `user`).
+- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` records who
+  cancelled a host job (a model download, delete or engine install): `by`
+  (`api`, or `console` for a click in an embedded console) and the signed-in
+  `user` are stored on the job as `cancelled_by`, `cancelled_by_user` and
+  `ended_reason`. Existing calls without these arguments keep working and are
+  recorded as `by="api"`. Hosts such as AbstractGateway can pass the requesting
+  account to show who cancelled a job.
+- Compatibility: AbstractRuntime 0.4.34 requires AbstractCore 2.15.1 or newer
+  (was 2.14.0) in the base install and in the `apple` and `gpu` extras.
+  Upgrading AbstractRuntime upgrades AbstractCore accordingly; if you pin
+  AbstractCore yourself, raise the pin to 2.15.1 as well.
 
 ## [0.4.33] - 2026-09-23
 
@@ -3783,6 +4187,8 @@ published on its own.
   `abstractcore[all-gpu]>=2.13.41` (`gpu` extra), `AbstractMemory>=0.3.0`,
   `abstractsemantics>=0.0.5`. `RestrictedPython>=7.0` and `pyyaml>=6.0` are
   declared dependencies.
+- The `gpu` extra's setuptools floor is `>=77.0.3` (was `>=80.10.2`), which
+  vLLM's `setuptools<80` requirement can satisfy.
 - Migration: with RestrictedPython installed, VisualFlow Code nodes always run
   under its policy. Augmented assignment on subscripts (`d["k"] += 1`) is
   refused; rewrite it as read, modify, write.

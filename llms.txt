@@ -17,6 +17,7 @@
 - [API reference](docs/api.md): public imports + pointers to source-of-truth modules
 - [Architecture](docs/architecture.md): component map + durability invariants (includes diagrams)
 - [Docs index](docs/README.md): full documentation map
+- [Overview](docs/proposal.md): design goals, core concepts, and scope boundaries
 
 ## Key code (source of truth)
 
@@ -51,6 +52,9 @@
 - Remote multimodal guardrail: remote/hybrid media generation uses AbstractCore Server endpoints, does not inherit the chat model for media endpoints, routes image edits through Core `/images/edits`, routes video generation through Core `/videos/*`, rejects unsupported input media and non-file STT inputs instead of ignoring them, and redacts data URLs from persisted provider-request metadata
 - [MCP worker](docs/mcp-worker.md): `abstractruntime-mcp-worker` CLI (stdio/HTTP)
 - [Comms toolset](docs/tools-comms.md): opt-in email/WhatsApp/Telegram gating
+- [Tool approval](docs/tool-approval.md): tool risk tiers, the run-policy rank ceiling, and per-call refiners
+- [Entity runtime](docs/entity-runtime.md): per-entity runtimes, homes, the one-writer lease, act-only diary privacy, and durable visit waits
+- [Models, engines and host jobs](docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade): `config_facade` passthroughs for hosts; `host_job_cancel(job_id, *, by="api", user=None)` records who cancelled a job
 
 ## Durability & observability
 

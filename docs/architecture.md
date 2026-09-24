@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-08-27
+> Updated: 2026-09-25
 > Version: 0.4.34
 > Scope: this describes **what is implemented in this repository**.
 
@@ -41,6 +41,49 @@ The boundary is intentionally narrow:
 - Gateway and other hosts compose Runtime with the desired memory and local-inference profile. Runtime's base package includes the AbstractMemory contract, AbstractCore remote/tool capability integration, Runtime-owned permissive PDF read/write and standard-library DOCX write support, and the MCP worker entry point, but not backend extras such as LanceDB, Core media document stacks, or local inferencer stacks. Hosts choose storage, embeddings, readiness policy, and whether to add `abstractruntime[apple]` or `abstractruntime[gpu]`.
 - Remote and hybrid clients use explicit Core server URLs and auth headers supplied by the host. Runtime does not read Gateway auth environment variables for provider/model/auth decisions or treat Gateway bearer tokens as Core server/provider credentials.
 
+### Host-facing facades
+
+Hosts such as AbstractGateway talk to AbstractCore through Runtime-owned facades, so they never import AbstractCore themselves. Durable model work goes through the runtime (effects, ledger, artifacts); host operations (discovery, residency, prompt caches, configuration, models, engines and host jobs) go through the facades, which call AbstractCore in-process or its server.
+
+```mermaid
+flowchart LR
+  subgraph Host["Host (AbstractGateway, apps)"]
+    HostAPI["HTTP routes / UI"]
+  end
+
+  subgraph RT["AbstractRuntime"]
+    Runtime["Runtime
+start / tick / resume"]
+    Handlers["effect handlers
+LLM_CALL / TOOL_CALLS / MODEL_RESIDENCY"]
+    RunFacade["run_facade
+durable media + comms child runs"]
+    HostFacade["host_facade / discovery_facade
+residency, prompt caches, discovery"]
+    ConfigFacade["config_facade
+capability defaults, models, engines, host jobs"]
+    Stores["RunStore / LedgerStore / ArtifactStore"]
+  end
+
+  subgraph AC["AbstractCore"]
+    Providers["providers + tools
+(local or AbstractCore Server)"]
+    CoreConfig["config, model catalog,
+engine installer, host job registry"]
+  end
+
+  HostAPI -->|"WorkflowSpec, resume, cancel"| Runtime
+  HostAPI --> RunFacade
+  HostAPI --> HostFacade
+  HostAPI --> ConfigFacade
+  RunFacade --> Runtime
+  Runtime --> Handlers
+  Runtime --> Stores
+  Handlers -->|"generate / tools"| Providers
+  HostFacade --> Providers
+  ConfigFacade --> CoreConfig
+```
+
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
 
 ## Component map
@@ -77,7 +120,7 @@ flowchart TB
   end
 
   subgraph Integrations["integrations/ (optional wiring)"]
-    AC["abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker"]
+    AC["abstractcore/\nLLM_CALL, TOOL_CALLS, MCP worker,\nhost / run / discovery / config facades"]
     AM["abstractmemory/\nMEMORY_KG_* handlers"]
   end
 
@@ -116,7 +159,7 @@ flowchart TB
 ### Crash-ordering invariant (reliability)
 
 The run store is truth; the ledger is evidence. Every state transition obeys
-ONE ordering law (backlog 0045; every durable feature is a consumer):
+ONE ordering law ([backlog 0045](backlog/planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md); every durable feature is a consumer):
 
 1. **State save is the commit point.** A transition is true when — and only
    when — `RunStore.save(run)` returns. Everything before the save must be

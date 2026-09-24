@@ -11,11 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` passes who asked for a cancel to
-  AbstractCore (needs AbstractCore with `HostJobRegistry.cancel(by=, user=)`), so a cancelled
-  download can say who cancelled it.
-- The AbstractCore floor is now 2.15.1 in the base install and in the `apple`
-  and `gpu` extras (the release whose host-job cancel takes `by` and `user`).
+- `config_facade.host_job_cancel(job_id, *, by="api", user=None)` records who
+  cancelled a host job (a model download, delete or engine install): `by`
+  (`api`, or `console` for a click in an embedded console) and the signed-in
+  `user` are stored on the job as `cancelled_by`, `cancelled_by_user` and
+  `ended_reason`. Existing calls without these arguments keep working and are
+  recorded as `by="api"`. Hosts such as AbstractGateway can pass the requesting
+  account to show who cancelled a job.
+- Compatibility: AbstractRuntime 0.4.34 requires AbstractCore 2.15.1 or newer
+  (was 2.14.0) in the base install and in the `apple` and `gpu` extras.
+  Upgrading AbstractRuntime upgrades AbstractCore accordingly; if you pin
+  AbstractCore yourself, raise the pin to 2.15.1 as well.
 
 ## [0.4.33] - 2026-09-23
 

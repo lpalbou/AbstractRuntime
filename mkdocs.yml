@@ -39,6 +39,9 @@ nav:
   - Architecture: architecture.md
   - AbstractCore Integration: integrations/abstractcore.md
   - Troubleshooting: troubleshooting.md
+  - Artifacts: artifacts.md
+  - Tool Approval: tool-approval.md
+  - Entity Runtime: entity-runtime.md
   - Tools and Comms: tools-comms.md
   - MCP Worker: mcp-worker.md
   - Workflow Bundles: workflow-bundles.md

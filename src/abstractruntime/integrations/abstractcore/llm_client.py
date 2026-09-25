@@ -9608,15 +9608,12 @@ class MultiLocalAbstractCoreLLMClient:
             # Its resident engines (TTS/STT/image/music) are unloaded first --
             # dropping the core used to leave them in memory, unreachable.
             self._retire_capability_residency_core()
-        if provider_s or model_s:
-            self._default_client = self._get_client(provider_s, model_s)
-        else:
-            self._default_client = None
-        self._llm = getattr(self._default_client, "_llm", None)
         # CLEAN SWITCH (M1 finding, 2026-09-25): evicting a pool entry only
         # dropped a Python reference. An in-process model (MLX / HuggingFace)
         # the new pool no longer uses stayed resident -- 17.36 GB measured
         # after a console default switch -- until someone ejected it by hand.
+        # Ejected BEFORE the new default is built, so a switch between two
+        # large models never holds both at once.
         dropped: List[Tuple[Tuple[str, str], Any]] = [
             (key, getattr(client, "_llm", None)) for key, client in previous_clients.items()
             if self._clients.get(key) is not client
@@ -9627,6 +9624,12 @@ class MultiLocalAbstractCoreLLMClient:
         )
         del previous_clients, previous_overrides
         self._eject_models_dropped_by_switch(dropped)
+        del dropped
+        if provider_s or model_s:
+            self._default_client = self._get_client(provider_s, model_s)
+        else:
+            self._default_client = None
+        self._llm = getattr(self._default_client, "_llm", None)
         return True
 
     def _pairs_still_in_use(self) -> set:

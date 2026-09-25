@@ -289,3 +289,19 @@ def test_all_listing_has_no_permanent_task_errors_with_working_facades(pool):
     listing = client.list_model_residency()
     assert listing["ok"] is True
     assert not listing["diagnostics"].get("task_errors"), listing["diagnostics"].get("task_errors")
+
+
+def test_the_previous_model_is_ejected_before_the_new_default_loads(monkeypatch, pool):
+    """Two 17 GB models must never be resident together because of a switch."""
+    client, ejects = pool
+    order: List[str] = []
+    monkeypatch.setattr(llm_mod, "_process_eject_for", lambda p, m: (order.append(f"eject {m}"), {"ok": True})[1])
+    original = MultiLocalAbstractCoreLLMClient._create_client
+
+    def recording_create(self, provider, model, *, llm_kwargs_override=None):
+        order.append(f"build {model}")
+        return original(self, provider, model, llm_kwargs_override=llm_kwargs_override)
+
+    monkeypatch.setattr(MultiLocalAbstractCoreLLMClient, "_create_client", recording_create)
+    client.set_default_provider_model(provider="mlx", model="vendor/B")
+    assert order == ["eject vendor/A", "build vendor/B"]

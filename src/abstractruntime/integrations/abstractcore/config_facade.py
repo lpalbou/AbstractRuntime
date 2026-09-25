@@ -14,7 +14,7 @@ Scope:
 - read a provider API key from a specific AbstractCore config file
 - read AbstractCore's stored mail (IMAP/SMTP) and maintenance-triage settings
 - model weights: availability probes and single downloads (`model_materializer`)
-- models & engines (AbstractCore >= 2.15.1): host profile, local-engine status and
+- models & engines (AbstractCore >= 2.15.3): host profile, local-engine status and
   installs, the model catalog with fit verdicts, installed models, deletes, host jobs,
   and the embeddable console screens -- see the section near the end of this module
 
@@ -608,7 +608,7 @@ def download_model_artifact(
 
 # ---------------------------------------------------------------------------
 # Models & engines: the host profile, local engines, the model catalog,
-# installed models, deletes and host jobs (AbstractCore >= 2.15.1)
+# installed models, deletes and host jobs (AbstractCore >= 2.15.3)
 # ---------------------------------------------------------------------------
 #
 # AbstractCore implements the model browser, the engine installer and the job
@@ -631,7 +631,7 @@ def download_model_artifact(
 # structured body Core's own server answers with, so a host never imports an
 # AbstractCore exception type to tell them apart.
 
-MODELS_ENGINES_MIN_ABSTRACTCORE = "2.15.1"
+MODELS_ENGINES_MIN_ABSTRACTCORE = "2.15.3"
 
 
 class AbstractCoreTooOld(NotImplementedError):

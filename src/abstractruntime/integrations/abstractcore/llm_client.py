@@ -3834,6 +3834,136 @@ def _merge_host_sweep_into_text_records(
     return records
 
 
+def _mlx_process_residency_rows() -> List[Dict[str, Any]]:
+    """Core's PROCESS-level MLX residency (`abstractcore.providers.mlx_residency`):
+    every MLX model whose weights are alive in this process, whoever holds them
+    (a pool client, an override client, a chat summarizer built at boot, an old
+    runtime after a bundle reload, another principal's service). Best-effort: an
+    older core or a failing probe yields []."""
+    try:
+        from abstractcore.providers.mlx_residency import resident_models  # type: ignore
+    except Exception:
+        return []
+    try:
+        return [dict(r) for r in resident_models() if isinstance(r, dict) and r.get("weights_alive")]
+    except Exception:
+        return []
+
+
+def _mlx_process_eject(model: str) -> Optional[Dict[str, Any]]:
+    """Unload EVERY holder of `model` in this process (core `eject_model`), then
+    collect + clear MLX's cache. None when core has no process-level eject."""
+    try:
+        from abstractcore.providers.mlx_residency import eject_model  # type: ignore
+    except Exception:
+        return None
+    try:
+        return eject_model(str(model or "").strip() or None, reason="model_residency_unload")
+    except Exception as exc:  # noqa: BLE001 - the eject report must reach the caller
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "model": model}
+
+
+def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
+    extras: Dict[str, Any] = {
+        "process_holders": int(row.get("holders") or 0),
+        "held_bytes": int(row.get("held_bytes") or 0),
+        "cache_bytes": int(row.get("cache_bytes") or 0),
+        "process_lane": row.get("lane"),
+    }
+    if isinstance(row.get("weights_bytes"), int) and not isinstance(row.get("weights_bytes"), bool):
+        extras["est_weights_bytes"] = int(row["weights_bytes"])
+    return extras
+
+
+def _merge_mlx_process_residency_into_text_records(
+    records: List[Dict[str, Any]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fold the process-level MLX residency into a text-residency listing, in
+    place. A pool row whose own instance says "not loaded" while the weights
+    are still alive in the process becomes `resident: True` with
+    `provider_state: "resident_via_other_holders"`; a model no pool row names
+    (held only by unreachable holders) is APPENDED, tagged
+    `source: "abstractcore.provider.mlx.process"`. Either way the listing can
+    no longer say "nothing loaded" over gigabytes of live MLX buffers."""
+    provider_filter = str(provider or "").strip().lower()
+    if provider_filter and provider_filter != "mlx":
+        return records
+    model_filter = str(model or "").strip()
+    rows = _mlx_process_residency_rows()
+    if not rows:
+        return records
+    for row in rows:
+        names = [str(n) for n in (row.get("models") or []) if str(n).strip()]
+        if not names:
+            names = [str(row.get("model_path") or "").strip()]
+        extras = _mlx_process_row_extras(row)
+        for name in names:
+            if not name or (model_filter and name != model_filter):
+                continue
+            existing = next(
+                (
+                    r
+                    for r in records
+                    if isinstance(r, dict)
+                    and str(r.get("provider") or "").strip().lower() == "mlx"
+                    and str(r.get("model") or "").strip() == name
+                ),
+                None,
+            )
+            if existing is None:
+                record = _local_residency_record(
+                    provider="mlx",
+                    model=name,
+                    default=False,
+                    runtime_cached=False,
+                    include_provider_state=False,
+                )
+                record.update(
+                    {
+                        "resident": True,
+                        "loaded": True,
+                        "state": "provider_loaded",
+                        "provider_residency_verified": True,
+                        "provider_resident": True,
+                        "provider_residency_source": "abstractcore.provider.mlx.process",
+                        "provider_state": "resident_via_other_holders",
+                        "source": "abstractcore.provider.mlx.process",
+                        "lockable": False,
+                        "warnings": [
+                            f"held in memory by {extras['process_holders']} provider instance(s) outside this "
+                            "runtime's pool; unloading it ejects every holder in the process"
+                        ],
+                        **extras,
+                    }
+                )
+                records.append(_normalize_residency_size_extras(record))
+                continue
+            if existing.get("resident") is not True:
+                existing.update(
+                    {
+                        "resident": True,
+                        "loaded": True,
+                        "state": "provider_loaded",
+                        "provider_residency_verified": True,
+                        "provider_resident": True,
+                        "provider_state": "resident_via_other_holders",
+                    }
+                )
+                existing.setdefault("warnings", [])
+                if isinstance(existing["warnings"], list):
+                    existing["warnings"].append(
+                        f"this runtime's own instance released the weights, but {extras['process_holders']} other "
+                        "provider instance(s) in the process still hold them; unloading ejects every holder"
+                    )
+            for key, value in extras.items():
+                if existing.get(key) is None:
+                    existing[key] = value
+    return records
+
+
 def _local_memory_snapshot() -> Dict[str, Any]:
     try:
         from abstractcore.utils.memory import get_memory_snapshot  # type: ignore
@@ -6874,6 +7004,7 @@ class LocalAbstractCoreLLMClient:
         else:
             records = [record]
         records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
+        records = _merge_mlx_process_residency_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -7099,6 +7230,15 @@ class LocalAbstractCoreLLMClient:
         if force_unlock_pending and unload_error is None:
             locked_pairs.discard((provider_s, model_s))
 
+        # Process-wide eject of in-process MLX weights (see the multilocal
+        # twin): this client's instance released its references; every other
+        # holder in the process is unloaded by core's `eject_model`.
+        process_eject: Optional[Dict[str, Any]] = None
+        if provider_s == "mlx" and unload_error is None:
+            process_eject = _mlx_process_eject(model_s)
+            if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
+                unload_error = f"process-wide MLX eject failed: {process_eject['error']}"
+
         record = _local_residency_record(
             provider=self._provider,
             model=self._model,
@@ -7116,7 +7256,22 @@ class LocalAbstractCoreLLMClient:
             error = "model_residency unload did not verify unloaded provider residency"
             warnings.append(error)
         elif record.get("loaded") is True:
-            error = "model_residency unload completed but provider still reports the model loaded"
+            residual = (process_eject or {}).get("residual") if isinstance(process_eject, dict) else None
+            if isinstance(residual, dict):
+                error = (
+                    "model_residency unload completed but the weights are still resident in this process: "
+                    f"{int(residual.get('holders') or 0)} holder(s) still alive, "
+                    f"{int(residual.get('held_bytes') or 0)} bytes held"
+                )
+            else:
+                error = "model_residency unload completed but provider still reports the model loaded"
+            warnings.append(error)
+        elif isinstance(process_eject, dict) and process_eject.get("holders_refused"):
+            error = (
+                "model_residency unload: "
+                f"{len(process_eject['holders_refused'])} holder(s) refused to unload "
+                f"({'; '.join(str(h.get('error')) for h in process_eject['holders_refused'])})"
+            )
             warnings.append(error)
         result = {
             "ok": error is None,
@@ -7129,6 +7284,7 @@ class LocalAbstractCoreLLMClient:
             **({"error": error} if error else {}),
             **({"warnings": warnings} if warnings else {}),
             **({"provider_unload_result": _jsonable(provider_unload_result)} if provider_unload_result is not None else {}),
+            **({"process_eject": _jsonable(process_eject)} if process_eject is not None else {}),
             "diagnostics": {
                 "source": "abstractruntime.local",
                 "runtime_cache_unloaded": False,
@@ -9406,6 +9562,7 @@ class MultiLocalAbstractCoreLLMClient:
                 )
             )
         records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
+        records = _merge_mlx_process_residency_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -9675,6 +9832,68 @@ class MultiLocalAbstractCoreLLMClient:
                 changed=False,
             )
 
+        if client is None and provider_instance is None and provider_s == "mlx":
+            # No pool client for this pair -- but the WEIGHTS may still be in
+            # this process, held by instances this pool cannot reach (an
+            # override client, a boot-time summarizer, an old runtime). That is
+            # exactly the row the listing reports as
+            # `resident_via_other_holders`; the operator's eject must free it.
+            held_rows = [
+                row for row in _mlx_process_residency_rows()
+                if model_s in [str(n) for n in (row.get("models") or [])]
+            ]
+            if held_rows:
+                process_eject = _mlx_process_eject(model_s)
+                remaining = [
+                    row for row in _mlx_process_residency_rows()
+                    if model_s in [str(n) for n in (row.get("models") or [])]
+                ]
+                record_after = _local_residency_record(
+                    provider=provider_s,
+                    model=model_s,
+                    default=default_key,
+                    runtime_cached=False,
+                    include_provider_state=False,
+                    lock_owner=self,
+                )
+                _merge_mlx_process_residency_into_text_records([record_after], provider="mlx", model=model_s)
+                error: Optional[str] = None
+                if remaining:
+                    error = (
+                        "model_residency unload: the weights are still resident in this process after ejecting "
+                        f"every reachable holder ({int(remaining[0].get('holders') or 0)} holder(s) still alive, "
+                        f"{int(remaining[0].get('held_bytes') or 0)} bytes held)"
+                    )
+                elif isinstance(process_eject, dict) and process_eject.get("error"):
+                    error = f"process-wide MLX eject failed: {process_eject['error']}"
+                result = {
+                    "ok": error is None,
+                    "supported": True,
+                    "operation": "unload",
+                    "task": "text_generation",
+                    "unloaded": error is None,
+                    "runtime_cache_unloaded": False,
+                    "runtime": record_after,
+                    **({"error": error} if error else {}),
+                    "warnings": (
+                        [error] if error else
+                        [f"ejected {len((process_eject or {}).get('holders_unloaded') or [])} provider instance(s) that held "
+                         f"{model_s} outside this runtime's pool"]
+                    ),
+                    **({"process_eject": _jsonable(process_eject)} if process_eject is not None else {}),
+                    "diagnostics": {"source": "abstractruntime.multilocal", "reason": "process_holders_ejected"},
+                }
+                if error:
+                    result.setdefault("status_hint", "warning")
+                    result.setdefault("degraded", True)
+                return _with_local_model_residency_summary(
+                    result,
+                    operation="unload",
+                    runtime=record_after,
+                    action="unload_failed" if error else "unloaded",
+                    changed=error is None,
+                )
+
         if client is None and provider_instance is None:
             result = {
                 "ok": True,
@@ -9713,6 +9932,19 @@ class MultiLocalAbstractCoreLLMClient:
         if force_unlock_pending and unload_error is None:
             locked_pairs.discard(key)
 
+        # PROCESS-WIDE eject for in-process MLX weights. This pool's instance
+        # released ITS references above; the weights stay in Metal memory while
+        # any other instance holds them (override clients, the chat summarizer
+        # built at boot, an old runtime after a bundle reload, another
+        # principal's service) -- none of which this pool can reach. Core's
+        # `eject_model` unloads every holder, collects, clears MLX's cache, and
+        # reports what is still resident. Its report rides in the payload.
+        process_eject: Optional[Dict[str, Any]] = None
+        if provider_s == "mlx" and unload_error is None:
+            process_eject = _mlx_process_eject(model_s)
+            if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
+                unload_error = f"process-wide MLX eject failed: {process_eject['error']}"
+
         record_after_unload = _local_residency_record(
             provider=provider_s,
             model=model_s,
@@ -9733,7 +9965,22 @@ class MultiLocalAbstractCoreLLMClient:
             error = "model_residency unload did not verify unloaded provider residency"
             warnings.append(error)
         elif record_after_unload.get("loaded") is True:
-            error = "model_residency unload completed but provider still reports the model loaded"
+            residual = (process_eject or {}).get("residual") if isinstance(process_eject, dict) else None
+            if isinstance(residual, dict):
+                error = (
+                    "model_residency unload completed but the weights are still resident in this process: "
+                    f"{int(residual.get('holders') or 0)} holder(s) still alive, "
+                    f"{int(residual.get('held_bytes') or 0)} bytes held"
+                )
+            else:
+                error = "model_residency unload completed but provider still reports the model loaded"
+            warnings.append(error)
+        elif isinstance(process_eject, dict) and process_eject.get("holders_refused"):
+            error = (
+                "model_residency unload: "
+                f"{len(process_eject['holders_refused'])} holder(s) refused to unload "
+                f"({'; '.join(str(h.get('error')) for h in process_eject['holders_refused'])})"
+            )
             warnings.append(error)
 
         if error is None and client is not None and not default_key:
@@ -9760,6 +10007,7 @@ class MultiLocalAbstractCoreLLMClient:
             **({"error": error} if error else {}),
             **({"warnings": warnings} if warnings else {}),
             **({"provider_unload_result": _jsonable(provider_unload_result)} if provider_unload_result is not None else {}),
+            **({"process_eject": _jsonable(process_eject)} if process_eject is not None else {}),
             "diagnostics": {
                 "source": "abstractruntime.multilocal",
                 "runtime_cache_unloaded": runtime_cache_unloaded,

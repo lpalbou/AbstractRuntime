@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Changing the default text model no longer leaves the previous model in memory. The previous
+  in-process model (MLX or HuggingFace) is unloaded from the whole process before the new default
+  is loaded, unless the pool still uses it or it is locked. A call still generating on it is not
+  cancelled; the model is unloaded when that call ends. Measured on a 27B MLX model: 17 GB stayed
+  resident after a console switch; now it is freed.
+- The chat summarizer uses the current default model on each call. Before, it kept the model that
+  was the default at startup, kept it in memory, and kept summarizing with it after a switch.
+- Unloading a model by `runtime_id` alone now works for every task: TTS, STT, image, music and
+  embedding rows, not only text. A backend's own id is looked up in the listing.
+- Listings no longer report a task error on every call for `image_upscale`, `video_generation`,
+  `text_to_video`, `image_to_video` and `text_to_audio`; they are served by the image and music
+  capabilities.
+- Changing a capability default unloads the models the previous capability routes had loaded
+  instead of leaving them in memory.
+
+### Added
+
+- Embedding models loaded in the process appear in `list_model_residency` as `task: "embedding"`
+  rows (`local:embedding:huggingface:<model>`, with holders and bytes) and can be unloaded like any
+  other model.
+- HuggingFace models held in the process outside the runtime's pool are listed and unloaded like
+  MLX ones.
+- Compatibility: these features need the AbstractCore changes released alongside this version.
+
 ## [0.4.36] - 2026-09-25
 
 ### Fixed

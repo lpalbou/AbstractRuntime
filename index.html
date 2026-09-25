@@ -486,6 +486,87 @@
   
   
     <li class="md-nav__item">
+      <a href="artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="tools-comms/" class="md-nav__link">
         
   
@@ -737,10 +818,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
         
           
-          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
             
   
   
@@ -758,8 +839,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_16">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1037,14 +1118,13 @@
 <h2 id="guides">Guides<a class="headerlink" href="#guides" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>faq.md</code> — common questions (recommended)</li>
-<li><code>troubleshooting.md</code> — symptom-oriented setup, runtime, and integration fixes</li>
 <li><code>manual_testing.md</code> — manual smoke tests and how to run the test suite</li>
 <li><code>artifacts.md</code> — Runtime artifact identity, descriptors, provenance, catalog search, and access stats</li>
-<li><code>integrations/abstractcore.md</code> — wiring <code>LLM_CALL</code> / <code>TOOL_CALLS</code>, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings and locks, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore</li>
-<li>run history bundle replay now also exports <code>resolved_actions</code> summaries for cross-client capability replay; see <code>api.md</code> and <code>integrations/abstractcore.md</code></li>
+<li><code>integrations/abstractcore.md</code> — wiring <code>LLM_CALL</code> / <code>TOOL_CALLS</code>, the <code>config_facade</code> models/engines/host-jobs passthroughs for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings and locks, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore</li>
 <li><code>tools-comms.md</code> — enabling the optional comms toolset (email/WhatsApp/Telegram)</li>
 <li><code>tool-approval.md</code> — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the <code>send_email</code> self-recipient rule)</li>
 <li><code>api.md#workflowbundles-flow-and-visualflow-distribution</code> — VisualFlow compiler APIs, media nodes, and document nodes (<code>read_pdf</code> / <code>write_pdf</code> / <code>write_docx</code>)</li>
+<li><code>api.md#run-history-bundle-export-portable-replay-artifact</code> — run history bundles, including <code>resolved_actions</code> summaries for cross-client capability replay</li>
 </ul>
 <h2 id="features-reference">Features (reference)<a class="headerlink" href="#features-reference" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1063,7 +1143,7 @@
 <li><code>../CONTRIBUTING.md</code> — how to build/test and submit changes</li>
 <li><code>../SECURITY.md</code> — responsible vulnerability reporting</li>
 <li><code>../ACKNOWLEDGMENTS.md</code> — credits</li>
-<li><code>../ROADMAP.md</code> — prioritized next steps</li>
+<li><code>../ROADMAP.md</code> — current status and longer-term direction</li>
 <li><code>adr/README.md</code> — architectural decisions (why)</li>
 <li><code>backlog/README.md</code> — implemented and planned work items (what/how)</li>
 </ul>

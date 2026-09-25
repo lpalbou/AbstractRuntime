@@ -715,6 +715,87 @@
   
   
     <li class="md-nav__item">
+      <a href="../../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../tools-comms/" class="md-nav__link">
         
   
@@ -966,10 +1047,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
         
           
-          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
             
   
   
@@ -987,8 +1068,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_16">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2031,8 +2112,10 @@ request/output summary, and effective route actually ran.</p>
 <span class="n">result</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">clear_session_prompt_caches</span><span class="p">(</span><span class="s2">"support-session-1"</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="models-engines-and-host-jobs-config-facade">Models, engines and host jobs (config facade)<a class="headerlink" href="#models-engines-and-host-jobs-config-facade" title="Permanent link">&para;</a></h2>
-<p>AbstractCore 2.14.0 implements the model browser, the local-engine installer and
-a host job registry. <code>abstractruntime.integrations.abstractcore.config_facade</code>
+<p>AbstractCore implements the model browser, the local-engine installer and a
+host job registry. These passthroughs need AbstractCore 2.15.1 (the
+base-install floor), the first release that records who cancelled a job.
+<code>abstractruntime.integrations.abstractcore.config_facade</code>
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as <code>abstractcore models|engines … --json</code> and the <code>/acore/*</code> routes
 without importing AbstractCore itself.</p>

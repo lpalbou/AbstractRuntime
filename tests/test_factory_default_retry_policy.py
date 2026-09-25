@@ -34,7 +34,7 @@ def _stub_factory(monkeypatch):
             pass
 
     class FakeSummarizer:
-        def __init__(self, llm, *, max_tokens: int, max_output_tokens: int):
+        def __init__(self, llm=None, *, llm_resolver=None, max_tokens: int, max_output_tokens: int):
             pass
 
     monkeypatch.setattr(rt_factory, "MultiLocalAbstractCoreLLMClient", FakeLLMClient)

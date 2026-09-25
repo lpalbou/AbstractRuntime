@@ -38,8 +38,8 @@ def test_create_local_runtime_defaults_timeouts_from_abstractcore_config(monkeyp
             captured["tool_timeout_set"] = timeout_s
 
     class FakeSummarizer:
-        def __init__(self, llm, *, max_tokens: int, max_output_tokens: int):
-            captured["summarizer_llm"] = llm
+        def __init__(self, llm=None, *, llm_resolver=None, max_tokens: int, max_output_tokens: int):
+            captured["summarizer_llm"] = llm_resolver() if llm_resolver is not None else llm
             captured["summarizer_max_tokens"] = max_tokens
             captured["summarizer_max_output_tokens"] = max_output_tokens
 
@@ -81,8 +81,8 @@ def test_create_local_runtime_respects_explicit_overrides(monkeypatch) -> None:
             captured["tool_timeout_set"] = timeout_s
 
     class FakeSummarizer:
-        def __init__(self, llm, *, max_tokens: int, max_output_tokens: int):
-            self._llm = llm
+        def __init__(self, llm=None, *, llm_resolver=None, max_tokens: int, max_output_tokens: int):
+            self._llm = llm_resolver() if llm_resolver is not None else llm
 
     monkeypatch.setattr(rt_factory, "MultiLocalAbstractCoreLLMClient", FakeLLMClient)
     monkeypatch.setattr(rt_factory, "AbstractCoreToolExecutor", FakeTools)

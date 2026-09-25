@@ -289,8 +289,13 @@ def create_local_runtime(
 
     # Create chat summarizer with token limits from config
     # This enables adaptive chunking during MEMORY_COMPACT
+    #
+    # The model is resolved at CALL time (the client's current default), never
+    # captured here: a captured instance kept the boot-time default's weights
+    # resident after the operator switched models, and kept summarizing with
+    # it (M1 finding, 2026-09-25: 17.36 GB pinned via summarizer -> runtime).
     summarizer = AbstractCoreChatSummarizer(
-        llm=llm_client._llm,  # Use the underlying AbstractCore LLM instance
+        llm_resolver=lambda: getattr(llm_client, "_llm", None),
         max_tokens=config.max_tokens if config.max_tokens is not None else -1,
         max_output_tokens=config.max_output_tokens if config.max_output_tokens is not None else -1,
     )

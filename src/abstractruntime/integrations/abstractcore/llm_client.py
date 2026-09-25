@@ -30,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import weakref
 import uuid
 import wave
 from dataclasses import asdict, dataclass, is_dataclass
@@ -3478,6 +3479,9 @@ def _normalize_residency_task(task: Any) -> str:
         "speech_to_text": "stt",
         "audio_transcription": "stt",
         "audio_transcriptions": "stt",
+        "embedding": "embedding",
+        "embeddings": "embedding",
+        "text_embedding": "embedding",
     }
     return aliases.get(raw, raw)
 
@@ -3503,6 +3507,9 @@ _LOCAL_CAPABILITY_RESIDENCY_LIST_TASKS = (
     "stt",
     "music_generation",
     "text_to_audio",
+    # In-process embedding models (core's EmbeddingManager registry): listed
+    # and ejectable like any other local model (mission M2, 2026-09-25).
+    "embedding",
 )
 
 
@@ -3863,6 +3870,277 @@ def _mlx_process_eject(model: str) -> Optional[Dict[str, Any]]:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "model": model}
 
 
+def _hf_process_residency_rows() -> List[Dict[str, Any]]:
+    """Core's PROCESS-level HuggingFace residency (`abstractcore.providers.
+    hf_residency`): every transformers / GGUF model whose weights are alive in
+    this process, whoever holds them. Unlike MLX, HuggingFace instances do not
+    share weights: each holder is a FULL COPY. Best-effort: an older core or a
+    failing probe yields []."""
+    try:
+        from abstractcore.providers.hf_residency import resident_models  # type: ignore
+    except Exception:
+        return []
+    try:
+        return [dict(r) for r in resident_models() if isinstance(r, dict) and r.get("weights_alive")]
+    except Exception:
+        return []
+
+
+def _hf_process_eject(model: str) -> Optional[Dict[str, Any]]:
+    """Unload EVERY HuggingFace holder of `model` in this process (core
+    `hf_residency.eject_model`), then collect + return torch's MPS pool. None
+    when core has no process-level eject for this backend."""
+    try:
+        from abstractcore.providers.hf_residency import eject_model  # type: ignore
+    except Exception:
+        return None
+    try:
+        return eject_model(str(model or "").strip() or None, reason="model_residency_unload")
+    except Exception as exc:  # noqa: BLE001 - the eject report must reach the caller
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "model": model}
+
+
+_EMBEDDINGS_MANAGER_MODULE = "abstractcore.embeddings.manager"
+
+
+def _embedding_process_rows() -> List[Dict[str, Any]]:
+    """Core's process-level truth for in-process embedding models
+    (`EmbeddingManager` registry): one row per model whose weights are alive,
+    whoever built the embedder (gateway memory, a flow, a tool). A process that
+    never imported the manager holds none, and this never imports it (it pulls
+    sentence-transformers and torch). An imported core WITHOUT the registry is
+    an incompatible core: that raises, it is not read as "nothing loaded"."""
+    mod = sys.modules.get(_EMBEDDINGS_MANAGER_MODULE)
+    if mod is None:
+        return []
+    fn = getattr(mod, "resident_embedding_models", None)
+    if not callable(fn):
+        raise RuntimeError(
+            "this AbstractCore has no embedding residency registry (resident_embedding_models); "
+            "upgrade abstractcore to list or eject embedding models"
+        )
+    return [dict(r) for r in fn() if isinstance(r, dict) and r.get("weights_alive", True)]
+
+
+def _embedding_process_eject(model: Optional[str]) -> Dict[str, Any]:
+    """Unload EVERY in-process embedder holding `model`, collect, return torch's
+    MPS pool (core `eject_embedding_models`). The embedders stay usable: the
+    next embedding reloads the model."""
+    mod = sys.modules.get(_EMBEDDINGS_MANAGER_MODULE)
+    if mod is None:
+        return {"ok": True, "model": model, "holders_found": 0, "holders_unloaded": [], "holders_refused": [],
+                "residual": None, "note": "no embedding model was ever loaded in this process"}
+    fn = getattr(mod, "eject_embedding_models", None)
+    if not callable(fn):
+        raise RuntimeError(
+            "this AbstractCore has no embedding eject (eject_embedding_models); upgrade abstractcore"
+        )
+    return dict(fn(str(model or "").strip() or None, reason="model_residency_unload"))
+
+
+def _embedding_residency_record(row: Dict[str, Any], name: str, *, source: str) -> Dict[str, Any]:
+    runtime_id = f"local:embedding:huggingface:{name}"
+    holders = int(row.get("holders") or 0)
+    return {
+        "task": "embedding",
+        "provider": "huggingface",
+        "model": name,
+        "backend": "embeddings",
+        "runtime_id": runtime_id,
+        "load_id": runtime_id,
+        "loaded": True,
+        "resident": True,
+        "state": "provider_loaded",
+        "provider_state": "resident",
+        "provider_residency_verified": True,
+        "provider_resident": True,
+        "provider_residency_source": "abstractcore.embeddings.process",
+        "source": source,
+        "isolation": "in_process",
+        "runtime_cached": False,
+        "lockable": False,
+        "locked": False,
+        "device": row.get("device"),
+        "model_path": row.get("model_path"),
+        "process_holders": holders,
+        "weights_bytes": row.get("weights_bytes"),
+        "est_weights_bytes": row.get("weights_bytes"),
+        "held_bytes": row.get("held_bytes"),
+        "shared_weights": False,
+    }
+
+
+def _local_embedding_residency_result(
+    *,
+    operation: str,
+    provider: Optional[str],
+    model: Optional[str],
+    source: str,
+) -> Dict[str, Any]:
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    if provider_s and provider_s != "huggingface" and operation != "list_loaded":
+        # Ollama / LM Studio / OpenAI-compatible embedders hold nothing here.
+        return _model_residency_unsupported_payload(
+            operation=operation, task="embedding", provider=provider_s, model=model_s,
+            error=f"{provider_s} serves its embedding models from its own server; nothing is held in this process",
+        )
+    if operation == "list_loaded":
+        records = [
+            _embedding_residency_record(row, name, source=source)
+            for row in _embedding_process_rows()
+            for name in [str(n) for n in (row.get("models") or []) if str(n).strip()]
+            if (not model_s or name == model_s) and provider_s in ("", "huggingface")
+        ]
+        return _with_local_model_residency_summary(
+            {"ok": True, "supported": True, "operation": "list_loaded", "task": "embedding", "models": records,
+             "diagnostics": {"source": source, "capability": "embeddings", "count": len(records)}},
+            operation="list_loaded",
+            models=records,
+        )
+    if operation == "unload":
+        if not model_s:
+            return {"ok": False, "success": False, "supported": True, "operation": "unload", "task": "embedding",
+                    "unloaded": False, "error": "embedding unload requires a model (or its local:embedding: runtime_id)",
+                    "warnings": ["embedding unload requires a model"], "affected_models": []}
+        held = [r for r in _embedding_process_rows() if model_s in [str(n) for n in (r.get("models") or [])]]
+        report = _embedding_process_eject(model_s)
+        ok = bool(report.get("ok"))
+        runtime = {
+            "task": "embedding", "provider": "huggingface", "model": model_s, "backend": "embeddings",
+            "runtime_id": f"local:embedding:huggingface:{model_s}", "loaded": not ok, "resident": not ok,
+            "state": "unloaded" if ok else "provider_loaded", "isolation": "in_process", "source": source,
+        }
+        error: Optional[str] = None
+        if not ok:
+            refused = report.get("holders_refused") or []
+            residual = report.get("residual") or {}
+            error = (f"{len(refused)} embedder(s) refused to unload {model_s}: {refused[0].get('error')}" if refused
+                     else f"{model_s} is still resident in this process after the eject "
+                          f"({int(residual.get('holders') or 0)} holder(s), {int(residual.get('held_bytes') or 0)} bytes held)")
+        result = {
+            "ok": ok,
+            "supported": True,
+            "operation": "unload",
+            "task": "embedding",
+            "provider": "huggingface",
+            "model": model_s,
+            "unloaded": bool(ok and held),
+            "runtime": runtime,
+            "process_eject": _jsonable({k: v for k, v in report.items() if k not in ("residual",)}),
+            "diagnostics": {"source": source, "capability": "embeddings", "was_resident": bool(held)},
+        }
+        if error:
+            result["error"] = error
+            result["warnings"] = [error]
+        return _with_local_model_residency_summary(
+            result, operation="unload", runtime=runtime,
+            action="unloaded" if (ok and held) else "not_unloaded", changed=bool(ok and held),
+        )
+    return _model_residency_unsupported_payload(
+        operation=operation, task="embedding", provider=provider_s, model=model_s,
+        error="embedding models load on first use (an embedding request); there is no explicit preload",
+    )
+
+
+def _parse_local_residency_runtime_id(runtime_id: Any) -> Optional[Tuple[str, str, str]]:
+    """`local:<task>:<provider>:<model>` -> (task, provider, model), the form
+    every local residency row carries when its backend gives no id of its own.
+    The model may contain ':' (`gemma3:1b`); an `endpoint:<name>` provider
+    keeps its colon. None for any other id."""
+    raw = str(runtime_id or "").strip()
+    if not raw.startswith("local:"):
+        return None
+    parts = raw.split(":", 3)
+    if len(parts) < 4:
+        return None
+    _, task, provider, rest = parts
+    provider = provider.strip().lower()
+    if provider == "endpoint" and ":" in rest:
+        name, rest = rest.split(":", 1)
+        provider = f"endpoint:{name.strip()}"
+    task_s = _normalize_residency_task(task)
+    if not task_s or not provider or not rest.strip():
+        return None
+    return task_s, provider, rest.strip()
+
+
+def _provider_inflight_count(instance: Any) -> int:
+    """Generations currently running on a provider instance (core's
+    `InflightGenerations`); 0 when the provider does not track them."""
+    try:
+        registry = instance._inflight_generations()
+        return int(registry.active())
+    except Exception:
+        return 0
+
+
+def _resolve_unload_selector(
+    holder: Any,
+    *,
+    task: Optional[str],
+    runtime_id: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+) -> Tuple[str, str, str, Optional[str]]:
+    """(task, provider, model, runtime_id_for_capability) for an unload.
+
+    The console, tray and CLI eject a row by sending only its `runtime_id`.
+    Every task is addressed: `local:<task>:<provider>:<model>` is parsed
+    generically (a TTS / STT / image / embedding row, not only text), and a
+    backend's own id (abstractvision's `diffusers/<model>`...) is looked up in
+    the current listing. A synthesized `local:` id is not passed on to the
+    capability plugin (it never issued it); a backend's own id is."""
+    explicit_task = str(task or "").strip()
+    task_s = _normalize_residency_task(task)
+    provider_s = str(provider or "").strip().lower()
+    model_s = str(model or "").strip()
+    rid = str(runtime_id or "").strip() or None
+    parsed = _parse_local_residency_runtime_id(rid)
+    if parsed is not None:
+        p_task, p_provider, p_model = parsed
+        if not explicit_task:
+            task_s = p_task
+        if task_s == p_task and (not provider_s or not model_s):
+            provider_s, model_s = provider_s or p_provider, model_s or p_model
+        return task_s, provider_s, model_s, None
+    if rid and not explicit_task and (not provider_s or not model_s):
+        lister = getattr(holder, "list_model_residency", None)
+        listing = lister() if callable(lister) else {}
+        for row in list((listing or {}).get("models") or []):
+            if not isinstance(row, dict):
+                continue
+            if rid in (str(row.get("runtime_id") or ""), str(row.get("load_id") or "")):
+                task_s = _normalize_residency_task(row.get("task"))
+                provider_s = provider_s or str(row.get("provider") or "").strip().lower()
+                model_s = model_s or str(row.get("model") or "").strip()
+                break
+    return task_s, provider_s, model_s, rid
+
+
+# Providers whose weights live IN THIS PROCESS and can therefore be held by
+# instances no runtime pool reaches. Both have a core process-level truth.
+_PROCESS_RESIDENCY_PROVIDERS = ("mlx", "huggingface")
+
+
+def _process_residency_rows_for(provider: str) -> List[Dict[str, Any]]:
+    provider_s = str(provider or "").strip().lower()
+    if provider_s == "mlx":
+        return _mlx_process_residency_rows()
+    if provider_s == "huggingface":
+        return _hf_process_residency_rows()
+    return []
+
+
+def _process_eject_for(provider: str, model: str) -> Optional[Dict[str, Any]]:
+    provider_s = str(provider or "").strip().lower()
+    if provider_s == "mlx":
+        return _mlx_process_eject(model)
+    if provider_s == "huggingface":
+        return _hf_process_eject(model)
+    return None
+
+
 def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
     extras: Dict[str, Any] = {
         "process_holders": int(row.get("holders") or 0),
@@ -3875,26 +4153,30 @@ def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
     return extras
 
 
-def _merge_mlx_process_residency_into_text_records(
+def _merge_process_residency_into_text_records(
     records: List[Dict[str, Any]],
     *,
+    lane_provider: str,
     provider: Optional[str] = None,
     model: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Fold the process-level MLX residency into a text-residency listing, in
-    place. A pool row whose own instance says "not loaded" while the weights
-    are still alive in the process becomes `resident: True` with
-    `provider_state: "resident_via_other_holders"`; a model no pool row names
-    (held only by unreachable holders) is APPENDED, tagged
-    `source: "abstractcore.provider.mlx.process"`. Either way the listing can
-    no longer say "nothing loaded" over gigabytes of live MLX buffers."""
+    """Fold the process-level residency of one in-process backend (`mlx` or
+    `huggingface`) into a text-residency listing, in place. A pool row whose
+    own instance says "not loaded" while the weights are still alive in the
+    process becomes `resident: True` with `provider_state:
+    "resident_via_other_holders"`; a model no pool row names (held only by
+    unreachable holders) is APPENDED, tagged
+    `source: "abstractcore.provider.<backend>.process"`. Either way the listing
+    can no longer say "nothing loaded" over gigabytes of live buffers."""
+    lane = str(lane_provider or "").strip().lower()
     provider_filter = str(provider or "").strip().lower()
-    if provider_filter and provider_filter != "mlx":
+    if provider_filter and provider_filter != lane:
         return records
     model_filter = str(model or "").strip()
-    rows = _mlx_process_residency_rows()
+    rows = _process_residency_rows_for(lane)
     if not rows:
         return records
+    copies_note = " (each a full copy of the weights)" if lane == "huggingface" else ""
     for row in rows:
         names = [str(n) for n in (row.get("models") or []) if str(n).strip()]
         if not names:
@@ -3908,14 +4190,14 @@ def _merge_mlx_process_residency_into_text_records(
                     r
                     for r in records
                     if isinstance(r, dict)
-                    and str(r.get("provider") or "").strip().lower() == "mlx"
+                    and str(r.get("provider") or "").strip().lower() == lane
                     and str(r.get("model") or "").strip() == name
                 ),
                 None,
             )
             if existing is None:
                 record = _local_residency_record(
-                    provider="mlx",
+                    provider=lane,
                     model=name,
                     default=False,
                     runtime_cached=False,
@@ -3928,13 +4210,13 @@ def _merge_mlx_process_residency_into_text_records(
                         "state": "provider_loaded",
                         "provider_residency_verified": True,
                         "provider_resident": True,
-                        "provider_residency_source": "abstractcore.provider.mlx.process",
+                        "provider_residency_source": f"abstractcore.provider.{lane}.process",
                         "provider_state": "resident_via_other_holders",
-                        "source": "abstractcore.provider.mlx.process",
+                        "source": f"abstractcore.provider.{lane}.process",
                         "lockable": False,
                         "warnings": [
                             f"held in memory by {extras['process_holders']} provider instance(s) outside this "
-                            "runtime's pool; unloading it ejects every holder in the process"
+                            f"runtime's pool{copies_note}; unloading it ejects every holder in the process"
                         ],
                         **extras,
                     }
@@ -3956,12 +4238,30 @@ def _merge_mlx_process_residency_into_text_records(
                 if isinstance(existing["warnings"], list):
                     existing["warnings"].append(
                         f"this runtime's own instance released the weights, but {extras['process_holders']} other "
-                        "provider instance(s) in the process still hold them; unloading ejects every holder"
+                        f"provider instance(s) in the process still hold them{copies_note}; unloading ejects every holder"
                     )
             for key, value in extras.items():
                 if existing.get(key) is None:
                     existing[key] = value
     return records
+
+
+def _merge_mlx_process_residency_into_text_records(
+    records: List[Dict[str, Any]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    return _merge_process_residency_into_text_records(records, lane_provider="mlx", provider=provider, model=model)
+
+
+def _merge_hf_process_residency_into_text_records(
+    records: List[Dict[str, Any]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    return _merge_process_residency_into_text_records(records, lane_provider="huggingface", provider=provider, model=model)
 
 
 def _local_memory_snapshot() -> Dict[str, Any]:
@@ -4923,9 +5223,12 @@ def _local_capability_residency_target(core: Any, task: str) -> Tuple[Any, str]:
         return getattr(core, "voice", None), "voice"
     if task_s == "stt":
         return getattr(core, "audio", None), "audio"
-    if task_s == "music_generation":
+    if task_s in {"music_generation", "text_to_audio"}:
+        # abstractmusic serves text_to_audio (sound effects) beside music.
         return getattr(core, "music", None), "music"
-    if task_s in {"image_generation", "image_to_image"}:
+    if task_s in {"image_generation", "image_to_image", "image_upscale", "video_generation", "text_to_video",
+                  "image_to_video"}:
+        # abstractvision's facade owns image, upscale AND video residency.
         return getattr(core, "vision", None), "vision"
     raise ValueError(f"Unsupported local capability residency task: {task!r}")
 
@@ -5072,6 +5375,15 @@ def _local_capability_residency_result(
     task_s = _normalize_residency_task(task)
     provider_s = str(provider or "").strip().lower()
     model_s = str(model or "").strip()
+    if task_s == "embedding":
+        try:
+            return _local_embedding_residency_result(
+                operation=operation, provider=provider_s, model=model_s, source=source,
+            )
+        except Exception as exc:  # noqa: BLE001 - an incompatible core is reported, never read as "none"
+            return _model_residency_unsupported_payload(
+                operation=operation, task=task_s, provider=provider_s, model=model_s, error=str(exc),
+            )
     try:
         target, capability = _local_capability_residency_target(_local_capability_residency_core(holder), task_s)
     except Exception as exc:  # noqa: BLE001
@@ -7005,6 +7317,7 @@ class LocalAbstractCoreLLMClient:
             records = [record]
         records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
         records = _merge_mlx_process_residency_into_text_records(records, provider=provider, model=model)
+        records = _merge_hf_process_residency_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -7146,23 +7459,30 @@ class LocalAbstractCoreLLMClient:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         _ = kwargs
-        task_s = _normalize_residency_task(task)
+        task_s, provider_sel, model_sel, capability_runtime_id = _resolve_unload_selector(
+            self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+        )
         if task_s != "text_generation":
-            provider_s = str(provider or "").strip().lower()
-            model_s = str(model or "").strip()
             return _local_capability_residency_result(
                 self,
                 operation="unload",
                 task=task_s,
-                provider=provider_s,
-                model=model_s,
+                provider=provider_sel,
+                model=model_sel,
                 options=options,
-                runtime_id=runtime_id,
+                runtime_id=capability_runtime_id,
                 kwargs=dict(kwargs or {}),
                 source="abstractruntime.local",
             )
-        provider_s = str(provider or self._provider or "").strip().lower()
-        model_s = str(model or self._model or "").strip()
+        if capability_runtime_id and not (provider_sel and model_sel):
+            # A runtime_id this client does not know must never fall back to
+            # the default model (it would eject a model nobody addressed).
+            message = f"no local model residency row has runtime_id {capability_runtime_id!r}"
+            return {"ok": False, "success": False, "supported": True, "operation": "unload",
+                    "task": "text_generation", "unloaded": False, "error": message, "warnings": [message],
+                    "affected_models": []}
+        provider_s = str(provider_sel or self._provider or "").strip().lower()
+        model_s = str(model_sel or self._model or "").strip()
         locked_pairs = _local_locked_residency_pairs(self)
         force_unlock_pending = False
         if (provider_s, model_s) in locked_pairs:
@@ -7234,10 +7554,10 @@ class LocalAbstractCoreLLMClient:
         # twin): this client's instance released its references; every other
         # holder in the process is unloaded by core's `eject_model`.
         process_eject: Optional[Dict[str, Any]] = None
-        if provider_s == "mlx" and unload_error is None:
-            process_eject = _mlx_process_eject(model_s)
+        if provider_s in _PROCESS_RESIDENCY_PROVIDERS and unload_error is None:
+            process_eject = _process_eject_for(provider_s, model_s)
             if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
-                unload_error = f"process-wide MLX eject failed: {process_eject['error']}"
+                unload_error = f"process-wide {provider_s} eject failed: {process_eject['error']}"
 
         record = _local_residency_record(
             provider=self._provider,
@@ -9257,7 +9577,9 @@ class MultiLocalAbstractCoreLLMClient:
         # flag cleared so a re-lock binds the rebuilt client.
         locked_pairs = _local_locked_residency_pairs(self)
         kept_clients: Dict[Tuple[str, str], LocalAbstractCoreLLMClient] = {}
-        for pool_key, pool_client in dict(getattr(self, "_clients", {}) or {}).items():
+        previous_clients = dict(getattr(self, "_clients", {}) or {})
+        previous_overrides = dict(getattr(self, "_override_clients", {}) or {}) if capability_changed else {}
+        for pool_key, pool_client in previous_clients.items():
             if pool_key not in locked_pairs:
                 continue
             if pool_key == (provider_s, model_s):
@@ -9281,13 +9603,109 @@ class MultiLocalAbstractCoreLLMClient:
                     f"🔒 override eviction skipped (locked): {override_key[0]}/{override_key[1]}"
                 )
             self._override_clients = kept_overrides
-        self._capability_residency_core = None
+        if capability_changed:
+            # The capability routes changed: the residency core re-reads them.
+            # Its resident engines (TTS/STT/image/music) are unloaded first --
+            # dropping the core used to leave them in memory, unreachable.
+            self._retire_capability_residency_core()
         if provider_s or model_s:
             self._default_client = self._get_client(provider_s, model_s)
         else:
             self._default_client = None
         self._llm = getattr(self._default_client, "_llm", None)
+        # CLEAN SWITCH (M1 finding, 2026-09-25): evicting a pool entry only
+        # dropped a Python reference. An in-process model (MLX / HuggingFace)
+        # the new pool no longer uses stayed resident -- 17.36 GB measured
+        # after a console default switch -- until someone ejected it by hand.
+        dropped: List[Tuple[Tuple[str, str], Any]] = [
+            (key, getattr(client, "_llm", None)) for key, client in previous_clients.items()
+            if self._clients.get(key) is not client
+        ]
+        dropped.extend(
+            ((key[0], key[1]), getattr(client, "_llm", None)) for key, client in previous_overrides.items()
+            if self._override_clients.get(key) is not client
+        )
+        del previous_clients, previous_overrides
+        self._eject_models_dropped_by_switch(dropped)
         return True
+
+    def _pairs_still_in_use(self) -> set:
+        used = set(getattr(self, "_clients", {}) or {})
+        used |= {(k[0], k[1]) for k in (getattr(self, "_override_clients", {}) or {})}
+        used |= set(_local_locked_residency_pairs(self))
+        if getattr(self, "_default_provider", None) or getattr(self, "_default_model", None):
+            used.add((str(self._default_provider or ""), str(self._default_model or "")))
+        return used
+
+    def _eject_models_dropped_by_switch(self, dropped: List[Tuple[Tuple[str, str], Any]]) -> None:
+        """Eject, process-wide, every in-process model a default switch dropped
+        from the pool that nothing in the pool still uses (unlocked by
+        construction: locked pairs survive the eviction). A model still
+        generating on a dropped instance is ejected when that generation ends
+        -- a switch never cancels a running call. Reports land in
+        `self._last_switch_ejects` and the log."""
+        by_pair: Dict[Tuple[str, str], List[Any]] = {}
+        still_used = self._pairs_still_in_use()
+        for (provider_s, model_s), instance in dropped:
+            if str(provider_s) not in _PROCESS_RESIDENCY_PROVIDERS or (provider_s, model_s) in still_used:
+                continue
+            by_pair.setdefault((provider_s, model_s), []).append(instance)
+        reports: Dict[str, Any] = {}
+        self._last_switch_ejects = reports
+        for (provider_s, model_s), instances in by_pair.items():
+            busy = [i for i in instances if i is not None and _provider_inflight_count(i) > 0]
+            label = f"{provider_s}/{model_s}"
+            if busy:
+                reports[label] = {"deferred": True, "reason": "a generation is still running on it"}
+                logger.info(f"default switch: {label} is still generating; it is ejected when that call ends")
+                threading.Thread(
+                    target=self._eject_after_inflight,
+                    args=(provider_s, model_s, [weakref.ref(i) for i in busy], reports),
+                    name=f"switch-eject:{label}",
+                    daemon=True,
+                ).start()
+                continue
+            reports[label] = self._eject_dropped_pair(provider_s, model_s)
+
+    def _eject_dropped_pair(self, provider_s: str, model_s: str) -> Dict[str, Any]:
+        label = f"{provider_s}/{model_s}"
+        if (provider_s, model_s) in self._pairs_still_in_use():
+            return {"skipped": True, "reason": "back in use"}
+        report = _process_eject_for(provider_s, model_s) or {"ok": True, "holders_found": 0}
+        if report.get("ok") is False:
+            logger.warning(f"default switch: {label} is still resident after the eject: {report.get('error') or report.get('residual')}")
+        else:
+            logger.info(
+                f"default switch: ejected {label} from {int(report.get('holders_found') or 0)} holder(s) "
+                "no pool entry uses any more"
+            )
+        return report
+
+    def _eject_after_inflight(self, provider_s: str, model_s: str, refs: List[Any], reports: Dict[str, Any]) -> None:
+        while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
+            time.sleep(0.5)
+        reports[f"{provider_s}/{model_s}"] = self._eject_dropped_pair(provider_s, model_s)
+
+    def _retire_capability_residency_core(self) -> None:
+        core = getattr(self, "_capability_residency_core", None)
+        self._capability_residency_core = None
+        if core is None:
+            return
+        for facade_name in ("vision", "voice", "audio", "music"):
+            try:
+                facade = getattr(core, facade_name, None)
+                lister = getattr(facade, "list_resident_models", None) or getattr(facade, "list_loaded_models", None)
+                unloader = getattr(facade, "unload_resident_model", None)
+                if not callable(lister) or not callable(unloader):
+                    continue
+                for record in list(lister({}) or []):
+                    if not isinstance(record, dict) or record.get("resident") is False:
+                        continue
+                    selector = {k: record.get(k) for k in ("task", "provider", "model", "load_id") if record.get(k)}
+                    unloader(selector)
+                    logger.info(f"capability routes changed: unloaded {facade_name} model {record.get('model')}")
+            except Exception as exc:  # noqa: BLE001 - one facade must not keep the others resident
+                logger.warning(f"capability routes changed: could not unload the {facade_name} models: {exc}")
 
     def set_capability_defaults(self, capability_defaults: Optional[Any]) -> bool:
         """Refresh the non-text capability routes (image/voice/music/...) in place.
@@ -9563,6 +9981,7 @@ class MultiLocalAbstractCoreLLMClient:
             )
         records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
         records = _merge_mlx_process_residency_into_text_records(records, provider=provider, model=model)
+        records = _merge_hf_process_residency_into_text_records(records, provider=provider, model=model)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,
@@ -9732,18 +10151,9 @@ class MultiLocalAbstractCoreLLMClient:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         _ = kwargs
-        task_s = _normalize_residency_task(task)
-        provider_s = str(provider or "").strip().lower()
-        model_s = str(model or "").strip()
-        if not provider_s or not model_s:
-            raw_runtime_id = str(runtime_id or "").strip()
-            prefix = "local:text_generation:"
-            if raw_runtime_id.startswith(prefix):
-                rest = raw_runtime_id[len(prefix) :]
-                if ":" in rest:
-                    provider_s, model_s = rest.split(":", 1)
-                    provider_s = provider_s.strip().lower()
-                    model_s = model_s.strip()
+        task_s, provider_s, model_s, capability_runtime_id = _resolve_unload_selector(
+            self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+        )
         if task_s != "text_generation":
             return _local_capability_residency_result(
                 self,
@@ -9752,7 +10162,7 @@ class MultiLocalAbstractCoreLLMClient:
                 provider=provider_s,
                 model=model_s,
                 options=options,
-                runtime_id=runtime_id,
+                runtime_id=capability_runtime_id,
                 kwargs=dict(kwargs or {}),
                 source="abstractruntime.multilocal",
             )
@@ -9832,20 +10242,20 @@ class MultiLocalAbstractCoreLLMClient:
                 changed=False,
             )
 
-        if client is None and provider_instance is None and provider_s == "mlx":
+        if client is None and provider_instance is None and provider_s in _PROCESS_RESIDENCY_PROVIDERS:
             # No pool client for this pair -- but the WEIGHTS may still be in
             # this process, held by instances this pool cannot reach (an
             # override client, a boot-time summarizer, an old runtime). That is
             # exactly the row the listing reports as
             # `resident_via_other_holders`; the operator's eject must free it.
             held_rows = [
-                row for row in _mlx_process_residency_rows()
+                row for row in _process_residency_rows_for(provider_s)
                 if model_s in [str(n) for n in (row.get("models") or [])]
             ]
             if held_rows:
-                process_eject = _mlx_process_eject(model_s)
+                process_eject = _process_eject_for(provider_s, model_s)
                 remaining = [
-                    row for row in _mlx_process_residency_rows()
+                    row for row in _process_residency_rows_for(provider_s)
                     if model_s in [str(n) for n in (row.get("models") or [])]
                 ]
                 record_after = _local_residency_record(
@@ -9856,7 +10266,7 @@ class MultiLocalAbstractCoreLLMClient:
                     include_provider_state=False,
                     lock_owner=self,
                 )
-                _merge_mlx_process_residency_into_text_records([record_after], provider="mlx", model=model_s)
+                _merge_process_residency_into_text_records([record_after], lane_provider=provider_s, provider=provider_s, model=model_s)
                 error: Optional[str] = None
                 if remaining:
                     error = (
@@ -9865,7 +10275,7 @@ class MultiLocalAbstractCoreLLMClient:
                         f"{int(remaining[0].get('held_bytes') or 0)} bytes held)"
                     )
                 elif isinstance(process_eject, dict) and process_eject.get("error"):
-                    error = f"process-wide MLX eject failed: {process_eject['error']}"
+                    error = f"process-wide {provider_s} eject failed: {process_eject['error']}"
                 result = {
                     "ok": error is None,
                     "supported": True,
@@ -9940,10 +10350,10 @@ class MultiLocalAbstractCoreLLMClient:
         # `eject_model` unloads every holder, collects, clears MLX's cache, and
         # reports what is still resident. Its report rides in the payload.
         process_eject: Optional[Dict[str, Any]] = None
-        if provider_s == "mlx" and unload_error is None:
-            process_eject = _mlx_process_eject(model_s)
+        if provider_s in _PROCESS_RESIDENCY_PROVIDERS and unload_error is None:
+            process_eject = _process_eject_for(provider_s, model_s)
             if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
-                unload_error = f"process-wide MLX eject failed: {process_eject['error']}"
+                unload_error = f"process-wide {provider_s} eject failed: {process_eject['error']}"
 
         record_after_unload = _local_residency_record(
             provider=provider_s,

@@ -57,6 +57,22 @@ class AbstractCoreEmbeddingsClient:
     def model(self) -> str:
         return self._model
 
+    def residency(self) -> dict[str, Any]:
+        """Core-owned truth for the in-process embedding weights (device, bytes)."""
+        method = getattr(self._mgr, "get_residency", None)
+        if not callable(method):
+            return {"task": "embedding", "provider": self._provider, "model": self._model, "loaded": None,
+                    "state": "unknown", "source": "abstractruntime.embeddings"}
+        return dict(method())
+
+    def unload(self) -> dict[str, Any]:
+        """Eject the in-process embedding model (weights, memo, MPS pool).
+        Raises when the manager has no eject (an older core)."""
+        method = getattr(self._mgr, "unload", None)
+        if not callable(method):
+            raise RuntimeError("AbstractCore EmbeddingManager exposes no unload(); upgrade abstractcore.")
+        return dict(method())
+
     def embed_texts(self, texts: Sequence[str]) -> EmbeddingsResult:
         items = [str(t or "") for t in texts]
         embeddings = self._mgr.embed_batch(items)

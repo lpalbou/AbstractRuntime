@@ -13,7 +13,7 @@ It is generated from `llms.txt` in first-link order, de-duplicated, with repo-ro
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.4.35 • **Python:** 3.10+
+**Version:** 0.4.36 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -41,7 +41,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.15.1 or newer with remote provider,
+The base install includes AbstractCore 2.15.3 or newer with remote provider,
 tool, vision, voice, audio, and music integration, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -105,7 +105,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.4.35)
+## What’s included (v0.4.36)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -239,7 +239,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.15.1 or newer with remote provider, vision,
+This installs AbstractCore 2.15.3 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -598,7 +598,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.15.1 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.15.3 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -688,7 +688,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 # AbstractRuntime — Architecture
 
 > Updated: 2026-09-25
-> Version: 0.4.35
+> Version: 0.4.36
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1509,7 +1509,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.15.1`.
+- The current AbstractCore integration expects `abstractcore>=2.15.3`.
 
 Verify:
 
@@ -1984,7 +1984,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.15.1 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.15.3 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -2638,8 +2638,8 @@ result = facade.clear_session_prompt_caches("support-session-1")
 ## Models, engines and host jobs (config facade)
 
 AbstractCore implements the model browser, the local-engine installer and a
-host job registry. These passthroughs need AbstractCore 2.15.1 (the
-base-install floor), the first release that records who cancelled a job.
+host job registry. These passthroughs need AbstractCore 2.15.3 (the
+base-install floor; 2.15.1 is the first release that records who cancelled a job).
 `abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as `abstractcore models|engines … --json` and the `/acore/*` routes
@@ -4043,6 +4043,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.36] - 2026-09-25
+
+### Fixed
+
+- Unloading a local MLX model through the runtime (`model_residency` unload, on
+  a single client or the multi-model pool) now frees it from every holder in
+  the process, not only from the runtime's own instance. Before, the weights
+  could stay in memory when another part of the process still held the model
+  (for example a client created with a per-request override, a chat summarizer
+  built at startup, or a runtime left over after a bundle reload), and the
+  unload still reported success. The unload result now includes a
+  `process_eject` report and names what, if anything, is still held.
+- Model residency listings now show MLX models the process still holds, even
+  when the runtime's own pool no longer references them
+  (`provider_state: "resident_via_other_holders"`). Such a model can be
+  unloaded from the listing like any other.
+- Compatibility: AbstractRuntime 0.4.36 requires AbstractCore 2.15.3 or newer
+  (was 2.15.1) in the base install and in the `apple` and `gpu` extras, and
+  `models_engines_support()` now reports 2.15.3 as `required`. Upgrading
+  AbstractRuntime upgrades AbstractCore accordingly; if you pin AbstractCore
+  yourself, raise the pin to 2.15.3.
+
 ## [0.4.35] - 2026-09-25
 
 ### Fixed
@@ -4924,7 +4946,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...HEAD
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.36...HEAD
+[0.4.36]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...v0.4.36
 [0.4.35]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...v0.4.35
 [0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33

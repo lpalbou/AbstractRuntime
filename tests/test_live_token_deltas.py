@@ -1444,3 +1444,62 @@ def test_reprobe_counter_is_thread_safe(monkeypatch) -> None:
         th.join()
     assert client._stream_usage_refused_calls == 2000
     assert results.count(None) == 200  # exactly one re-probe per ten calls
+
+
+# ---------------------------------------------------------------------------
+# Ordering: every live fragment precedes the call's durable record
+# ---------------------------------------------------------------------------
+
+
+def test_the_last_batched_fragment_is_sent_before_the_record_and_nothing_after() -> None:
+    timeline: List[tuple] = []
+    held: Dict[str, Any] = {}
+
+    class _RecordingLedger(InMemoryLedgerStore):
+        def append(self, record):  # type: ignore[override]
+            out = super().append(record)
+            rec = record if isinstance(record, dict) else getattr(record, "to_dict", lambda: {})()
+            status = getattr(record, "status", None)
+            status = getattr(status, "value", status) or rec.get("status")
+            effect = getattr(record, "effect", None) or rec.get("effect") or {}
+            etype = effect.get("type") if isinstance(effect, dict) else getattr(getattr(effect, "type", None), "value", None)
+            timeline.append(("record", etype, status))
+            return out
+
+    def llm_handler(run, effect, default_next_node):
+        del run, effect, default_next_node
+        cb = current_effect_delta_callback()
+        held["cb"] = cb
+        cb("Hello", "content")  # first fragment: sent at once
+        cb(" world", "content")  # inside the 40 ms window: still batched on return
+        return EffectOutcome.completed({"content": "Hello world"})
+
+    ledger = _RecordingLedger()
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=ledger, effect_handlers={EffectType.LLM_CALL: llm_handler})
+    rt.set_live_delta_sink(lambda e: timeline.append((e["kind"], e.get("text"), e["seq"])))
+    wf = _llm_workflow()
+    run_id = rt.start(workflow=wf, vars={"_runtime": {"stream": True}})
+    assert rt.tick(workflow=wf, run_id=run_id).status.value == "completed"
+
+    # A fragment arriving after the call returned (a late provider thread) is refused.
+    held["cb"]("late", "content")
+    time.sleep(0.08)  # longer than the batch window: a stray timer would have fired
+
+    record_at = next(i for i, t in enumerate(timeline) if t[0] == "record" and t[1] == "llm_call" and t[2] == "completed")
+    delta_positions = [i for i, t in enumerate(timeline) if t[0] == "llm.delta"]
+    end_at = next(i for i, t in enumerate(timeline) if t[0] == "llm.delta_end")
+    assert delta_positions and max(delta_positions) < record_at < end_at
+    assert "".join(t[1] for t in timeline if t[0] == "llm.delta") == "Hello world"
+    assert [t[2] for t in timeline if t[0].startswith("llm.")] == [0, 1, 2]  # seq: deltas, then end
+
+
+def test_seal_flushes_and_refuses_more_text_but_allows_the_end() -> None:
+    events: List[Dict[str, Any]] = []
+    em = _emitter(events, _Clock(), flush_interval_s=10.0)
+    em("a")
+    em("b")  # batched
+    em.seal()
+    assert [e["text"] for e in events] == ["a", "b"]
+    em("c")
+    em.end("completed")
+    assert [e["kind"] for e in events] == ["llm.delta", "llm.delta", "llm.delta_end"]

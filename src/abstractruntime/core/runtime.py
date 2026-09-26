@@ -3529,6 +3529,12 @@ class Runtime:
                             retryable=False,
                         )
 
+                # Every live text of this attempt goes out BEFORE its durable
+                # record: flush the batch now and refuse late fragments (a
+                # provider thread or the 40 ms timer), so no delta ever
+                # follows the final answer. `delta_end` still comes after.
+                if delta_emitter is not None:
+                    delta_emitter.seal()
                 if outcome.status != "completed" and (inflight.cancelled or outcome.status == "cancelled"):
                     # Whatever the provider raised on its way out (a typed cancel, a
                     # closed stream, a native `cancelled` code), an attempt whose

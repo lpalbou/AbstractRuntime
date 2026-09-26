@@ -109,6 +109,7 @@ class LiveDeltaEmitter:
         self._last_emit: Optional[float] = None
         self._timer: Optional[threading.Timer] = None
         self._ended = False
+        self._sealed = False
         self.emitted_deltas = 0
         self.unavailable_detail: Optional[str] = None
         # A gap recorded on the durable record only (the live view is not told
@@ -123,7 +124,7 @@ class LiveDeltaEmitter:
         if channel not in DELTA_CHANNELS:
             raise ValueError(f"unknown live delta channel {channel!r}; expected one of {DELTA_CHANNELS}")
         with self._lock:
-            if self._ended:
+            if self._ended or self._sealed:
                 return
             if self._pending_channel is not None and self._pending_channel != channel:
                 self._flush_locked()
@@ -161,6 +162,17 @@ class LiveDeltaEmitter:
         with self._lock:
             if self.record_only_detail is None:
                 self.record_only_detail = detail
+
+    def seal(self) -> None:
+        """Send pending text now and accept no more text for this call.
+
+        Called by the runtime right before the call's durable record is
+        written, so every live fragment precedes the final answer; only
+        `end()` may follow.
+        """
+        with self._lock:
+            self._flush_locked()
+            self._sealed = True
 
     def flush(self) -> None:
         with self._lock:

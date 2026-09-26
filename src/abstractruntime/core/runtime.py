@@ -28,7 +28,9 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
+from contextlib import contextmanager
 
 from .config import RuntimeConfig
 from .models import (
@@ -474,6 +476,42 @@ NODE_TRACE_ENTRY_INLINE_CAP = 32 * 1024
 NODE_TRACE_LEAF_CAP = 4 * 1024
 
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
+
+
+class _PerRunLocks:
+    """Process-wide per-run locks (one RLock per run id, dropped when unused).
+
+    `Runtime.resume` checks "this run is WAITING on this key" and commits the
+    resume later (after payload merging, tool execution for approvals, ledger
+    appends). Without a lock two callers can both pass the check and both
+    resume the same wait. Process-wide rather than per-Runtime because hosts
+    build several Runtime objects over one store (the gateway does).
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: Dict[str, list] = {}
+
+    @contextmanager
+    def hold(self, key: str):
+        with self._guard:
+            entry = self._locks.get(key)
+            if entry is None:
+                entry = [threading.RLock(), 0]
+                self._locks[key] = entry
+            entry[1] += 1
+        entry[0].acquire()
+        try:
+            yield
+        finally:
+            entry[0].release()
+            with self._guard:
+                entry[1] -= 1
+                if entry[1] <= 0:
+                    self._locks.pop(key, None)
+
+
+_RESUME_LOCKS = _PerRunLocks()
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -2755,6 +2793,29 @@ class Runtime:
         payload: Dict[str, Any],
         max_steps: int = 100,
     ) -> RunState:
+        # A wait is resumed at most once. The check below and the save that
+        # commits the resume run under one per-run lock, so a racing second
+        # caller (2026-09-26: the gateway's tick-thread parent resume and its
+        # repair pass both resumed one `subworkflow:` wait, and the parent ran
+        # its Agent node twice) re-reads the committed state and is refused
+        # as "Run is not waiting". The tick after the commit runs unlocked.
+        with _RESUME_LOCKS.hold(str(run_id)):
+            run, finished = self._resume_commit(
+                workflow=workflow, run_id=run_id, wait_key=wait_key, payload=payload
+            )
+        if finished or max_steps <= 0:
+            return run
+        return self.tick(workflow=workflow, run_id=run_id, max_steps=max_steps)
+
+    def _resume_commit(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        run_id: str,
+        wait_key: Optional[str],
+        payload: Dict[str, Any],
+    ) -> tuple[RunState, bool]:
+        """Validate and persist one resume; returns (run, finished)."""
         run = self.get_state(run_id)
         if _is_paused_run_vars(run.vars):
             raise ValueError("Run is paused")
@@ -3139,15 +3200,12 @@ class Runtime:
             )
             self._run_store.save(run)
             self._append_terminal_status_event(run)
-            return run
+            return run, True
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)
         run.updated_at = utc_now_iso()
         self._run_store.save(run)
-
-        if max_steps <= 0:
-            return run
-        return self.tick(workflow=workflow, run_id=run_id, max_steps=max_steps)
+        return run, False
 
     # ---------------------------------------------------------------------
     # Internals

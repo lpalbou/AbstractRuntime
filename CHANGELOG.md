@@ -5,6 +5,15 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A wait is resumed at most once. Two callers resuming the same wait at the same moment could both
+  succeed, and the run then executed the resumed node twice (seen as an Agent node starting a
+  second full agent loop after its child finished). The second caller is now refused with
+  "Run is not waiting", as it already was when the calls did not overlap.
+
 ## [0.5.0] - 2026-09-26
 
 ### Fixed

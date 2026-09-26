@@ -22,6 +22,9 @@ python -m pip install -e ".[test,docs]"
 python -m pytest -q
 ```
 
+Inside the AbstractFramework workspace, prefer `python -P -m pytest tests -q`: `-P` keeps the current folder off
+`sys.path`, so a workspace folder named like a package (for example `abstractflow/`) cannot shadow it.
+
 If you cloned **only** this repo (without the AbstractFramework workspace), make sure the sibling packages above are importable (install them or clone them next to this repo) before running the full test suite.
 
 ## Repo map (source of truth)
@@ -55,6 +58,12 @@ When behavior changes, update:
 - `docs/getting-started.md` (onboarding examples)
 - `docs/architecture.md` (semantics/invariants)
 - `CHANGELOG.md` (user-visible changes)
+
+List every `docs/*.md` page in `docs/README.md`. Keep `llms.txt` (the hand-curated index) and
+`llms-full.txt` in step with the documentation in the same change. `llms-full.txt` is generated:
+run `python scripts/generate_llms_full.py` after editing any page it includes, and
+`python scripts/generate_llms_full.py --check` to confirm it is current (it exits 1 when the file
+is stale). Add a page to the script's `DOCUMENTS` list when it joins the core set.
 
 ## Releases
 

@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 28
+- Planned: 30
 - Proposed: 12
 - Completed: 34
 - Deprecated: 13
@@ -23,6 +23,15 @@ addition). [0846](completed/0846_mlx_instance_scheduling_and_execution_controls.
 repairs existing MLX instance scheduling and remote speculation/boolean-reasoning
 forwarding; it does not add another provider. Core's deferred backend/capability
 and pressure-eviction work is tracked separately by its planned 0848–0853.
+
+2026-09-26: counts reconciled to disk (30 planned). Added the Automations
+pair: [0847](planned/0847_automations_v1_controller_contracts_occurrences_triggers.md)
+(P1, v1: controller bundle, definition/state contracts, deterministic
+occurrence creation, trigger-source registry, session-turn selector, index
+queries) and [0848](planned/0848_automations_v2_external_event_inbox_and_run_triggers.md)
+(P2, planned after v1: durable external-event inbox, `event` and
+`run.finished`/`run.failed` sources with reconciliation). Umbrella:
+abstractframework backlog 0928.
 
 ## Topic tracks
 
@@ -43,6 +52,9 @@ and pressure-eviction work is tracked separately by its planned 0848–0853.
 
 ## Next recommended work
 
+0. `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md`
+   P1, leads the next minor wave (Automations v1); the gateway and apps
+   integrate against its contracts. `0848` (v2 external triggers) follows it.
 1. `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md`
    The keystone: kill-and-replay harness + ONE written crash-ordering
    invariant + the two ordering-inversion fixes. Every other track item is a
@@ -121,6 +133,8 @@ and pressure-eviction work is tracked separately by its planned 0848–0853.
 | 027* | `planned/027_quote_provenance_discipline.md` |
 | 028* | `planned/028_selective_artifact_rehydration.md` |
 | 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
+| 0847 | `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md` (P1, Automations v1) |
+| 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, planned after 0847) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

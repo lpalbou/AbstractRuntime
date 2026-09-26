@@ -1037,7 +1037,7 @@
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="counts">Counts<a class="headerlink" href="#counts" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Planned: 28</li>
+<li>Planned: 30</li>
 <li>Proposed: 12</li>
 <li>Completed: 34</li>
 <li>Deprecated: 13</li>
@@ -1048,6 +1048,14 @@ addition). <a href="completed/0846_mlx_instance_scheduling_and_execution_control
 repairs existing MLX instance scheduling and remote speculation/boolean-reasoning
 forwarding; it does not add another provider. Core's deferred backend/capability
 and pressure-eviction work is tracked separately by its planned 0848–0853.</p>
+<p>2026-09-26: counts reconciled to disk (30 planned). Added the Automations
+pair: <a href="planned/0847_automations_v1_controller_contracts_occurrences_triggers/">0847</a>
+(P1, v1: controller bundle, definition/state contracts, deterministic
+occurrence creation, trigger-source registry, session-turn selector, index
+queries) and <a href="planned/0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a>
+(P2, planned after v1: durable external-event inbox, <code>event</code> and
+<code>run.finished</code>/<code>run.failed</code> sources with reconciliation). Umbrella:
+abstractframework backlog 0928.</p>
 <h2 id="topic-tracks">Topic tracks<a class="headerlink" href="#topic-tracks" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>planned/runtime_systemic_reliability/</code> + <code>proposed/runtime_systemic_reliability/</code>
@@ -1067,6 +1075,9 @@ and pressure-eviction work is tracked separately by its planned 0848–0853.</p>
 </ul>
 <h2 id="next-recommended-work">Next recommended work<a class="headerlink" href="#next-recommended-work" title="Permanent link">&para;</a></h2>
 <ol>
+<li><code>planned/0847_automations_v1_controller_contracts_occurrences_triggers.md</code>
+   P1, leads the next minor wave (Automations v1); the gateway and apps
+   integrate against its contracts. <code>0848</code> (v2 external triggers) follows it.</li>
 <li><code>planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md</code>
    The keystone: kill-and-replay harness + ONE written crash-ordering
    invariant + the two ordering-inversion fixes. Every other track item is a
@@ -1284,6 +1295,14 @@ and pressure-eviction work is tracked separately by its planned 0848–0853.</p>
 <tr>
 <td>0070</td>
 <td><code>planned/0070_standalone_wui_browser_session_security_contract.md</code></td>
+</tr>
+<tr>
+<td>0847</td>
+<td><code>planned/0847_automations_v1_controller_contracts_occurrences_triggers.md</code> (P1, Automations v1)</td>
+</tr>
+<tr>
+<td>0848</td>
+<td><code>planned/0848_automations_v2_external_event_inbox_and_run_triggers.md</code> (P2, planned after 0847)</td>
 </tr>
 <tr>
 <td>0044</td>

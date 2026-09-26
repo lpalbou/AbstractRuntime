@@ -1404,6 +1404,8 @@
 <li>optional <code>step_gate()</code> is consulted at every step boundary; when it returns <code>False</code> the tick returns the persisted state and the run stays <code>RUNNING</code> (a later tick continues where it stopped)</li>
 <li><code>Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -&gt; RunState</code></li>
 <li>validates the <code>wait_key</code>, writes <code>payload</code> to <code>WaitState.result_key</code> (if set), and continues from <code>WaitState.resume_to_node</code></li>
+<li>a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises <code>StaleResumeError</code> (a <code>ValueError</code>), for example when another caller resumed it first</li>
+<li>the check and the commit run under a per-run lock, and tools approved with <code>{"approved": true}</code> execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused</li>
 <li><code>Runtime.get_state(run_id) -&gt; RunState</code> and <code>Runtime.get_ledger(run_id) -&gt; list[dict]</code></li>
 <li>host-facing read APIs for checkpoints and the append-only ledger</li>
 <li><code>Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -&gt; RunState</code></li>

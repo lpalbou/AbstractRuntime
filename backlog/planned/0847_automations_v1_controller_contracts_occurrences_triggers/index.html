@@ -1,0 +1,1714 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/0847_automations_v1_controller_contracts_occurrences_triggers/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>0847-abstractruntime: [FEATURE] Automations v1: controller bundle, definition/state contracts, deterministic occurrence creation, trigger-source registry, session-turn selector, index queries - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#0847-abstractruntime-feature-automations-v1-controller-bundle-definitionstate-contracts-deterministic-occurrence-creation-trigger-source-registry-session-turn-selector-index-queries" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              0847-abstractruntime: [FEATURE] Automations v1: controller bundle, definition/state contracts, deterministic occurrence creation, trigger-source registry, session-turn selector, index queries
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope and non-goals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope and non-goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-scope-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In scope (v1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out of scope (v1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contracts-copied-from-the-design-3-ae" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contracts (copied from the design, §3 A–E)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Contracts (copied from the design, §3 A–E)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-definitionstateledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A — Definition/state/ledger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b-attributioncreationdiscussion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B — Attribution/creation/discussion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#c-triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C — Triggers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#d-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        D — Controller
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        E — Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current code reality
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#seams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seams
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Seams">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-this-item-must-read-before-writing-owned-by-other-packages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this item must READ before writing (owned by other packages)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-other-packages-read-from-this-item-identifiers-owned-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What other packages read from this item (identifiers owned here)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acceptance criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies-and-adr-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependencies and ADR status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="0847-abstractruntime-feature-automations-v1-controller-bundle-definitionstate-contracts-deterministic-occurrence-creation-trigger-source-registry-session-turn-selector-index-queries">0847-abstractruntime: [FEATURE] Automations v1: controller bundle, definition/state contracts, deterministic occurrence creation, trigger-source registry, session-turn selector, index queries<a class="headerlink" href="#0847-abstractruntime-feature-automations-v1-controller-bundle-definitionstate-contracts-deterministic-occurrence-creation-trigger-source-registry-session-turn-selector-index-queries" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Created: 2026-09-26
+Status: Planned
+Type: feature
+Priority: P1 (leads the next minor wave; every other package's Automations work integrates against it)
+Labels: automations, triggers, durability, session-history, run-index
+Design: untracked/design/automations-PLAN.md (2026-09-26)</p>
+</blockquote>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
+<p>Make an Automation a runtime-native durable workflow. The automation IS a
+controller root run (<code>automation_id == controller root run_id</code>) executing one
+pinned, runtime-packaged VisualFlow bundle
+(<code>abstractframework.automation-controller@1.0.0</code>, flow <code>controller</code>). Each firing
+is a serial child run (an <em>occurrence</em>) created with a deterministic id, so a
+crash at any point around dispatch can never produce a duplicate or a lost
+occurrence. Triggers are pluggable <code>TriggerAdapter</code>s discovered through the
+entry-point group <code>abstractruntime.trigger_sources</code>; v1 ships <code>schedule@1</code> and
+<code>manual@1</code>. Commands (revise, pause, resume, run now, stop current, archive) are
+applied by one runtime function, <code>apply_automation_command</code>, under the same
+per-run serialization as <code>resume()</code>. One session-turn selector
+(<code>select_session_turns</code>) replaces the root-only history filters so Growing mode,
+occurrence transcripts and Discuss all read the same conversation. Run-index
+queries (<code>list_automations</code>, <code>latest_occurrence</code>, attribution filters on
+<code>list_run_index</code>) let hosts project automations without loading run payloads.
+Everything works from a bundle alone, without the gateway.</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>The operator's principles for the feature (design §1, verbatim):</p>
+<blockquote>
+<p><strong>Runtime-native.</strong> Automations execute as durable runtime workflows, with ordinary run state, ledgers, artifacts and child runs.</p>
+<p><strong>One system.</strong> An Automation is its root run. Gateway APIs and indexes project runtime truth; they do not independently schedule or execute work.</p>
+<p><strong>Extensible triggers.</strong> "Trigger" is the user concept. Runtime <code>TriggerSource</code> adapters register once and become discoverable to hosts and apps.</p>
+<p><strong>Visible and manageable.</strong> Users can inspect results and steps, edit definitions, pause/resume, run manually, stop current work and archive.</p>
+<p><strong>Conversation representation.</strong> Each occurrence contributes a trigger/task turn and answer. Independent mode starts fresh; Growing mode supplies bounded prior conversation. Long-term summaries remain target-owned in v1.</p>
+<p><strong>Isolated discussion.</strong> Discuss creates a separate session seeded at a selected occurrence. It cannot write into automation context or resources.</p>
+<p><strong>Minimal scope.</strong> Reuse commands, stores, effects, bundles and tool ceilings. External admission, automatic summaries and connector infrastructure are deferred.</p>
+</blockquote>
+<p>Operator rulings of 2026-09-26 (verbatim; they amend the design):</p>
+<blockquote>
+<ol>
+<li>
+<p>Runtime-root model with child occurrences: <strong>approved</strong>.</p>
+</li>
+<li>
+<p>Independent mode as the default: <strong>agreed</strong> (matches today's <code>share_context=false</code> behaviour for isolated occurrences).</p>
+</li>
+<li>
+<p>Schedule + manual first; external triggers in the next phase: <strong>agreed</strong>, but the next phase is a PLANNED backlog item, not proposed.</p>
+</li>
+<li>
+<p><strong>Discuss is NOT read-only and NOT tool-restricted.</strong> A discussion is a new durable runtime session, forked/seeded from the automation's
+   conversation through the chosen occurrence, replayable like any session, with the target's normal tools. Isolation means only that it
+   never writes back into the automation's session/context (a fork). Contract B's <code>DISCUSSION_READERS_V1</code> allowlist is DROPPED. Open detail
+   (question to the operator): workspace of a discussion — own workspace with read access to the occurrence's, or shared read-write.</p>
+</li>
+</ol>
+</blockquote>
+<p>Today the only scheduling primitive is the <code>on_schedule</code> node inside a
+user's flow and gateway-side <code>scheduled:</code> wrapper runs; neither is an
+inspectable, editable, pausable object, their history is filtered out of
+conversation replay, and a crash between "child started" and "parent waits"
+leaves an orphan child that recovery cannot re-link.</p>
+<h2 id="scope-and-non-goals">Scope and non-goals<a class="headerlink" href="#scope-and-non-goals" title="Permanent link">&para;</a></h2>
+<h3 id="in-scope-v1">In scope (v1)<a class="headerlink" href="#in-scope-v1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Contract A</strong> — definition (<code>_meta.automation</code>), controller state
+  (<code>_runtime.automation</code>) and the <code>automation.*</code> ledger observations, recorded as
+  existing <code>emit_event</code> StepRecords with stable record identities.</li>
+<li><strong>Contract B</strong> — occurrence attribution (<code>_meta.occurrence</code>, inherited by
+  descendants with <code>role:"descendant"</code>), deterministic child ids,
+  <code>Runtime.start(..., run_id=)</code> and <code>START_SUBWORKFLOW.payload.run_id</code> with
+  atomic create-if-absent + identity validation on every run store, and the
+  admission → child create/load → parent wait ordering with recovery that
+  reconstructs the wait. Discussion attribution (<code>_meta.discussion</code>) and a
+  discussion seed stored once and included in the discussion session's later
+  history composition.</li>
+<li><strong>Contract C</strong> — <code>TriggerSource</code> / <code>TriggerBinding</code> / <code>TriggerEnvelope</code>,
+  the <code>TriggerAdapter</code> protocol, the <code>abstractruntime.trigger_sources</code>
+  entry-point group and registry, and the two v1 sources <code>schedule@1</code> and
+  <code>manual@1</code>.</li>
+<li><strong>Contract D</strong> — the controller bundle packaged inside the wheel, its
+  <code>automation.&lt;node_id&gt;</code> adapters (issuing existing effects only), and
+  <code>apply_automation_command()</code> sharing the root's per-run lock.</li>
+<li><strong>Contract E</strong> — <code>select_session_turns</code>, <code>list_run_index</code> attribution filters,
+  <code>latest_occurrence</code>, <code>list_automations</code>, and the indexed columns
+  <code>automation_id, role, occurrence_index, session_kind, change_cursor</code> on both
+  persistent stores (SQLite and JSON files) plus the in-memory and offloading
+  wrappers.</li>
+<li>Context modes: Independent (default; fresh <code>occurrence</code> session per
+  occurrence) and Growing (controller and occurrences share one <code>automation</code>
+  session; bounded prior conversation via the selector).</li>
+<li>Discuss at runtime level: a new <code>discussion</code> session seeded through a chosen
+  occurrence, replayable like any session, running the target with its normal
+  tools. It never writes into the automation's session or context.</li>
+</ul>
+<h3 id="out-of-scope-v1">Out of scope (v1)<a class="headerlink" href="#out-of-scope-v1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>External event admission (inbox, generic <code>event</code> source, <code>run.finished</code> /
+  <code>run.failed</code> sources) — planned as
+  <a href="../0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a>.</li>
+<li>Any tool restriction on Discuss: the <code>DISCUSSION_READERS_V1</code> allowlist from the
+  design is dropped by operator ruling 4. The discussion's workspace model (own
+  workspace with read access vs shared read-write) is an open operator question;
+  do not guess — implement the fork of session/context and leave the workspace
+  policy to the ruling.</li>
+<li>Automatic Growing-mode summaries (<code>context.growing.summary</code> returns
+  <code>unsupported_feature</code>), constrained fetching, calendar scheduling, connectors.</li>
+<li>Gateway routes, attention/seen cursors, legacy-schedule projection, UI — owned
+  by the gateway and app packages.</li>
+<li>Parallel execution registry, template database, per-automation generated
+  flows, automatic legacy migration, universal broker, arbitrary filter
+  language, concurrent occurrences, delivery router, agent-memory transfer.</li>
+<li>Multi-process runners on one store: v1 supports one active runner per store
+  (see Risks; 0046 is the general fix).</li>
+</ul>
+<h2 id="contracts-copied-from-the-design-3-ae">Contracts (copied from the design, §3 A–E)<a class="headerlink" href="#contracts-copied-from-the-design-3-ae" title="Permanent link">&para;</a></h2>
+<p>Notation: <code>?</code> optional, timestamps UTC RFC3339, <code>JSON</code> arbitrary JSON. Other
+objects reject unknown fields.</p>
+<h3 id="a-definitionstateledger">A — Definition/state/ledger<a class="headerlink" href="#a-definitionstateledger" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>_meta.automation = {
+ schema_version:1, revision:int&gt;=1=1, title:nonempty-string,
+ controller:{bundle_ref:"abstractframework.automation-controller@1.0.0",
+             flow_id:"controller"},
+ target:{workflow_id:string,bundle_ref:string,flow_id:string,input_data:JSON={}},
+ trigger:TriggerBinding,
+ context:{mode:"independent"|"growing"="independent",
+          growing:{summary?:{enabled:bool,every_n:int&gt;=1,max_tokens:int&gt;=1}}={}},
+ policy:{serial:true,misfire:"coalesce",failure:"continue"},
+ session_id:string,created_at:timestamp,archived_at:timestamp|null=null
+}
+_runtime.automation = {
+ active_revision:int=1,
+ pending_occurrence:null|{
+   run_id:UUID,index:int&gt;=1,event_id:string,revision:int,
+   envelope:TriggerEnvelope,phase:"admitted"|"dispatched"
+ }=null,
+ anchor:timestamp|null=null,tick:int&gt;=0=0,next_index:int&gt;=1=1,
+ scheduled_count:int&gt;=0=0,paused:bool=false,
+ last_outcome:null|{run_id:UUID,index:int,status:string,finished_at:timestamp}=null
+}
+</code></pre></div>
+<p>Server owns IDs, timestamps and revisions. Any supplied
+<code>context.growing.summary</code> returns <code>unsupported_feature</code> in v1.</p>
+<p>Ledger observations use existing StepRecords with <code>effect.type="emit_event"</code>,
+<code>effect.payload.name</code> below and <code>effect.payload.payload</code>:</p>
+<div class="highlight"><pre><span></span><code>common={schema_version:1,automation_id,revision,at,command_id?}
+automation.created    common+{definition}
+automation.revised    common+{previous_revision,definition}
+automation.admitted   common+{run_id,index,event_id,trigger_envelope}
+automation.dispatched common+{run_id,index}
+automation.completed  common+{run_id,index,status,finished_at,notify}
+automation.coalesced  common+{first_tick,last_tick,missed_count,event_id}
+automation.paused     common+{}
+automation.resumed    common+{next_fire_at}
+automation.archived   common+{active_occurrence_run_id?}
+automation.command_result
+ common+{command_id,status:"applied"|"rejected",error?}
+</code></pre></div>
+<p>These record facts, not external delivery. Stable record identities prevent
+duplicate observations.</p>
+<p>Command semantics (design §2): <strong>Pause</strong> suspends scheduled admissions; the
+current occurrence finishes. <strong>Run now</strong> is allowed while paused, executes once
+and remains paused; rejected when busy/exhausted/archived; no queue. <strong>Resume</strong>
+re-arms without firing or catching up paused time. <strong>Revise</strong> activates at the
+next controller boundary and re-arms idle waits without firing. <strong>Stop current</strong>
+cancels the occurrence tree only. <strong>Archive</strong> prevents future admissions,
+finishes current work, retains history. Normal downtime coalesces missed
+scheduled ticks into at most one occurrence. Automation pause is
+<code>_runtime.automation.paused</code>, not runtime execution freeze: the parked command
+wait accepts manual admission and the flag remains true.</p>
+<h3 id="b-attributioncreationdiscussion">B — Attribution/creation/discussion<a class="headerlink" href="#b-attributioncreationdiscussion" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>_meta.occurrence={
+ automation_id:UUID,occurrence_index:int&gt;=1,event_id:string,revision:int&gt;=1,
+ role:"occurrence"|"descendant",fired_at:timestamp,
+ trigger_envelope:TriggerEnvelope
+}
+_meta.discussion={
+ automation_id,occurrence_index,revision,seed_run_id,seed_messages?
+}
+</code></pre></div>
+<p>Descendants inherit attribution with <code>role:"descendant"</code>; only occurrence roots
+become turns. Discussion seed is stored once and included in subsequent local
+history composition.</p>
+<p>Child IDs:</p>
+<div class="highlight"><pre><span></span><code><span class="n">uuid5</span><span class="p">(</span><span class="n">UUID</span><span class="p">(</span><span class="n">automation_id</span><span class="p">),</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">revision</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">occurrence_index</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># scheduled</span>
+<span class="n">uuid5</span><span class="p">(</span><span class="n">UUID</span><span class="p">(</span><span class="n">automation_id</span><span class="p">),</span> <span class="s2">"manual:"</span> <span class="o">+</span> <span class="n">command_id</span><span class="p">)</span>            <span class="c1"># manual</span>
+</code></pre></div>
+<p>Add <code>Runtime.start(..., run_id: str|None=None)</code> and
+<code>START_SUBWORKFLOW.payload.run_id</code>; neither currently exists. Explicit IDs
+require atomic create-if-absent and identity validation, never overwrite.
+Persist admission first; create/load child; persist parent wait. Recovery
+reconstructs the wait.</p>
+<blockquote>
+<p><strong>Amended by operator ruling 4 (2026-09-26):</strong> the design's Discuss ceiling
+(<code>_runtime.allowed_tools = target_effective_tools ∩ DISCUSSION_READERS_V1</code>) is
+DROPPED. A discussion runs with the target's normal tools and ceiling; its
+isolation is a fork of session/context only.</p>
+</blockquote>
+<h3 id="c-triggers">C — Triggers<a class="headerlink" href="#c-triggers" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>TriggerSource={
+ id:string,version:int&gt;=1,label:string,config_schema:JSONSchema,
+ event_schema:JSONSchema,capabilities:{kind:"time"|"manual"|"event"}
+}
+TriggerBinding={
+ binding_id:UUID,source_id:string,source_version:int,config:JSON
+}
+TriggerEnvelope={
+ event_id:string,source_id:string,source_version:int,
+ fired_at:timestamp,payload:JSON,binding_id:UUID
+}
+</code></pre></div>
+<p>Entry-point group: <code>abstractruntime.trigger_sources</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">TriggerAdapter</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+    <span class="n">descriptor</span><span class="p">:</span> <span class="n">TriggerSource</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span> <span class="o">...</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">prepare</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">binding</span><span class="p">:</span> <span class="n">TriggerBinding</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+                <span class="n">state</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">now</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TriggerWait</span><span class="p">:</span> <span class="o">...</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">binding</span><span class="p">:</span> <span class="n">TriggerBinding</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+                  <span class="n">event_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">fired_at</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+                  <span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TriggerEnvelope</span><span class="p">:</span> <span class="o">...</span>
+
+<span class="c1"># TriggerWait:</span>
+<span class="c1"># {kind:"until",until:timestamp}</span>
+<span class="c1"># {kind:"event",scope:"run",name:string}</span>
+<span class="c1"># {kind:"exhausted"}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>schedule@1:{start_at?:timestamp,every?:string,until?:timestamp,
+            count?:int&gt;=1,anchor?:timestamp}
+manual@1:{}
+</code></pre></div>
+<p>Persist defaults <code>start_at=creation_time</code>, <code>anchor=start_at</code>; initially require
+equal values. <code>every</code> is a positive integer duration <code>[smhd]</code>; absent means
+one-shot. <code>count&gt;1</code> requires <code>every</code>. Count scheduled admissions only; one
+coalesced firing counts once. <code>until</code> is exclusive.</p>
+<h3 id="d-controller">D — Controller<a class="headerlink" href="#d-controller" title="Permanent link">&para;</a></h3>
+<p>Bundle <code>abstractframework.automation-controller@1.0.0</code>, flow <code>controller</code>.</p>
+<div class="highlight"><pre><span></span><code>start:on_flow_start
+→ read_definition → wait → admit → prepare_context
+→ dispatch → record_outcome → next → read_definition
+</code></pre></div>
+<p>Middle nodes have <code>nodeType:"automation"</code> and corresponding adapter IDs
+<code>automation.&lt;node_id&gt;</code>. Exhausted/archive paths reach <code>end:on_flow_end</code>.</p>
+<p>Adapters issue existing effects. <code>apply_automation_command()</code> shares root
+mutation serialization; revisions activate at <code>read_definition</code>. Manual
+admission bypasses only the automation pause gate.</p>
+<h3 id="e-queries">E — Queries<a class="headerlink" href="#e-queries" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">list_run_index</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">automation_id</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+               <span class="n">role</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">session_kind</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+               <span class="n">changed_since</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">RunIndexRow</span><span class="p">]</span>
+<span class="n">latest_occurrence</span><span class="p">(</span><span class="n">automation_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RunIndexRow</span><span class="o">|</span><span class="kc">None</span>
+<span class="n">list_automations</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">status</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">changed_since</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">cursor</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Page</span>
+<span class="n">select_session_turns</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+                     <span class="n">include_occurrences</span><span class="p">:</span> <span class="nb">bool</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                     <span class="n">before</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">automation_id</span><span class="p">:</span> <span class="nb">str</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                     <span class="n">through_occurrence</span><span class="p">:</span> <span class="nb">int</span><span class="o">|</span><span class="kc">None</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                     <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Turn</span><span class="p">]</span>
+</code></pre></div>
+<p>Add indexed <code>automation_id,role,occurrence_index,session_kind,change_cursor</code>.
+No runtime <code>plane</code> parameter; gateway selects the store. Session kinds derive
+from attribution/controller linkage, including children. Existing indexes omit
+vars.</p>
+<p><code>Page={items,next_cursor,change_cursor}</code>; opaque restart-stable cursors,
+explicit invalidation after incompatible rebuild, archive tombstones retained.</p>
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<p>Verified 2026-09-26 against <code>2100d1f</code> (paths under <code>src/abstractruntime/</code>):</p>
+<ul>
+<li><strong>No explicit run id.</strong> <code>Runtime.start</code> (<code>core/runtime.py:1292-1484</code>) accepts
+  <code>workflow, vars, actor_id, session_id, parent_run_id</code> only; the id comes from
+  <code>RunState.new</code> → <code>str(uuid.uuid4())</code> (<code>core/models.py:219-238</code>), and the run is
+  persisted with a plain <code>self._run_store.save(run)</code> (<code>core/runtime.py:1483</code>).</li>
+<li><strong>Stores upsert; there is no create-if-absent.</strong> SQLite <code>save</code>
+  (<code>storage/sqlite.py:522</code>) is <code>INSERT … ON CONFLICT(run_id) DO UPDATE</code>; the
+  JSON store (<code>storage/json_files.py:513</code>) writes a temp file and <code>replace()</code>s.
+  An explicit id therefore needs a new atomic create-or-load primitive on every
+  <code>RunStore</code> (SQLite, JSON files, in-memory, offloading wrapper).</li>
+<li><strong>Subworkflow child id is random and saved before the parent waits.</strong>
+  <code>_handle_start_subworkflow</code> (<code>core/runtime.py:4164</code>) calls <code>self.start(...)</code>
+  at <code>core/runtime.py:4453</code> (random child id, child saved immediately), then
+  returns <code>EffectOutcome.waiting(WaitState(wait_key=f"subworkflow:{sub_run_id}"))</code>
+  (<code>core/runtime.py:4470-4486</code>). The parent's wait is recorded in the ledger at
+  <code>core/runtime.py:3649-3654</code> and committed to the run store only at
+  <code>core/runtime.py:2696-2706</code>. A crash between the two leaves an orphan child and
+  a parent that re-dispatches a second child on replay.</li>
+<li><strong>Per-run lock is held only by resume.</strong> <code>_PerRunLocks</code>
+  (<code>core/runtime.py:492-522</code>, process-wide RLock per run id, instance
+  <code>_RESUME_LOCKS</code> at <code>:525</code>) is acquired only in <code>resume()</code>
+  (<code>core/runtime.py:2813</code>). Commands and controller boundaries must join it; it
+  does not serialize separate processes.</li>
+<li><strong>Terminal state is saved before the terminal event.</strong> Every terminal path
+  saves the run and only then calls <code>_append_terminal_status_event</code>
+  (<code>core/runtime.py:2640-2641</code>, <code>:2690-2691</code>, <code>:2722-2723</code>; method at <code>:2068</code>).
+  Occurrence completion must therefore be observed by reading the child's state
+  on the parent's resume, not by relying on the event alone.</li>
+<li><strong>Conversation replay is bounded and root-only.</strong> <code>session_chat_messages</code>
+  (<code>session_history.py:75</code>, defaults 40 messages / 8 000 chars per message /
+  24 000 total) rides <code>_best_effort_session_turns</code>
+  (<code>history_bundle.py:686</code>), which queries
+  <code>list_run_index(session_id=sid, root_only=True, …)</code> (<code>history_bundle.py:816</code>)
+  and also skips runs with a <code>parent_run_id</code> on the scan path
+  (<code>history_bundle.py:872-873</code>). <code>_classify_turn</code> (<code>history_bundle.py:708-727</code>)
+  labels any run with <code>_meta.schedule</code> or a <code>scheduled:</code> workflow id as
+  <code>scheduled</code>, and <code>session_chat_messages</code> drops <code>scheduled</code> turns
+  (<code>session_history.py:155-158</code>). Occurrence child runs are invisible to every
+  history path today; <code>select_session_turns</code> must replace these filters, not add
+  a parallel one.</li>
+<li><strong><code>on_schedule</code> is drift-based, not anchored.</strong> The node handler
+  (<code>visualflow_compiler/adapters/event_adapter.py:98-205</code>) computes
+  <code>until = now + interval</code> on each pass (<code>:140-148</code>) and accepts <code>ms</code> and
+  decimal amounts (<code>:134</code>). <code>schedule@1</code> is anchored (<code>anchor + tick*every</code>),
+  integer <code>[smhd]</code> only, with coalescing; it must not reuse this time math.</li>
+<li><strong>Index filters.</strong> <code>QueryableRunIndexStore.list_run_index</code>
+  (<code>storage/base.py:125-141</code>) filters by <code>status, workflow_id, session_id,
+  root_only</code> only; the SQLite implementation (<code>storage/sqlite.py:709</code>, page query
+  at <code>:747-758</code>) selects fixed columns and never reads vars. JSON files
+  (<code>storage/json_files.py:719</code>), in-memory (<code>storage/in_memory.py:68</code>) and
+  offloading (<code>storage/offloading.py:419</code>) mirror the same signature.</li>
+<li><strong>Bundles load without the gateway.</strong> <code>open_workflow_bundle</code>
+  (<code>workflow_bundle/reader.py:75</code>) opens a directory or <code>.flow</code> zip; nothing in
+  the package ships a bundle as a resource yet, and <code>pyproject.toml</code> declares no
+  entry-point groups (wheel = <code>packages = ["src/abstractruntime"]</code>).</li>
+<li><strong>Command store exists and is idempotent per process.</strong> <code>JsonlCommandStore.append</code>
+  (<code>storage/commands.py:276</code>) dedups on <code>command_id</code> under an in-process lock and
+  returns <code>CommandAppendResult(accepted, duplicate, seq)</code>; cursors live in
+  <code>JsonFileCommandCursorStore</code> (<code>:183</code>). The runtime has no automation command
+  applier; the gateway runner polls and applies commands itself.</li>
+<li><strong>Tool ceilings.</strong> <code>resolve_tool_scope</code> (<code>core/tool_scope.py:20</code>) intersects a
+  run's <code>allowed_tools</code> with every ancestor. Discussion runs must be started
+  without a parent link to the automation tree so this intersection does not
+  inherit the controller's or occurrence's ceiling by accident.</li>
+<li>No <code>automation</code> or <code>trigger_source</code> identifier exists anywhere in <code>src/</code>.</li>
+</ul>
+<h2 id="seams">Seams<a class="headerlink" href="#seams" title="Permanent link">&para;</a></h2>
+<h3 id="what-this-item-must-read-before-writing-owned-by-other-packages">What this item must READ before writing (owned by other packages)<a class="headerlink" href="#what-this-item-must-read-before-writing-owned-by-other-packages" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>abstractgateway <code>src/abstractgateway/runner.py</code></strong> — the command lane
+  (<code>_poll_commands</code> at <code>:1293</code>, <code>_apply_command</code> at <code>:1754</code>) and the
+  parent-resume behaviour for <code>subworkflow:</code> waits (<code>:500-550</code>, <code>:2531</code>), so that
+  controller children are driven and their parents resumed exactly once by the
+  host that already does this, and so <code>apply_automation_command</code> is callable from
+  <code>_apply_command</code> without a second applier.</li>
+<li><strong>abstractgateway <code>src/abstractgateway/hosts/bundle_host.py</code></strong> —
+  <code>_seed_session_history</code> (<code>:2024</code>), the host-side session history seeding that
+  <code>select_session_turns</code> must feed (Growing mode, discussion seed), so the
+  gateway swaps its call rather than keeping a second history path.</li>
+</ul>
+<p>Any reference to these that is not verified in the live code is written to fail
+loudly and raised with the gateway owner, never hedged.</p>
+<h3 id="what-other-packages-read-from-this-item-identifiers-owned-here">What other packages read from this item (identifiers owned here)<a class="headerlink" href="#what-other-packages-read-from-this-item-identifiers-owned-here" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>apply_automation_command(...)</code> — the only automation command applier.</li>
+<li><code>Runtime.start(..., run_id=...)</code> and <code>START_SUBWORKFLOW.payload.run_id</code>.</li>
+<li><code>select_session_turns(store, session_id, *, include_occurrences, before,
+  automation_id, through_occurrence, limit)</code>.</li>
+<li><code>list_automations(...)</code>, <code>latest_occurrence(automation_id)</code>, and the new
+  <code>list_run_index</code> filters (<code>automation_id</code>, <code>role</code>, <code>session_kind</code>,
+  <code>changed_since</code>).</li>
+<li><code>TriggerAdapter</code>, <code>TriggerSource</code>, <code>TriggerBinding</code>, <code>TriggerEnvelope</code>, and the
+  entry-point group <code>abstractruntime.trigger_sources</code>.</li>
+<li>Bundle <code>abstractframework.automation-controller@1.0.0</code>, flow <code>controller</code>.</li>
+<li>The <code>automation.*</code> ledger event names and the <code>_meta.automation</code>,
+  <code>_runtime.automation</code>, <code>_meta.occurrence</code>, <code>_meta.discussion</code> shapes.</li>
+</ul>
+<p>These names are frozen once this item lands; the gateway integrates against them
+before its own work completes.</p>
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[ ] <code>Runtime.start(run_id=...)</code> and <code>START_SUBWORKFLOW.payload.run_id</code> create a
+      run atomically if absent, load it when present with a matching identity,
+      and raise <code>identity_conflict</code> on a mismatch; no path overwrites an existing
+      run. Implemented on SQLite, JSON files, in-memory and offloading stores.</li>
+<li>[ ] Occurrence dispatch persists admission → creates/loads the child →
+      persists the parent wait; a crash injected at every commit point yields
+      exactly one child per <code>(revision, occurrence_index)</code> or <code>manual:command_id</code>,
+      and recovery reconstructs the parent's wait.</li>
+<li>[ ] <code>apply_automation_command</code> applies revise/pause/resume/run_now/
+      stop_current/archive under the root's per-run lock (shared with
+      <code>resume()</code>); duplicate <code>command_id</code>s are idempotent and every outcome is
+      recorded as <code>automation.command_result</code>.</li>
+<li>[ ] Pause/run-now/resume/revise/archive semantics match the design §2 rules
+      (no catch-up on resume, at most one coalesced occurrence after downtime,
+      run-now while paused stays paused, busy/exhausted/archived rejections).</li>
+<li>[ ] <code>schedule@1</code> and <code>manual@1</code> are discovered through
+      <code>abstractruntime.trigger_sources</code>; a third-party source registered by entry
+      point appears in the registry with no code change here.</li>
+<li>[ ] Independent mode starts each occurrence in a fresh <code>occurrence</code> session;
+      Growing mode supplies bounded prior conversation from
+      <code>select_session_turns</code>; only occurrence roots become turns.</li>
+<li>[ ] A discussion session is seeded once through the selected occurrence,
+      replays like any session over several turns, runs with the target's normal
+      tools, and never writes into the automation's session or context.</li>
+<li>[ ] <code>list_automations</code>, <code>latest_occurrence</code> and the <code>list_run_index</code>
+      attribution filters return the same results on SQLite and JSON files;
+      cursors survive a restart; archive tombstones remain listable.</li>
+<li>[ ] Replaying an automation's history performs zero provider and tool calls.</li>
+<li>[ ] The controller bundle ships inside the wheel and runs standalone with a
+      runtime and a store, without the gateway.</li>
+<li>[ ] Architecture, API and backlog docs describe the contracts; no gateway,
+      app or UI change is part of this item.</li>
+</ul>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p>Deliver, and run against both persistent stores:</p>
+<ul>
+<li><code>tests/test_automation_occurrence_recovery.py</code> — crash around every dispatch
+  commit; exactly one child, reconstructed wait.</li>
+<li><code>tests/test_automation_commands.py</code> — edit/pause/manual/restart races,
+  idempotent replays, revision checks.</li>
+<li><code>tests/test_automation_session_turns.py</code> — multiple occurrences and discussion
+  turns through <code>select_session_turns</code>, Independent vs Growing.</li>
+<li><code>tests/test_automation_discussion_isolation.py</code> — discussion turns with normal
+  tools never write into the automation session, context or controller state.</li>
+<li><code>tests/test_automation_index.py</code> — attribution filters, <code>list_automations</code>
+  paging, <code>latest_occurrence</code>, restart-stable cursors, tombstones.</li>
+<li><code>tests/test_automation_replay_read_only.py</code> — history replay makes zero
+  provider/tool calls.</li>
+</ul>
+<p>Full suite green; no live provider required (deterministic fixture flows).</p>
+<h2 id="risks">Risks<a class="headerlink" href="#risks" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Duplicate children</td>
+<td>Atomic deterministic create-or-load</td>
+<td><code>test_automation_occurrence_recovery.py</code>: crash around every dispatch commit</td>
+</tr>
+<tr>
+<td>Command races/replay</td>
+<td>Shared root lock, idempotent outcomes, optional revision checks</td>
+<td><code>test_automation_commands.py</code>: edit/pause/manual/restart races</td>
+</tr>
+<tr>
+<td>Lost/duplicated context</td>
+<td>Shared selector, persistent discussion seed</td>
+<td><code>test_automation_session_turns.py</code>: multiple occurrences/discussion turns</td>
+</tr>
+<tr>
+<td>Discussion writes back into the automation</td>
+<td>Discussion is a separate session (fork); no parent link into the automation tree</td>
+<td><code>test_automation_discussion_isolation.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>Additional runtime-owned risks: the per-run lock is process-local, so two
+runners on one store can still race (v1 supports one active runner per store;
+the general fix is
+<a href="../runtime_systemic_reliability/0046_per_run_driver_exclusion/">0046</a>); a
+long-lived controller root accumulates vars and ledger records (keep controller
+state bounded; see
+<a href="../runtime_systemic_reliability/0053_bounded_run_vars_growth/">0053</a>).</p>
+<h2 id="dependencies-and-adr-status">Dependencies and ADR status<a class="headerlink" href="#dependencies-and-adr-status" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Upstream: none. Downstream: the gateway Automations work depends on this item
+  and must integrate against it before completing.</li>
+<li>Related runtime items: 0045 (crash-ordering invariant — the dispatch ordering
+  here is an instance of it), 0046, 0053, and
+  <a href="../0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a> (v2).</li>
+<li>ADR impact: likely one new ADR — "an automation is its controller root run;
+  occurrences are deterministic child runs" — to be written with the
+  implementation, not before.</li>
+<li>Effort estimate from the design: 8–12 engineer-days (±50%).</li>
+</ul>
+<h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
+<ul>
+<li>abstractframework backlog 0928 (Automations umbrella).</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

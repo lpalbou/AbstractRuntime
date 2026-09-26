@@ -485,6 +485,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-replies-do-not-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live replies do not stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-previous-model-stays-in-memory-after-a-default-switch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The previous model stays in memory after a default switch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1114,6 +1136,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-replies-do-not-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live replies do not stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-previous-model-stays-in-memory-after-a-default-switch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The previous model stays in memory after a default switch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1159,7 +1203,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects <code>abstractcore&gt;=2.15.1</code>.</p>
+- The current AbstractCore integration expects <code>abstractcore&gt;=2.16.0</code>.</p>
 <p>Verify:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])"</span>
 </code></pre></div>
@@ -1227,6 +1271,43 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <p>Docs:
 - <code>integrations/abstractcore.md#prompt-cache-control-plane-and-durable-blocs</code>
 - <code>faq.md#where-should-cached-session-or-prompt-cache-state-live</code></p>
+<h2 id="live-replies-do-not-stream">Live replies do not stream<a class="headerlink" href="#live-replies-do-not-stream" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- A host registered a sink with <code>Runtime.set_live_delta_sink(...)</code>, but an answer arrives only when the call ends, or the
+  sink receives only an <code>llm.delta_end</code>.</p>
+<p>Checks:
+- The run must set <code>_runtime.stream</code> to the boolean <code>True</code>; <code>Runtime.start</code> refuses any other value with a <code>ValueError</code>.
+- Read the call's <code>llm.delta_end</code>: <code>reason: "unavailable"</code> carries a <code>detail</code>, and the <code>LLM_CALL</code> ledger record carries
+  the same value as <code>metadata._runtime_observability.stream_unavailable</code>.</p>
+<p>Fix, by <code>detail</code>:
+- <code>remote_core</code>: remote mode does not stream; use a local or multi-local runtime for live text.
+- <code>node_stream_off</code>: the node sets <code>params.stream: False</code>; remove it to stream that node.
+- <code>structured_output</code>: structured and media-output calls never stream; this is expected.
+- <code>usage_unavailable</code>: the provider's server cannot report token usage in streams; configure the server to accept
+  <code>stream_options</code>, or accept non-streamed answers for that model.
+- <code>tool_envelope_holdback</code>: the whole answer was a tool call or a hidden channel; this is expected.
+- <code>sink_error</code>: your sink raised. Keep the sink fast and non-raising (put the event on a queue and return).</p>
+<p>Verify:
+- Start a run with <code>vars={"_runtime": {"stream": True}}</code> and check that the sink receives <code>llm.delta</code> events before the
+  <code>llm.delta_end</code> with <code>reason: "completed"</code>.</p>
+<p>Docs:
+- <code>integrations/abstractcore.md#live-token-streaming</code></p>
+<h2 id="the-previous-model-stays-in-memory-after-a-default-switch">The previous model stays in memory after a default switch<a class="headerlink" href="#the-previous-model-stays-in-memory-after-a-default-switch" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- After <code>set_default_provider_model(...)</code>, the previous MLX, HuggingFace or embedding model still appears in
+  <code>list_model_residency</code> and memory does not drop.</p>
+<p>Checks:
+- Read <code>list_model_residency</code> diagnostics. <code>pending_ejects</code> lists a model waiting for its running call to end.
+  <code>last_switch_ejects</code> shows, per model, whether it was unloaded, kept because another owner still uses or locked it
+  (<code>skipped</code> with a <code>reason</code>), or failed (<code>ok: false</code> with the remaining holders).</p>
+<p>Fix:
+- A pending model is unloaded when its call ends; no action is needed.
+- A model kept for another owner stays until that owner releases it. Unlock or unload it there. An explicit
+  <code>unload_model_residency(runtime_id=...)</code> frees the model from every holder in the process, including owners that
+  still use it, so use it only when you intend that.
+- A <code>skipped</code> reason that names the claim registry means the installed AbstractCore predates it; upgrade AbstractCore.</p>
+<p>Docs:
+- <code>integrations/abstractcore.md#unloading-and-switching-models</code></p>
 <h2 id="mcp-worker-command-is-not-found">MCP worker command is not found<a class="headerlink" href="#mcp-worker-command-is-not-found" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>

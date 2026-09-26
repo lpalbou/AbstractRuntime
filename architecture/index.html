@@ -398,6 +398,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#live-token-streaming-outside-the-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live token streaming (outside the ledger)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-residency-in-a-shared-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency in a shared process
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1220,6 +1242,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#live-token-streaming-outside-the-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live token streaming (outside the ledger)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-residency-in-a-shared-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model residency in a shared process
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1424,8 +1468,8 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-09-25
-Version: 0.4.35
+<p>Updated: 2026-09-26
+Version: 0.5.0
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1495,6 +1539,46 @@ engine installer, host job registry"]
   ConfigFacade --&gt; CoreConfig
 </code></pre></div>
 <p>This keeps the runtime usable by <code>../abstractgateway</code> and application layers such as <code>../abstractflow</code>, <code>../abstractassistant</code>, <code>../abstractobserver</code>, and <code>../abstractcode</code> without embedding provider-specific model logic in the durable kernel.</p>
+<h3 id="live-token-streaming-outside-the-ledger">Live token streaming (outside the ledger)<a class="headerlink" href="#live-token-streaming-outside-the-ledger" title="Permanent link">&para;</a></h3>
+<p>Live text travels on a side channel next to the durable path. A run opts in with <code>_runtime.stream: true</code>, the host registers one sink with <code>Runtime.set_live_delta_sink(sink)</code>, and each <code>LLM_CALL</code> hands a per-call emitter (<code>src/abstractruntime/core/live_deltas.py</code>) to the AbstractCore client. The emitter batches fragments (about 40 ms), splits reasoning from content, holds back tool-call markup, and always closes the call with one <code>llm.delta_end</code> after the durable record is appended. Nothing on the live path is persisted, so replay and the ledger are the same with streaming on or off. See <a href="../integrations/abstractcore/#live-token-streaming">Live token streaming</a>.</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  Provider["AbstractCore provider
+(stream=True)"] --&gt;|"chunks"| Client["LLM client
+think / harmony split,
+tool-markup hold-back"]
+  Client --&gt;|"content / reasoning fragments"| Emitter["LiveDeltaEmitter
+(per call, ~40 ms batches)"]
+  Emitter --&gt;|"llm.delta / llm.delta_end"| Sink["host sink
+set_live_delta_sink"]
+  Client --&gt;|"final result
+(content, usage, raw_response, prompt_cache)"| Handler["LLM_CALL handler"]
+  Handler --&gt;|"StepRecord"| Ledger["LedgerStore"]
+  Handler -.-&gt;|"after the record: delta_end"| Emitter
+</code></pre></div>
+<h3 id="model-residency-in-a-shared-process">Model residency in a shared process<a class="headerlink" href="#model-residency-in-a-shared-process" title="Permanent link">&para;</a></h3>
+<p>In-process models (MLX, HuggingFace, embeddings) belong to the process, not to one runtime. Every multi-local client registers what it still needs (pooled, per-override, locked, being built, default) with AbstractCore's process residency registry. An unload after a default switch or a failed load goes through <code>eject_unclaimed</code>, which checks every owner's claims and unloads under one lock, so one service never unloads a model another service, user, entity runtime or the AbstractCore server still uses. A model that is still generating is unloaded when its call ends. See <a href="../integrations/abstractcore/#unloading-and-switching-models">Unloading and switching models</a>.</p>
+<div class="highlight"><pre><span></span><code>flowchart TB
+  subgraph Process["One host process"]
+    ClientA["multi-local client
+(service A)"]
+    ClientB["multi-local client
+(service B / entity runtime)"]
+    Server["AbstractCore server
+managed runtimes"]
+    Registry["process residency registry
+claims: pool, override, lock,
+building, default"]
+    Weights["in-process weights
+MLX / HuggingFace / embeddings"]
+  end
+
+  ClientA --&gt;|"register claims"| Registry
+  ClientB --&gt;|"register claims"| Registry
+  Server --&gt;|"register claims"| Registry
+  ClientA --&gt;|"default switch:
+eject_unclaimed(old model)"| Registry
+  Registry --&gt;|"unload only if no owner claims it"| Weights
+</code></pre></div>
 <h2 id="component-map">Component map<a class="headerlink" href="#component-map" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>flowchart TB
   subgraph Core["core/ (execution kernel)"]
@@ -1637,7 +1721,7 @@ record exactly once), and no doubled side effects.</p>
 - inspection: <code>VARS_QUERY</code> (read-only access to <code>RunState.vars</code> paths; parsing helpers in <code>src/abstractruntime/core/vars.py</code>)</p>
 <h3 id="host-wired-effects">Host-wired effects<a class="headerlink" href="#host-wired-effects" title="Permanent link">&para;</a></h3>
 <p>The kernel defines the protocol; concrete integrations provide handlers:
-- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars <code>workspace_*</code>, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
 <h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
 <ul>

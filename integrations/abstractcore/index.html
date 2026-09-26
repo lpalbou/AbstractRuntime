@@ -486,6 +486,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-token-streaming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live token streaming
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tool_calls-payload" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -501,6 +512,17 @@
     <span class="md-ellipsis">
       
         Tool execution modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-scoped-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace-scoped tools
       
     </span>
   </a>
@@ -573,6 +595,17 @@
     <span class="md-ellipsis">
       
         Model residency listings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unloading-and-switching-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unloading and switching models
       
     </span>
   </a>
@@ -1347,6 +1380,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-token-streaming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live token streaming
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tool_calls-payload" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1362,6 +1406,17 @@
     <span class="md-ellipsis">
       
         Tool execution modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-scoped-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace-scoped tools
       
     </span>
   </a>
@@ -1434,6 +1489,17 @@
     <span class="md-ellipsis">
       
         Model residency listings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unloading-and-switching-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unloading and switching models
       
     </span>
   </a>
@@ -1566,7 +1632,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.15.1 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.16.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -1787,11 +1853,11 @@ hello
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>LLM-call results that flow through the Core request/output path now also expose a replay-safe
+<p>LLM-call results that flow through the Core request/output path also expose a replay-safe
 <code>metadata._runtime_resolved_action</code> summary. <code>history_bundle</code> collects those into top-level
 <code>resolved_actions</code>, so another client can replay which capability family, task, normalized
 request/output summary, and effective route actually ran.</p>
-<p>Media-only normalized results now distinguish orchestration identity from the actual media backend:</p>
+<p>Media-only normalized results distinguish orchestration identity from the actual media backend:</p>
 <ul>
 <li><code>runtime_provider</code> / <code>runtime_model</code>: the runtime-side orchestration identity, when relevant</li>
 <li><code>media_provider</code> / <code>media_model</code>: the actual image/video/voice/music backend identity surfaced from the generated output</li>
@@ -1815,7 +1881,7 @@ request/output summary, and effective route actually ran.</p>
 </code></pre></div>
 <p><strong>Cost.</strong> AbstractCore, not Runtime, bounds the volume: <code>prefill</code>, the first-token event and the terminal <code>complete</code> always fire, cadence events no closer than 0.5 s apart, for the whole call, never capped by count (ADR-0026). A 3.7 s answer produced 9 records. Runtime appends each already-completed with a uuid suffix, so no progress tick re-parses the ledger.</p>
 <p><strong>Scope.</strong> These records are <code>scope: "run"</code> and land in the ledger of the run that made the call. In a chat bundle the <code>llm_call</code> runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the <code>abstract.status</code> "Thinking…" event (<code>result.wait.details.sub_run_id</code> on the parent's waiting record).</p>
-<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. The Runtime/Core request surface forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
 <p>Local media residency is intentionally explicit when unsupported. <code>MODEL_RESIDENCY</code> results for local <code>image_generation</code>, <code>image_upscale</code>, <code>video_generation</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>tts</code>, <code>stt</code>, and <code>music_generation</code> return:</p>
 <ul>
@@ -1843,6 +1909,86 @@ request/output summary, and effective route actually ran.</p>
     <span class="p">},</span>
 <span class="p">}</span>
 </code></pre></div>
+<h2 id="live-token-streaming">Live token streaming<a class="headerlink" href="#live-token-streaming" title="Permanent link">&para;</a></h2>
+<p>A host can show an answer while it is being generated. Streaming is opt-in per run and needs two things:</p>
+<ol>
+<li>The run asks for it: <code>run.vars["_runtime"]["stream"] = True</code>. The value must be a boolean (<code>False</code> is an explicit off); <code>Runtime.start</code> refuses anything else, such as the string <code>"true"</code>, with a <code>ValueError</code>.</li>
+<li>The host registers a sink on the runtime: <code>runtime.set_live_delta_sink(sink)</code>.</li>
+</ol>
+<p>When both hold, every <code>LLM_CALL</code> of the run streams from the provider and the runtime calls <code>sink(event)</code> with plain dicts:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"llm.delta"</span><span class="p">,</span> <span class="s2">"run_id"</span><span class="p">:</span> <span class="s2">"…"</span><span class="p">,</span> <span class="s2">"parent_run_id"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"node_id"</span><span class="p">:</span> <span class="s2">"reason"</span><span class="p">,</span>
+ <span class="s2">"call_id"</span><span class="p">:</span> <span class="s2">"&lt;step_id&gt;"</span><span class="p">,</span> <span class="s2">"seq"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"text"</span><span class="p">:</span> <span class="s2">"Hello"</span><span class="p">,</span> <span class="s2">"channel"</span><span class="p">:</span> <span class="s2">"content"</span><span class="p">}</span>
+<span class="p">{</span><span class="s2">"kind"</span><span class="p">:</span> <span class="s2">"llm.delta_end"</span><span class="p">,</span> <span class="s2">"run_id"</span><span class="p">:</span> <span class="s2">"…"</span><span class="p">,</span> <span class="s2">"parent_run_id"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">"node_id"</span><span class="p">:</span> <span class="s2">"reason"</span><span class="p">,</span>
+ <span class="s2">"call_id"</span><span class="p">:</span> <span class="s2">"&lt;step_id&gt;"</span><span class="p">,</span> <span class="s2">"seq"</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="s2">"reason"</span><span class="p">:</span> <span class="s2">"completed"</span><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><code>parent_run_id</code> is the emitting run's parent (<code>None</code> for a root run), so a host can show a child run's text in its root conversation.</li>
+<li><code>call_id</code> is the <code>step_id</code> of the <code>LLM_CALL</code> ledger record that later holds the final answer, so a client can replace its live text with the durable result.</li>
+<li><code>seq</code> counts the events of one call from 0, <code>llm.delta_end</code> included.</li>
+<li><code>channel</code> is <code>content</code> (the answer) or <code>reasoning</code> (the model's thinking). Reasoning arrives from the provider's reasoning stream, and inline <code>&lt;think&gt;…&lt;/think&gt;</code> markup is split out of the content live, so clients can hide or fold it. The markup itself is never sent.</li>
+<li><code>reason</code> is <code>completed</code>, <code>failed</code>, <code>cancelled</code> or <code>unavailable</code>. Every live fragment of a call is sent before the call's durable record is written (the last batch is flushed first, and later fragments are dropped); every call then ends with exactly one <code>llm.delta_end</code>, sent after that record is in the ledger. Each retry attempt is its own call with its own <code>call_id</code>; so is the rare re-run of an attempt interrupted by a stray kill (<code>&lt;step_id&gt;:reinvoke</code>), whose interrupted first run ends <code>cancelled</code> with <code>detail: "reinvoked"</code> (the run goes on; a client can say "reply restarted" rather than "stopped").</li>
+<li>Tool-call markup a local model writes as text (<code>&lt;tool_call&gt;</code>, <code>&lt;|tool_call|&gt;</code>, <code>&lt;function_call&gt;</code>, …) never reaches the live text. AbstractCore already removes it from streamed content; the runtime also stops the live content of a call at the first such marker. The final record carries the tool calls.</li>
+<li>Harmony transcripts (gpt-oss) are split live: the <code>final</code> channel streams as content, <code>analysis</code> as reasoning, and a tool call (<code>commentary to=functions.…</code>) is held back. The framing tokens are never sent.</li>
+<li>Text is coalesced: the first fragment is sent immediately, later fragments are grouped over about 40 ms.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="n">events</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">runtime</span><span class="o">.</span><span class="n">set_live_delta_sink</span><span class="p">(</span><span class="n">events</span><span class="o">.</span><span class="n">append</span><span class="p">)</span>
+<span class="n">run_id</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">{</span><span class="s2">"_runtime"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"stream"</span><span class="p">:</span> <span class="kc">True</span><span class="p">}})</span>
+<span class="n">runtime</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">wf</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>The ledger is unchanged.</strong> Deltas are never persisted. A streamed run records the same <code>LLM_CALL</code> result as a non-streamed one (<code>content</code>, <code>reasoning</code>, <code>tool_calls</code>, <code>usage</code>, <code>raw_response</code>), apart from the <code>stream</code> flag in the recorded provider request and the timings the stream measures (<code>gen_time</code>, <code>ttft_ms</code>). In streaming mode <code>raw_response</code> is the provider's terminal chunk.</p>
+<p><strong>Child runs inherit the switch.</strong> Subworkflows, and the delegated children of AbstractAgent loops, receive the parent's <code>_runtime.stream</code> unless they set their own value.</p>
+<p><strong>When a call does not stream, it says why.</strong> The call runs non-streamed with the same complete answer, its <code>llm.delta_end</code> has <code>reason: "unavailable"</code> and a <code>detail</code>, and the same detail is recorded on the <code>LLM_CALL</code> record as <code>metadata._runtime_observability.stream_unavailable</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>detail</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usage_unavailable</code></td>
+<td>The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects <code>stream_options</code>). The call that lacked usage is reported on its <code>LLM_CALL</code> record; if its text had already streamed, its <code>llm.delta_end</code> still says <code>completed</code> (the reply did stream). Such a record carries <code>metadata.usage_estimated: true</code>: without usage, the aborted-generation check judges a streamed answer from its <code>finish_reason</code> and text (no terminal reason, or a short reply ending with ":" and no tool call). Later calls on that model run non-streamed only when the provider also reports that its server rejects usage in streams; they stream again as soon as a streamed answer brings usage back (one call in ten streams to re-check). A server that rejects the option but sends usage anyway (LM Studio) keeps streaming.</td>
+</tr>
+<tr>
+<td><code>prompt_cache_unavailable</code></td>
+<td>Reserved for a provider whose streamed answers do not carry <code>metadata.prompt_cache</code> while its non-streamed answers do. No provider is in this case with a current AbstractCore.</td>
+</tr>
+<tr>
+<td><code>structured_output</code></td>
+<td>Structured or media-output calls are never streamed.</td>
+</tr>
+<tr>
+<td><code>provider_cannot_stream</code></td>
+<td>The provider answered in one piece.</td>
+</tr>
+<tr>
+<td><code>remote_core</code></td>
+<td>Remote mode: the AbstractCore server call is not streamed.</td>
+</tr>
+<tr>
+<td><code>node_stream_off</code></td>
+<td>The <code>LLM_CALL</code> payload sets <code>params.stream: False</code>.</td>
+</tr>
+<tr>
+<td><code>sink_error</code></td>
+<td>The host sink raised; the rest of the call was not delivered live.</td>
+</tr>
+<tr>
+<td><code>reinvoked</code> (with <code>reason: "cancelled"</code>)</td>
+<td>A stray kill interrupted the call and the runtime re-runs it under a new <code>call_id</code>; the run continues and answers.</td>
+</tr>
+<tr>
+<td><code>tool_envelope_holdback</code></td>
+<td>The whole answer was a tool call (or a channel that is not shown), so no answer text was streamed.</td>
+</tr>
+</tbody>
+</table>
+<p>A streamed call records the same <code>usage</code>, <code>raw_response</code> and <code>metadata.prompt_cache</code> as a non-streamed one; where it cannot, the call does not stream.</p>
+<p><strong>AbstractCore dependency for MLX.</strong> MLX calls with a prompt-cache key stream with a complete record only on an AbstractCore release that puts the prompt-cache record, usage and finish reason on the last streamed chunk. With an older AbstractCore these calls still stream, but their record has no <code>metadata.prompt_cache</code>; upgrade AbstractCore to keep streamed and non-streamed records identical.</p>
+<p><strong>Harmony output on raw lanes.</strong> On a provider lane where AbstractCore itself buffers harmony (gpt-oss) output until the end of the answer, the text reaches the sink in one piece when the call ends. Lanes that separate reasoning on the server side (for example LM Studio) stream normally.</p>
+<p><strong>Writing a sink.</strong> The sink is called from the provider's thread, in <code>seq</code> order for a given call. Keep it fast: put the event on a queue and return. A sink that raises is switched off for the rest of that call and the call itself continues normally.</p>
 <h2 id="tool_calls-payload"><code>TOOL_CALLS</code> payload<a class="headerlink" href="#tool_calls-payload" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">"tool_calls"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -1892,8 +2038,50 @@ request/output summary, and effective route actually ran.</p>
 <span class="p">)</span>
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tools</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="workspace-scoped-tools">Workspace-scoped tools<a class="headerlink" href="#workspace-scoped-tools" title="Permanent link">&para;</a></h2>
+<p>When a run sets <code>workspace_root</code> in its vars, file tools (<code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, <code>list_files</code>, <code>search_files</code>, <code>skim_files</code>, <code>skim_folders</code>, …) resolve paths against that folder, and the shell tools (<code>execute_command</code>, <code>shell_exec</code>, <code>local_helper_start</code>) start there. The policy is read from run vars (<code>src/abstractruntime/integrations/abstractcore/workspace_scoped_tools.py</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Run var</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>workspace_root</code></td>
+<td>Base folder for relative paths and the shell's starting folder. Relative roots resolve against <code>ABSTRACT_WORKSPACE_BASE_DIR</code> when set.</td>
+</tr>
+<tr>
+<td><code>workspace_access_mode</code></td>
+<td><code>workspace_only</code> (default: paths stay under the root), <code>workspace_or_allowed</code> (also under <code>workspace_allowed_paths</code>), or <code>all_except_ignored</code> (anywhere except <code>workspace_ignored_paths</code>).</td>
+</tr>
+<tr>
+<td><code>workspace_allowed_paths</code></td>
+<td>Extra folders a <code>workspace_or_allowed</code> run may use.</td>
+</tr>
+<tr>
+<td><code>workspace_ignored_paths</code></td>
+<td>The operator's exclusions; always refused.</td>
+</tr>
+<tr>
+<td><code>workspace_builtin_deny_prefixes</code></td>
+<td>The host's own protected folders (for example a gateway's data folder and credential folders), as path prefixes. Anything under one is refused.</td>
+</tr>
+<tr>
+<td><code>workspace_builtin_allow</code></td>
+<td>Exceptions inside the host's protected folders (for example the run's own folder inside the data folder). The operator's <code>workspace_ignored_paths</code> still win over them.</td>
+</tr>
+</tbody>
+</table>
+<p>Lists accept a JSON array, a JSON array pasted as a string, or newline-separated entries.</p>
+<ul>
+<li>When an <code>LLM_CALL</code> offers tools and the run has a workspace scope, the runtime appends a short description of the scope to the system prompt: the root, the access mode, the authorized roots and the operator's <code>workspace_ignored_paths</code>. The host's built-in deny prefixes and allow entries are enforced but never described to the model, so the system prompt stays identical from turn to turn while the host's folders change, and the prompt cache stays warm. A refused path is reported as <code>Path is not accessible (protected by the host)</code> without listing the host's rules.</li>
+<li>Child runs (subworkflows and agent delegation) inherit all six vars unless they set their own; VisualFlow file and document nodes (<code>read_file</code>, <code>write_file</code>, <code>read_pdf</code>, <code>write_pdf</code>, <code>write_docx</code>, <code>write_chart</code>) apply the same scope.</li>
+<li>Shell tools are pinned to their starting folder only. A command can still reach other paths (<code>cd ..</code>, absolute paths); the workspace scope is a file-tool policy, not a sandbox.</li>
+</ul>
 <h2 id="prompt-cache-control-plane-and-durable-blocs">Prompt-cache control plane and durable blocs<a class="headerlink" href="#prompt-cache-control-plane-and-durable-blocs" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:</p>
+<p>AbstractRuntime's AbstractCore integration exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:</p>
 <ul>
 <li><code>get_abstractcore_host_facade(runtime)</code></li>
 <li><code>AbstractCoreHostFacade</code></li>
@@ -1941,7 +2129,7 @@ request/output summary, and effective route actually ran.</p>
 <li>Unsupported operations return structured payloads with <code>supported=false</code>, <code>operation</code>, <code>code</code>, and <code>capabilities</code>.</li>
 <li>When a provider reports <code>mode=local_control_plane</code> (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized <code>system | tools | history</code> cache path automatically.</li>
 <li>When a provider reports <code>mode=keyed</code>, the runtime still forwards stable <code>prompt_cache_key</code>s but skips module preparation/fork/update orchestration.</li>
-<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.</li>
+<li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, and gateway/CLI hosts manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.</li>
 <li>Automatic per-session prompt-cache keys are enabled by <code>run.vars["_runtime"]["prompt_cache"]</code>, <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default. Gateway-specific prompt-cache env vars should be translated by Gateway into <code>_runtime.prompt_cache</code>.</li>
 <li>Durable exact reuse uses <code>LLM_CALL.params.prompt_cache_binding</code>. If a binding includes <code>key</code>, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.</li>
 <li>Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit <code>prompt_cache_binding</code>, but Runtime does not derive a session cache key for them.</li>
@@ -2084,7 +2272,7 @@ request/output summary, and effective route actually ran.</p>
 </ul>
 <h3 id="lifecycle-operations">Lifecycle operations<a class="headerlink" href="#lifecycle-operations" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Runtime now exposes public host methods for:</li>
+<li>Runtime exposes public host methods for:</li>
 <li>listing durable bloc records</li>
 <li>listing provider/model KV artifacts under those blocs</li>
 <li>deleting one derived KV artifact while keeping the bloc text</li>
@@ -2113,8 +2301,8 @@ request/output summary, and effective route actually ran.</p>
 </code></pre></div>
 <h2 id="models-engines-and-host-jobs-config-facade">Models, engines and host jobs (config facade)<a class="headerlink" href="#models-engines-and-host-jobs-config-facade" title="Permanent link">&para;</a></h2>
 <p>AbstractCore implements the model browser, the local-engine installer and a
-host job registry. These passthroughs need AbstractCore 2.15.1 (the
-base-install floor), the first release that records who cancelled a job.
+host job registry. These passthroughs need AbstractCore 2.16.0 (the
+base-install floor; 2.15.1 is the first release that records who cancelled a job).
 <code>abstractruntime.integrations.abstractcore.config_facade</code>
 passes them through unchanged, so a host such as AbstractGateway serves the same
 payloads as <code>abstractcore models|engines … --json</code> and the <code>/acore/*</code> routes
@@ -2222,6 +2410,19 @@ job.</p>
 <li>Local text rows carry AbstractCore's registry-declared <code>modalities</code> (capability route keys such as <code>input.text</code>, <code>input.image</code>, <code>output.text</code>). When the registry has no entry for the model, the field is omitted rather than guessed. When the provider instance reports its vision lane unusable, <code>input.image</code> is removed and <code>modalities_note: "vision_unusable"</code> records the divergence.</li>
 <li>Local rows also carry the serving host's identity (<code>host_id</code>, <code>host_name</code>) from AbstractCore's host-info utility; rows already carrying another host's attribution — for example sweep rows — are not overwritten. Remote listings relay the Core server's rows verbatim, including the server's host identity; Runtime never re-stamps them with the client's identity.</li>
 <li>Rows report lock truth: rows for models this runtime manages carry <code>locked</code> and <code>lockable: true</code>, while sweep-only provider-server rows carry <code>lockable: false</code> because this runtime cannot enforce a lock on them. Lock state is runtime-owned — provider claims cannot supply or override <code>locked</code>, <code>lockable</code>, or <code>locked_at</code>. <code>pinned</code> is a truthful alias of <code>locked</code> (same value, Core parity), never the default-identity flag: <code>default</code> alone marks the client's default pair, so a configured capability default is never presented as pinned or loaded.</li>
+<li>Local and multi-local listings also show every model the process itself still holds, even when this runtime's pool no longer references it: MLX and HuggingFace text models (<code>provider_state: "resident_via_other_holders"</code>, with <code>process_holders</code> and <code>held_bytes</code>; HuggingFace holders are full copies of the weights), and in-process embedding models as <code>task: "embedding"</code> rows with <code>runtime_id</code> <code>local:embedding:huggingface:&lt;model&gt;</code>, <code>backend: "embeddings"</code>, <code>process_holders</code> and <code>held_bytes</code>.</li>
+<li>Every row the listing serves can be unloaded by its <code>runtime_id</code> alone. <code>unload_model_residency(runtime_id=...)</code> reads the task, provider and model from any <code>local:&lt;task&gt;:&lt;provider&gt;:&lt;model&gt;</code> id (text, TTS, STT, image, music or embedding) and finds a backend's own id (for example an image backend's <code>diffusers/&lt;model&gt;</code>) in the current listing.</li>
+</ul>
+<h2 id="unloading-and-switching-models">Unloading and switching models<a class="headerlink" href="#unloading-and-switching-models" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Unloading an in-process model (MLX, HuggingFace, embeddings) frees it from every holder in the process, not only from this runtime's instance, and the result carries a <code>process_eject</code> report. The result is <code>ok: false</code> when weights remain in memory. An embedding model loads again on the next embedding request.</li>
+<li>Changing the default text model (<code>set_default_provider_model</code>, which the gateway calls when the console default changes) unloads the previous in-process model, unless the pool still uses it or it is locked. The previous model is freed before the new default is loaded, so the two are never in memory together. If the previous model is still generating, the switch does not cancel that call; the model is unloaded when the call ends.</li>
+<li>A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, override, lock, are loading or use as their default, and the unload skips a model any of them uses. Multi-local clients (the client <code>create_local_runtime(...)</code> builds) register these claims; a standalone <code>LocalAbstractCoreLLMClient</code> does not, so a host that shares a process between several runtimes should build them with <code>create_local_runtime(...)</code>.</li>
+<li>The switch unload and the failed-load cleanup need an AbstractCore release with the process residency claim registry (<code>abstractcore.providers.process_residency.eject_unclaimed</code>). With an older AbstractCore the previous model stays loaded and <code>last_switch_ejects</code> reports <code>skipped</code> with the reason; unload it explicitly or upgrade AbstractCore. <code>list_model_residency</code> diagnostics list <code>pending_ejects</code> (waiting for a running call to end) and <code>last_switch_ejects</code> (unloaded, kept because it is still in use, or failed, with the reason).</li>
+<li>Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.</li>
+<li>A load with <code>ttl_s</code> or <code>keep_alive</code> for an in-process model, or for a model that is already loaded, lists them under <code>unsupported_options</code> with a warning. A load that fails part-way unloads what it loaded.</li>
+<li>Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.</li>
+<li>MLX has no idle or time-based unload. A load with <code>ttl_s</code> or <code>keep_alive</code> on MLX reports them under <code>unsupported_options</code>, with a warning, and the model stays loaded until it is unloaded.</li>
 </ul>
 <h2 id="model-residency-locks-and-context-estimates">Model residency locks and context estimates<a class="headerlink" href="#model-residency-locks-and-context-estimates" title="Permanent link">&para;</a></h2>
 <p>The host facade and all execution modes expose model-residency lock controls and a context-fit estimate relay:</p>
@@ -2263,7 +2464,7 @@ job.</p>
 <p>Runtime also exposes the remaining Gateway-facing host/operator wrappers for
 email and Telegram:</p>
 <ul>
-<li><code>get_abstractcore_host_facade(runtime)</code> now includes:</li>
+<li><code>get_abstractcore_host_facade(runtime)</code> includes:</li>
 <li><code>list_email_accounts(...)</code></li>
 <li><code>list_emails(...)</code></li>
 <li><code>read_email(...)</code></li>

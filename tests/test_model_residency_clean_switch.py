@@ -48,11 +48,15 @@ class _FakeProvider:
         return self.inflight
 
 
+import abstractcore.providers.process_residency as core_pr
+
+
 @pytest.fixture
 def pool(monkeypatch):
+    gc.collect()  # clients of earlier tests must not claim models here
     ejects: List[tuple] = []
-    monkeypatch.setattr(llm_mod, "_process_eject_for",
-                        lambda p, m: (ejects.append((p, m)), {"ok": True, "holders_found": 1})[1])
+    monkeypatch.setattr(core_pr, "eject",
+                        lambda b, m, reason="eject": (ejects.append((b, m)), {"ok": True, "holders_found": 1})[1])
     monkeypatch.setattr(llm_mod, "_mlx_process_residency_rows", lambda: [])
     monkeypatch.setattr(llm_mod, "_hf_process_residency_rows", lambda: [])
 
@@ -151,7 +155,7 @@ def test_chat_summarizer_follows_the_current_default_and_pins_nothing(monkeypatc
         pass
 
     holder = SimpleNamespace(_llm=_LLM())
-    summarizer = AbstractCoreChatSummarizer(llm_resolver=lambda: holder._llm)
+    summarizer = AbstractCoreChatSummarizer(llm_resolver=lambda provider, model: holder._llm)
     summarizer.summarize_chat_history([{"role": "user", "content": "x"}])
     first = weakref.ref(holder._llm)
     holder._llm = _LLM()                                     # the default switched
@@ -164,6 +168,45 @@ def test_chat_summarizer_follows_the_current_default_and_pins_nothing(monkeypatc
     holder._llm = None
     with pytest.raises(RuntimeError, match="no default model"):
         summarizer.summarize_chat_history([{"role": "user", "content": "z"}])
+
+
+def test_summarizer_uses_the_runs_own_model_and_never_loads_the_default(pool, monkeypatch):
+    """S7. MUTANT: the resolver ignores the run's route -> the default's
+    instance summarizes (and would be loaded just for that) -> RED."""
+    from abstractruntime.integrations.abstractcore import factory
+    from abstractruntime.integrations.abstractcore.summarizer import AbstractCoreChatSummarizer
+
+    client, _ = pool
+    seen: List[Any] = []
+
+    class _Basic:
+        def __init__(self, llm, **kwargs):
+            self.llm = llm
+
+        def summarize_chat_history(self, **kwargs):
+            seen.append(self.llm)
+            return SimpleNamespace(summary="s", key_points=[], confidence=1.0, focus_alignment=1.0,
+                                   word_count_original=1, word_count_summary=1)
+
+    import abstractcore.processing as processing
+    monkeypatch.setattr(processing, "BasicSummarizer", _Basic)
+    summarizer = AbstractCoreChatSummarizer(
+        llm_resolver=lambda provider=None, model=None: factory._summarizer_llm(client, provider, model))
+    out = summarizer.summarize_chat_history([{"role": "user", "content": "x"}], provider="mlx", model="vendor/RUN")
+    assert seen[-1].model == "vendor/RUN" and out["model"] == "vendor/RUN"
+    out = summarizer.summarize_chat_history([{"role": "user", "content": "x"}])
+    assert seen[-1] is client._llm and out["model"] == "vendor/A"
+
+
+def test_compaction_passes_the_runs_route_to_the_summarizer():
+    import inspect
+
+    from abstractruntime.core import runtime as rt_mod
+
+    source = inspect.getsource(rt_mod.Runtime)
+    assert 'summarize_kwargs = {"provider": route_provider, "model": route_model}' in source
+    assert rt_mod._accepts_kwarg(lambda messages, **kw: None, "model")
+    assert not rt_mod._accepts_kwarg(lambda messages, preserve_recent=6: None, "model")
 
 
 def test_factory_wires_the_summarizer_lazily():
@@ -295,7 +338,7 @@ def test_the_previous_model_is_ejected_before_the_new_default_loads(monkeypatch,
     """Two 17 GB models must never be resident together because of a switch."""
     client, ejects = pool
     order: List[str] = []
-    monkeypatch.setattr(llm_mod, "_process_eject_for", lambda p, m: (order.append(f"eject {m}"), {"ok": True})[1])
+    monkeypatch.setattr(core_pr, "eject", lambda b, m, reason="eject": (order.append(f"eject {m}"), {"ok": True})[1])
     original = MultiLocalAbstractCoreLLMClient._create_client
 
     def recording_create(self, provider, model, *, llm_kwargs_override=None):
@@ -305,3 +348,115 @@ def test_the_previous_model_is_ejected_before_the_new_default_loads(monkeypatch,
     monkeypatch.setattr(MultiLocalAbstractCoreLLMClient, "_create_client", recording_create)
     client.set_default_provider_model(provider="mlx", model="vendor/B")
     assert order == ["eject vendor/A", "build vendor/B"]
+
+
+# -- review follow-up (2026-09-26) ---------------------------------------------------
+def test_a_switch_never_ejects_a_model_another_client_in_the_process_still_holds(pool):
+    """S2: two services (users / entities) in one process. MUTANT: judge
+    "unused" from this client's pool only -> B's model is ejected -> RED."""
+    a, ejects = pool
+    b = MultiLocalAbstractCoreLLMClient(provider="mlx", model="vendor/A")      # user B, same model
+    a.set_default_provider_model(provider="mlx", model="vendor/B")
+    assert ejects == [], "B still has vendor/A as its default"
+    assert a._last_switch_ejects["mlx/vendor/A"]["skipped"] is True
+    b._locked_model_residency.add(("mlx", "vendor/A"))
+    b.set_default_provider_model(provider="mlx", model="vendor/C")
+    assert ejects == [], "B's LOCK keeps it"
+    b._locked_model_residency.clear()
+    # B's capability change evicts its pool: now NOBODY claims vendor/A.
+    b.set_capability_defaults({"output": {"audio": {"provider": "x", "model": "y"}}})
+    assert ("mlx", "vendor/A") in ejects and ("mlx", "vendor/B") not in ejects and ("mlx", "vendor/C") not in ejects
+
+
+def test_a_model_being_built_by_another_client_is_not_ejected(pool):
+    a, ejects = pool
+    b = MultiLocalAbstractCoreLLMClient(provider="lmstudio", model="q")
+    b._building[("mlx", "vendor/A")] = 1                                       # B is loading it right now
+    a.set_default_provider_model(provider="mlx", model="vendor/B")
+    assert ejects == [] and a._last_switch_ejects["mlx/vendor/A"]["claims"][0]["kind"] == "building"
+    b._building.clear()
+
+
+def test_deferred_eject_is_visible_and_rechecks_claims_before_ejecting(pool):
+    """S3: pending state in the listing; a rebuild while waiting cancels the eject."""
+    a, ejects = pool
+    old = a._llm
+    old.inflight.n = 1
+    a.set_default_provider_model(provider="mlx", model="vendor/B")
+    diag = a.list_model_residency(task="text_generation")["diagnostics"]
+    assert diag["pending_ejects"] and diag["pending_ejects"][0]["model"] == "vendor/A"
+    assert diag["pending_ejects"][0]["reason"] == "waiting for the in-flight call"
+    assert diag["last_switch_ejects"][0]["deferred"] is True
+    a._get_client("mlx", "vendor/A")                                           # back in use meanwhile
+    old.inflight.n = 0
+    deadline = time.time() + 5
+    while a._pending_ejects and time.time() < deadline:
+        time.sleep(0.05)
+    assert ejects == [], "re-checked under the lock: now claimed again"
+    last = a.list_model_residency(task="text_generation")["diagnostics"]["last_switch_ejects"]
+    assert last[0]["skipped"] is True and a.list_model_residency()["diagnostics"]["pending_ejects"] == []
+
+
+class _LoadableProvider(_FakeProvider):
+    def __init__(self, provider, model, *, loaded=False, fail=False, warnings=None):
+        super().__init__(provider, model)
+        self.loaded, self.fail, self.warnings = loaded, fail, warnings or []
+
+    def get_model_residency(self, **kwargs):
+        return {"task": "text_generation", "provider": self.provider, "model": self.model,
+                "provider_residency_verified": True, "provider_resident": self.loaded, "loaded": self.loaded,
+                "state": "loaded" if self.loaded else "not_loaded", "source": "fake"}
+
+    def load_model(self, name, **kwargs):
+        if self.fail:
+            raise RuntimeError("drafter failed after the main weights loaded")
+        self.loaded = True
+        out = {"action": "loaded"}
+        if self.warnings:
+            out["warnings"] = list(self.warnings)
+            out["unsupported_options"] = ["ttl_s"]
+        return out
+
+
+@pytest.fixture
+def loadable(monkeypatch, pool):
+    client, ejects = pool
+    made: Dict[tuple, Any] = {}
+
+    def create(self, provider, model, *, llm_kwargs_override=None):
+        spec = made.get((provider, model)) or {}
+        return SimpleNamespace(_llm=_LoadableProvider(provider, model, **spec),
+                               _drop_prompt_cache_client_state=lambda: None)
+
+    monkeypatch.setattr(MultiLocalAbstractCoreLLMClient, "_create_client", create)
+    return client, ejects, made
+
+
+def test_ttl_on_an_already_loaded_model_is_reported_not_applied(loadable):
+    """S6. MUTANT: skip the report when the provider load did not run -> RED."""
+    client, _, made = loadable
+    made[("mlx", "vendor/M")] = {"loaded": True}
+    out = client.load_model_residency(task="text_generation", provider="mlx", model="vendor/M", options={"ttl_s": 20})
+    assert out["ok"] is True and out["unsupported_options"] == ["ttl_s"]
+    assert any("no idle/TTL unload" in w for w in out["warnings"])
+    made[("ollama", "g")] = {"loaded": True}
+    out = client.load_model_residency(task="text_generation", provider="ollama", model="g", keep_alive="5m")
+    assert out["unsupported_options"] == ["keep_alive"] and "already loaded" in out["warnings"][0]
+
+
+def test_provider_load_warnings_reach_the_top_level_warnings(loadable):
+    client, _, made = loadable
+    made[("mlx", "vendor/W")] = {"warnings": ["MLX has no idle/TTL unload: ttl_s not applied"]}
+    out = client.load_model_residency(task="text_generation", provider="mlx", model="vendor/W", options={"ttl_s": 5})
+    assert out["warnings"] == ["MLX has no idle/TTL unload: ttl_s not applied"]
+    assert out["unsupported_options"] == ["ttl_s"]
+
+
+def test_a_failed_load_ejects_its_partial_weights(loadable):
+    """Nit 8. MUTANT: plain pool pop -> partial weights stay -> RED."""
+    client, ejects, made = loadable
+    made[("mlx", "vendor/F")] = {"fail": True}
+    out = client.load_model_residency(task="text_generation", provider="mlx", model="vendor/F")
+    assert out["ok"] is False and ("mlx", "vendor/F") not in client._clients
+    assert ejects == [("mlx", "vendor/F")]
+    assert client.list_model_residency()["diagnostics"]["last_switch_ejects"][-1]["model"] == "vendor/F"

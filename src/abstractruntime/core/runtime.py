@@ -76,6 +76,16 @@ logger = logging.getLogger(__name__)
 _ENTITY_VISIT_WORKFLOW_ID = "entity-visit@1"
 
 
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    """Does `fn` take keyword `name` (or **kwargs)? Host-supplied summarizers
+    predating the run-route arguments keep working unchanged."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -5348,11 +5358,22 @@ class Runtime:
         if self._chat_summarizer is not None:
             # Use AbstractCore's BasicSummarizer with adaptive chunking
             try:
+                summarize_kwargs: Dict[str, Any] = {}
+                route = target_run.vars.get("_runtime") if isinstance(target_run.vars.get("_runtime"), dict) else {}
+                route_provider = str(route.get("provider") or "").strip() or None
+                route_model = str(route.get("model") or "").strip() or None
+                if route_provider and route_model and _accepts_kwarg(
+                    self._chat_summarizer.summarize_chat_history, "model"
+                ):
+                    # Summarize a run with the model it runs on, never by
+                    # loading the default just for the summary.
+                    summarize_kwargs = {"provider": route_provider, "model": route_model}
                 summarizer_result = self._chat_summarizer.summarize_chat_history(
                     messages=split.older_messages,
                     preserve_recent=0,  # Already split; don't preserve again
                     focus=focus_text,
                     compression_mode=compression_mode,
+                    **summarize_kwargs,
                 )
                 summary_text_out = summarizer_result.get("summary", "(summary unavailable)")
                 key_points = list(summarizer_result.get("key_points") or [])

@@ -83,3 +83,31 @@ def test_remote_providers_are_not_guarded(clients):
     b._locked_model_residency.add(("ollama", "g"))
     out = a.unload_model_residency(provider="ollama", model="g")
     assert out.get("refused") is None
+
+
+# -- REVIEW/20: the check and the eject under one core lock ---------------------------
+def test_a_lock_taken_between_the_check_and_the_eject_is_still_refused(clients, monkeypatch):
+    """MUTANT: eject without the late re-check (plain `_process_eject_for`)
+    -> the injected lock is missed and the model is ejected -> RED."""
+    import abstractcore.providers.process_residency as core_pr
+
+    a, b, ejects = clients
+    seen_lock_held: List[bool] = []
+
+    def inject(owner, provider, model):
+        seen_lock_held.append(core_pr.residency_lock()._is_owned())
+        b._locked_model_residency.add(("mlx", "vendor/X"))   # lands after the pre-check
+
+    monkeypatch.setattr(llm_mod, "_before_process_eject", inject)
+    out = a.unload_model_residency(provider="mlx", model="vendor/X")
+    assert seen_lock_held == [True], "the eject step runs under the core residency lock"
+    assert out["ok"] is False and out["refused"] == "model_locked_by_other_client" and out["status_code"] == 409
+    assert ejects == [], "not ejected from the process"
+
+
+def test_force_still_ejects_when_a_lock_lands_late(clients, monkeypatch):
+    a, b, ejects = clients
+    monkeypatch.setattr(llm_mod, "_before_process_eject",
+                        lambda owner, p, m: b._locked_model_residency.add(("mlx", "vendor/X")))
+    out = a.unload_model_residency(provider="mlx", model="vendor/X", force=True)
+    assert out["ok"] is True and ejects == [("mlx", "vendor/X")]

@@ -4150,6 +4150,45 @@ def _load_option_report(**kw: Any) -> Dict[str, Any]:
     return out
 
 
+def _before_process_eject(owner: Any, provider: str, model: str) -> None:
+    """Test seam: runs right before an explicit unload's process-wide eject,
+    after the pre-check (a lock injected here must still be honoured)."""
+
+
+def _other_client_lock_claims(owner: Any, provider: str, model: str) -> List[Dict[str, Any]]:
+    pr = _core_process_residency()
+    if pr is None:
+        return []
+    mine = f"runtime client {id(owner):x}"
+    return [
+        {k: c.get(k) for k in ("kind", "owner", "runtime_id", "model") if c.get(k) is not None}
+        for c in pr.claims_for(provider, model)
+        if c.get("owner") != mine and c.get("locked")
+    ]
+
+
+def _claims_checked_process_eject(owner: Any, provider: str, model: str) -> Optional[Dict[str, Any]]:
+    """The process-wide eject of an explicit unload, re-checking other
+    clients' LOCK claims immediately before it (under the core residency lock
+    the caller holds). A lock found now refuses the eject unless forced; the
+    refusal is recorded for `unload_model_residency` to report."""
+    ctx = getattr(owner, "_explicit_eject_ctx", None)
+    with _core_residency_lock():
+        _before_process_eject(owner, provider, model)
+        if isinstance(ctx, dict) and not ctx.get("force"):
+            locks = _other_client_lock_claims(owner, provider, model)
+            if locks:
+                message = (
+                    f"{provider}/{model} was locked by another client in this process "
+                    f"({', '.join(sorted({str(h.get('kind')) + ': ' + str(h.get('owner')) for h in locks}))}); "
+                    "not ejected from the process; pass force=true to eject it anyway"
+                )
+                ctx["refusal"] = {"refused": "model_locked_by_other_client", "status_code": 409,
+                                  "locked_by": locks, "error": message}
+                return {"ok": False, "error": message, "refused": "model_locked_by_other_client"}
+        return _process_eject_for(provider, model)
+
+
 def _explicit_eject_guard(
     owner: Any,
     *,
@@ -5151,7 +5190,8 @@ def _local_model_residency_lock_result(
                 "affected_models": [],
                 "diagnostics": {"source": source, "reason": "model_not_resident"},
             }
-        locked_pairs.add(pair)
+        with _core_residency_lock():  # a lock is a claim: never between an eject's check and its eject
+            locked_pairs.add(pair)
     else:
         locked_pairs.discard(pair)
     provider_side = _apply_local_provider_side_lock_knob(
@@ -7928,12 +7968,29 @@ class LocalAbstractCoreLLMClient:
         `process_residency`): another client's LOCK refuses the eject unless
         `force=True`; other clients that merely pool the model are ejected as
         well and counted in `ejected_from_other_clients`."""
-        guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
-                                      force=force, source='abstractruntime.local')
-        if guard.get("refusal") is not None:
-            return guard["refusal"]
-        result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider, model=model,
-                                              options=options, force=force, **kwargs)
+        # The claim check and the process-wide eject run under ONE core
+        # residency lock (the lock every owner takes to register a claim or a
+        # lock), and the claims are checked again right before the eject
+        # (`_claims_checked_process_eject`): no lock can land in between.
+        with _core_residency_lock():
+            guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                          force=force, source='abstractruntime.local')
+            if guard.get("refusal") is not None:
+                return guard["refusal"]
+            self._explicit_eject_ctx = {"force": bool(force), "refusal": None, "source": 'abstractruntime.local'}
+            try:
+                result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider,
+                                                      model=model, options=options, force=force, **kwargs)
+            finally:
+                ctx = self.__dict__.pop("_explicit_eject_ctx", None) or {}
+        if isinstance(result, dict) and ctx.get("refusal") is not None:
+            late = ctx["refusal"]
+            result.update({k: late[k] for k in ("refused", "status_code", "locked_by") if k in late})
+            result["ok"] = False
+            result["success"] = False
+            result["unloaded"] = False
+            result["error"] = late["error"]
+            return result
         if isinstance(result, dict) and guard.get("in_process"):
             result["ejected_from_other_clients"] = int(guard.get("pooled_elsewhere") or 0)
             if guard.get("forced_over_locks"):
@@ -8048,7 +8105,7 @@ class LocalAbstractCoreLLMClient:
         # holder in the process is unloaded by core's `eject_model`.
         process_eject: Optional[Dict[str, Any]] = None
         if provider_s in _PROCESS_RESIDENCY_PROVIDERS and unload_error is None:
-            process_eject = _process_eject_for(provider_s, model_s)
+            process_eject = _claims_checked_process_eject(self, provider_s, model_s)
             if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
                 unload_error = f"process-wide {provider_s} eject failed: {process_eject['error']}"
 
@@ -10785,12 +10842,29 @@ class MultiLocalAbstractCoreLLMClient:
         `process_residency`): another client's LOCK refuses the eject unless
         `force=True`; other clients that merely pool the model are ejected as
         well and counted in `ejected_from_other_clients`."""
-        guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
-                                      force=force, source='abstractruntime.multilocal')
-        if guard.get("refusal") is not None:
-            return guard["refusal"]
-        result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider, model=model,
-                                              options=options, force=force, **kwargs)
+        # The claim check and the process-wide eject run under ONE core
+        # residency lock (the lock every owner takes to register a claim or a
+        # lock), and the claims are checked again right before the eject
+        # (`_claims_checked_process_eject`): no lock can land in between.
+        with _core_residency_lock():
+            guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                          force=force, source='abstractruntime.multilocal')
+            if guard.get("refusal") is not None:
+                return guard["refusal"]
+            self._explicit_eject_ctx = {"force": bool(force), "refusal": None, "source": 'abstractruntime.multilocal'}
+            try:
+                result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider,
+                                                      model=model, options=options, force=force, **kwargs)
+            finally:
+                ctx = self.__dict__.pop("_explicit_eject_ctx", None) or {}
+        if isinstance(result, dict) and ctx.get("refusal") is not None:
+            late = ctx["refusal"]
+            result.update({k: late[k] for k in ("refused", "status_code", "locked_by") if k in late})
+            result["ok"] = False
+            result["success"] = False
+            result["unloaded"] = False
+            result["error"] = late["error"]
+            return result
         if isinstance(result, dict) and guard.get("in_process"):
             result["ejected_from_other_clients"] = int(guard.get("pooled_elsewhere") or 0)
             if guard.get("forced_over_locks"):
@@ -10911,7 +10985,7 @@ class MultiLocalAbstractCoreLLMClient:
                 if model_s in [str(n) for n in (row.get("models") or [])]
             ]
             if held_rows:
-                process_eject = _process_eject_for(provider_s, model_s)
+                process_eject = _claims_checked_process_eject(self, provider_s, model_s)
                 remaining = [
                     row for row in _process_residency_rows_for(provider_s)
                     if model_s in [str(n) for n in (row.get("models") or [])]
@@ -11009,7 +11083,7 @@ class MultiLocalAbstractCoreLLMClient:
         # reports what is still resident. Its report rides in the payload.
         process_eject: Optional[Dict[str, Any]] = None
         if provider_s in _PROCESS_RESIDENCY_PROVIDERS and unload_error is None:
-            process_eject = _process_eject_for(provider_s, model_s)
+            process_eject = _claims_checked_process_eject(self, provider_s, model_s)
             if process_eject is not None and process_eject.get("ok") is False and process_eject.get("error"):
                 unload_error = f"process-wide {provider_s} eject failed: {process_eject['error']}"
 

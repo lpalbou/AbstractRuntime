@@ -3517,6 +3517,21 @@ class Runtime:
                             f"effect interrupted by a kill aimed at an effect that had already finished: "
                             f"run={run.run_id} node={node_id} step={rec.step_id} — re-invoking the attempt"
                         )
+                        # The interrupted invocation's live text is not the
+                        # answer: close it as cancelled, and give the re-invoke
+                        # its own call id, so a live view never shows a partial
+                        # first answer followed by the full second one.
+                        if delta_emitter is not None:
+                            try:
+                                delta_emitter.end("cancelled")
+                            except Exception:  # pragma: no cover - live preview must never break execution
+                                logger.warning("live delta_end failed for step %s", rec.step_id, exc_info=True)
+                            delta_emitter = self._runtime_delta_callback(
+                                effect_for_attempt,
+                                run=run,
+                                node_id=node_id,
+                                step_id=f"{rec.step_id}:reinvoke",
+                            )
                         try:
                             outcome = _invoke_registered()
                         except EffectKilled:

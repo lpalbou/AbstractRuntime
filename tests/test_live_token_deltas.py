@@ -1503,3 +1503,41 @@ def test_seal_flushes_and_refuses_more_text_but_allows_the_end() -> None:
     em("c")
     em.end("completed")
     assert [e["kind"] for e in events] == ["llm.delta", "llm.delta", "llm.delta_end"]
+
+
+def test_a_kill_reinvoke_gets_its_own_call_and_the_first_ends_cancelled() -> None:
+    """REVIEW/23: a kill aimed at an effect that had already finished lands on
+    this attempt and the runtime re-invokes it. The interrupted invocation's
+    partial text must be closed as cancelled, and the re-invoke streams under
+    its own call id."""
+    from abstractruntime.core.effect_cancellation import EffectKilled
+
+    events: List[Dict[str, Any]] = []
+    invocations = {"n": 0}
+
+    def llm_handler(run, effect, default_next_node):
+        del run, effect, default_next_node
+        invocations["n"] += 1
+        cb = current_effect_delta_callback()
+        if invocations["n"] == 1:
+            cb("partial ans", "content")
+            raise EffectKilled()  # unattributed: meant for an effect that already finished
+        cb("The full answer.", "content")
+        return EffectOutcome.completed({"content": "The full answer."})
+
+    state, ledger, run_id = _drive({EffectType.LLM_CALL: llm_handler}, runtime_ns={"stream": True}, sink=events.append)
+    assert state.status.value == "completed", state.error
+    assert invocations["n"] == 2
+    calls: Dict[str, List[Dict[str, Any]]] = {}
+    for e in events:
+        calls.setdefault(e["call_id"], []).append(e)
+    assert len(calls) == 2
+    first, second = list(calls.values())
+    assert [e["kind"] for e in first] == ["llm.delta", "llm.delta_end"]
+    assert first[0]["text"] == "partial ans" and first[-1]["reason"] == "cancelled"
+    assert "".join(e["text"] for e in second if e["kind"] == "llm.delta") == "The full answer."
+    assert second[-1]["kind"] == "llm.delta_end" and second[-1]["reason"] == "completed"
+    # The first call is closed before the second one starts.
+    assert events.index(first[-1]) < events.index(second[0])
+    [step_id] = _llm_call_step_ids(ledger, run_id)
+    assert first[0]["call_id"] == step_id and second[0]["call_id"] == f"{step_id}:reinvoke"

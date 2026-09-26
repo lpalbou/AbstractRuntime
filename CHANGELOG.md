@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When an LLM call is re-run after a stray kill, its interrupted first run ends with
+  `delta_end` `cancelled` and the re-run streams under its own call id, so a live view never shows
+  a partial answer followed by the full one.
 - The last batch of a streamed reply is sent before the call's final record is written, never just
   after it; text arriving once the call has returned is dropped.
 - A streamed reply that only turns out to lack token usage at the end now ends with

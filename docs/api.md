@@ -76,7 +76,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 - `Runtime.set_default_provider_model(provider=..., model=...)`
   - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
 - `Runtime.set_live_delta_sink(sink)` where `sink(event: dict) -> None`, or `None` to remove it
-  - receives live token deltas (`llm.delta`, `llm.delta_end`) for LLM calls of runs started with `_runtime.stream: true`; nothing is written to the ledger. See [Live token streaming](integrations/abstractcore.md#live-token-streaming)
+  - receives live token deltas (`llm.delta`, `llm.delta_end`) for LLM calls of runs started with `_runtime.stream: true` (a boolean; `start` refuses any other value); nothing is written to the ledger. See [Live token streaming](integrations/abstractcore.md#live-token-streaming)
 
 Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
 - `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)

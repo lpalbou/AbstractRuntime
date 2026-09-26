@@ -31,12 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Live token streaming.** `Runtime.set_live_delta_sink(sink)` lets a host receive the text of an
   answer while it is generated. For runs started with `_runtime.stream: true`, each LLM call streams
-  and the sink gets `llm.delta` events (`run_id`, `node_id`, `call_id` = the LLM call's step id,
-  `seq`, `text`, `channel` = `content` or `reasoning`) and one `llm.delta_end` (`completed`,
-  `failed` or `cancelled`) after the call's final record is written. Deltas are never written to the
-  ledger. Thinking is sent on its own `reasoning` channel, including inline `<think>` markup, so
-  clients can hide it. Child runs inherit `stream`. Remote mode (AbstractCore server) stays
-  non-streaming. See `docs/integrations/abstractcore.md#live-token-streaming`.
+  and the sink gets `llm.delta` events (`run_id`, `parent_run_id`, `node_id`, `call_id` = the LLM
+  call's step id, `seq`, `text`, `channel` = `content` or `reasoning`) and one `llm.delta_end`
+  (`completed`, `failed`, `cancelled`, or `unavailable` with a `detail`) after the call's final
+  record is written. Deltas are never written to the ledger. Thinking is sent on its own `reasoning`
+  channel, including inline `<think>` markup, and tool-call markup never reaches the live text.
+  A call streams only when its recorded result keeps its usage, `raw_response` and prompt-cache
+  telemetry; otherwise it runs non-streamed and the reason is sent to the client and recorded as
+  `_runtime_observability.stream_unavailable`. Child runs inherit `stream`. `Runtime.start`
+  refuses a non-boolean `_runtime.stream`. Remote mode (AbstractCore server) stays non-streaming.
+  See `docs/integrations/abstractcore.md#live-token-streaming`.
 - Embedding models loaded in the process appear in `list_model_residency` as `task: "embedding"`
   rows (`local:embedding:huggingface:<model>`, with holders and bytes) and can be unloaded like any
   other model.

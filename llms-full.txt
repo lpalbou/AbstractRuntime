@@ -458,7 +458,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 - `Runtime.set_default_provider_model(provider=..., model=...)`
   - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
 - `Runtime.set_live_delta_sink(sink)` where `sink(event: dict) -> None`, or `None` to remove it
-  - receives live token deltas (`llm.delta`, `llm.delta_end`) for LLM calls of runs started with `_runtime.stream: true`; nothing is written to the ledger. See [Live token streaming](docs/integrations/abstractcore.md#live-token-streaming)
+  - receives live token deltas (`llm.delta`, `llm.delta_end`) for LLM calls of runs started with `_runtime.stream: true` (a boolean; `start` refuses any other value); nothing is written to the ledger. See [Live token streaming](docs/integrations/abstractcore.md#live-token-streaming)
 
 Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
 - `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
@@ -2343,22 +2343,24 @@ payload = {
 
 A host can show an answer while it is being generated. Streaming is opt-in per run and needs two things:
 
-1. The run asks for it: `run.vars["_runtime"]["stream"] = True` (only the boolean `True` enables it; `False` is an explicit off).
+1. The run asks for it: `run.vars["_runtime"]["stream"] = True`. The value must be a boolean (`False` is an explicit off); `Runtime.start` refuses anything else, such as the string `"true"`, with a `ValueError`.
 2. The host registers a sink on the runtime: `runtime.set_live_delta_sink(sink)`.
 
 When both hold, every `LLM_CALL` of the run streams from the provider and the runtime calls `sink(event)` with plain dicts:
 
 ```python
-{"kind": "llm.delta", "run_id": "…", "node_id": "reason", "call_id": "<step_id>",
- "seq": 0, "text": "Hello", "channel": "content"}
-{"kind": "llm.delta_end", "run_id": "…", "node_id": "reason", "call_id": "<step_id>",
- "seq": 5, "reason": "completed"}
+{"kind": "llm.delta", "run_id": "…", "parent_run_id": None, "node_id": "reason",
+ "call_id": "<step_id>", "seq": 0, "text": "Hello", "channel": "content"}
+{"kind": "llm.delta_end", "run_id": "…", "parent_run_id": None, "node_id": "reason",
+ "call_id": "<step_id>", "seq": 5, "reason": "completed"}
 ```
 
+- `parent_run_id` is the emitting run's parent (`None` for a root run), so a host can show a child run's text in its root conversation.
 - `call_id` is the `step_id` of the `LLM_CALL` ledger record that later holds the final answer, so a client can replace its live text with the durable result.
 - `seq` counts the events of one call from 0, `llm.delta_end` included.
 - `channel` is `content` (the answer) or `reasoning` (the model's thinking). Reasoning arrives from the provider's reasoning stream, and inline `<think>…</think>` markup is split out of the content live, so clients can hide or fold it. The markup itself is never sent.
-- `reason` is `completed`, `failed` or `cancelled`. Every call that streamed ends with exactly one `llm.delta_end`, sent after the call's durable record is in the ledger. Each retry attempt is its own call with its own `call_id`.
+- `reason` is `completed`, `failed`, `cancelled` or `unavailable`. Every call ends with exactly one `llm.delta_end`, sent after the call's durable record is in the ledger. Each retry attempt is its own call with its own `call_id`.
+- Tool-call markup a local model writes as text (`<tool_call>`, `<|tool_call|>`, `<function_call>`, …) never reaches the live text. AbstractCore already removes it from streamed content; the runtime also stops the live content of a call at the first such marker. The final record carries the tool calls.
 - Text is coalesced: the first fragment is sent immediately, later fragments are grouped over about 40 ms.
 
 ```python
@@ -2372,9 +2374,19 @@ runtime.tick(workflow=wf, run_id=run_id)
 
 **Child runs inherit the switch.** Subworkflows, and the delegated children of AbstractAgent loops, receive the parent's `_runtime.stream` unless they set their own value.
 
-**When a call does not stream.** A call whose payload sets `params.stream: False`, and structured or media-output calls, run without streaming; they still send one `llm.delta_end` so the client can close its live view.
+**When a call does not stream, it says why.** The call runs non-streamed with the same complete answer, its `llm.delta_end` has `reason: "unavailable"` and a `detail`, and the same detail is recorded on the `LLM_CALL` record as `metadata._runtime_observability.stream_unavailable`:
 
-**Remote mode does not stream.** With a remote runtime (AbstractCore server), the call is a single non-streaming request: the run completes with the same answer, without live deltas.
+| `detail` | Meaning |
+| --- | --- |
+| `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When this is only known at the end of a call, that call is reported and the next calls on that model run non-streamed. |
+| `prompt_cache_unavailable` | The provider's streamed answers do not carry `metadata.prompt_cache`. Today this applies to MLX calls that use a prompt-cache key. |
+| `structured_output` | Structured or media-output calls are never streamed. |
+| `provider_cannot_stream` | The provider answered in one piece. |
+| `remote_core` | Remote mode: the AbstractCore server call is not streamed. |
+| `node_stream_off` | The `LLM_CALL` payload sets `params.stream: False`. |
+| `sink_error` | The host sink raised; the rest of the call was not delivered live. |
+
+A streamed call records the same `usage`, `raw_response` and `metadata.prompt_cache` as a non-streamed one; where it cannot, the call does not stream.
 
 **Writing a sink.** The sink is called from the provider's thread, in `seq` order for a given call. Keep it fast: put the event on a queue and return. A sink that raises is switched off for the rest of that call and the call itself continues normally.
 

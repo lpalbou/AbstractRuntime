@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Host-protected folders no longer grow the system prompt. A host can pass its own protection as
+  `workspace_builtin_deny_prefixes` (for example the gateway's data folder and credential folders)
+  and `workspace_builtin_allow` (the run's own folder inside it). File tools, listings and the
+  shell's starting folder are refused under a denied prefix, except under an allow entry. These
+  entries are enforced but never written into the model's system prompt, which keeps it identical
+  from turn to turn (and the prompt cache warm); only the operator's own `workspace_ignored_paths`
+  are shown to the model. Child runs inherit both lists.
+- MLX calls stream again when they use a prompt-cache key: AbstractCore now puts the prompt-cache
+  record on the stream's last chunk, so the streamed record matches the non-streamed one.
 - Streamed LLM calls now record the same result as non-streamed ones: `raw_response` is present
   (the provider's terminal chunk), and the last reasoning fragment no longer leaks into
   `metadata.reasoning_delta`.

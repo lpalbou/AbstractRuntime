@@ -6759,11 +6759,11 @@ def _split_think_blocks(text: str) -> Tuple[str, Optional[str]]:
 
 # Providers whose STREAMED lane does not report `metadata["prompt_cache"]`,
 # which their non-streamed lane does (the prompt-cache diagnosis reads it first).
-# abstractcore mlx_provider.py (~4832-4840) attaches the cache telemetry on the
-# sync lane only ("Sync lane only, deliberately: the runtime's durable llm_call
-# lane forces stream=False"). Streaming is refused for these when a prompt-cache
-# key is in play, until AbstractCore streams the telemetry on the final chunk.
-_STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY = frozenset({"mlx"})
+# Streaming is refused for these when a prompt-cache key is in play. Empty today:
+# MLX was the one entry until AbstractCore 8d59974 ("streamed calls end with the
+# sync lane's finish_reason, usage and prompt_cache"), which puts the same
+# record on the stream's terminal chunk.
+_STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY: frozenset = frozenset()
 
 
 def _mark_stream_unavailable(on_delta: Any, detail: str) -> None:

@@ -925,16 +925,112 @@ def test_usage_missing_at_the_end_is_reported_and_later_calls_do_not_stream() ->
     assert record2["result"]["usage"] == _USAGE
 
 
-def test_mlx_with_a_prompt_cache_key_does_not_stream_until_core_streams_its_telemetry() -> None:
+def test_a_provider_listed_without_streamed_prompt_cache_does_not_stream(monkeypatch) -> None:
+    """The gate mechanism, independent of which providers are listed today."""
+    from abstractruntime.integrations.abstractcore import llm_client as lc
+
+    monkeypatch.setattr(lc, "_STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY", frozenset({"fakelane"}))
     provider = _ConfigurableProvider("ok")
     client = _local_client(provider)
-    client._provider = "mlx"
+    client._provider = "fakelane"
     events, record = _run_with(
         provider, client=client, payload={"prompt": "hi", "params": {"prompt_cache_key": "sess:1"}}
     )
     assert provider.calls[-1]["stream"] is False
     assert events[-1]["detail"] == "prompt_cache_unavailable"
     assert _stream_unavailable(record) == "prompt_cache_unavailable"
+
+
+class _RealMLXShapes:
+    """The REAL MLXProvider's streamed and sync lanes (abstractcore 8d59974),
+    over a fake mlx-lm generator: no model load, real chunk/metadata shapes."""
+
+    TELEMETRY = {"mode": "key", "outcome": "hit_extend", "cached_tokens": 4, "fed_tokens": 7}
+
+    def __init__(self) -> None:
+        from unittest.mock import Mock
+
+        from abstractcore.providers.mlx_provider import MLXProvider
+
+        words = ["Hello", " there", " friend"]
+        p = MLXProvider.__new__(MLXProvider)
+        p.model = "fake/mlx-lm"
+        p.logger = Mock()
+        p.llm = object()
+        p.tokenizer = NS(encode=lambda text: list(range(len(str(text).split()))))
+        p._mtp_processor = None
+        p._native_runtime = None
+        p._build_mlx_sampler = lambda *a, **k: None
+
+        def stream_generate_fn(model, tokenizer, prompt, **kwargs):
+            for i, w in enumerate(words):
+                yield NS(text=w, generation_tokens=i + 1, prompt_tokens=7,
+                         finish_reason="stop" if i == len(words) - 1 else None)
+
+        p.stream_generate_fn = stream_generate_fn
+        p.generate_fn = lambda model, tokenizer, prompt=None, **kwargs: "".join(words)
+        self.p = p
+        self.calls: List[Dict[str, Any]] = []
+
+    def generate(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        telemetry = dict(self.TELEMETRY, key=kwargs.get("prompt_cache_key"))
+        if kwargs.get("stream"):
+            return self.p._stream_generate(
+                "the prompt", 16, 0.0, 1.0, usage_prompt="the full prompt", prompt_cache_telemetry=telemetry
+            )
+        resp = self.p._single_generate("the prompt", 16, 0.0, 1.0, usage_prompt="the full prompt")
+        resp.metadata = dict(resp.metadata or {}, prompt_cache=self.p._final_prompt_cache_telemetry(telemetry))
+        return resp
+
+
+def test_mlx_streams_and_records_the_same_prompt_cache_and_usage_as_non_streamed() -> None:
+    pytest.importorskip("abstractcore.providers.mlx_provider")
+    payload = {"prompt": "hi", "params": {"prompt_cache_key": "sess:1"}}
+
+    streamed_provider = _RealMLXShapes()
+    client = _local_client(streamed_provider)
+    client._provider = "mlx"
+    events, streamed = _run_with(streamed_provider, client=client, payload=payload)
+    assert streamed_provider.calls[-1]["stream"] is True
+    assert "".join(e["text"] for e in events if e["kind"] == "llm.delta") == "Hello there friend"
+    assert events[-1]["reason"] == "completed"
+    assert _stream_unavailable(streamed) is None
+
+    sync_provider = _RealMLXShapes()
+    sync_client = _local_client(sync_provider)
+    sync_client._provider = "mlx"
+    rt = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers=build_effect_handlers(llm=sync_client),
+    )
+    wf = WorkflowSpec(
+        workflow_id="sync",
+        entry_node="a",
+        nodes={
+            "a": lambda r, c: StepPlan(
+                node_id="a",
+                effect=Effect(type=EffectType.LLM_CALL, payload=deepcopy(payload), result_key="ans"),
+                next_node="b",
+            ),
+            "b": lambda r, c: StepPlan(node_id="b", complete_output={}),
+        },
+    )
+    run_id = rt.start(workflow=wf, vars={})
+    rt.tick(workflow=wf, run_id=run_id)
+    [plain] = [
+        r for r in rt.ledger_store.list(run_id)
+        if (r.get("effect") or {}).get("type") == "llm_call" and r["status"] == "completed"
+    ]
+    assert sync_provider.calls[-1]["stream"] is False
+
+    s_res, p_res = streamed["result"], plain["result"]
+    assert s_res["metadata"]["prompt_cache"] == p_res["metadata"]["prompt_cache"]
+    assert s_res["metadata"]["prompt_cache"]["key"] == "sess:1"
+    assert s_res["usage"] == p_res["usage"] and s_res["usage"]
+    assert s_res["finish_reason"] == p_res["finish_reason"] == "stop"
+    assert s_res["content"] == p_res["content"] == "Hello there friend"
 
 
 def test_structured_output_does_not_stream_and_says_so() -> None:

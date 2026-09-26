@@ -409,7 +409,7 @@ runtime.tick(workflow=wf, run_id=run_id)
 | `detail` | Meaning |
 | --- | --- |
 | `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When this is only known at the end of a call, that call is reported and the next calls on that model run non-streamed. |
-| `prompt_cache_unavailable` | The provider's streamed answers do not carry `metadata.prompt_cache`. Today this applies to MLX calls that use a prompt-cache key. |
+| `prompt_cache_unavailable` | The provider's streamed answers do not carry `metadata.prompt_cache` while its non-streamed answers do. No current provider is in this case: MLX streams carry it on their last chunk (AbstractCore release with that change required). |
 | `structured_output` | Structured or media-output calls are never streamed. |
 | `provider_cannot_stream` | The provider answered in one piece. |
 | `remote_core` | Remote mode: the AbstractCore server call is not streamed. |

@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.15.3 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.16.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -747,7 +747,7 @@ result = facade.clear_session_prompt_caches("support-session-1")
 ## Models, engines and host jobs (config facade)
 
 AbstractCore implements the model browser, the local-engine installer and a
-host job registry. These passthroughs need AbstractCore 2.15.3 (the
+host job registry. These passthroughs need AbstractCore 2.16.0 (the
 base-install floor; 2.15.1 is the first release that records who cancelled a job).
 `abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same

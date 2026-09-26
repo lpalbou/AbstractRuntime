@@ -5,7 +5,7 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-26
 
 ### Fixed
 
@@ -73,6 +73,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capabilities.
 - Changing a capability default unloads the models the previous capability routes had loaded
   instead of leaving them in memory.
+- Unloading a local MLX model through the runtime (`model_residency` unload, on
+  a single client or the multi-model pool) now frees it from every holder in
+  the process, not only from the runtime's own instance. Before, the weights
+  could stay in memory when another part of the process still held the model
+  (for example a client created with a per-request override, a chat summarizer
+  built at startup, or a runtime left over after a bundle reload), and the
+  unload still reported success. The unload result now includes a
+  `process_eject` report and names what, if anything, is still held.
+- Model residency listings now show MLX models the process still holds, even
+  when the runtime's own pool no longer references them
+  (`provider_state: "resident_via_other_holders"`). Such a model can be
+  unloaded from the listing like any other.
 
 ### Added
 
@@ -93,33 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other model.
 - HuggingFace models held in the process outside the runtime's pool are listed and unloaded like
   MLX ones.
-- Compatibility: these features need the AbstractCore changes released alongside this version.
-  Unloading the previous model on a default switch needs AbstractCore's process residency claim
-  registry; with an older AbstractCore the model is kept and `last_switch_ejects` says why. MLX
-  calls with a prompt-cache key record their prompt-cache telemetry when streamed only with the
-  AbstractCore release that puts it on the last streamed chunk.
 
-## [0.4.36] - 2026-09-25
+### Changed
 
-### Fixed
-
-- Unloading a local MLX model through the runtime (`model_residency` unload, on
-  a single client or the multi-model pool) now frees it from every holder in
-  the process, not only from the runtime's own instance. Before, the weights
-  could stay in memory when another part of the process still held the model
-  (for example a client created with a per-request override, a chat summarizer
-  built at startup, or a runtime left over after a bundle reload), and the
-  unload still reported success. The unload result now includes a
-  `process_eject` report and names what, if anything, is still held.
-- Model residency listings now show MLX models the process still holds, even
-  when the runtime's own pool no longer references them
-  (`provider_state: "resident_via_other_holders"`). Such a model can be
-  unloaded from the listing like any other.
-- Compatibility: AbstractRuntime 0.4.36 requires AbstractCore 2.15.3 or newer
-  (was 2.15.1) in the base install and in the `apple` and `gpu` extras, and
-  `models_engines_support()` now reports 2.15.3 as `required`. Upgrading
-  AbstractRuntime upgrades AbstractCore accordingly; if you pin AbstractCore
-  yourself, raise the pin to 2.15.3.
+- Compatibility: AbstractRuntime 0.5.0 requires AbstractCore 2.16.0 or newer (was 2.15.1 in
+  0.4.35) in the base install and in the `apple` and `gpu` extras, and `models_engines_support()`
+  reports 2.16.0 as `required`. The live streaming, process-wide unload and residency features above
+  use modules that first ship in AbstractCore 2.16.0. Upgrading AbstractRuntime upgrades AbstractCore
+  accordingly; if you pin AbstractCore yourself, raise the pin to 2.16.0.
 
 ## [0.4.35] - 2026-09-25
 
@@ -1002,8 +995,8 @@ AbstractRuntime is the durable execution substrate designed to pair with Abstrac
 
 Initial development version with basic proof-of-concept features.
 
-[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.4.36...HEAD
-[0.4.36]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...v0.4.36
+[Unreleased]: https://github.com/lpalbou/abstractruntime/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lpalbou/abstractruntime/compare/v0.4.35...v0.5.0
 [0.4.35]: https://github.com/lpalbou/abstractruntime/compare/v0.4.34...v0.4.35
 [0.4.34]: https://github.com/lpalbou/abstractruntime/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/lpalbou/abstractruntime/compare/v0.4.32...v0.4.33

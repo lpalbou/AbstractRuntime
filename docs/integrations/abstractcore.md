@@ -409,7 +409,7 @@ runtime.tick(workflow=wf, run_id=run_id)
 
 | `detail` | Meaning |
 | --- | --- |
-| `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When the server rejects usage in streams, calls on that model run non-streamed from then on; when usage is only missing at the end of one call, that call is reported and the next call streams again. |
+| `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). The call that lacked usage is reported. Later calls on that model run non-streamed only when the provider also reports that its server rejects usage in streams; they stream again as soon as a streamed answer brings usage back (one call in ten streams to re-check). A server that rejects the option but sends usage anyway (LM Studio) keeps streaming. |
 | `prompt_cache_unavailable` | Reserved for a provider whose streamed answers do not carry `metadata.prompt_cache` while its non-streamed answers do. No provider is in this case with a current AbstractCore. |
 | `structured_output` | Structured or media-output calls are never streamed. |
 | `provider_cannot_stream` | The provider answered in one piece. |

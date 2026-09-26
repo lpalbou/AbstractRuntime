@@ -828,7 +828,7 @@ class _ConfigurableProvider:
         provider = self
 
         def gen():
-            if provider.mode == "reject_options":
+            if provider.mode in ("reject_options", "reject_options_usage_anyway"):
                 provider._stream_options_unsupported = True
             usage = None if provider.mode in ("no_usage", "reject_options") else _USAGE
             yield NS(content="Hel", tool_calls=None, usage=None, model="fake-model", finish_reason=None,
@@ -892,25 +892,26 @@ def test_streamed_record_keeps_prompt_cache_raw_response_and_usage() -> None:
     assert _stream_unavailable(record) is None
 
 
-def test_known_usage_gap_runs_non_streamed_and_says_so() -> None:
+def test_the_provider_flag_alone_does_not_refuse_streaming() -> None:
+    """A server that rejected `stream_options` may still send usage (LM Studio
+    puts it on the last content chunk): the flag alone never refuses."""
     provider = _ConfigurableProvider("ok")
-    provider._stream_options_unsupported = True  # learned on an earlier call
+    provider._stream_options_unsupported = True
     events, record = _run_with(provider)
-    assert provider.calls[-1]["stream"] is False
-    assert [e["kind"] for e in events] == ["llm.delta_end"]
-    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
-    assert _stream_unavailable(record) == "usage_unavailable"
+    assert provider.calls[-1]["stream"] is True
+    assert events[-1]["reason"] == "completed"
     assert record["result"]["usage"] == _USAGE
 
 
-def test_usage_gap_discovered_while_opening_the_stream_reruns_non_streamed() -> None:
-    provider = _ConfigurableProvider("reject_options")
-    events, record = _run_with(provider)
-    assert [c["stream"] for c in provider.calls] == [True, False]
-    assert [e["kind"] for e in events] == ["llm.delta_end"]  # no text leaked from the abandoned stream
-    assert events[-1]["detail"] == "usage_unavailable"
-    assert record["result"]["usage"] == _USAGE
-    assert record["result"]["metadata"]["_provider_request"]["payload"]["stream"] is False
+def test_a_server_that_rejects_options_but_sends_usage_keeps_streaming() -> None:
+    provider = _ConfigurableProvider("reject_options_usage_anyway")
+    client = _local_client(provider)
+    events, record = _run_with(provider, client=client)
+    assert provider._stream_options_unsupported is True
+    assert events[-1]["reason"] == "completed" and record["result"]["usage"] == _USAGE
+    events2, _ = _run_with(provider, client=client)
+    assert provider.calls[-1]["stream"] is True
+    assert events2[-1]["reason"] == "completed"
 
 
 def test_usage_missing_at_the_end_is_reported_and_the_next_call_streams_again() -> None:
@@ -930,18 +931,30 @@ def test_usage_missing_at_the_end_is_reported_and_the_next_call_streams_again() 
     assert _stream_unavailable(record2) is None
 
 
-def test_a_provider_flagged_rejection_keeps_later_calls_non_streamed() -> None:
-    """The provider's own flag (server rejected `stream_options`) is the only
-    thing that keeps streaming off across calls."""
+def test_flag_plus_a_missing_usage_refuses_until_a_reprobe_gets_usage(monkeypatch) -> None:
+    """Into the refusal: the provider flagged the rejection AND the streamed
+    answer had no usage. Out of it: a periodic re-probe streams again, and one
+    streamed answer with usage lifts the refusal."""
+    from abstractruntime.integrations.abstractcore import llm_client as lc
+
+    monkeypatch.setattr(lc, "_STREAM_USAGE_REPROBE_EVERY", 3)
     provider = _ConfigurableProvider("reject_options")
     client = _local_client(provider)
-    _run_with(provider, client=client)
-    assert provider._stream_options_unsupported is True
-    provider.mode = "ok"
-    events2, record2 = _run_with(provider, client=client)
-    assert provider.calls[-1]["stream"] is False
-    assert [e["kind"] for e in events2] == ["llm.delta_end"]
-    assert events2[-1]["detail"] == "usage_unavailable"
+    events, record = _run_with(provider, client=client)
+    assert provider.calls[-1]["stream"] is True  # discovery call streamed
+    assert events[-1]["detail"] == "usage_unavailable" and _stream_unavailable(record) == "usage_unavailable"
+
+    provider.mode = "reject_options_usage_anyway"  # the server now sends usage
+    for _ in range(2):  # refused calls 1 and 2
+        ev, rec = _run_with(provider, client=client)
+        assert provider.calls[-1]["stream"] is False
+        assert [e["kind"] for e in ev] == ["llm.delta_end"] and ev[-1]["detail"] == "usage_unavailable"
+        assert rec["result"]["usage"] == _USAGE
+    ev, _ = _run_with(provider, client=client)  # 3rd: re-probe streams, gets usage
+    assert provider.calls[-1]["stream"] is True and ev[-1]["reason"] == "completed"
+    ev, _ = _run_with(provider, client=client)  # released
+    assert provider.calls[-1]["stream"] is True and ev[-1]["reason"] == "completed"
+
 
 def test_a_provider_listed_without_streamed_prompt_cache_does_not_stream(monkeypatch) -> None:
     """The gate mechanism, independent of which providers are listed today."""
@@ -1260,3 +1273,68 @@ def test_text_then_a_tool_call_is_not_reported_as_held_back() -> None:
     assert "".join(e["text"] for e in events if e.get("channel") == "content") == "Let me look. "
     assert events[-1]["reason"] == "completed"
     assert _stream_unavailable(record) is None
+
+
+# ---------------------------------------------------------------------------
+# Core's UnifiedStreamProcessor output through the runtime path: the core
+# splits harmony (7dddf90) and gates ```json tool blocks (4d9260b); the runtime
+# splitter is defence in depth and must never process the same text twice.
+# ---------------------------------------------------------------------------
+
+
+def _through_core_and_runtime(transcript: str, *, size: int, tools):
+    usp = pytest.importorskip("abstractcore.providers.streaming")
+    from abstractcore.core.types import GenerateResponse
+
+    chunks = [GenerateResponse(content=transcript[i : i + size], model="m") for i in range(0, len(transcript), size)]
+    core_out = list(usp.UnifiedStreamProcessor(model_name="openai/gpt-oss-20b").process_stream(iter(chunks), tools))
+    got: List[tuple] = []
+    result = _normalize_local_streaming_response(iter(core_out), on_delta=lambda t, c: got.append((c, t)))
+    live = {"content": "", "reasoning": ""}
+    for channel, text in got:
+        live[channel] += text
+    core_content = "".join(c.content or "" for c in core_out)
+    core_reasoning = "".join((c.metadata or {}).get("reasoning_delta", "") for c in core_out)
+    return live, result, core_content, core_reasoning
+
+
+@pytest.mark.parametrize("size", [1, 5, 1000])
+def test_core_split_harmony_is_streamed_once(size) -> None:
+    transcript = (
+        "<|channel|>analysis<|message|>User asks 2+2. Simple.<|end|>"
+        "<|start|>assistant<|channel|>final<|message|>The answer is 4."
+    )
+    live, result, core_content, core_reasoning = _through_core_and_runtime(transcript, size=size, tools=None)
+    assert live == {"content": "The answer is 4.", "reasoning": "User asks 2+2. Simple."}
+    assert live["content"] == core_content and live["reasoning"] == core_reasoning  # not doubled, not dropped
+    assert result["content"] == "The answer is 4."
+
+
+@pytest.mark.parametrize("size", [1, 5, 1000])
+def test_core_split_harmony_tool_call_streams_preamble_once_and_keeps_the_call(size) -> None:
+    transcript = (
+        "<|channel|>analysis<|message|>Need the weather.<|end|>"
+        "<|start|>assistant<|channel|>commentary<|message|>Checking now.<|end|>"
+        "<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json"
+        '<|message|>{"city": "Paris"}<|call|>'
+    )
+    live, result, core_content, _ = _through_core_and_runtime(transcript, size=size, tools=[{"name": "get_weather"}])
+    assert live["content"] == core_content == "Checking now."
+    assert live["reasoning"] == "Need the weather."
+    assert "Paris" not in live["content"]
+    assert [c.get("name") for c in (result["tool_calls"] or [])] == ["get_weather"]
+
+
+def test_a_json_block_that_is_not_a_tool_call_reaches_the_live_text() -> None:
+    """Core only treats ```json as a tool call when it names an offered tool;
+    the runtime must not hold back what core decided is content."""
+    usp = pytest.importorskip("abstractcore.providers.streaming")
+    from abstractcore.core.types import GenerateResponse
+
+    text = 'Here is the config:\n```json\n{"theme": "dark"}\n```\nDone.'
+    chunks = [GenerateResponse(content=text[i : i + 4], model="m") for i in range(0, len(text), 4)]
+    core_out = list(usp.UnifiedStreamProcessor(model_name="qwen3-4b").process_stream(iter(chunks), [{"name": "read_file"}]))
+    got: List[str] = []
+    _normalize_local_streaming_response(iter(core_out), on_delta=lambda t, c: got.append(t) if c == "content" else None)
+    assert "".join(got) == "".join(c.content or "" for c in core_out)
+    assert '"theme": "dark"' in "".join(got)

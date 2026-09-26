@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Servers that reject `stream_options` but still send token usage (LM Studio) stream again.
+  Streaming is refused for missing usage only when the provider reports the rejection AND a
+  streamed answer came back without usage; one call in ten streams again to re-check, and a
+  streamed answer with usage lifts the refusal.
+- A child run or a VisualFlow node can no longer switch off the host's built-in workspace
+  protection: it may add `workspace_builtin_deny_prefixes`, never remove the host's, and cannot
+  widen `workspace_builtin_allow` beyond the parent's (its own folder counts only when it is
+  inside an allowed folder).
 - Harmony-format models (gpt-oss) stream their answers live: the `final` channel is sent as
   content, `analysis` as reasoning, and tool calls are held back. A call whose whole answer is held
   back ends with `reason: "unavailable"`, `detail: "tool_envelope_holdback"` instead of a silent

@@ -6824,6 +6824,10 @@ def _split_think_blocks(text: str) -> Tuple[str, Optional[str]]:
 # record on the stream's terminal chunk.
 _STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY: frozenset = frozenset()
 
+# While streaming is refused for missing usage (see `_stream_parity_refusal`),
+# every Nth call on that client streams again to re-check the server.
+_STREAM_USAGE_REPROBE_EVERY = 10
+
 
 def _mark_stream_unavailable(on_delta: Any, detail: str) -> None:
     """Tell the runtime's live emitter why this call does not stream (no-op without one)."""
@@ -7590,10 +7594,18 @@ class LocalAbstractCoreLLMClient:
     def _stream_parity_refusal(self, params: Dict[str, Any]) -> Optional[str]:
         """Why a streamed call on this provider would record less than a non-streamed one, or None."""
 
-        if getattr(self._llm, "_stream_options_unsupported", False):
-            # abstractcore openai_compatible_provider: the server rejected
-            # `stream_options`, so streamed calls carry no usage.
-            return "usage_unavailable"
+        if getattr(self._llm, "_stream_options_unsupported", False) and getattr(
+            self, "_stream_usage_refused", False
+        ):
+            # The server rejected `stream_options` (abstractcore
+            # openai_compatible_provider's own flag) AND the last streamed call
+            # here indeed came back without usage. Some servers (LM Studio)
+            # send usage anyway, so the flag alone never refuses. While refused,
+            # every `_STREAM_USAGE_REPROBE_EVERY`-th call streams again to
+            # re-check; one streamed answer with usage lifts the refusal.
+            self._stream_usage_refused_calls = int(getattr(self, "_stream_usage_refused_calls", 0)) + 1
+            if self._stream_usage_refused_calls % _STREAM_USAGE_REPROBE_EVERY != 0:
+                return "usage_unavailable"
         key = params.get("prompt_cache_key")
         if (
             str(self._provider or "").strip().lower() in _STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY
@@ -8790,7 +8802,6 @@ class LocalAbstractCoreLLMClient:
             def _invoke_provider(stream_flag: bool) -> Tuple[Dict[str, Any], bool]:
                 """One provider call -> (normalized result, whether it streamed)."""
 
-                options_unsupported_before = bool(getattr(self._llm, "_stream_options_unsupported", False))
                 resp = self._llm.generate(
                     prompt=str(prompt or ""),
                     messages=call_messages,
@@ -8801,38 +8812,25 @@ class LocalAbstractCoreLLMClient:
                     **params,
                 )
                 if stream_flag and hasattr(resp, "__next__"):
-                    # The OpenAI-compatible provider learns that its server
-                    # rejects `stream_options` (so no streamed usage) while
-                    # opening the stream, before the first token. Look at the
-                    # first chunk, then check: if usage just became
-                    # unavailable, abandon the stream and answer non-streamed.
-                    try:
-                        first_chunk = next(resp)
-                        head: List[Any] = [first_chunk]
-                    except StopIteration:
-                        head = []
-                    if not options_unsupported_before and getattr(self._llm, "_stream_options_unsupported", False):
-                        _close = getattr(resp, "close", None)
-                        if callable(_close):
-                            try:
-                                _close()
-                            except Exception:
-                                pass
-                        _mark_stream_unavailable(on_delta, "usage_unavailable")
-                        return _invoke_provider(False)
                     streamed = _normalize_local_streaming_response(
-                        itertools.chain(head, resp),
+                        resp,
                         on_token=getattr(self, "_on_token", None),
                         on_delta=on_delta,
                     )
                     if streamed.get("usage") is None:
-                        # Found out only at the end, for a reason the provider
-                        # did not flag: this call is reported, and the next call
-                        # tries streaming again (a one-off server hiccup must not
-                        # switch streaming off for the model). A server that
-                        # REJECTS usage in streams is the provider's own flag,
-                        # checked before every call in `_stream_parity_refusal`.
+                        # This call is reported. The next calls are refused
+                        # only when the provider ALSO flagged that its server
+                        # rejects usage in streams (`_stream_parity_refusal`);
+                        # an unexplained miss is a one-off and the next call
+                        # streams again.
                         _mark_stream_unavailable(on_delta, "usage_unavailable")
+                        if getattr(self._llm, "_stream_options_unsupported", False):
+                            self._stream_usage_refused = True
+                            self._stream_usage_refused_calls = 0
+                    else:
+                        # Usage arrived (e.g. LM Studio sends it without
+                        # `stream_options`): streaming stays on.
+                        self._stream_usage_refused = False
                     return streamed, True
                 if stream_flag:
                     _mark_stream_unavailable(on_delta, "provider_cannot_stream")

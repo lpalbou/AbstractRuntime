@@ -111,6 +111,9 @@ class LiveDeltaEmitter:
         self._ended = False
         self.emitted_deltas = 0
         self.unavailable_detail: Optional[str] = None
+        # A gap recorded on the durable record only (the live view is not told
+        # "not streamed" under text that DID stream).
+        self.record_only_detail: Optional[str] = None
         self._failed_sink: Optional[LiveDeltaSink] = None
 
     # -- producer side -----------------------------------------------------
@@ -144,6 +147,20 @@ class LiveDeltaEmitter:
         with self._lock:
             if self.unavailable_detail is None:
                 self.unavailable_detail = detail
+
+    @property
+    def has_streamed_text(self) -> bool:
+        """True once any text of this call was delivered or is queued for delivery."""
+        with self._lock:
+            return self.emitted_deltas > 0 or bool(self._pending_text)
+
+    def note_for_record(self, detail: str) -> None:
+        """Record a gap on the durable record without changing the end reason."""
+        if detail not in UNAVAILABLE_DETAILS:
+            raise ValueError(f"unknown stream-unavailable detail {detail!r}; expected one of {UNAVAILABLE_DETAILS}")
+        with self._lock:
+            if self.record_only_detail is None:
+                self.record_only_detail = detail
 
     def flush(self) -> None:
         with self._lock:

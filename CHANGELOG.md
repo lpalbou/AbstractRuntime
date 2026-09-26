@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A streamed reply that only turns out to lack token usage at the end now ends with
+  `reason: "completed"` in the live view (the text did stream); `usage_unavailable` is recorded on
+  the `LLM_CALL` record only.
+- Streamed answers without usage are no longer invisible to the aborted-generation check: it judges
+  them from `finish_reason` and the text, and the record says so with `metadata.usage_estimated`.
 - Servers that reject `stream_options` but still send token usage (LM Studio) stream again.
   Streaming is refused for missing usage only when the provider reports the rejection AND a
   streamed answer came back without usage; one call in ten streams again to re-check, and a

@@ -6867,6 +6867,24 @@ _STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY: frozenset = frozenset()
 # While streaming is refused for missing usage (see `_stream_parity_refusal`),
 # every Nth call on that client streams again to re-check the server.
 _STREAM_USAGE_REPROBE_EVERY = 10
+# Guards each client's refusal state and re-probe counter (calls run on
+# several threads at once).
+_STREAM_USAGE_LOCK = threading.Lock()
+
+
+def _report_stream_usage_missing(on_delta: Any) -> None:
+    """A stream ended without usage. If text already streamed, the live view
+    keeps `completed` (the reply DID stream) and only the record says so;
+    otherwise the call ends `unavailable` / `usage_unavailable`."""
+
+    from ...core.live_deltas import LiveDeltaEmitter
+
+    if not isinstance(on_delta, LiveDeltaEmitter):
+        return
+    if on_delta.has_streamed_text:
+        on_delta.note_for_record("usage_unavailable")
+    else:
+        on_delta.mark_unavailable("usage_unavailable")
 
 
 def _mark_stream_unavailable(on_delta: Any, detail: str) -> None:
@@ -7643,8 +7661,10 @@ class LocalAbstractCoreLLMClient:
             # send usage anyway, so the flag alone never refuses. While refused,
             # every `_STREAM_USAGE_REPROBE_EVERY`-th call streams again to
             # re-check; one streamed answer with usage lifts the refusal.
-            self._stream_usage_refused_calls = int(getattr(self, "_stream_usage_refused_calls", 0)) + 1
-            if self._stream_usage_refused_calls % _STREAM_USAGE_REPROBE_EVERY != 0:
+            with _STREAM_USAGE_LOCK:
+                self._stream_usage_refused_calls = int(getattr(self, "_stream_usage_refused_calls", 0)) + 1
+                refuse = self._stream_usage_refused_calls % _STREAM_USAGE_REPROBE_EVERY != 0
+            if refuse:
                 return "usage_unavailable"
         key = params.get("prompt_cache_key")
         if (
@@ -8880,14 +8900,16 @@ class LocalAbstractCoreLLMClient:
                         # rejects usage in streams (`_stream_parity_refusal`);
                         # an unexplained miss is a one-off and the next call
                         # streams again.
-                        _mark_stream_unavailable(on_delta, "usage_unavailable")
+                        _report_stream_usage_missing(on_delta)
                         if getattr(self._llm, "_stream_options_unsupported", False):
-                            self._stream_usage_refused = True
-                            self._stream_usage_refused_calls = 0
+                            with _STREAM_USAGE_LOCK:
+                                self._stream_usage_refused = True
+                                self._stream_usage_refused_calls = 0
                     else:
                         # Usage arrived (e.g. LM Studio sends it without
                         # `stream_options`): streaming stays on.
-                        self._stream_usage_refused = False
+                        with _STREAM_USAGE_LOCK:
+                            self._stream_usage_refused = False
                     return streamed, True
                 if stream_flag:
                     _mark_stream_unavailable(on_delta, "provider_cannot_stream")

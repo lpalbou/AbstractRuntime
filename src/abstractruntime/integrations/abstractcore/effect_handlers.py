@@ -1431,8 +1431,10 @@ def _looks_like_aborted_generation(result: Any) -> bool:
     usage block is: text cannot have been produced by a completion that
     consumed zero prompt tokens and produced zero completion tokens.
 
-    Absent or empty usage is UNKNOWN, never "aborted": we do not manufacture a
-    verdict out of missing evidence. A result carrying tool calls is never lost
+    Absent or empty usage is UNKNOWN on a non-streamed answer: we do not
+    manufacture a verdict out of missing evidence. A STREAMED answer without
+    usage is judged by `_streamed_without_usage_looks_aborted` instead, and the
+    record says so (`metadata.usage_estimated`). A result carrying tool calls is never lost
     work. Kept in sync with abstractcore's provider-side detector; either
     signal alone is enough downstream.
     """
@@ -1442,7 +1444,7 @@ def _looks_like_aborted_generation(result: Any) -> bool:
         return False
     usage = result.get("usage")
     if not isinstance(usage, dict) or not usage:
-        return False
+        return _streamed_without_usage_looks_aborted(result)
     counters = [usage.get(k) for k in _ABORT_USAGE_KEYS if usage.get(k) is not None]
     if not counters or any(bool(c) for c in counters):
         return False
@@ -1451,6 +1453,52 @@ def _looks_like_aborted_generation(result: Any) -> bool:
         if isinstance(val, str) and val.strip():
             return True
     return False
+
+
+# Heuristic fallback for STREAMED answers that came without usage (a server that
+# never sends it: the first call and every re-probe). Without usage the zero-
+# token rule above is blind, so two text-level tells stand in, and the record
+# says the verdict was estimated (`metadata.usage_estimated`).
+_ABORT_PREFACE_MAX_CHARS = 400
+
+
+def _result_was_streamed(result: Dict[str, Any]) -> bool:
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    request = meta.get("_provider_request") if isinstance(meta.get("_provider_request"), dict) else {}
+    payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
+    return payload.get("stream") is True
+
+
+def _streamed_without_usage_looks_aborted(result: Dict[str, Any]) -> bool:
+    """Streamed, no usage: judge from `finish_reason` and the text instead.
+
+    - The stream ended with text but no `finish_reason` at all: the server
+      never reached a terminal chunk (cut mid-flight).
+    - Or it "stopped" on a short tool-call PREFACE — a reply under
+      `_ABORT_PREFACE_MAX_CHARS` that ends with ":" — with no tool call.
+
+    Stamps `metadata.usage_estimated = True` on every streamed result it
+    judges, so an estimated verdict (either way) is visible on the record.
+    """
+    if not _result_was_streamed(result):
+        return False
+    meta = result.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+        result["metadata"] = meta
+    meta["usage_estimated"] = True
+    content = result.get("content")
+    text = content.strip() if isinstance(content, str) else ""
+    if not text:
+        return False
+    finish_reason = result.get("finish_reason")
+    if not (isinstance(finish_reason, str) and finish_reason.strip()):
+        return True
+    return (
+        finish_reason.strip().lower() == "stop"
+        and len(text) <= _ABORT_PREFACE_MAX_CHARS
+        and text.endswith(":")
+    )
 
 
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
@@ -2437,8 +2485,10 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                     }
                 # Every "no stream" outcome of a call that asked to stream is
                 # recorded on the durable record, not only told to live viewers.
-                if isinstance(runtime_delta_callback, LiveDeltaEmitter) and runtime_delta_callback.unavailable_detail:
-                    runtime_observability["stream_unavailable"] = runtime_delta_callback.unavailable_detail
+                if isinstance(runtime_delta_callback, LiveDeltaEmitter):
+                    gap = runtime_delta_callback.unavailable_detail or runtime_delta_callback.record_only_detail
+                    if gap:
+                        runtime_observability["stream_unavailable"] = gap
                 existing = meta.get("_runtime_observability")
                 if not isinstance(existing, dict):
                     existing = {}

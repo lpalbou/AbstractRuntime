@@ -920,8 +920,12 @@ def test_usage_missing_at_the_end_is_reported_and_the_next_call_streams_again() 
     provider = _ConfigurableProvider("no_usage")
     client = _local_client(provider)
     events, record = _run_with(provider, client=client)
-    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
+    # The reply DID stream: the live view ends `completed`; only the record
+    # says usage was missing (REVIEW/21).
+    assert any(e["kind"] == "llm.delta" for e in events)
+    assert events[-1]["reason"] == "completed" and "detail" not in events[-1]
     assert _stream_unavailable(record) == "usage_unavailable"
+    assert record["result"]["metadata"]["usage_estimated"] is True
 
     provider.mode = "ok"  # the hiccup is over
     events2, record2 = _run_with(provider, client=client)
@@ -942,7 +946,7 @@ def test_flag_plus_a_missing_usage_refuses_until_a_reprobe_gets_usage(monkeypatc
     client = _local_client(provider)
     events, record = _run_with(provider, client=client)
     assert provider.calls[-1]["stream"] is True  # discovery call streamed
-    assert events[-1]["detail"] == "usage_unavailable" and _stream_unavailable(record) == "usage_unavailable"
+    assert events[-1]["reason"] == "completed" and _stream_unavailable(record) == "usage_unavailable"
 
     provider.mode = "reject_options_usage_anyway"  # the server now sends usage
     for _ in range(2):  # refused calls 1 and 2
@@ -1338,3 +1342,105 @@ def test_a_json_block_that_is_not_a_tool_call_reaches_the_live_text() -> None:
     _normalize_local_streaming_response(iter(core_out), on_delta=lambda t, c: got.append(t) if c == "content" else None)
     assert "".join(got) == "".join(c.content or "" for c in core_out)
     assert '"theme": "dark"' in "".join(got)
+
+
+
+# ---------------------------------------------------------------------------
+# REVIEW/21: no "not streamed" under text that streamed; the aborted-
+# generation detector is not blind on streams without usage.
+# ---------------------------------------------------------------------------
+
+
+def test_usage_missing_before_any_text_still_ends_unavailable() -> None:
+    from abstractruntime.integrations.abstractcore.llm_client import _report_stream_usage_missing
+
+    events: List[Dict[str, Any]] = []
+    em = LiveDeltaEmitter(events.append, run_id="r", node_id="n", call_id="c")
+    _report_stream_usage_missing(em)
+    em.end("completed")
+    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
+
+    streamed: List[Dict[str, Any]] = []
+    em2 = LiveDeltaEmitter(streamed.append, run_id="r", node_id="n", call_id="c", flush_interval_s=10.0)
+    em2("hello")
+    em2(" again")  # still buffered: counts as streamed text
+    _report_stream_usage_missing(em2)
+    em2.end("completed")
+    assert streamed[-1]["reason"] == "completed"
+    assert em2.record_only_detail == "usage_unavailable"
+
+
+class _AbortedStreamProvider(_ConfigurableProvider):
+    """Streams text with no usage; `finish` is the terminal chunk's reason."""
+
+    def __init__(self, text: str, finish: Optional[str]) -> None:
+        super().__init__("ok")
+        self.text, self.finish = text, finish
+
+    def generate(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        pieces = _chop(self.text, 6)
+
+        def gen():
+            for i, piece in enumerate(pieces):
+                last = i == len(pieces) - 1
+                yield NS(content=piece, tool_calls=None, usage=None, model="m",
+                         finish_reason=self.finish if last else None, metadata=None, raw_response=None)
+
+        return gen()
+
+
+@pytest.mark.parametrize(
+    "text,finish,aborted",
+    [
+        ("Let me read the configuration file first:", "stop", True),  # tool-call preface, call dropped
+        ("Here is the whole answer, cut", None, True),  # no terminal chunk at all
+        ("The answer is 4.", "stop", False),
+        ("x" * 500 + ":", "stop", False),  # long text ending with ':' is a real answer
+    ],
+)
+def test_streamed_answers_without_usage_are_judged_by_the_heuristic(text, finish, aborted) -> None:
+    _, record = _run_with(_AbortedStreamProvider(text, finish))
+    meta = record["result"]["metadata"]
+    assert meta["usage_estimated"] is True
+    assert bool(meta.get("generation_aborted")) is aborted
+    observed = (meta.get("_runtime_observability") or {}).get("aborted_generation")
+    assert (observed is not None) is aborted
+
+
+def test_non_streamed_answers_without_usage_stay_unknown() -> None:
+    from abstractruntime.integrations.abstractcore.effect_handlers import _looks_like_aborted_generation
+
+    result = {"content": "Let me check:", "finish_reason": None, "usage": None, "tool_calls": None,
+              "metadata": {"_provider_request": {"payload": {"stream": False}}}}
+    assert _looks_like_aborted_generation(result) is False
+    assert "usage_estimated" not in result["metadata"]
+
+
+def test_reprobe_counter_is_thread_safe(monkeypatch) -> None:
+    import threading as _t
+
+    from abstractruntime.integrations.abstractcore import llm_client as lc
+
+    monkeypatch.setattr(lc, "_STREAM_USAGE_REPROBE_EVERY", 10)
+    provider = _ConfigurableProvider("ok")
+    provider._stream_options_unsupported = True
+    client = _local_client(provider)
+    client._stream_usage_refused = True
+    client._stream_usage_refused_calls = 0
+    results: List[Optional[str]] = []
+    lock = _t.Lock()
+
+    def worker() -> None:
+        for _ in range(250):
+            r = client._stream_parity_refusal({})
+            with lock:
+                results.append(r)
+
+    threads = [_t.Thread(target=worker) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert client._stream_usage_refused_calls == 2000
+    assert results.count(None) == 200  # exactly one re-probe per ten calls

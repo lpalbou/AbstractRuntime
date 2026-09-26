@@ -4189,7 +4189,7 @@ class Runtime:
         # Policy: only inherit when the child did not explicitly override the keys.
         try:
             parent_vars = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
-            for k in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+            for k in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths", "workspace_builtin_deny_prefixes", "workspace_builtin_allow"):
                 if k in sub_vars:
                     continue
                 v = parent_vars.get(k)

@@ -2811,7 +2811,7 @@ def _create_visual_function_handler(
         visual_node_type = getattr(func, "_visual_node_type", None)
         if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx", "write_chart"} and isinstance(run.vars, dict):
             ambient: Dict[str, Any] = {}
-            for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+            for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths", "workspace_builtin_deny_prefixes", "workspace_builtin_allow"):
                 if key in run.vars:
                     ambient[key] = run.vars.get(key)
             # Report writers also receive the run's workflow identity so the
@@ -2839,7 +2839,7 @@ def _create_visual_function_handler(
                 if value is not None:
                     merged_input.setdefault(key, value)
             if isinstance(run.vars, dict):
-                for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths"):
+                for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths", "workspace_builtin_deny_prefixes", "workspace_builtin_allow"):
                     if key in run.vars:
                         merged_input.setdefault(key, run.vars.get(key))
             input_data = merged_input

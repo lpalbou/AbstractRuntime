@@ -11,6 +11,12 @@ Key concepts:
   - `workspace_or_allowed`: absolute paths may escape `workspace_root` only when under `workspace_allowed_paths`
 - `workspace_ignored_paths`: denylist of directories (absolute or relative-to-workspace_root).
 - `workspace_allowed_paths`: allowlist of directories (absolute or relative-to-workspace_root).
+- `workspace_builtin_deny_prefixes` + `workspace_builtin_allow`: the HOST's own protection
+  (e.g. the gateway's data folder and credential folders), as path prefixes. Anything under a
+  denied prefix is refused, except under an allow entry (the run's own folder inside the data
+  folder). Enforced exactly like `workspace_ignored_paths`, but NEVER rendered into the model's
+  system prompt: it is host policy, it would disclose other users' paths, and a list that
+  grows with the host's files would change the prompt (and bust the prompt cache) every turn.
 
 Important limitations:
 - `execute_command` is not a sandbox; commands can still write outside via absolute paths / `cd ..`.
@@ -213,10 +219,31 @@ def _resolve_virtual_mount_relative_path(*, scope: "WorkspaceScope", raw: str) -
     return (resolved.root_path, rel_part)
 
 
+def _under_or_equal(path: Path, prefix: Path) -> bool:
+    return _is_under(path, prefix) or resolve_no_strict(path) == resolve_no_strict(prefix)
+
+
+def _builtin_denied(*, path: Path, scope: "WorkspaceScope") -> bool:
+    """Under a host deny prefix and not under one of the host's allow entries."""
+
+    if not any(_under_or_equal(path, prefix) for prefix in scope.builtin_deny_prefixes):
+        return False
+    return not any(_under_or_equal(path, allow) for allow in scope.builtin_allow)
+
+
+def _is_blocked(*, path: Path, scope: "WorkspaceScope") -> bool:
+    if any(_under_or_equal(path, blocked) for blocked in scope.ignored_paths):
+        return True
+    return _builtin_denied(path=path, scope=scope)
+
+
 def _ensure_allowed(*, path: Path, scope: "WorkspaceScope") -> None:
     for blocked in scope.ignored_paths:
-        if _is_under(path, blocked) or resolve_no_strict(path) == resolve_no_strict(blocked):
+        if _under_or_equal(path, blocked):
             raise ValueError(f"Path is blocked by workspace_ignored_paths: '{path}'")
+    if _builtin_denied(path=path, scope=scope):
+        # Names the path the model asked for, never the host's deny list.
+        raise ValueError(f"Path is not accessible (protected by the host): '{path}'")
 
 
 def _resolve_under_root_strict(*, root: Path, user_path: str) -> Path:
@@ -291,12 +318,7 @@ def _reanchor_absolute(*, scope: "WorkspaceScope", resolved: Path, roots: Tuple[
                 continue
             # Ignored candidates are skipped silently (no blacklist oracle);
             # _ensure_allowed backstops after return.
-            blocked = False
-            for ign in scope.ignored_paths:
-                if _is_under(candidate, ign) or resolve_no_strict(candidate) == resolve_no_strict(ign):
-                    blocked = True
-                    break
-            if blocked:
+            if _is_blocked(path=candidate, scope=scope):
                 continue
             if named_exists:
                 # Identity required: the named path is a REAL file elsewhere;
@@ -442,6 +464,9 @@ class WorkspaceScope:
     access_mode: WorkspaceAccessMode = "workspace_only"
     ignored_paths: Tuple[Path, ...] = ()
     allowed_paths: Tuple[Path, ...] = ()
+    # Host protection (see the module docstring): enforced, never described.
+    builtin_deny_prefixes: Tuple[Path, ...] = ()
+    builtin_allow: Tuple[Path, ...] = ()
 
     @classmethod
     def from_input_data(
@@ -470,7 +495,21 @@ class WorkspaceScope:
         allowed = _parse_allowed_paths(input_data.get("workspace_allowed_paths") or input_data.get("workspaceAllowedPaths"))
         allowed_paths = _resolve_allowed_paths(root=root, allowed=allowed)
 
-        return cls(root=root, access_mode=access_mode, ignored_paths=ignored_paths, allowed_paths=allowed_paths)
+        builtin_deny = _resolve_ignored_paths(
+            root=root, ignored=_parse_ignored_paths(input_data.get("workspace_builtin_deny_prefixes"))
+        )
+        builtin_allow = _resolve_allowed_paths(
+            root=root, allowed=_parse_allowed_paths(input_data.get("workspace_builtin_allow"))
+        )
+
+        return cls(
+            root=root,
+            access_mode=access_mode,
+            ignored_paths=ignored_paths,
+            allowed_paths=allowed_paths,
+            builtin_deny_prefixes=builtin_deny,
+            builtin_allow=builtin_allow,
+        )
 
 
 def describe_workspace_scope(scope: WorkspaceScope) -> str:
@@ -493,6 +532,9 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
         lines.append("File paths must remain under the default working directory.")
     else:
         lines.append("Absolute file paths may be outside the default working directory, except exclusions below.")
+    # Only the operator's own exclusions are described. The host's built-in
+    # protection (`builtin_deny_prefixes` / `builtin_allow`) is enforced by the
+    # resolver and deliberately never rendered here (see the module docstring).
     if scope.ignored_paths:
         lines.append("Excluded paths (override grants): " + json.dumps([str(p) for p in scope.ignored_paths]))
     lines.append("Stay within this scope. Shell execution is not sandboxed by this file-tool policy.")

@@ -6672,7 +6672,64 @@ def _split_think_blocks(text: str) -> Tuple[str, Optional[str]]:
     return out.strip(), reasoning
 
 
-def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = None) -> Dict[str, Any]:
+class _LiveThinkSplitter:
+    """Route live content fragments to the `content` or `reasoning` channel.
+
+    Some providers stream thinking inline as `<think>...</think>` markup inside
+    content deltas (the aggregated record splits it after the fact with
+    `_split_think_blocks`). Live deltas cannot wait for the end, so this splits
+    incrementally: text inside a think block goes to `reasoning`, the rest to
+    `content`, and a tag cut across two fragments (`"<th"` + `"ink>"`) is held
+    back until it can be decided. The markup itself is never emitted.
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self, emit: Any) -> None:
+        self._emit = emit
+        self._inside = False
+        self._hold = ""
+
+    @staticmethod
+    def _partial_suffix(text: str, tag: str) -> int:
+        lowered = text.lower()
+        for n in range(min(len(tag) - 1, len(text)), 0, -1):
+            if lowered.endswith(tag[:n]):
+                return n
+        return 0
+
+    def feed(self, text: str) -> None:
+        buf = self._hold + text
+        self._hold = ""
+        while buf:
+            tag = self._CLOSE if self._inside else self._OPEN
+            channel = "reasoning" if self._inside else "content"
+            idx = buf.lower().find(tag)
+            if idx >= 0:
+                if idx:
+                    self._emit(buf[:idx], channel)
+                buf = buf[idx + len(tag):]
+                self._inside = not self._inside
+                continue
+            keep = self._partial_suffix(buf, tag)
+            ready = buf[: len(buf) - keep] if keep else buf
+            if ready:
+                self._emit(ready, channel)
+            self._hold = buf[len(buf) - keep:] if keep else ""
+            return
+
+    def finish(self) -> None:
+        if self._hold:
+            self._emit(self._hold, "reasoning" if self._inside else "content")
+            self._hold = ""
+
+
+def _normalize_local_streaming_response(
+    stream: Any,
+    on_token: Optional[Any] = None,
+    on_delta: Optional[Any] = None,
+) -> Dict[str, Any]:
     """Consume an AbstractCore streaming `generate(..., stream=True)` iterator into a single JSON result.
 
     AbstractRuntime currently persists a single effect outcome object per LLM call, so even when
@@ -6685,12 +6742,49 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
     stream (one warning), never failing the call. Same-process hosts (the
     abstractcode CLI) use it for live tail rendering; gateway-hosted surfaces
     need the durable plane instead (deliberately not built here).
+
+    `on_delta` (token streaming, 2026-09-26): the PER-CALL live delta
+    callback `on_delta(text: str, channel: str)` the runtime passes as
+    `params["_on_delta"]` when a run streams to a host sink. Channel
+    `"content"` carries answer text; `"reasoning"` carries thinking — both the
+    provider's `metadata["reasoning_delta"]` fragments and inline `<think>`
+    markup split out of content (`_LiveThinkSplitter`). Same failure contract
+    as `on_token`: best-effort, a raising callback is disabled for the rest of
+    the stream with one warning, and the aggregated result is unchanged.
+    Unlike `on_token` it belongs to ONE call, so concurrent runs sharing a
+    client never see each other's text.
     """
     import time
 
     start_perf = time.perf_counter()
 
     token_cb = on_token if callable(on_token) else None
+    delta_cb = on_delta if callable(on_delta) else None
+
+    def _fire_delta(text: str, channel: str) -> None:
+        nonlocal delta_cb
+        if delta_cb is None or not text:
+            return
+        try:
+            delta_cb(text, channel)
+        except Exception as e:
+            logger.warning(f"live delta callback raised; disabled for this stream: {e}")
+            delta_cb = None
+
+    think_splitter = _LiveThinkSplitter(_fire_delta)
+
+    def _fire_content_delta(text: str) -> None:
+        if delta_cb is not None and text:
+            think_splitter.feed(text)
+
+    def _fire_reasoning_delta(meta: Any) -> None:
+        if delta_cb is None or not isinstance(meta, dict):
+            return
+        # Only the per-chunk DELTA key: `metadata["reasoning"]` on the trailing
+        # chunk is the complete aggregate and would repeat everything.
+        r_delta = meta.get("reasoning_delta")
+        if isinstance(r_delta, str) and r_delta:
+            _fire_delta(r_delta, "reasoning")
 
     def _fire_token(delta: str, model_name: Optional[str], fr: Any) -> None:
         nonlocal token_cb
@@ -6712,6 +6806,11 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
     trace_id: Optional[str] = None
     reasoning: Optional[str] = None
     ttft_ms: Optional[float] = None
+    # Parity with the non-streamed record: providers attach the raw wire
+    # payload per chunk; the LAST one (the terminal chunk: finish reason,
+    # usage) is kept, so `raw_response` exists in both modes. It is that
+    # terminal chunk, not a reassembled full response.
+    raw_response: Any = None
 
     def _fold_tool_calls(tc: Any) -> None:
         """Accumulate streamed tool calls across chunks (c1017 parity).
@@ -6762,10 +6861,16 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
             continue
 
         if isinstance(chunk, dict):
+            _fire_reasoning_delta(chunk.get("metadata"))
             content = chunk.get("content")
             if isinstance(content, str) and content:
                 chunks.append(content)
                 _fire_token(content, model, chunk.get("finish_reason"))
+                _fire_content_delta(content)
+
+            rr = chunk.get("raw_response")
+            if rr is not None:
+                raw_response = rr
 
             tc = chunk.get("tool_calls")
             _fold_tool_calls(tc)
@@ -6802,10 +6907,16 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
                         reasoning = r.strip()
             continue
 
+        _fire_reasoning_delta(getattr(chunk, "metadata", None))
         content = getattr(chunk, "content", None)
         if isinstance(content, str) and content:
             chunks.append(content)
             _fire_token(content, model, getattr(chunk, "finish_reason", None))
+            _fire_content_delta(content)
+
+        rr = getattr(chunk, "raw_response", None)
+        if rr is not None:
+            raw_response = rr
 
         tc = getattr(chunk, "tool_calls", None)
         _fold_tool_calls(tc)
@@ -6844,6 +6955,14 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
                     # fold deliberately never reads.
                     reasoning = r.strip()
 
+    if delta_cb is not None:
+        think_splitter.finish()
+
+    # `reasoning_delta` is a per-chunk DISPLAY fragment; the merged metadata
+    # kept the LAST fragment, which the non-streamed record never has
+    # (parity). The complete thought is `reasoning` above.
+    metadata.pop("reasoning_delta", None)
+
     gen_time = round((time.perf_counter() - start_perf) * 1000, 1)
 
     # Parity with the non-streamed shape (c1017): providers strip `<think>`
@@ -6859,6 +6978,7 @@ def _normalize_local_streaming_response(stream: Any, on_token: Optional[Any] = N
         "content": content,
         "reasoning": reasoning,
         "data": None,
+        "raw_response": _jsonable(raw_response) if raw_response is not None else None,
         "tool_calls": _jsonable(tool_calls) if tool_calls is not None else None,
         "usage": _jsonable(usage) if usage is not None else None,
         "model": model,
@@ -8052,6 +8172,10 @@ class LocalAbstractCoreLLMClient:
         try:
             params = _normalize_prompt_cache_binding_params(params)
             prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
+            # The runtime's PER-CALL live delta callback (core.live_deltas),
+            # never a provider kwarg and never the per-client `on_token`
+            # (which is shared by every run using this client).
+            on_delta = params.pop("_on_delta", None)
             prompt = _promote_text_param_to_prompt(prompt, params)
             has_binding = _has_prompt_cache_binding(params)
             output_request = params.get("output")
@@ -8317,7 +8441,9 @@ class LocalAbstractCoreLLMClient:
                     **params,
                 )
                 if stream and hasattr(resp, "__next__"):
-                    result = _normalize_local_streaming_response(resp, on_token=getattr(self, "_on_token", None))
+                    result = _normalize_local_streaming_response(
+                        resp, on_token=getattr(self, "_on_token", None), on_delta=on_delta
+                    )
                 else:
                     result = _normalize_local_response(
                         resp,
@@ -8351,7 +8477,9 @@ class LocalAbstractCoreLLMClient:
                         **params,
                     )
                     if stream and hasattr(resp, "__next__"):
-                        result = _normalize_local_streaming_response(resp, on_token=getattr(self, "_on_token", None))
+                        result = _normalize_local_streaming_response(
+                            resp, on_token=getattr(self, "_on_token", None), on_delta=on_delta
+                        )
                     else:
                         result = _normalize_local_response(
                             resp,
@@ -15114,6 +15242,12 @@ class RemoteAbstractCoreLLMClient:
     ) -> Dict[str, Any]:
         params = _normalize_prompt_cache_binding_params(params)
         prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
+        # REMOTE MODE DOES NOT STREAM LIVE DELTAS. The AbstractCore server call
+        # below is a single non-streaming request (`"stream": False`), so the
+        # runtime's per-call `_on_delta` is dropped here on purpose: a run that
+        # asked for `_runtime.stream` still completes with the same durable
+        # answer, only without a live preview.
+        params.pop("_on_delta", None)
         prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)
@@ -15266,6 +15400,8 @@ class RemoteAbstractCoreLLMClient:
         body: Dict[str, Any] = {
             "model": effective_model,
             "messages": out_messages,
+            # Always non-streaming in remote mode: no live token deltas (see the
+            # `_on_delta` note at the top of this method).
             "stream": False,
             # Orchestrator policy: ask AbstractCore server to use the same timeout it expects.
             # This keeps runtime authority even when the actual provider call happens server-side.

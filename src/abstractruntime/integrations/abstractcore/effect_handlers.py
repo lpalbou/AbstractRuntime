@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
-from ...core.progress_channel import current_effect_progress_callback
+from ...core.progress_channel import current_effect_delta_callback, current_effect_progress_callback
 from ...core.effect_cancellation import annotate_current_effect, current_effect_cancel_event
 from ...core.runtime import EffectOutcome, EffectHandler
 from ...core.tool_scope import ToolScopeError, resolve_tool_scope
@@ -209,7 +209,9 @@ def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
 
     # `cancel_event` is the runtime's live threading.Event (core.effect_cancellation):
     # an in-process handle like the progress callback, never persisted.
-    callback_keys = {"on_progress", "progress_callback", "progress_event_callback", "cancel_event"}
+    # `_on_delta` is the runtime's live token-delta callback (core.live_deltas):
+    # in-process only, never persisted.
+    callback_keys = {"on_progress", "progress_callback", "progress_event_callback", "cancel_event", "_on_delta"}
     out: Dict[str, Any] = {}
     for key, value in dict(params or {}).items():
         key_s = str(key)
@@ -1493,6 +1495,24 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             runtime_progress_callback = current_effect_progress_callback()
             if runtime_progress_callback is not None:
                 params["on_progress"] = runtime_progress_callback
+
+        # LIVE TOKEN DELTAS, OUT OF BAND (core/live_deltas.py), same discipline.
+        # Present only when the run set `_runtime.stream: true` AND the host
+        # registered a live sink. It becomes the per-CALL `_on_delta` the
+        # AbstractCore client composes into its stream consumer, and it turns
+        # streaming on for this call — unless the payload explicitly says
+        # `stream: False` (an explicit off always wins). Stripped from every
+        # persisted copy (`_observability_params`, `_provider_request`).
+        runtime_delta_callback = current_effect_delta_callback()
+        if runtime_delta_callback is not None:
+            params["_on_delta"] = runtime_delta_callback
+            explicit_off = (
+                payload.get("stream") is False
+                or params.get("stream") is False
+                or params.get("streaming") is False
+            )
+            if not explicit_off:
+                params["stream"] = True
 
         # CANCEL CHANNEL, OUT OF BAND (core/effect_cancellation.py), same
         # discipline: the runtime's per-attempt threading.Event becomes the

@@ -180,3 +180,139 @@ def test_children_inherit_the_builtin_entries(layout) -> None:
     child_vars = rt.get_state(child_id).vars
     assert child_vars["workspace_builtin_deny_prefixes"] == deny
     assert child_vars["workspace_builtin_allow"] == allow
+
+
+# ---------------------------------------------------------------------------
+# The host's lists are authoritative for the whole run tree
+# ---------------------------------------------------------------------------
+
+from abstractruntime.utils.workspace_paths import merge_builtin_workspace_protection  # noqa: E402
+
+
+def _child_vars(layout: Dict[str, Path], child_overrides: Dict[str, Any]) -> Dict[str, Any]:
+    from abstractruntime import (
+        Effect, EffectType, InMemoryLedgerStore, InMemoryRunStore, Runtime, StepPlan, WorkflowRegistry, WorkflowSpec,
+    )
+
+    child = WorkflowSpec(workflow_id="child", entry_node="end",
+                         nodes={"end": lambda r, c: StepPlan(node_id="end", complete_output={})})
+    parent = WorkflowSpec(workflow_id="parent", entry_node="spawn", nodes={
+        "spawn": lambda r, c: StepPlan(node_id="spawn", effect=Effect(
+            type=EffectType.START_SUBWORKFLOW,
+            payload={"workflow_id": "child", "vars": dict(child_overrides), "async": True, "wait": True},
+            result_key="child",
+        )),
+    })
+    registry = WorkflowRegistry()
+    registry.register(child)
+    registry.register(parent)
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=registry)
+    run_id = rt.start(workflow=parent, vars={
+        "workspace_root": str(layout["own"]),
+        "workspace_access_mode": "all_except_ignored",
+        "workspace_builtin_deny_prefixes": [str(layout["data"]), str(layout["creds"])],
+        "workspace_builtin_allow": [str(layout["own"])],
+    })
+    state = rt.tick(workflow=parent, run_id=run_id, max_steps=1)
+    child_id = state.waiting.wait_key.split(":", 1)[1]
+    return rt.get_state(child_id).vars
+
+
+@pytest.mark.parametrize("child_deny", [[], "", None, "[]"])
+def test_a_child_cannot_remove_the_hosts_deny_prefixes(layout, child_deny) -> None:
+    vars_ = _child_vars(layout, {"workspace_builtin_deny_prefixes": child_deny})
+    assert vars_["workspace_builtin_deny_prefixes"] == [str(layout["data"]), str(layout["creds"])]
+    scope = WorkspaceScope.from_input_data(vars_)
+    with pytest.raises(ValueError, match="protected by the host"):
+        rewrite_tool_arguments(tool_name="read_file", args={"file_path": str(layout["other"] / "secret.txt")}, scope=scope)
+
+
+def test_a_shorter_child_list_is_topped_up_and_additions_are_kept(layout) -> None:
+    extra = str(layout["tmp"] / "child-extra-deny")
+    vars_ = _child_vars(layout, {"workspace_builtin_deny_prefixes": [str(layout["creds"]), extra]})
+    assert vars_["workspace_builtin_deny_prefixes"] == [str(layout["data"]), str(layout["creds"]), extra]
+
+
+def test_a_child_cannot_widen_the_allow_list(layout) -> None:
+    # Pointing its allow list, or its own root, at another session is not a grant.
+    vars_ = _child_vars(layout, {
+        "workspace_builtin_allow": [str(layout["data"])],
+        "workspace_root": str(layout["other"]),
+    })
+    assert vars_["workspace_builtin_allow"] == [str(layout["own"])]
+    scope = WorkspaceScope.from_input_data(vars_)
+    with pytest.raises(ValueError, match="protected by the host"):
+        rewrite_tool_arguments(tool_name="read_file", args={"file_path": "secret.txt"}, scope=scope)
+
+
+def test_a_child_folder_inside_the_parents_allowed_folder_is_allowed(layout) -> None:
+    sub = layout["own"] / "child-task"
+    sub.mkdir()
+    (sub / "draft.txt").write_text("x")
+    vars_ = _child_vars(layout, {"workspace_root": str(sub)})
+    assert vars_["workspace_builtin_allow"] == [str(layout["own"]), str(sub)]
+    scope = WorkspaceScope.from_input_data(vars_)
+    out = rewrite_tool_arguments(tool_name="read_file", args={"file_path": "draft.txt"}, scope=scope)
+    assert out["file_path"].endswith("draft.txt")
+
+
+def test_without_host_protection_the_child_values_stand() -> None:
+    assert merge_builtin_workspace_protection({}, {"workspace_builtin_deny_prefixes": ["/x"]}) == {}
+
+
+def test_a_visual_file_node_cannot_switch_the_protection_off(layout) -> None:
+    from abstractruntime.core.runtime import Runtime
+    from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
+    from abstractruntime.visualflow_compiler.compiler import compile_flow
+    from abstractruntime.visualflow_compiler.visual.executor import visual_to_flow
+    from abstractruntime.visualflow_compiler.visual.models import load_visualflow_json
+
+    target = str(layout["other"] / "secret.txt")
+    vf = load_visualflow_json({
+        "id": "t-visual-deny",
+        "name": "t-visual-deny",
+        "nodes": [
+            {"id": "start", "type": "on_flow_start", "data": {"nodeType": "on_flow_start"}},
+            # A flow wires an empty deny list and a wide allow list straight into
+            # the file node's inputs.
+            {"id": "empty", "type": "code", "data": {"nodeType": "code", "codeBody": "return []"}},
+            {"id": "wide", "type": "code", "data": {"nodeType": "code",
+                                                     "codeBody": f"return [{str(layout['data'])!r}]"}},
+            {"id": "read", "type": "read_file", "data": {
+                "nodeType": "read_file",
+                "inputs": [
+                    {"id": "exec-in", "label": "", "type": "execution"},
+                    {"id": "file_path", "label": "file_path", "type": "string"},
+                    {"id": "workspace_builtin_deny_prefixes", "label": "deny", "type": "array"},
+                    {"id": "workspace_builtin_allow", "label": "allow", "type": "array"},
+                ],
+                "pinDefaults": {"file_path": target},
+            }},
+            {"id": "end", "type": "on_flow_end", "data": {"nodeType": "on_flow_end", "inputs": [
+                {"id": "exec-in", "label": "", "type": "execution"},
+                {"id": "content", "label": "content", "type": "string"},
+            ]}},
+        ],
+        "edges": [
+            {"source": "start", "sourceHandle": "exec-out", "target": "empty", "targetHandle": "exec-in"},
+            {"source": "empty", "sourceHandle": "exec-out", "target": "wide", "targetHandle": "exec-in"},
+            {"source": "wide", "sourceHandle": "exec-out", "target": "read", "targetHandle": "exec-in"},
+            {"source": "empty", "sourceHandle": "output", "target": "read",
+             "targetHandle": "workspace_builtin_deny_prefixes"},
+            {"source": "wide", "sourceHandle": "output", "target": "read", "targetHandle": "workspace_builtin_allow"},
+            {"source": "read", "sourceHandle": "exec-out", "target": "end", "targetHandle": "exec-in"},
+            {"source": "read", "sourceHandle": "content", "target": "end", "targetHandle": "content"},
+        ],
+    })
+    workflow = compile_flow(visual_to_flow(vf))
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+    run_id = rt.start(workflow=workflow, vars={
+        "workspace_root": str(layout["own"]),
+        "workspace_access_mode": "all_except_ignored",
+        "workspace_builtin_deny_prefixes": [str(layout["data"])],
+        "workspace_builtin_allow": [str(layout["own"])],
+    })
+    state = rt.tick(workflow=workflow, run_id=run_id, max_steps=20)
+    leaked = "theirs" in str(state.output) or "theirs" in str(state.vars)
+    assert not leaked, "the node read another session's file: its inputs switched the host protection off"
+    assert state.status.value == "failed" or "protected by the host" in str(state.error or state.output)

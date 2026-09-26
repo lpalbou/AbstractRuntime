@@ -17,6 +17,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from ..flow import Flow
+from ...utils.workspace_paths import BUILTIN_ALLOW_KEY, BUILTIN_DENY_KEY, merge_builtin_workspace_protection
 
 from .agent_ids import visual_react_workflow_id
 from .builtins import get_builtin_handler
@@ -4983,6 +4984,14 @@ def _create_data_aware_handler(
                 pin_expressions,
                 get_run_vars() if callable(get_run_vars) else None,
             )
+
+        # The host's built-in workspace protection is authoritative: whatever a
+        # wire, default or expression put in these inputs, the run's deny
+        # prefixes stay and its allow list cannot be widened.
+        if any(k in resolved_input for k in (BUILTIN_DENY_KEY, BUILTIN_ALLOW_KEY)):
+            run_vars = get_run_vars() if callable(get_run_vars) else None
+            if isinstance(run_vars, dict):
+                resolved_input.update(merge_builtin_workspace_protection(run_vars, resolved_input))
 
         execution: Optional[Dict[str, Any]] = None
         if node_type == "code":

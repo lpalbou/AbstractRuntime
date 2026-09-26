@@ -4317,6 +4317,16 @@ class Runtime:
                 sub_rt.setdefault("stream", stream)
         except Exception:
             pass
+        # The host's built-in workspace protection is authoritative for the run
+        # tree: a child may add deny prefixes, never remove one, and never widen
+        # the allow list. Outside the best-effort block above, like the tool
+        # ceiling below: a security rule must not be skipped on an exception.
+        # Imported here: `abstractruntime.utils` pulls optional capability
+        # stacks, which the package root must not import (install boundary).
+        from ..utils.workspace_paths import merge_builtin_workspace_protection
+
+        parent_ws_vars = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
+        sub_vars.update(merge_builtin_workspace_protection(parent_ws_vars, sub_vars))
         # A child may narrow, never widen, an explicit run tool grant. Keep
         # this security check outside the best-effort inheritance block above.
         sub_rt = sub_vars.get("_runtime")

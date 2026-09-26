@@ -189,7 +189,72 @@ def resolve_workspace_path(
     return WorkspacePathResolution(resolved, virt, mount_name, root)
 
 
+BUILTIN_DENY_KEY = "workspace_builtin_deny_prefixes"
+BUILTIN_ALLOW_KEY = "workspace_builtin_allow"
+
+
+def _path_entries(raw: object) -> list[str]:
+    """A path list as hosts send it: a list, a JSON array string, or newline-separated text."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            import json
+
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if isinstance(x, str) and x.strip()]
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return []
+
+
+def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
+    """The host's built-in protection a CHILD scope may carry, given its parent.
+
+    The host (the gateway) sets `workspace_builtin_deny_prefixes` and
+    `workspace_builtin_allow` on the run it starts; they are authoritative for
+    the whole run tree. A child (a subworkflow's vars, a VisualFlow node's
+    inputs) may ADD deny prefixes but never remove one, and may never widen the
+    allow list: the result is
+
+    - deny  = parent's deny prefixes, then the child's additional ones;
+    - allow = parent's allow entries, plus the child's own `workspace_root`
+      only when that folder already lies under one of the parent's allow
+      entries (a child cannot allow itself into another folder of the data
+      directory by pointing its root there). The child's own allow entries
+      are ignored.
+
+    Returns the two keys to set on the child, or {} when the parent carries no
+    built-in deny (nothing to protect; the child's own values stand).
+    """
+
+    parent_deny = _path_entries(parent.get(BUILTIN_DENY_KEY))
+    if not parent_deny:
+        return {}
+    deny = list(dict.fromkeys(parent_deny + _path_entries(child.get(BUILTIN_DENY_KEY))))
+    parent_allow = _path_entries(parent.get(BUILTIN_ALLOW_KEY))
+    allow = list(dict.fromkeys(parent_allow))
+    child_root = child.get("workspace_root")
+    if isinstance(child_root, str) and child_root.strip():
+        root_path = Path(child_root.strip()).expanduser()
+        if root_path.is_absolute() and any(is_under_path(root_path, Path(a).expanduser()) for a in parent_allow):
+            if child_root.strip() not in allow:
+                allow.append(child_root.strip())
+    return {BUILTIN_DENY_KEY: deny, BUILTIN_ALLOW_KEY: allow}
+
+
 __all__ = [
+    "BUILTIN_ALLOW_KEY",
+    "BUILTIN_DENY_KEY",
+    "merge_builtin_workspace_protection",
     "WorkspacePathError",
     "WorkspacePathResolution",
     "build_workspace_mounts",

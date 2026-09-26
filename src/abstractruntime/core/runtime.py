@@ -45,7 +45,8 @@ from .models import (
 )
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
-from .progress_channel import effect_progress_callback
+from .progress_channel import effect_delta_callback, effect_progress_callback
+from .live_deltas import LiveDeltaEmitter, LiveDeltaSink
 from .effect_cancellation import (
     EffectKilled,
     InflightEffect,
@@ -942,6 +943,9 @@ class Runtime:
         self._ledger_store = ledger_store
         self._ctx = context or DefaultRunContext()
         self._workflow_registry = workflow_registry
+        # Live token deltas (core.live_deltas): None = no host is listening,
+        # and no LLM call streams deltas whatever the run asked for.
+        self._live_delta_sink: Optional[LiveDeltaSink] = None
         self._artifact_store = artifact_store
         self._tool_executor_for_resume: Any = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
@@ -1120,6 +1124,27 @@ class Runtime:
     def set_artifact_store(self, store: Any) -> None:
         """Set the artifact store for large payload support."""
         self._artifact_store = store
+
+    def set_live_delta_sink(self, sink: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """Register (or with None, remove) the host's live token-delta sink.
+
+        When a run's input sets ``_runtime.stream`` to ``True`` (strictly the
+        boolean), each of its LLM calls streams and the runtime hands `sink` one
+        dict per coalesced fragment and one at the end of the call:
+
+        ``{"kind": "llm.delta", "run_id", "node_id", "call_id", "seq", "text", "channel"}``
+        ``{"kind": "llm.delta_end", "run_id", "node_id", "call_id", "seq", "reason"}``
+
+        `call_id` is the LLM_CALL step id, `channel` is "content" or
+        "reasoning", `reason` is "completed", "failed" or "cancelled". Nothing
+        of this reaches the ledger; the runtime never knows the transport. The
+        sink is called from provider threads and must return quickly. See
+        `core.live_deltas` for batching and the failure contract.
+        """
+
+        if sink is not None and not callable(sink):
+            raise TypeError("set_live_delta_sink expects a callable taking one dict, or None")
+        self._live_delta_sink = sink
 
     def set_tool_executor_for_resume(self, tool_executor: Any) -> None:
         """Set a ToolExecutor used for host-owned TOOL_CALLS approvals on resume.
@@ -2078,6 +2103,32 @@ class Runtime:
             )
 
         return _on_progress
+
+    def _runtime_delta_callback(
+        self,
+        effect: Effect,
+        *,
+        run: RunState,
+        node_id: str,
+        step_id: str,
+    ) -> Optional[LiveDeltaEmitter]:
+        """The live delta emitter offered to ONE LLM_CALL attempt, or None.
+
+        Offered only when all three hold: the effect is an LLM_CALL, the run's
+        `_runtime.stream` is exactly True (False is an explicit off, anything
+        else is not a request), and a host registered a sink with
+        `set_live_delta_sink`. Installed beside the progress callback on
+        `core.progress_channel`, never in the payload, and closed with exactly
+        one `llm.delta_end` by `_execute_effect_with_retry`.
+        """
+
+        sink = self._live_delta_sink
+        if sink is None or effect.type != EffectType.LLM_CALL:
+            return None
+        runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        if not isinstance(runtime_ns, dict) or runtime_ns.get("stream") is not True:
+            return None
+        return LiveDeltaEmitter(sink, run_id=run.run_id, node_id=str(node_id), call_id=str(step_id))
 
     def tick(
         self,
@@ -3366,6 +3417,14 @@ class Runtime:
                 idempotency_key=idempotency_key,
                 attempt=attempt,
             )
+            # Live token deltas ride the same out-of-band channel (None unless
+            # the run asked for streaming and a host is listening).
+            delta_emitter = self._runtime_delta_callback(
+                effect_for_attempt,
+                run=run,
+                node_id=node_id,
+                step_id=rec.step_id,
+            )
 
             # IN-FLIGHT REGISTRATION (core.effect_cancellation): the cancel event
             # travels beside the effect like the progress callback, and the
@@ -3395,76 +3454,93 @@ class Runtime:
                     if inflight.cancelled:
                         return EffectOutcome.failed("cancelled before the effect started", retryable=False)
                     try:
-                        with effect_progress_callback(progress_callback):
+                        with effect_progress_callback(progress_callback), effect_delta_callback(delta_emitter):
                             return self._execute_effect(run, effect_for_attempt, default_next_node)
                     except Exception as e:
                         return EffectOutcome.failed(f"Effect handler raised exception: {e}")
 
+            # One `llm.delta_end` per attempt that offered live deltas, AFTER
+            # the attempt's terminal record is in the ledger (a client that
+            # swaps the live bubble for the durable answer never sees a gap),
+            # and on every exit path, exceptions included.
+            delta_end_reason = "failed"
             try:
-                outcome = _invoke_registered()
-            except EffectKilled:
-                # HARD STOP (core.effect_cancellation.kill_inflight_effect): the
-                # host injected this into our thread because the effect did not
-                # stop on its cancel event; it unwound the provider through every
-                # `finally`/`with` on the way here. Aimed at THIS attempt when it
-                # carries a `killed_by`. Otherwise it was meant for an effect that
-                # finished a moment before the injection landed on this thread:
-                # this attempt was interrupted by mistake and is re-invoked once,
-                # outside the effect policy's attempt budget.
-                if inflight.killed_by is None:
-                    logger.warning(
-                        f"effect interrupted by a kill aimed at an effect that had already finished: "
-                        f"run={run.run_id} node={node_id} step={rec.step_id} — re-invoking the attempt"
-                    )
-                    try:
-                        outcome = _invoke_registered()
-                    except EffectKilled:
-                        outcome = EffectOutcome.failed(
-                            f"inference killed by {inflight.killed_by or 'an unattributed kill'}", retryable=False
+                try:
+                    outcome = _invoke_registered()
+                except EffectKilled:
+                    # HARD STOP (core.effect_cancellation.kill_inflight_effect): the
+                    # host injected this into our thread because the effect did not
+                    # stop on its cancel event; it unwound the provider through every
+                    # `finally`/`with` on the way here. Aimed at THIS attempt when it
+                    # carries a `killed_by`. Otherwise it was meant for an effect that
+                    # finished a moment before the injection landed on this thread:
+                    # this attempt was interrupted by mistake and is re-invoked once,
+                    # outside the effect policy's attempt budget.
+                    if inflight.killed_by is None:
+                        logger.warning(
+                            f"effect interrupted by a kill aimed at an effect that had already finished: "
+                            f"run={run.run_id} node={node_id} step={rec.step_id} — re-invoking the attempt"
                         )
-                else:
-                    outcome = EffectOutcome.failed(
-                        f"inference killed by {inflight.killed_by}: the effect did not stop on its cancel event",
-                        retryable=False,
+                        try:
+                            outcome = _invoke_registered()
+                        except EffectKilled:
+                            outcome = EffectOutcome.failed(
+                                f"inference killed by {inflight.killed_by or 'an unattributed kill'}", retryable=False
+                            )
+                    else:
+                        outcome = EffectOutcome.failed(
+                            f"inference killed by {inflight.killed_by}: the effect did not stop on its cancel event",
+                            retryable=False,
+                        )
+
+                if outcome.status != "completed" and (inflight.cancelled or outcome.status == "cancelled"):
+                    # Whatever the provider raised on its way out (a typed cancel, a
+                    # closed stream, a native `cancelled` code), an attempt whose
+                    # cancel event was set is a CANCELLED attempt: recorded as such,
+                    # never retried, never reported as a failure of the effect.
+                    # (A handler that COMPLETED despite a late cancel keeps its
+                    # true status; the tick loop still discards it for a cancelled run.)
+                    outcome = self._cancelled_outcome(inflight, outcome)
+                    rec.finish_cancelled(outcome.result)
+                    delta_end_reason = "cancelled"
+                    self._ledger_store.append(rec)
+                    self._health.increment("effect_cancellations_total")
+                    logger.info(
+                        f"effect cancelled mid-execution: run={run.run_id} node={node_id} "
+                        f"step={rec.step_id} type={inflight.effect_type} "
+                        f"cancelled_by={(outcome.result or {}).get('cancelled_by')} "
+                        f"stopped_after_cancel_s={(outcome.result or {}).get('stopped_after_cancel_s')}"
                     )
+                    return outcome
 
-            if outcome.status != "completed" and (inflight.cancelled or outcome.status == "cancelled"):
-                # Whatever the provider raised on its way out (a typed cancel, a
-                # closed stream, a native `cancelled` code), an attempt whose
-                # cancel event was set is a CANCELLED attempt: recorded as such,
-                # never retried, never reported as a failure of the effect.
-                # (A handler that COMPLETED despite a late cancel keeps its
-                # true status; the tick loop still discards it for a cancelled run.)
-                outcome = self._cancelled_outcome(inflight, outcome)
-                rec.finish_cancelled(outcome.result)
-                self._ledger_store.append(rec)
-                self._health.increment("effect_cancellations_total")
-                logger.info(
-                    f"effect cancelled mid-execution: run={run.run_id} node={node_id} "
-                    f"step={rec.step_id} type={inflight.effect_type} "
-                    f"cancelled_by={(outcome.result or {}).get('cancelled_by')} "
-                    f"stopped_after_cancel_s={(outcome.result or {}).get('stopped_after_cancel_s')}"
-                )
-                return outcome
+                if outcome.status == "completed":
+                    delta_end_reason = "completed"
+                    rec.finish_success(outcome.result)
+                    _slim_terminal_record(rec, started_digests=started_digests)
+                    self._ledger_store.append(rec)
+                    return outcome
 
-            if outcome.status == "completed":
-                rec.finish_success(outcome.result)
+                if outcome.status == "waiting":
+                    delta_end_reason = "completed"
+                    rec.finish_waiting(outcome.wait)
+                    _slim_terminal_record(rec, started_digests=started_digests)
+                    self._ledger_store.append(rec)
+                    self._health.increment("waits_entered_total")
+                    return outcome
+
+                # Failed - record and maybe retry
+                last_error = outcome.error or "unknown error"
+                rec.finish_failure(last_error)
                 _slim_terminal_record(rec, started_digests=started_digests)
                 self._ledger_store.append(rec)
-                return outcome
-
-            if outcome.status == "waiting":
-                rec.finish_waiting(outcome.wait)
-                _slim_terminal_record(rec, started_digests=started_digests)
-                self._ledger_store.append(rec)
-                self._health.increment("waits_entered_total")
-                return outcome
-
-            # Failed - record and maybe retry
-            last_error = outcome.error or "unknown error"
-            rec.finish_failure(last_error)
-            _slim_terminal_record(rec, started_digests=started_digests)
-            self._ledger_store.append(rec)
+            finally:
+                if delta_emitter is not None:
+                    try:
+                        if delta_end_reason == "failed" and inflight.cancelled:
+                            delta_end_reason = "cancelled"
+                        delta_emitter.end(delta_end_reason)
+                    except Exception:  # pragma: no cover - live preview must never break execution
+                        logger.warning("live delta_end failed for step %s", rec.step_id, exc_info=True)
 
             # Deterministic client errors (invalid request/auth/model-not-found) fail the same
             # way every time; retrying them only adds latency and cost before the same failure.
@@ -4192,6 +4268,17 @@ class Runtime:
                     sub_vars["_runtime"] = sub_rt
                 if sub_rt.get("speculation") is None:
                     sub_rt["speculation"] = copy.deepcopy(speculation)
+            # Live token streaming follows the run tree too: bundle agents do
+            # their LLM work in CHILD runs, so a root-only `stream` would
+            # stream nothing. Strict booleans only (True on, False explicit
+            # off); an explicit child value wins.
+            stream = (parent_rt or {}).get("stream") if isinstance(parent_rt, dict) else None
+            if isinstance(stream, bool):
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt.setdefault("stream", stream)
         except Exception:
             pass
         # A child may narrow, never widen, an explicit run tool grant. Keep

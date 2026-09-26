@@ -101,8 +101,65 @@ def effect_progress_callback(callback: Optional[ProgressCallback]) -> Iterator[N
         _EFFECT_PROGRESS_CALLBACK.reset(token)
 
 
+# ---------------------------------------------------------------------------
+# LIVE TOKEN DELTAS (token streaming, runtime half — S-DESIGN 2026-09-26)
+# ---------------------------------------------------------------------------
+# The second out-of-band callback, with exactly the same discipline as the
+# progress callback above: built per effect attempt by the runtime, installed
+# here for the duration of ONE handler invocation, read by the LLM handler
+# into its private params (`params["_on_delta"]`), never placed in
+# `effect.payload`, reset in a `finally`.
+#
+# What differs is durability. Progress callbacks write ledger records; delta
+# callbacks write NOTHING durable. They hand `(text, channel)` fragments of the
+# answer being generated to the host's live sink (`Runtime.set_live_delta_sink`)
+# and are offered only when the run asked for streaming (`_runtime.stream is
+# True`) AND a host registered a sink. None is the normal case.
+
+DeltaCallback = Callable[..., Any]
+
+_EFFECT_DELTA_CALLBACK: "ContextVar[Optional[DeltaCallback]]" = ContextVar(
+    "abstractruntime_effect_delta_callback",
+    default=None,
+)
+
+
+def current_effect_delta_callback() -> Optional[DeltaCallback]:
+    """The live delta callback offered for the effect being executed, or None.
+
+    The callable takes ``(text: str, channel: str = "content")`` where channel is
+    ``"content"`` or ``"reasoning"``. None means "nobody is watching live" —
+    callers must treat it as a normal state, never as an error.
+    """
+
+    try:
+        callback = _EFFECT_DELTA_CALLBACK.get()
+    except LookupError:  # pragma: no cover - default makes this unreachable
+        return None
+    return callback if callable(callback) else None
+
+
+@contextlib.contextmanager
+def effect_delta_callback(callback: Optional[DeltaCallback]) -> Iterator[None]:
+    """Install `callback` for the body, then restore the previous value.
+
+    Passing None installs None, so an effect without a live channel never
+    inherits the previous effect's callback (which would stream one step's
+    text under another step's call id).
+    """
+
+    token = _EFFECT_DELTA_CALLBACK.set(callback if callable(callback) else None)
+    try:
+        yield
+    finally:
+        _EFFECT_DELTA_CALLBACK.reset(token)
+
+
 __all__ = [
+    "DeltaCallback",
     "ProgressCallback",
+    "current_effect_delta_callback",
     "current_effect_progress_callback",
+    "effect_delta_callback",
     "effect_progress_callback",
 ]

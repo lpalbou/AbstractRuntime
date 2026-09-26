@@ -478,6 +478,17 @@ NODE_TRACE_LEAF_CAP = 4 * 1024
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 
 
+class StaleResumeError(ValueError):
+    """A resume refused because its wait is no longer the run's current wait.
+
+    Raised by `Runtime.resume` when the run is not waiting any more ("Run is
+    not waiting") or waits on a different key ("wait_key mismatch: ...") —
+    typically another caller resumed it first. Hosts that resume the same
+    wait from more than one place can treat it as a lost race. A ValueError
+    subclass, so existing `except ValueError` handling keeps working.
+    """
+
+
 class _PerRunLocks:
     """Process-wide per-run locks (one RLock per run id, dropped when unused).
 
@@ -2820,12 +2831,12 @@ class Runtime:
         if _is_paused_run_vars(run.vars):
             raise ValueError("Run is paused")
         if run.status != RunStatus.WAITING or run.waiting is None:
-            raise ValueError("Run is not waiting")
+            raise StaleResumeError("Run is not waiting")
         self._health.increment("resumes_total")
 
         # Validate wait_key if provided
         if wait_key is not None and run.waiting.wait_key is not None and wait_key != run.waiting.wait_key:
-            raise ValueError(f"wait_key mismatch: expected '{run.waiting.wait_key}', got '{wait_key}'")
+            raise StaleResumeError(f"wait_key mismatch: expected '{run.waiting.wait_key}', got '{wait_key}'")
 
         resume_to = run.waiting.resume_to_node
         result_key = run.waiting.result_key

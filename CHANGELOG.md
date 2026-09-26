@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `StaleResumeError` (a `ValueError`, exported from `abstractruntime`): what `Runtime.resume` raises
+  when the run is no longer waiting or waits on another key, so a host that resumes the same wait
+  from two places can tell a lost race from a real failure. The messages are unchanged.
+
 ### Fixed
 
 - A wait is resumed at most once. Two callers resuming the same wait at the same moment could both

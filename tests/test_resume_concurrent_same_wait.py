@@ -19,7 +19,9 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from abstractruntime import Effect, EffectType, Runtime, StepPlan, WorkflowSpec
+import pytest
+
+from abstractruntime import Effect, EffectType, Runtime, StaleResumeError, StepPlan, WorkflowSpec
 from abstractruntime.core.models import RunStatus
 from abstractruntime.storage.in_memory import InMemoryLedgerStore
 from abstractruntime.storage.json_files import JsonFileRunStore
@@ -91,6 +93,7 @@ def test_concurrent_resume_of_the_same_wait_runs_once(tmp_path) -> None:
 
     assert first.status == RunStatus.RUNNING
     assert "state" not in second, "a second resume of an already-resumed wait was accepted"
+    assert isinstance(second.get("error"), StaleResumeError)
     assert isinstance(second.get("error"), ValueError)
     assert "not waiting" in str(second["error"])
 
@@ -103,3 +106,50 @@ def test_concurrent_resume_of_the_same_wait_runs_once(tmp_path) -> None:
     final = runtime.tick(workflow=wf, run_id=run_id, max_steps=10)
     assert final.status == RunStatus.COMPLETED
     assert executed == [{"response": "first"}]
+
+
+def _two_waits_workflow() -> WorkflowSpec:
+    def ask1(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="ask1",
+            effect=Effect(type=EffectType.ASK_USER, payload={"prompt": "one?"}, result_key="_temp.one"),
+            next_node="ask2",
+        )
+
+    def ask2(run, ctx) -> StepPlan:
+        return StepPlan(
+            node_id="ask2",
+            effect=Effect(type=EffectType.ASK_USER, payload={"prompt": "two?"}, result_key="_temp.two"),
+            next_node="end",
+        )
+
+    def end(run, ctx) -> StepPlan:
+        return StepPlan(node_id="end", complete_output={"ok": True})
+
+    return WorkflowSpec(workflow_id="wf_two_waits", entry_node="ask1", nodes={"ask1": ask1, "ask2": ask2, "end": end})
+
+
+def test_stale_resumes_raise_typed_error_not_waiting_and_key_mismatch(tmp_path) -> None:
+    """Both refusals of a stale resume are StaleResumeError (still ValueError).
+
+    The loser of a resume race sees "not waiting" when the winner has not
+    reached a new wait yet, and "wait_key mismatch" when the winner's tick
+    already parked the run on its NEXT wait. Hosts treat both as a lost race.
+    """
+    runtime = Runtime(run_store=JsonFileRunStore(tmp_path), ledger_store=InMemoryLedgerStore())
+    wf = _two_waits_workflow()
+    run_id = runtime.start(workflow=wf, vars={"_temp": {}, "_limits": {}, "_runtime": {}})
+    first_wait = runtime.tick(workflow=wf, run_id=run_id, max_steps=10).waiting.wait_key
+
+    # Resumed without ticking: RUNNING, no wait -> "not waiting".
+    runtime.resume(workflow=wf, run_id=run_id, wait_key=first_wait, payload={"response": "a"}, max_steps=0)
+    with pytest.raises(StaleResumeError, match="Run is not waiting") as not_waiting:
+        runtime.resume(workflow=wf, run_id=run_id, wait_key=first_wait, payload={"response": "b"}, max_steps=0)
+    assert isinstance(not_waiting.value, ValueError)
+
+    # The winner's tick moved on to the next wait -> "wait_key mismatch".
+    st = runtime.tick(workflow=wf, run_id=run_id, max_steps=10)
+    assert st.status == RunStatus.WAITING and st.waiting.wait_key != first_wait
+    with pytest.raises(StaleResumeError, match="wait_key mismatch") as mismatch:
+        runtime.resume(workflow=wf, run_id=run_id, wait_key=first_wait, payload={"response": "b"}, max_steps=0)
+    assert isinstance(mismatch.value, ValueError)

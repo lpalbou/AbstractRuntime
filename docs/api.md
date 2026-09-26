@@ -69,6 +69,8 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
+  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`), for example when another caller resumed it first
+  - the check and the commit run under a per-run lock, and tools approved with `{"approved": true}` execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
   - host-facing read APIs for checkpoints and the append-only ledger
 - `Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -> RunState`

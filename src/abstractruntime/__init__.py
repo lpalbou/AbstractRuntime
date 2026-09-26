@@ -36,7 +36,7 @@ from .core.models import (
     WaitState,
 )
 from .core.health import RuntimeHealth
-from .core.runtime import Runtime
+from .core.runtime import Runtime, StaleResumeError
 from .core.spec import WorkflowSpec
 from .core.policy import (
     EffectPolicy,
@@ -154,6 +154,7 @@ __all__ = [
     "WorkflowSpec",
     "Runtime",
     "RuntimeHealth",
+    "StaleResumeError",
     # Scheduler
     "WorkflowRegistry",
     "Scheduler",

@@ -4150,6 +4150,65 @@ def _load_option_report(**kw: Any) -> Dict[str, Any]:
     return out
 
 
+def _explicit_eject_guard(
+    owner: Any,
+    *,
+    task: Optional[str],
+    runtime_id: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+    force: bool,
+    source: str,
+) -> Dict[str, Any]:
+    """Claims of OTHER owners on the model an explicit eject targets.
+
+    Returns {"in_process": bool, "refusal": payload|None, "pooled_elsewhere": n,
+    "forced_over_locks": [...]} . A refusal is the structured 409-style payload
+    `refused: "model_locked_by_other_client"` naming the holders."""
+    out: Dict[str, Any] = {"in_process": False, "refusal": None, "pooled_elsewhere": 0, "forced_over_locks": []}
+    task_s, provider_s, model_s, _ = _resolve_unload_selector(
+        owner, task=task, runtime_id=runtime_id, provider=provider, model=model,
+    )
+    if task_s != "text_generation" or str(provider_s) not in _PROCESS_RESIDENCY_PROVIDERS or not model_s:
+        return out
+    out["in_process"] = True
+    pr = _core_process_residency()
+    if pr is None:
+        return out
+    mine = f"runtime client {id(owner):x}"
+    others = [c for c in pr.claims_for(provider_s, model_s) if c.get("owner") != mine]
+    locks = [c for c in others if c.get("locked")]
+    holders = [{k: c.get(k) for k in ("kind", "owner", "runtime_id", "model") if c.get(k) is not None} for c in locks]
+    if locks and not force:
+        message = (
+            f"{provider_s}/{model_s} is locked by another client in this process "
+            f"({', '.join(sorted({str(h.get('kind')) + ': ' + str(h.get('owner')) for h in holders}))}); "
+            "unload it there, or pass force=true to eject it anyway"
+        )
+        out["refusal"] = {
+            "ok": False,
+            "success": False,
+            "supported": True,
+            "operation": "unload",
+            "task": "text_generation",
+            "provider": provider_s,
+            "model": model_s,
+            "unloaded": False,
+            "refused": "model_locked_by_other_client",
+            "status_code": 409,
+            "locked_by": holders,
+            "error": message,
+            "warnings": [message],
+            "affected_models": [],
+            "diagnostics": {"source": source, "reason": "model_locked_by_other_client"},
+        }
+        return out
+    out["forced_over_locks"] = holders if locks else []
+    owners = {str(c.get("owner")) for c in others if not c.get("locked")}
+    out["pooled_elsewhere"] = len(owners)
+    return out
+
+
 def _provider_inflight_count(instance: Any) -> int:
     """Generations currently running on a provider instance (core's
     `InflightGenerations`); 0 when the provider does not track them."""
@@ -7852,6 +7911,34 @@ class LocalAbstractCoreLLMClient:
         force: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        """Explicit eject (console / tray / CLI). An in-process model's eject is
+        process-wide, so it first consults every OTHER owner's claims (core
+        `process_residency`): another client's LOCK refuses the eject unless
+        `force=True`; other clients that merely pool the model are ejected as
+        well and counted in `ejected_from_other_clients`."""
+        guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                      force=force, source='abstractruntime.local')
+        if guard.get("refusal") is not None:
+            return guard["refusal"]
+        result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                              options=options, force=force, **kwargs)
+        if isinstance(result, dict) and guard.get("in_process"):
+            result["ejected_from_other_clients"] = int(guard.get("pooled_elsewhere") or 0)
+            if guard.get("forced_over_locks"):
+                result["forced_over_other_client_locks"] = guard["forced_over_locks"]
+        return result
+
+    def _unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
         _ = kwargs
         task_s, provider_sel, model_sel, capability_runtime_id = _resolve_unload_selector(
             self, task=task, runtime_id=runtime_id, provider=provider, model=model,
@@ -10685,6 +10772,34 @@ class MultiLocalAbstractCoreLLMClient:
         )
 
     def unload_model_residency(
+        self,
+        *,
+        task: Optional[str] = None,
+        runtime_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        force: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Explicit eject (console / tray / CLI). An in-process model's eject is
+        process-wide, so it first consults every OTHER owner's claims (core
+        `process_residency`): another client's LOCK refuses the eject unless
+        `force=True`; other clients that merely pool the model are ejected as
+        well and counted in `ejected_from_other_clients`."""
+        guard = _explicit_eject_guard(self, task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                      force=force, source='abstractruntime.multilocal')
+        if guard.get("refusal") is not None:
+            return guard["refusal"]
+        result = self._unload_model_residency(task=task, runtime_id=runtime_id, provider=provider, model=model,
+                                              options=options, force=force, **kwargs)
+        if isinstance(result, dict) and guard.get("in_process"):
+            result["ejected_from_other_clients"] = int(guard.get("pooled_elsewhere") or 0)
+            if guard.get("forced_over_locks"):
+                result["forced_over_other_client_locks"] = guard["forced_over_locks"]
+        return result
+
+    def _unload_model_residency(
         self,
         *,
         task: Optional[str] = None,

@@ -76,16 +76,6 @@ logger = logging.getLogger(__name__)
 _ENTITY_VISIT_WORKFLOW_ID = "entity-visit@1"
 
 
-def _accepts_kwarg(fn: Any, name: str) -> bool:
-    """Does `fn` take keyword `name` (or **kwargs)? Host-supplied summarizers
-    predating the run-route arguments keep working unchanged."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
-    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-
-
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -368,6 +358,25 @@ def _progress_event_payload(
     if kwargs:
         payload.update(_jsonable(kwargs))
     return payload
+
+
+def _validate_runtime_stream_switch(vars: Dict[str, Any]) -> None:
+    """`_runtime.stream` is a boolean or absent; anything else is refused.
+
+    A client that sends `"true"` (a string) or `1` must hear about it instead
+    of silently getting a run that does not stream. `None` means unset (the
+    usual JSON spelling of "no value", inherited from the parent for a child).
+    """
+
+    runtime_ns = vars.get("_runtime")
+    if not isinstance(runtime_ns, dict) or "stream" not in runtime_ns:
+        return
+    value = runtime_ns.get("stream")
+    if value is None or isinstance(value, bool):
+        return
+    raise ValueError(
+        f"_runtime.stream must be a boolean (true or false), got {type(value).__name__} {value!r}"
+    )
 
 
 def _effect_accepts_progress_callback(effect: Effect) -> bool:
@@ -1251,6 +1260,7 @@ class Runtime:
         # never from a downstream reader's fallback literal. Seeding can only
         # ADD keys, so it can never reduce a caller's declared budget.
         vars = dict(vars or {})
+        _validate_runtime_stream_switch(vars)
         declared_limits = vars.get("_limits")
         # Captured BEFORE the merge: the operator ceiling below distinguishes a
         # workflow that DECLARED an iteration budget from one that stayed
@@ -2138,7 +2148,13 @@ class Runtime:
         runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
         if not isinstance(runtime_ns, dict) or runtime_ns.get("stream") is not True:
             return None
-        return LiveDeltaEmitter(sink, run_id=run.run_id, node_id=str(node_id), call_id=str(step_id))
+        return LiveDeltaEmitter(
+            sink,
+            run_id=run.run_id,
+            parent_run_id=getattr(run, "parent_run_id", None),
+            node_id=str(node_id),
+            call_id=str(step_id),
+        )
 
     def tick(
         self,
@@ -5358,22 +5374,11 @@ class Runtime:
         if self._chat_summarizer is not None:
             # Use AbstractCore's BasicSummarizer with adaptive chunking
             try:
-                summarize_kwargs: Dict[str, Any] = {}
-                route = target_run.vars.get("_runtime") if isinstance(target_run.vars.get("_runtime"), dict) else {}
-                route_provider = str(route.get("provider") or "").strip() or None
-                route_model = str(route.get("model") or "").strip() or None
-                if route_provider and route_model and _accepts_kwarg(
-                    self._chat_summarizer.summarize_chat_history, "model"
-                ):
-                    # Summarize a run with the model it runs on, never by
-                    # loading the default just for the summary.
-                    summarize_kwargs = {"provider": route_provider, "model": route_model}
                 summarizer_result = self._chat_summarizer.summarize_chat_history(
                     messages=split.older_messages,
                     preserve_recent=0,  # Already split; don't preserve again
                     focus=focus_text,
                     compression_mode=compression_mode,
-                    **summarize_kwargs,
                 )
                 summary_text_out = summarizer_result.get("summary", "(summary unavailable)")
                 key_points = list(summarizer_result.get("key_points") or [])

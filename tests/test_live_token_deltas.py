@@ -104,6 +104,7 @@ def test_first_fragment_is_immediate_then_fragments_coalesce() -> None:
     assert events[1] == {
         "kind": "llm.delta",
         "run_id": "r1",
+        "parent_run_id": None,
         "node_id": "n1",
         "call_id": "s1",
         "seq": 1,
@@ -113,6 +114,7 @@ def test_first_fragment_is_immediate_then_fragments_coalesce() -> None:
     assert events[2] == {
         "kind": "llm.delta_end",
         "run_id": "r1",
+        "parent_run_id": None,
         "node_id": "n1",
         "call_id": "s1",
         "seq": 2,
@@ -173,9 +175,33 @@ def test_a_raising_sink_is_disabled_without_failing_the_producer() -> None:
 
     em = LiveDeltaEmitter(bad, run_id="r", node_id="n", call_id="c", clock=_Clock())
     em("a")  # raises inside, contained
-    em.flush()
+    em("b")
+    em.flush()  # disabled: not delivered
+    em.end("completed")  # one more try, for the end event
+    assert [c["kind"] for c in calls] == ["llm.delta", "llm.delta_end"]
+    assert calls[-1]["reason"] == "unavailable"
+    assert calls[-1]["detail"] == "sink_error"
+    assert em.unavailable_detail == "sink_error"
+
+
+def test_unavailable_detail_turns_completed_into_unavailable_but_not_failed() -> None:
+    events: List[Dict[str, Any]] = []
+    em = _emitter(events, _Clock())
+    em.mark_unavailable("structured_output")
+    em.mark_unavailable("usage_unavailable")  # first reason wins
     em.end("completed")
-    assert len(calls) == 1
+    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "structured_output"
+
+    failed: List[Dict[str, Any]] = []
+    em2 = _emitter(failed, _Clock())
+    em2.mark_unavailable("provider_cannot_stream")
+    em2.end("failed")
+    assert failed[-1]["reason"] == "failed" and "detail" not in failed[-1]
+
+    with pytest.raises(ValueError):
+        _emitter([], _Clock()).mark_unavailable("because")
+    with pytest.raises(ValueError):
+        _emitter([], _Clock()).end("unavailable")  # needs a detail
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +314,7 @@ def test_runtime_streams_deltas_with_the_llm_call_step_id_and_ends_after_the_rec
     [
         ({"stream": True}, False),  # no host listening
         ({"stream": False}, True),  # explicit off
-        ({"stream": "true"}, True),  # strict: only the boolean True enables
-        ({"stream": 1}, True),
+        ({"stream": None}, True),  # unset
         ({}, True),
         (None, True),
     ],
@@ -311,6 +336,13 @@ def test_no_delta_callback_unless_stream_is_true_and_a_sink_is_registered(runtim
     assert state.status.value == "completed"
     assert offered["cb"] is None
     assert events == []
+
+
+@pytest.mark.parametrize("bad", ["true", 1, 0, "yes", {"on": True}])
+def test_a_non_boolean_stream_switch_is_refused_at_start(bad) -> None:
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+    with pytest.raises(ValueError, match="_runtime.stream must be a boolean"):
+        rt.start(workflow=_llm_workflow(), vars={"_runtime": {"stream": bad}})
 
 
 def test_set_live_delta_sink_rejects_non_callables_and_accepts_none() -> None:
@@ -438,7 +470,6 @@ def _child_runtime_ns(parent_ns: Dict[str, Any], child_ns: Optional[Dict[str, An
         (False, None, False),
         (True, False, False),  # explicit child value wins
         (False, True, True),
-        ("true", None, None),  # not a boolean: not inherited
         (None, None, None),
     ],
 )
@@ -690,3 +721,327 @@ def test_remote_client_stays_non_streaming_and_drops_on_delta() -> None:
     assert body["stream"] is False
     assert "_on_delta" not in body
     assert seen == []  # remote mode: no live deltas (documented)
+
+
+# ---------------------------------------------------------------------------
+# S-2 amendment: parent_run_id, the parity gate and every "no stream" detail
+# ---------------------------------------------------------------------------
+
+
+def test_events_carry_parent_run_id_none_for_roots_and_the_parent_for_children() -> None:
+    events: List[Dict[str, Any]] = []
+
+    def llm_handler(run, effect, default_next_node):
+        del run, effect, default_next_node
+        current_effect_delta_callback()("hi", "content")
+        return EffectOutcome.completed({"content": "hi"})
+
+    child = WorkflowSpec(
+        workflow_id="child",
+        entry_node="reason",
+        nodes={
+            "reason": lambda r, c: StepPlan(
+                node_id="reason",
+                effect=Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi"}, result_key="a"),
+                next_node="done",
+            ),
+            "done": lambda r, c: StepPlan(node_id="done", complete_output={}),
+        },
+    )
+    parent = WorkflowSpec(
+        workflow_id="parent",
+        entry_node="reason",
+        nodes={
+            "reason": lambda r, c: StepPlan(
+                node_id="reason",
+                effect=Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi"}, result_key="a"),
+                next_node="spawn",
+            ),
+            "spawn": lambda r, c: StepPlan(
+                node_id="spawn",
+                effect=Effect(
+                    type=EffectType.START_SUBWORKFLOW,
+                    payload={"workflow_id": "child", "vars": {}},
+                    result_key="child",
+                ),
+                next_node="done",
+            ),
+            "done": lambda r, c: StepPlan(node_id="done", complete_output={}),
+        },
+    )
+    registry = WorkflowRegistry()
+    registry.register(child)
+    registry.register(parent)
+    rt = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        workflow_registry=registry,
+        effect_handlers={EffectType.LLM_CALL: llm_handler},
+    )
+    rt.set_live_delta_sink(events.append)
+    root_id = rt.start(workflow=parent, vars={"_runtime": {"stream": True}})
+    state = rt.tick(workflow=parent, run_id=root_id)
+    assert state.status.value == "completed", state.error
+
+    by_run: Dict[str, set] = {}
+    for e in events:
+        by_run.setdefault(e["run_id"], set()).add(e["parent_run_id"])
+    assert by_run[root_id] == {None}
+    child_ids = [rid for rid in by_run if rid != root_id]
+    assert len(child_ids) == 1, "the child run did not stream: stream was not inherited"
+    assert by_run[child_ids[0]] == {root_id}
+
+
+class _ConfigurableProvider:
+    """Fake AbstractCore provider for the parity gate.
+
+    mode:
+      "ok"             streams with usage on the terminal chunk
+      "no_usage"       streams, never reports usage
+      "reject_options" the first streamed request discovers the server
+                       rejects `stream_options` (sets the provider latch the
+                       way openai_compatible_provider does, before any token)
+      "one_piece"      answers in one piece even when asked to stream
+    """
+
+    def __init__(self, mode: str = "ok") -> None:
+        self.mode = mode
+        self.calls: List[Dict[str, Any]] = []
+        self._stream_options_unsupported = False
+
+    def _final(self) -> NS:
+        return NS(
+            content="Hello world",
+            tool_calls=None,
+            usage=_USAGE,
+            model="fake-model",
+            finish_reason="stop",
+            metadata={"prompt_cache": {"mode": "key", "outcome": "hit_extend", "cached_tokens": 5}},
+            raw_response=_RAW,
+            gen_time=None,
+        )
+
+    def generate(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        if not kwargs.get("stream") or self.mode == "one_piece":
+            return self._final()
+        provider = self
+
+        def gen():
+            if provider.mode == "reject_options":
+                provider._stream_options_unsupported = True
+            usage = None if provider.mode in ("no_usage", "reject_options") else _USAGE
+            yield NS(content="Hel", tool_calls=None, usage=None, model="fake-model", finish_reason=None,
+                     metadata=None, raw_response={"i": 1})
+            yield NS(
+                content="lo world",
+                tool_calls=None,
+                usage=usage,
+                model="fake-model",
+                finish_reason="stop",
+                metadata={"prompt_cache": {"mode": "key", "outcome": "hit_extend", "cached_tokens": 5}},
+                raw_response=_RAW,
+            )
+
+        return gen()
+
+
+def _run_with(provider: Any, *, client: Any = None, payload: Optional[Dict[str, Any]] = None, sink=None):
+    events: List[Dict[str, Any]] = []
+    ledger = InMemoryLedgerStore()
+    rt = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=ledger,
+        effect_handlers=build_effect_handlers(llm=client if client is not None else _local_client(provider)),
+    )
+    rt.set_live_delta_sink(sink if sink is not None else events.append)
+    body = payload if payload is not None else {"prompt": "hi"}
+    wf = WorkflowSpec(
+        workflow_id="gate",
+        entry_node="a",
+        nodes={
+            "a": lambda r, c: StepPlan(
+                node_id="a",
+                effect=Effect(type=EffectType.LLM_CALL, payload=deepcopy(body), result_key="ans"),
+                next_node="b",
+            ),
+            "b": lambda r, c: StepPlan(node_id="b", complete_output={}),
+        },
+    )
+    run_id = rt.start(workflow=wf, vars={"_runtime": {"stream": True}})
+    state = rt.tick(workflow=wf, run_id=run_id)
+    assert state.status.value == "completed", state.error
+    [record] = [
+        r for r in ledger.list(run_id) if (r.get("effect") or {}).get("type") == "llm_call" and r["status"] == "completed"
+    ]
+    return events, record
+
+
+def _stream_unavailable(record: Dict[str, Any]) -> Optional[str]:
+    return ((record["result"].get("metadata") or {}).get("_runtime_observability") or {}).get("stream_unavailable")
+
+
+def test_streamed_record_keeps_prompt_cache_raw_response_and_usage() -> None:
+    events, record = _run_with(_ConfigurableProvider("ok"))
+    assert any(e["kind"] == "llm.delta" for e in events)
+    assert events[-1]["reason"] == "completed"
+    result = record["result"]
+    assert result["metadata"]["prompt_cache"]["outcome"] == "hit_extend"
+    assert result["raw_response"] == _RAW
+    assert result["usage"] == _USAGE
+    assert _stream_unavailable(record) is None
+
+
+def test_known_usage_gap_runs_non_streamed_and_says_so() -> None:
+    provider = _ConfigurableProvider("ok")
+    provider._stream_options_unsupported = True  # learned on an earlier call
+    events, record = _run_with(provider)
+    assert provider.calls[-1]["stream"] is False
+    assert [e["kind"] for e in events] == ["llm.delta_end"]
+    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
+    assert _stream_unavailable(record) == "usage_unavailable"
+    assert record["result"]["usage"] == _USAGE
+
+
+def test_usage_gap_discovered_while_opening_the_stream_reruns_non_streamed() -> None:
+    provider = _ConfigurableProvider("reject_options")
+    events, record = _run_with(provider)
+    assert [c["stream"] for c in provider.calls] == [True, False]
+    assert [e["kind"] for e in events] == ["llm.delta_end"]  # no text leaked from the abandoned stream
+    assert events[-1]["detail"] == "usage_unavailable"
+    assert record["result"]["usage"] == _USAGE
+    assert record["result"]["metadata"]["_provider_request"]["payload"]["stream"] is False
+
+
+def test_usage_missing_at_the_end_is_reported_and_later_calls_do_not_stream() -> None:
+    provider = _ConfigurableProvider("no_usage")
+    client = _local_client(provider)
+    events, record = _run_with(provider, client=client)
+    assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
+    assert _stream_unavailable(record) == "usage_unavailable"
+    events2, record2 = _run_with(provider, client=client)
+    assert provider.calls[-1]["stream"] is False
+    assert [e["kind"] for e in events2] == ["llm.delta_end"]
+    assert record2["result"]["usage"] == _USAGE
+
+
+def test_mlx_with_a_prompt_cache_key_does_not_stream_until_core_streams_its_telemetry() -> None:
+    provider = _ConfigurableProvider("ok")
+    client = _local_client(provider)
+    client._provider = "mlx"
+    events, record = _run_with(
+        provider, client=client, payload={"prompt": "hi", "params": {"prompt_cache_key": "sess:1"}}
+    )
+    assert provider.calls[-1]["stream"] is False
+    assert events[-1]["detail"] == "prompt_cache_unavailable"
+    assert _stream_unavailable(record) == "prompt_cache_unavailable"
+
+
+def test_structured_output_does_not_stream_and_says_so() -> None:
+    class _JSONProvider(_ConfigurableProvider):
+        def _final(self) -> NS:
+            out = super()._final()
+            out.content = '{"x": 1}'
+            return out
+
+    provider = _JSONProvider("ok")
+    events, record = _run_with(
+        provider,
+        payload={
+            "prompt": "hi",
+            "response_schema": {"type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]},
+        },
+    )
+    assert all(c["stream"] is False for c in provider.calls)
+    assert events[-1]["detail"] == "structured_output"
+    assert _stream_unavailable(record) == "structured_output"
+
+
+def test_provider_answering_in_one_piece_is_reported() -> None:
+    events, record = _run_with(_ConfigurableProvider("one_piece"))
+    assert events[-1]["detail"] == "provider_cannot_stream"
+    assert _stream_unavailable(record) == "provider_cannot_stream"
+
+
+def test_node_stream_off_is_reported() -> None:
+    events, record = _run_with(_ConfigurableProvider("ok"), payload={"prompt": "hi", "params": {"stream": False}})
+    assert events[-1]["detail"] == "node_stream_off"
+    assert _stream_unavailable(record) == "node_stream_off"
+
+
+def test_a_failing_sink_is_recorded_as_sink_error() -> None:
+    delivered: List[Dict[str, Any]] = []
+
+    def flaky(event: Dict[str, Any]) -> None:
+        delivered.append(event)
+        if event["kind"] == "llm.delta":
+            raise RuntimeError("client went away")
+
+    _, record = _run_with(_ConfigurableProvider("ok"), sink=flaky)
+    assert delivered[-1]["kind"] == "llm.delta_end"
+    assert delivered[-1]["detail"] == "sink_error"
+    assert _stream_unavailable(record) == "sink_error"
+    assert record["result"]["content"] == "Hello world"
+
+
+def test_remote_mode_reports_remote_core() -> None:
+    emitter_events: List[Dict[str, Any]] = []
+    em = LiveDeltaEmitter(emitter_events.append, run_id="r", node_id="n", call_id="c")
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://localhost:1", model="openai-compatible/default", request_sender=_StubSender()
+    )
+    client.generate(prompt="hello", params={"stream": True, "_on_delta": em})
+    em.end("completed")
+    assert emitter_events[-1]["reason"] == "unavailable" and emitter_events[-1]["detail"] == "remote_core"
+
+
+def test_think_tag_split_across_provider_chunks_is_split_server_side() -> None:
+    """S-2 #10: clients never parse <think>; the runtime splits it, even when
+    the tags themselves are cut across provider chunks."""
+
+    class _ThinkProvider(_ConfigurableProvider):
+        def generate(self, **kwargs: Any):
+            self.calls.append(kwargs)
+            pieces = ["<th", "ink>weigh ", "options</th", "ink>", "Answer", ": 4"]
+
+            def gen():
+                for i, piece in enumerate(pieces):
+                    last = i == len(pieces) - 1
+                    yield NS(content=piece, tool_calls=None, usage=_USAGE if last else None, model="m",
+                             finish_reason="stop" if last else None, metadata=None, raw_response=None)
+
+            return gen()
+
+    events, record = _run_with(_ThinkProvider("ok"))
+    content = "".join(e["text"] for e in events if e.get("channel") == "content")
+    reasoning = "".join(e["text"] for e in events if e.get("channel") == "reasoning")
+    assert content == "Answer: 4"
+    assert reasoning == "weigh options"
+    assert not any("<" in e.get("text", "") for e in events)
+    assert record["result"]["content"] == "Answer: 4"
+    assert record["result"]["reasoning"] == "weigh options"
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["<tool_call>", "<|tool_call|>", "<|tool_call>", "<|tool_call_start|>", "<function_call>", "```tool_code", "<|channel|>"],
+)
+def test_tool_call_envelopes_never_reach_the_live_content(marker) -> None:
+    got: List[tuple] = []
+    splitter = _LiveThinkSplitter(lambda text, channel: got.append((channel, text)))
+    cut = len(marker) // 2
+    for piece in ["Let me check. ", marker[:cut], marker[cut:], '{"name": "read_file", "arguments": {}}', "more"]:
+        splitter.feed(piece)
+    splitter.finish()
+    content = "".join(t for c, t in got if c == "content")
+    assert content == "Let me check. "
+    assert "{" not in content
+
+
+def test_a_lone_angle_bracket_is_not_swallowed() -> None:
+    got: List[tuple] = []
+    splitter = _LiveThinkSplitter(lambda text, channel: got.append((channel, text)))
+    for piece in ["a <", "b", " and <tool", "s> c"]:
+        splitter.feed(piece)
+    splitter.finish()
+    assert "".join(t for _, t in got) == "a <b and <tools> c"

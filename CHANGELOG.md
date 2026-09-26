@@ -17,19 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is loaded, unless the pool still uses it or it is locked. A call still generating on it is not
   cancelled; the model is unloaded when that call ends. Measured on a 27B MLX model: 17 GB stayed
   resident after a console switch; now it is freed.
-- Changing the default model in one service never unloads a model another service, user or
-  entity in the same process still uses or has locked. The check covers every owner in the
-  process and runs under one lock with the unload, so a model being loaded again at that moment
-  is not unloaded either.
-- `list_model_residency` diagnostics carry `pending_ejects` (a previous model waiting for its
-  running call to end before it is unloaded) and `last_switch_ejects` (unloaded, kept because
-  something still uses it, or failed, with the reason).
-- A load with `ttl_s` or `keep_alive` on an in-process model, or on a model that was already
-  loaded, now reports them under `unsupported_options` with a warning; provider warnings appear in
-  the response's top-level `warnings`.
-- A model load that fails part-way unloads what it had loaded.
-- Chat compaction summarizes a run with the model the run uses, instead of loading the default
-  model just for the summary.
 - The chat summarizer uses the current default model on each call. Before, it kept the model that
   was the default at startup, kept it in memory, and kept summarizing with it after a switch.
 - Unloading a model by `runtime_id` alone now works for every task: TTS, STT, image, music and

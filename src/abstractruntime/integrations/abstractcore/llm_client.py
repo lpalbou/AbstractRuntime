@@ -18,6 +18,7 @@ import base64
 from copy import deepcopy
 import hashlib
 import io
+import itertools
 import json
 import locale
 import mimetypes
@@ -35,7 +36,6 @@ import uuid
 import wave
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
-from contextlib import contextmanager
 from typing import Any, Dict, List, Mapping, Optional, Protocol, Tuple
 from urllib.parse import quote, urlencode
 
@@ -4066,89 +4066,6 @@ def _parse_local_residency_runtime_id(runtime_id: Any) -> Optional[Tuple[str, st
     return task_s, provider, rest.strip()
 
 
-def _core_process_residency() -> Any:
-    """Core's process residency module with the claimant registry, or None on
-    an AbstractCore without it (then no switch/failed-load eject runs: a
-    process-wide eject without knowing every owner's claims is unsafe)."""
-    try:
-        import abstractcore.providers.process_residency as pr  # type: ignore
-    except Exception:
-        return None
-    return pr if callable(getattr(pr, "eject_unclaimed", None)) else None
-
-
-class _NullLock:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def _core_residency_lock() -> Any:
-    pr = _core_process_residency()
-    return pr.residency_lock() if pr is not None else _NullLock()
-
-
-def _eject_report_summary(label: str, report: Dict[str, Any]) -> Dict[str, Any]:
-    provider_s, _, model_s = label.partition("/")
-    out: Dict[str, Any] = {"provider": provider_s, "model": model_s}
-    for key in ("ok", "skipped", "deferred", "reason", "error", "holders_found", "freed_bytes", "ts"):
-        if report.get(key) is not None:
-            out[key] = report[key]
-    residual = report.get("residual")
-    if isinstance(residual, dict):
-        out["residual"] = {k: residual.get(k) for k in ("holders", "held_bytes")}
-    if report.get("ok") is False and not out.get("error"):
-        out["error"] = f"still resident after the eject: {out.get('residual')}"
-    return out
-
-
-_IN_PROCESS_TIMED_OPTIONS = ("ttl_s", "keep_alive")
-
-
-def _load_option_warnings(
-    *,
-    provider: str,
-    model: str,
-    requested: Dict[str, Any],
-    provider_load_result: Any,
-    provider_called: bool,
-) -> Tuple[List[str], List[str]]:
-    """(warnings, unsupported_options) for a load response. Provider warnings
-    are copied up; `ttl_s` / `keep_alive` are reported as NOT applied when the
-    provider cannot apply them (in-process providers have no idle unload) or
-    when this call never reached the provider (the model was already loaded)."""
-    warnings: List[str] = []
-    unsupported: List[str] = []
-    if isinstance(provider_load_result, dict):
-        warnings.extend(str(w) for w in (provider_load_result.get("warnings") or []) if str(w).strip())
-        unsupported.extend(str(o) for o in (provider_load_result.get("unsupported_options") or []))
-    timed = [k for k in _IN_PROCESS_TIMED_OPTIONS if requested.get(k) is not None and k not in unsupported]
-    if timed:
-        names = ", ".join(timed)
-        if str(provider).strip().lower() in _PROCESS_RESIDENCY_PROVIDERS:
-            warnings.append(
-                f"{provider} has no idle/TTL unload: {names} not applied; {model} stays loaded until it is unloaded"
-            )
-        elif not provider_called:
-            warnings.append(f"{model} was already loaded, so this load did not apply {names}")
-        else:
-            timed = []
-        unsupported.extend(timed)
-    return warnings, unsupported
-
-
-def _load_option_report(**kw: Any) -> Dict[str, Any]:
-    warnings, unsupported = _load_option_warnings(**kw)
-    out: Dict[str, Any] = {}
-    if warnings:
-        out["warnings"] = warnings
-    if unsupported:
-        out["unsupported_options"] = unsupported
-    return out
-
-
 def _provider_inflight_count(instance: Any) -> int:
     """Generations currently running on a provider instance (core's
     `InflightGenerations`); 0 when the provider does not track them."""
@@ -6756,6 +6673,24 @@ def _split_think_blocks(text: str) -> Tuple[str, Optional[str]]:
     return out.strip(), reasoning
 
 
+# Providers whose STREAMED lane does not report `metadata["prompt_cache"]`,
+# which their non-streamed lane does (the prompt-cache diagnosis reads it first).
+# abstractcore mlx_provider.py (~4832-4840) attaches the cache telemetry on the
+# sync lane only ("Sync lane only, deliberately: the runtime's durable llm_call
+# lane forces stream=False"). Streaming is refused for these when a prompt-cache
+# key is in play, until AbstractCore streams the telemetry on the final chunk.
+_STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY = frozenset({"mlx"})
+
+
+def _mark_stream_unavailable(on_delta: Any, detail: str) -> None:
+    """Tell the runtime's live emitter why this call does not stream (no-op without one)."""
+
+    from ...core.live_deltas import LiveDeltaEmitter
+
+    if isinstance(on_delta, LiveDeltaEmitter):
+        on_delta.mark_unavailable(detail)
+
+
 class _LiveThinkSplitter:
     """Route live content fragments to the `content` or `reasoning` channel.
 
@@ -6769,11 +6704,48 @@ class _LiveThinkSplitter:
 
     _OPEN = "<think>"
     _CLOSE = "</think>"
+    # Tool-call envelopes a local model may write as TEXT. AbstractCore's
+    # UnifiedStreamProcessor already withholds them from content chunks
+    # (providers/streaming.py, IncrementalToolDetector patterns) when the
+    # model's format is known; this is the second line: once an opening
+    # marker shows up in live content, no more content is sent for the call
+    # (the final record replaces the live text anyway). Reasoning still flows.
+    _TOOL_MARKERS = (
+        "<tool_call>",
+        "<|tool_call|>",
+        "<|tool_call>",
+        "<|tool_call_start|>",
+        "<function_call>",
+        "```tool_code",
+        "<|channel|>",
+    )
 
     def __init__(self, emit: Any) -> None:
         self._emit = emit
         self._inside = False
         self._hold = ""
+        self._content_hold = ""
+        self._tool_envelope_seen = False
+
+    def _emit_content(self, text: str, *, final: bool = False) -> None:
+        """Send content unless a tool envelope began; hold a possible partial marker."""
+
+        if self._tool_envelope_seen or not (text or (final and self._content_hold)):
+            return
+        buf = self._content_hold + text
+        self._content_hold = ""
+        lowered = buf.lower()
+        cut = min((i for i in (lowered.find(m) for m in self._TOOL_MARKERS) if i >= 0), default=-1)
+        if cut >= 0:
+            self._tool_envelope_seen = True
+            if cut:
+                self._emit(buf[:cut], "content")
+            return
+        keep = 0 if final else max(self._partial_suffix(buf, m) for m in self._TOOL_MARKERS)
+        ready = buf[: len(buf) - keep] if keep else buf
+        if ready:
+            self._emit(ready, "content")
+        self._content_hold = buf[len(buf) - keep:] if keep else ""
 
     @staticmethod
     def _partial_suffix(text: str, tag: str) -> int:
@@ -6792,21 +6764,29 @@ class _LiveThinkSplitter:
             idx = buf.lower().find(tag)
             if idx >= 0:
                 if idx:
-                    self._emit(buf[:idx], channel)
+                    self._send(buf[:idx], channel)
                 buf = buf[idx + len(tag):]
                 self._inside = not self._inside
                 continue
             keep = self._partial_suffix(buf, tag)
             ready = buf[: len(buf) - keep] if keep else buf
             if ready:
-                self._emit(ready, channel)
+                self._send(ready, channel)
             self._hold = buf[len(buf) - keep:] if keep else ""
             return
 
+    def _send(self, text: str, channel: str) -> None:
+        if channel == "content":
+            self._emit_content(text)
+        else:
+            self._emit(text, channel)
+
     def finish(self) -> None:
         if self._hold:
-            self._emit(self._hold, "reasoning" if self._inside else "content")
+            self._send(self._hold, "reasoning" if self._inside else "content")
             self._hold = ""
+        if self._content_hold:
+            self._emit_content("", final=True)
 
 
 def _normalize_local_streaming_response(
@@ -7361,6 +7341,35 @@ class LocalAbstractCoreLLMClient:
         self._locked_model_residency: set = set()
         self._on_token: Optional[Any] = None
 
+    def _latch_stream_refusal(self, detail: str) -> None:
+        """Remember, for this client's lifetime, that its provider cannot stream with parity."""
+
+        if getattr(self, "_stream_refusal", None) is None:
+            self._stream_refusal = detail
+            logger.warning(
+                f"streaming refused for {self._provider}/{self._model} from now on: {detail} "
+                "(calls run non-streamed so the recorded result keeps its usage and telemetry)"
+            )
+
+    def _stream_parity_refusal(self, params: Dict[str, Any]) -> Optional[str]:
+        """Why a streamed call on this provider would record less than a non-streamed one, or None."""
+
+        latched = getattr(self, "_stream_refusal", None)
+        if latched is not None:
+            return latched
+        if getattr(self._llm, "_stream_options_unsupported", False):
+            # abstractcore openai_compatible_provider: the server rejected
+            # `stream_options`, so streamed calls carry no usage.
+            return "usage_unavailable"
+        key = params.get("prompt_cache_key")
+        if (
+            str(self._provider or "").strip().lower() in _STREAM_LANES_WITHOUT_PROMPT_CACHE_TELEMETRY
+            and isinstance(key, str)
+            and key.strip()
+        ):
+            return "prompt_cache_unavailable"
+        return None
+
     def set_on_token(self, callback: Optional[Any]) -> None:
         """Register an in-process token callback (code seat c990's streaming ask).
 
@@ -7636,13 +7645,6 @@ class LocalAbstractCoreLLMClient:
             "runtime_cache_loaded_new": False,
             "runtime": record,
             **({"provider_load_result": _jsonable(provider_load_result)} if provider_load_result is not None else {}),
-            **_load_option_report(
-                provider=provider_s,
-                model=model_s,
-                requested=_local_provider_load_options(options=options, pin=pin, extra=dict(kwargs or {})),
-                provider_load_result=provider_load_result,
-                provider_called=before_record.get("loaded") is not True,
-            ),
             "diagnostics": {
                 "source": "abstractruntime.local",
                 "loaded_new": provider_loaded_new,
@@ -8349,6 +8351,16 @@ class LocalAbstractCoreLLMClient:
                 or params.get("response_format") is not None
             ):
                 stream = False
+                _mark_stream_unavailable(on_delta, "structured_output")
+
+            # STREAMING PARITY GATE (S-2): a streamed call must record what the
+            # non-streamed call records. Where the provider cannot, the call
+            # runs non-streamed and says why (never a silent downgrade).
+            if stream:
+                refusal = self._stream_parity_refusal(params)
+                if refusal is not None:
+                    stream = False
+                    _mark_stream_unavailable(on_delta, refusal)
 
             requested_base_url = params.get("base_url")
             requested_provider = params.get("_provider")
@@ -8507,6 +8519,64 @@ class LocalAbstractCoreLLMClient:
             ):
                 call_messages = []
 
+            def _invoke_provider(stream_flag: bool) -> Tuple[Dict[str, Any], bool]:
+                """One provider call -> (normalized result, whether it streamed)."""
+
+                options_unsupported_before = bool(getattr(self._llm, "_stream_options_unsupported", False))
+                resp = self._llm.generate(
+                    prompt=str(prompt or ""),
+                    messages=call_messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    media=media,
+                    stream=stream_flag,
+                    **params,
+                )
+                if stream_flag and hasattr(resp, "__next__"):
+                    # The OpenAI-compatible provider learns that its server
+                    # rejects `stream_options` (so no streamed usage) while
+                    # opening the stream, before the first token. Look at the
+                    # first chunk, then check: if usage just became
+                    # unavailable, abandon the stream and answer non-streamed.
+                    try:
+                        first_chunk = next(resp)
+                        head: List[Any] = [first_chunk]
+                    except StopIteration:
+                        head = []
+                    if not options_unsupported_before and getattr(self._llm, "_stream_options_unsupported", False):
+                        _close = getattr(resp, "close", None)
+                        if callable(_close):
+                            try:
+                                _close()
+                            except Exception:
+                                pass
+                        _mark_stream_unavailable(on_delta, "usage_unavailable")
+                        return _invoke_provider(False)
+                    streamed = _normalize_local_streaming_response(
+                        itertools.chain(head, resp),
+                        on_token=getattr(self, "_on_token", None),
+                        on_delta=on_delta,
+                    )
+                    if streamed.get("usage") is None:
+                        # Found out only at the end: this answer is complete but
+                        # has no usage. Say so on this call, and run the next
+                        # calls of this client non-streamed.
+                        self._latch_stream_refusal("usage_unavailable")
+                        _mark_stream_unavailable(on_delta, "usage_unavailable")
+                    return streamed, True
+                if stream_flag:
+                    _mark_stream_unavailable(on_delta, "provider_cannot_stream")
+                return (
+                    _normalize_local_response(
+                        resp,
+                        artifact_store=self._artifact_store if acore_output_request else None,
+                        run_id=run_id,
+                        default_tags=default_artifact_tags,
+                        generation_context=generation_context,
+                    ),
+                    False,
+                )
+
             lock = getattr(self, "_generate_lock", None)
             # Query the loaded instance on each call, not the provider name or
             # constructor options: only its internal scheduler guarantees safe
@@ -8522,27 +8592,7 @@ class LocalAbstractCoreLLMClient:
                         messages=messages,
                         thinking=params.get("thinking"),
                     )
-                resp = self._llm.generate(
-                    prompt=str(prompt or ""),
-                    messages=call_messages,
-                    system_prompt=system_prompt,
-                    tools=tools,
-                    media=media,
-                    stream=stream,
-                    **params,
-                )
-                if stream and hasattr(resp, "__next__"):
-                    result = _normalize_local_streaming_response(
-                        resp, on_token=getattr(self, "_on_token", None), on_delta=on_delta
-                    )
-                else:
-                    result = _normalize_local_response(
-                        resp,
-                        artifact_store=self._artifact_store if acore_output_request else None,
-                        run_id=run_id,
-                        default_tags=default_artifact_tags,
-                        generation_context=generation_context,
-                    )
+                result, stream = _invoke_provider(stream)
                 _sanitize_runtime_grounding_echoes(result)
                 _attach_runtime_grounding(result, runtime_grounding)
                 result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
@@ -8558,27 +8608,7 @@ class LocalAbstractCoreLLMClient:
                             messages=messages,
                             thinking=params.get("thinking"),
                         )
-                    resp = self._llm.generate(
-                        prompt=str(prompt or ""),
-                        messages=call_messages,
-                        system_prompt=system_prompt,
-                        tools=tools,
-                        media=media,
-                        stream=stream,
-                        **params,
-                    )
-                    if stream and hasattr(resp, "__next__"):
-                        result = _normalize_local_streaming_response(
-                            resp, on_token=getattr(self, "_on_token", None), on_delta=on_delta
-                        )
-                    else:
-                        result = _normalize_local_response(
-                            resp,
-                            artifact_store=self._artifact_store if acore_output_request else None,
-                            run_id=run_id,
-                            default_tags=default_artifact_tags,
-                            generation_context=generation_context,
-                        )
+                    result, stream = _invoke_provider(stream)
                     _sanitize_runtime_grounding_echoes(result)
                     _attach_runtime_grounding(result, runtime_grounding)
                     result["tool_calls"] = _normalize_tool_calls(result.get("tool_calls"))
@@ -9662,15 +9692,6 @@ class MultiLocalAbstractCoreLLMClient:
         self._capability_residency_core_lock = threading.Lock()
         self._provider_endpoint_profile_resolver = None
         self._locked_model_residency: set = set()
-        # Residency claims (core `process_residency`): what this client pools,
-        # locks or is building, so a process-wide eject by ANY owner (another
-        # user's service, an entity runtime, the core server) skips it.
-        self._building: Dict[Tuple[str, str], int] = {}
-        self._pending_ejects: Dict[str, Dict[str, Any]] = {}
-        self._last_switch_ejects: Dict[str, Any] = {}
-        _pr = _core_process_residency()
-        if _pr is not None:
-            _pr.register_claimant(self)
         # Fresh-install guard (release gap 1, gateway c5878, 2026-07-27): a
         # brand-new install has NO provider configured anywhere. Eagerly
         # building the default client here crashed the whole runtime at
@@ -9860,17 +9881,25 @@ class MultiLocalAbstractCoreLLMClient:
         self._llm = getattr(self._default_client, "_llm", None)
         return True
 
+    def _pairs_still_in_use(self) -> set:
+        used = set(getattr(self, "_clients", {}) or {})
+        used |= {(k[0], k[1]) for k in (getattr(self, "_override_clients", {}) or {})}
+        used |= set(_local_locked_residency_pairs(self))
+        if getattr(self, "_default_provider", None) or getattr(self, "_default_model", None):
+            used.add((str(self._default_provider or ""), str(self._default_model or "")))
+        return used
+
     def _eject_models_dropped_by_switch(self, dropped: List[Tuple[Tuple[str, str], Any]]) -> None:
         """Eject, process-wide, every in-process model a default switch dropped
-        from the pool that NO owner in the process still claims (this client,
-        other users' clients, entity runtimes, the core server's managed
-        runtimes; see core `process_residency.eject_unclaimed`). A model still
+        from the pool that nothing in the pool still uses (unlocked by
+        construction: locked pairs survive the eviction). A model still
         generating on a dropped instance is ejected when that generation ends
         -- a switch never cancels a running call. Reports land in
         `self._last_switch_ejects` and the log."""
         by_pair: Dict[Tuple[str, str], List[Any]] = {}
+        still_used = self._pairs_still_in_use()
         for (provider_s, model_s), instance in dropped:
-            if str(provider_s) not in _PROCESS_RESIDENCY_PROVIDERS:
+            if str(provider_s) not in _PROCESS_RESIDENCY_PROVIDERS or (provider_s, model_s) in still_used:
                 continue
             by_pair.setdefault((provider_s, model_s), []).append(instance)
         reports: Dict[str, Any] = {}
@@ -9879,12 +9908,8 @@ class MultiLocalAbstractCoreLLMClient:
             busy = [i for i in instances if i is not None and _provider_inflight_count(i) > 0]
             label = f"{provider_s}/{model_s}"
             if busy:
-                reports[label] = {"deferred": True, "reason": "waiting for the in-flight call"}
-                if label in self._pending_ejects:
-                    continue  # one waiter per model
-                self._pending_ejects[label] = {"provider": provider_s, "model": model_s,
-                                               "reason": "waiting for the in-flight call", "since": time.time()}
-                logger.info(f"default switch: {label} is still generating; it is unloaded when that call ends")
+                reports[label] = {"deferred": True, "reason": "a generation is still running on it"}
+                logger.info(f"default switch: {label} is still generating; it is ejected when that call ends")
                 threading.Thread(
                     target=self._eject_after_inflight,
                     args=(provider_s, model_s, [weakref.ref(i) for i in busy], reports),
@@ -9894,38 +9919,24 @@ class MultiLocalAbstractCoreLLMClient:
                 continue
             reports[label] = self._eject_dropped_pair(provider_s, model_s)
 
-    def _eject_dropped_pair(self, provider_s: str, model_s: str, *, reason: str = "default_switch") -> Dict[str, Any]:
-        """Eject a model this client dropped, unless ANY owner in the process
-        (this client included: pool, override, lock, build, default) still
-        claims it. The claim check and the eject run under core's process
-        residency lock, so a rebuild cannot slip in between."""
+    def _eject_dropped_pair(self, provider_s: str, model_s: str) -> Dict[str, Any]:
         label = f"{provider_s}/{model_s}"
-        pr = _core_process_residency()
-        if pr is None:
-            logger.warning(f"{reason}: {label} not unloaded: this AbstractCore cannot tell which owners still use it")
-            return {"ok": True, "skipped": True,
-                    "reason": "this AbstractCore has no residency claim registry; upgrade it to unload switched-away models"}
-        report = pr.eject_unclaimed(provider_s, model_s, reason=reason) or {"ok": True, "holders_found": 0}
-        if report.get("skipped"):
-            logger.info(f"{reason}: {label} kept: {report.get('reason')}")
-        elif report.get("ok") is False:
-            logger.warning(f"{reason}: {label} is still resident after the eject: {report.get('error') or report.get('residual')}")
+        if (provider_s, model_s) in self._pairs_still_in_use():
+            return {"skipped": True, "reason": "back in use"}
+        report = _process_eject_for(provider_s, model_s) or {"ok": True, "holders_found": 0}
+        if report.get("ok") is False:
+            logger.warning(f"default switch: {label} is still resident after the eject: {report.get('error') or report.get('residual')}")
         else:
-            logger.info(f"{reason}: unloaded {label} from {int(report.get('holders_found') or 0)} holder(s) no owner uses any more")
+            logger.info(
+                f"default switch: ejected {label} from {int(report.get('holders_found') or 0)} holder(s) "
+                "no pool entry uses any more"
+            )
         return report
 
     def _eject_after_inflight(self, provider_s: str, model_s: str, refs: List[Any], reports: Dict[str, Any]) -> None:
-        label = f"{provider_s}/{model_s}"
-        try:
-            # Ends when the call ends or the instance is collected.
-            while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
-                time.sleep(0.5)
-            reports[label] = self._eject_dropped_pair(provider_s, model_s)
-        except Exception as exc:  # noqa: BLE001 - the report must say it failed
-            reports[label] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-            logger.warning(f"default switch: deferred unload of {label} failed: {exc}")
-        finally:
-            self._pending_ejects.pop(label, None)
+        while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
+            time.sleep(0.5)
+        reports[f"{provider_s}/{model_s}"] = self._eject_dropped_pair(provider_s, model_s)
 
     def _retire_capability_residency_core(self) -> None:
         core = getattr(self, "_capability_residency_core", None)
@@ -10111,18 +10122,13 @@ class MultiLocalAbstractCoreLLMClient:
                 self._override_clients = override_clients
             client = override_clients.get(override_key)
             if client is None:
-                with self._building_claim(key):
-                    client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
-                    with _core_residency_lock():
-                        override_clients[override_key] = client
+                client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
+                override_clients[override_key] = client
             return client
         client = self._clients.get(key)
         if client is None:
             try:
-                with self._building_claim(key):
-                    client = self._create_client(key[0], key[1])
-                    with _core_residency_lock():
-                        self._clients[key] = client
+                client = self._create_client(key[0], key[1])
             except DefaultRouteProviderError:
                 raise
             except Exception as exc:
@@ -10141,69 +10147,8 @@ class MultiLocalAbstractCoreLLMClient:
                         core_config_file=getattr(self, "_core_config_file", None),
                     ) from exc
                 raise
+            self._clients[key] = client
         return client
-
-    @contextmanager
-    def _building_claim(self, key: Tuple[str, str]):
-        """Claim `key` while its client is being built: an eject that runs
-        meanwhile (another client's switch, the core server) must not unload
-        the weights this build is loading. Released after the pool insert."""
-        with _core_residency_lock():
-            building = self.__dict__.setdefault("_building", {})
-            building[key] = int(building.get(key, 0)) + 1
-        try:
-            yield
-        finally:
-            with _core_residency_lock():
-                n = int(self._building.get(key, 1)) - 1
-                if n > 0:
-                    self._building[key] = n
-                else:
-                    self._building.pop(key, None)
-
-    def residency_claims(self) -> List[Dict[str, Any]]:
-        """Every (provider, model) this client still wants resident: pooled,
-        per-override, locked, being built, or its default."""
-        owner = f"runtime client {id(self):x}"
-        locked = set(_local_locked_residency_pairs(self))
-        claims: List[Dict[str, Any]] = []
-        for p, m in list(getattr(self, "_clients", {}) or {}):
-            claims.append({"provider": p, "model": m, "locked": (p, m) in locked, "kind": "pool", "owner": owner})
-        for k in list(getattr(self, "_override_clients", {}) or {}):
-            claims.append({"provider": k[0], "model": k[1], "locked": (k[0], k[1]) in locked, "kind": "override",
-                           "owner": owner})
-        for p, m in locked:
-            claims.append({"provider": p, "model": m, "locked": True, "kind": "lock", "owner": owner})
-        for p, m in list((getattr(self, "_building", {}) or {}).keys()):
-            claims.append({"provider": p, "model": m, "locked": False, "kind": "building", "owner": owner})
-        if getattr(self, "_default_provider", None) and getattr(self, "_default_model", None):
-            claims.append({"provider": self._default_provider, "model": self._default_model, "locked": False,
-                           "kind": "default", "owner": owner})
-        return claims
-
-    def _drop_failed_load_client(self, key: Tuple[str, str]) -> None:
-        """A load failed: drop the pool entry AND free what the failed load may
-        have left in memory (e.g. the main weights loaded, the drafter failed)
-        unless another owner claims the model."""
-        with _core_residency_lock():
-            self._clients.pop(key, None)
-        if str(key[0]) in _PROCESS_RESIDENCY_PROVIDERS:
-            label = f"{key[0]}/{key[1]}"
-            report = self._eject_dropped_pair(key[0], key[1], reason="failed_load")
-            self._last_switch_ejects = {**(getattr(self, "_last_switch_ejects", {}) or {}),
-                                        label: {**report, "reason": report.get("reason") or "failed_load"}}
-
-    def residency_eject_diagnostics(self) -> Dict[str, Any]:
-        """Pending and last switch/failed-load ejects, for listings (the console
-        shows "will be unloaded when its call ends" / "unload failed: ...")."""
-        return {
-            "pending_ejects": [dict(v) for v in list((getattr(self, "_pending_ejects", {}) or {}).values())],
-            "last_switch_ejects": [
-                _eject_report_summary(label, report)
-                for label, report in list((getattr(self, "_last_switch_ejects", {}) or {}).items())
-                if isinstance(report, dict)
-            ],
-        }
 
     def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:
         self._provider_endpoint_profile_resolver = resolver
@@ -10246,24 +10191,6 @@ class MultiLocalAbstractCoreLLMClient:
         )
 
     def list_model_residency(
-        self,
-        *,
-        task: Optional[str] = None,
-        provider: Optional[str] = None,
-        model: Optional[str] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        result = self._list_model_residency(task=task, provider=provider, model=model, **kwargs)
-        if isinstance(result, dict):
-            # Switch / failed-load ejects: pending ("will be unloaded when its
-            # call ends") and last outcomes ("unloaded" / "kept: in use by ..." /
-            # "failed: ..."), so the console can say so.
-            diagnostics = result.setdefault("diagnostics", {})
-            if isinstance(diagnostics, dict):
-                diagnostics.update(self.residency_eject_diagnostics())
-        return result
-
-    def _list_model_residency(
         self,
         *,
         task: Optional[str] = None,
@@ -10387,7 +10314,7 @@ class MultiLocalAbstractCoreLLMClient:
             )
             if load_error:
                 if runtime_cache_loaded_new and key != (self._default_provider, self._default_model):
-                    self._drop_failed_load_client(key)
+                    self._clients.pop(key, None)
                     before_record = _local_residency_record(
                         provider=provider_s,
                         model=model_s,
@@ -10419,7 +10346,7 @@ class MultiLocalAbstractCoreLLMClient:
         loaded_new = bool((runtime_cache_loaded_new or provider_loaded_new) and record.get("loaded") is True)
         if record.get("loaded") is not True:
             if runtime_cache_loaded_new and key != (self._default_provider, self._default_model):
-                self._drop_failed_load_client(key)
+                self._clients.pop(key, None)
                 record = _local_residency_record(
                     provider=provider_s,
                     model=model_s,
@@ -10449,13 +10376,6 @@ class MultiLocalAbstractCoreLLMClient:
             "runtime_cache_loaded_new": runtime_cache_loaded_new,
             "runtime": record,
             **({"provider_load_result": _jsonable(provider_load_result)} if provider_load_result is not None else {}),
-            **_load_option_report(
-                provider=provider_s,
-                model=model_s,
-                requested=_local_provider_load_options(options=options, pin=pin, extra=dict(kwargs or {})),
-                provider_load_result=provider_load_result,
-                provider_called=before_record.get("loaded") is not True,
-            ),
             "diagnostics": {
                 "source": "abstractruntime.multilocal",
                 "loaded_new": loaded_new,
@@ -15447,8 +15367,8 @@ class RemoteAbstractCoreLLMClient:
         # below is a single non-streaming request (`"stream": False`), so the
         # runtime's per-call `_on_delta` is dropped here on purpose: a run that
         # asked for `_runtime.stream` still completes with the same durable
-        # answer, only without a live preview.
-        params.pop("_on_delta", None)
+        # answer, only without a live preview, and the live view is told why.
+        _mark_stream_unavailable(params.pop("_on_delta", None), "remote_core")
         prompt = _promote_text_param_to_prompt(prompt, params)
         provider_api_key = _pop_provider_api_key(params)
         req_headers = self._headers_with_provider_api_key(provider_api_key)

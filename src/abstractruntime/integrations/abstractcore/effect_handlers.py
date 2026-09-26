@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional, Set, Tuple, Type
 
 from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
+from ...core.live_deltas import LiveDeltaEmitter
 from ...core.progress_channel import current_effect_delta_callback, current_effect_progress_callback
 from ...core.effect_cancellation import annotate_current_effect, current_effect_cancel_event
 from ...core.runtime import EffectOutcome, EffectHandler
@@ -1513,6 +1514,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
             )
             if not explicit_off:
                 params["stream"] = True
+            elif isinstance(runtime_delta_callback, LiveDeltaEmitter):
+                runtime_delta_callback.mark_unavailable("node_stream_off")
 
         # CANCEL CHANNEL, OUT OF BAND (core/effect_cancellation.py), same
         # discipline: the runtime's per-attempt threading.Event becomes the
@@ -2432,6 +2435,10 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         "attempts": truncation_attempts,
                         "resolved": not _finish_reason_is_truncation(result.get("finish_reason") if isinstance(result.get("finish_reason"), str) else None),
                     }
+                # Every "no stream" outcome of a call that asked to stream is
+                # recorded on the durable record, not only told to live viewers.
+                if isinstance(runtime_delta_callback, LiveDeltaEmitter) and runtime_delta_callback.unavailable_detail:
+                    runtime_observability["stream_unavailable"] = runtime_delta_callback.unavailable_detail
                 existing = meta.get("_runtime_observability")
                 if not isinstance(existing, dict):
                     existing = {}

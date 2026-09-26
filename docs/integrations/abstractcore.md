@@ -778,9 +778,7 @@ except core.HostActionRefused as refused:
 
 - Unloading an in-process model (MLX, HuggingFace, embeddings) frees it from every holder in the process, not only from this runtime's instance, and the result carries a `process_eject` report. The result is `ok: false` when weights remain in memory. An embedding model loads again on the next embedding request.
 - Changing the default text model (`set_default_provider_model`, which the gateway calls when the console default changes) unloads the previous in-process model, unless the pool still uses it or it is locked. The previous model is freed before the new default is loaded, so the two are never in memory together. If the previous model is still generating, the switch does not cancel that call; the model is unloaded when the call ends.
-- A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, lock or are loading, and the unload skips a model any of them uses. `list_model_residency` diagnostics list `pending_ejects` (waiting for a running call to end) and `last_switch_ejects` (unloaded, kept because it is still in use, or failed, with the reason).
-- Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.
-- A load with `ttl_s` or `keep_alive` for an in-process model, or for a model that is already loaded, lists them under `unsupported_options` with a warning. A load that fails part-way unloads what it loaded.
+- The chat summarizer uses the current default model on each call. It does not keep the model that was the default at startup.
 - Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.
 - MLX has no idle or time-based unload. A load with `ttl_s` or `keep_alive` on MLX reports them under `unsupported_options`, with a warning, and the model stays loaded until it is unloaded.
 

@@ -127,18 +127,6 @@ def _attach_runtime_abstractcore_client(runtime: Runtime, llm_client: Any) -> No
         ) from exc
 
 
-
-def _summarizer_llm(llm_client: Any, provider: Optional[str], model: Optional[str]) -> Any:
-    """The model a chat summary runs on: the run's own provider/model when it
-    names one (the client's pooled instance -- the one the run already uses,
-    so nothing extra is loaded), else the client's CURRENT default."""
-    provider_s = str(provider or "").strip()
-    model_s = str(model or "").strip()
-    getter = getattr(llm_client, "get_provider_instance", None)
-    if provider_s and model_s and callable(getter):
-        return getter(provider=provider_s, model=model_s)
-    return getattr(llm_client, "_llm", None)
-
 def create_local_runtime(
     *,
     provider: str,
@@ -307,7 +295,7 @@ def create_local_runtime(
     # resident after the operator switched models, and kept summarizing with
     # it (M1 finding, 2026-09-25: 17.36 GB pinned via summarizer -> runtime).
     summarizer = AbstractCoreChatSummarizer(
-        llm_resolver=lambda provider=None, model=None: _summarizer_llm(llm_client, provider, model),
+        llm_resolver=lambda: getattr(llm_client, "_llm", None),
         max_tokens=config.max_tokens if config.max_tokens is not None else -1,
         max_output_tokens=config.max_output_tokens if config.max_output_tokens is not None else -1,
     )

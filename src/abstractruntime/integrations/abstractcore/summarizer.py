@@ -32,8 +32,6 @@ class ChatSummarizer(Protocol):
         preserve_recent: int = 6,
         focus: Optional[str] = None,
         compression_mode: str = "standard",
-        provider: Optional[str] = None,
-        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Summarize chat history with adaptive chunking.
 
@@ -71,7 +69,7 @@ class AbstractCoreChatSummarizer:
         self,
         llm=None,
         *,
-        llm_resolver: Optional[Callable[[Optional[str], Optional[str]], Any]] = None,
+        llm_resolver: Optional[Callable[[], Any]] = None,
         max_tokens: int = -1,
         max_output_tokens: int = -1,
     ):
@@ -80,13 +78,10 @@ class AbstractCoreChatSummarizer:
         Args:
             llm: AbstractCore LLM instance (from create_llm or provider). Bound
                 for the life of the summarizer.
-            llm_resolver: Instead of `llm`: `resolver(provider, model)` returning
-                the model to summarize with NOW -- the run's own provider/model
-                when the call names one, else the runtime's current default.
-                Resolved on every call and never retained, so a default-model
-                switch is followed, a run pinned elsewhere is summarized by its
-                own model (the default is never loaded just to summarize), and
-                no previous model is kept in memory by the summarizer.
+            llm_resolver: Instead of `llm`: a callable returning the model to
+                use NOW (e.g. the runtime's current default). Resolved on every
+                call and never retained, so a default-model switch is followed
+                and the previous model is not kept in memory by the summarizer.
             max_tokens: Maximum context tokens. -1 = AUTO (use model capability)
             max_output_tokens: Maximum output tokens. -1 = AUTO
         """
@@ -106,10 +101,10 @@ class AbstractCoreChatSummarizer:
             max_output_tokens=self._max_output_tokens,
         )
 
-    def _current(self, provider: Optional[str] = None, model: Optional[str] = None) -> Any:
+    def _current(self) -> Any:
         if self._summarizer is not None:
             return self._summarizer
-        llm = self._llm_resolver(provider, model) if self._llm_resolver is not None else None
+        llm = self._llm_resolver() if self._llm_resolver is not None else None
         if llm is None:
             raise RuntimeError(
                 "chat summarization needs a text model, and this runtime has no default model configured"
@@ -125,8 +120,6 @@ class AbstractCoreChatSummarizer:
         preserve_recent: int = 6,
         focus: Optional[str] = None,
         compression_mode: str = "standard",
-        provider: Optional[str] = None,
-        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Summarize chat history with adaptive chunking.
 
@@ -157,9 +150,7 @@ class AbstractCoreChatSummarizer:
         mode = mode_map.get(compression_mode.lower(), CompressionMode.STANDARD)
 
         # Call BasicSummarizer - it handles adaptive chunking internally
-        summarizer = self._current(provider, model)
-        llm = getattr(summarizer, "llm", None)
-        result = summarizer.summarize_chat_history(
+        result = self._current().summarize_chat_history(
             messages=messages,
             preserve_recent=preserve_recent,
             focus=focus,
@@ -174,9 +165,6 @@ class AbstractCoreChatSummarizer:
             "focus_alignment": float(result.focus_alignment) if result.focus_alignment else None,
             "word_count_original": result.word_count_original,
             "word_count_summary": result.word_count_summary,
-            # Which model wrote the summary.
-            "provider": getattr(llm, "provider", None),
-            "model": getattr(llm, "model", None),
         }
 
     @property

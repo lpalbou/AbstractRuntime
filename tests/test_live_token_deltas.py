@@ -913,17 +913,35 @@ def test_usage_gap_discovered_while_opening_the_stream_reruns_non_streamed() -> 
     assert record["result"]["metadata"]["_provider_request"]["payload"]["stream"] is False
 
 
-def test_usage_missing_at_the_end_is_reported_and_later_calls_do_not_stream() -> None:
+def test_usage_missing_at_the_end_is_reported_and_the_next_call_streams_again() -> None:
+    """An unexplained missing usage is reported for THAT call only; it must not
+    switch streaming off for the model until restart (REVIEW/17 S2)."""
     provider = _ConfigurableProvider("no_usage")
     client = _local_client(provider)
     events, record = _run_with(provider, client=client)
     assert events[-1]["reason"] == "unavailable" and events[-1]["detail"] == "usage_unavailable"
     assert _stream_unavailable(record) == "usage_unavailable"
+
+    provider.mode = "ok"  # the hiccup is over
+    events2, record2 = _run_with(provider, client=client)
+    assert provider.calls[-1]["stream"] is True
+    assert any(e["kind"] == "llm.delta" for e in events2)
+    assert events2[-1]["reason"] == "completed"
+    assert _stream_unavailable(record2) is None
+
+
+def test_a_provider_flagged_rejection_keeps_later_calls_non_streamed() -> None:
+    """The provider's own flag (server rejected `stream_options`) is the only
+    thing that keeps streaming off across calls."""
+    provider = _ConfigurableProvider("reject_options")
+    client = _local_client(provider)
+    _run_with(provider, client=client)
+    assert provider._stream_options_unsupported is True
+    provider.mode = "ok"
     events2, record2 = _run_with(provider, client=client)
     assert provider.calls[-1]["stream"] is False
     assert [e["kind"] for e in events2] == ["llm.delta_end"]
-    assert record2["result"]["usage"] == _USAGE
-
+    assert events2[-1]["detail"] == "usage_unavailable"
 
 def test_a_provider_listed_without_streamed_prompt_cache_does_not_stream(monkeypatch) -> None:
     """The gate mechanism, independent of which providers are listed today."""
@@ -1120,7 +1138,7 @@ def test_think_tag_split_across_provider_chunks_is_split_server_side() -> None:
 
 @pytest.mark.parametrize(
     "marker",
-    ["<tool_call>", "<|tool_call|>", "<|tool_call>", "<|tool_call_start|>", "<function_call>", "```tool_code", "<|channel|>"],
+    ["<tool_call>", "<|tool_call|>", "<|tool_call>", "<|tool_call_start|>", "<function_call>", "```tool_code"],
 )
 def test_tool_call_envelopes_never_reach_the_live_content(marker) -> None:
     got: List[tuple] = []
@@ -1141,3 +1159,104 @@ def test_a_lone_angle_bracket_is_not_swallowed() -> None:
         splitter.feed(piece)
     splitter.finish()
     assert "".join(t for _, t in got) == "a <b and <tools> c"
+
+
+# ---------------------------------------------------------------------------
+# Harmony (gpt-oss) transcripts (REVIEW/17 S1)
+# ---------------------------------------------------------------------------
+
+
+def _split_live(pieces: List[str]):
+    got: List[tuple] = []
+    splitter = _LiveThinkSplitter(lambda text, channel: got.append((channel, text)))
+    for piece in pieces:
+        splitter.feed(piece)
+    splitter.finish()
+    joined: Dict[str, str] = {"content": "", "reasoning": ""}
+    for channel, text in got:
+        joined[channel] += text
+    return joined, got, splitter
+
+
+def _chop(text: str, size: int = 3) -> List[str]:
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+HARMONY_ANSWER = (
+    "<|channel|>analysis<|message|>User asks 2+2. Easy.<|end|>"
+    "<|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>"
+)
+HARMONY_TOOL = (
+    "<|channel|>analysis<|message|>Need to read the file.<|end|>"
+    "<|start|>assistant<|channel|>commentary to=functions.read_file <|constrain|>json"
+    '<|message|>{"file_path": "a.txt"}<|call|>'
+)
+
+
+@pytest.mark.parametrize("size", [1, 3, 7, 1000])
+def test_harmony_final_streams_and_analysis_is_reasoning(size) -> None:
+    joined, got, splitter = _split_live(_chop(HARMONY_ANSWER, size))
+    assert joined == {"content": "2 + 2 = 4.", "reasoning": "User asks 2+2. Easy."}
+    assert all("<|" not in t for _, t in got)  # framing tokens never emitted
+    assert splitter.emitted_content and not splitter.held_back
+
+
+@pytest.mark.parametrize("size", [1, 4, 1000])
+def test_harmony_commentary_tool_call_is_held_back(size) -> None:
+    joined, got, splitter = _split_live(_chop(HARMONY_TOOL, size))
+    assert joined == {"content": "", "reasoning": "Need to read the file."}
+    assert "file_path" not in "".join(t for _, t in got)
+    assert splitter.held_back and not splitter.emitted_content
+
+
+def test_harmony_commentary_preamble_without_recipient_is_content() -> None:
+    joined, _, _ = _split_live(["<|channel|>commentary<|message|>Checking the file now.<|end|>"])
+    assert joined["content"] == "Checking the file now."
+
+
+def test_plain_text_with_angle_pipes_is_untouched() -> None:
+    joined, _, splitter = _split_live(["a <| b |> c", " <|not a token|>"])
+    assert joined["content"] == "a <| b |> c <|not a token|>"
+    assert not splitter.held_back
+
+
+class _HarmonyProvider(_ConfigurableProvider):
+    def __init__(self, text: str) -> None:
+        super().__init__("ok")
+        self.text = text
+
+    def generate(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        pieces = _chop(self.text, 5)
+
+        def gen():
+            for i, piece in enumerate(pieces):
+                last = i == len(pieces) - 1
+                yield NS(content=piece, tool_calls=None, usage=_USAGE if last else None, model="gpt-oss",
+                         finish_reason="stop" if last else None, metadata=None, raw_response=None)
+
+        return gen()
+
+
+def test_harmony_answer_streams_end_to_end() -> None:
+    events, _ = _run_with(_HarmonyProvider(HARMONY_ANSWER))
+    content = "".join(e["text"] for e in events if e.get("channel") == "content")
+    reasoning = "".join(e["text"] for e in events if e.get("channel") == "reasoning")
+    assert content == "2 + 2 = 4."
+    assert reasoning == "User asks 2+2. Easy."
+    assert events[-1]["reason"] == "completed"
+
+
+def test_a_call_whose_whole_answer_is_held_back_says_so() -> None:
+    events, record = _run_with(_HarmonyProvider(HARMONY_TOOL))
+    assert not any(e.get("channel") == "content" for e in events)
+    assert events[-1]["reason"] == "unavailable"
+    assert events[-1]["detail"] == "tool_envelope_holdback"
+    assert _stream_unavailable(record) == "tool_envelope_holdback"
+
+
+def test_text_then_a_tool_call_is_not_reported_as_held_back() -> None:
+    events, record = _run_with(_HarmonyProvider('Let me look. <tool_call>{"name": "x", "arguments": {}}</tool_call>'))
+    assert "".join(e["text"] for e in events if e.get("channel") == "content") == "Let me look. "
+    assert events[-1]["reason"] == "completed"
+    assert _stream_unavailable(record) is None

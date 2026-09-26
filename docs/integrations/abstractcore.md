@@ -391,6 +391,7 @@ When both hold, every `LLM_CALL` of the run streams from the provider and the ru
 - `channel` is `content` (the answer) or `reasoning` (the model's thinking). Reasoning arrives from the provider's reasoning stream, and inline `<think>…</think>` markup is split out of the content live, so clients can hide or fold it. The markup itself is never sent.
 - `reason` is `completed`, `failed`, `cancelled` or `unavailable`. Every call ends with exactly one `llm.delta_end`, sent after the call's durable record is in the ledger. Each retry attempt is its own call with its own `call_id`.
 - Tool-call markup a local model writes as text (`<tool_call>`, `<|tool_call|>`, `<function_call>`, …) never reaches the live text. AbstractCore already removes it from streamed content; the runtime also stops the live content of a call at the first such marker. The final record carries the tool calls.
+- Harmony transcripts (gpt-oss) are split live: the `final` channel streams as content, `analysis` as reasoning, and a tool call (`commentary to=functions.…`) is held back. The framing tokens are never sent.
 - Text is coalesced: the first fragment is sent immediately, later fragments are grouped over about 40 ms.
 
 ```python
@@ -408,13 +409,14 @@ runtime.tick(workflow=wf, run_id=run_id)
 
 | `detail` | Meaning |
 | --- | --- |
-| `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When this is only known at the end of a call, that call is reported and the next calls on that model run non-streamed. |
+| `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When the server rejects usage in streams, calls on that model run non-streamed from then on; when usage is only missing at the end of one call, that call is reported and the next call streams again. |
 | `prompt_cache_unavailable` | The provider's streamed answers do not carry `metadata.prompt_cache` while its non-streamed answers do. No current provider is in this case: MLX streams carry it on their last chunk (AbstractCore release with that change required). |
 | `structured_output` | Structured or media-output calls are never streamed. |
 | `provider_cannot_stream` | The provider answered in one piece. |
 | `remote_core` | Remote mode: the AbstractCore server call is not streamed. |
 | `node_stream_off` | The `LLM_CALL` payload sets `params.stream: False`. |
 | `sink_error` | The host sink raised; the rest of the call was not delivered live. |
+| `tool_envelope_holdback` | The whole answer was a tool call (or a channel that is not shown), so no answer text was streamed. |
 
 A streamed call records the same `usage`, `raw_response` and `metadata.prompt_cache` as a non-streamed one; where it cannot, the call does not stream.
 

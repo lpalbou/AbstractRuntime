@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Harmony-format models (gpt-oss) stream their answers live: the `final` channel is sent as
+  content, `analysis` as reasoning, and tool calls are held back. A call whose whole answer is held
+  back ends with `reason: "unavailable"`, `detail: "tool_envelope_holdback"` instead of a silent
+  empty live view.
+- One streamed answer without token usage no longer turns streaming off for that model until
+  restart. That call is reported (`usage_unavailable`) and the next call streams again; streaming
+  stays off only when the provider reports that its server rejects usage in streams.
 - Host-protected folders no longer grow the system prompt. A host can pass its own protection as
   `workspace_builtin_deny_prefixes` (for example the gateway's data folder and credential folders)
   and `workspace_builtin_allow` (the run's own folder inside it). File tools, listings and the

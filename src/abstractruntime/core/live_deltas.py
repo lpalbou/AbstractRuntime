@@ -74,6 +74,7 @@ UNAVAILABLE_DETAILS = (
     "remote_core",  # remote mode: the AbstractCore server call is not streamed
     "node_stream_off",  # the LLM_CALL payload says `stream: False`
     "sink_error",  # the host sink raised; the rest of the call was not delivered
+    "tool_envelope_holdback",  # the whole answer was a tool call / hidden channel, held back
 )
 DEFAULT_FLUSH_INTERVAL_S = 0.040
 

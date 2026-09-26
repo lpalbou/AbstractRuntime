@@ -6784,8 +6784,22 @@ class _LiveThinkSplitter:
     incrementally: text inside a think block goes to `reasoning`, the rest to
     `content`, and a tag cut across two fragments (`"<th"` + `"ink>"`) is held
     back until it can be decided. The markup itself is never emitted.
+
+    HARMONY (gpt-oss) transcripts are parsed first, with AbstractCore's rules
+    (architectures/response_postprocessing.py `split_harmony_response_text`,
+    providers/streaming.py `_collect_harmony_tool_content`): a segment is
+    `<|channel|>NAME[ to=RECIPIENT]<|message|>BODY` closed by `<|end|>`,
+    `<|call|>` or `<|return|>`, and `<|start|>ROLE` opens the next one.
+    `final` -> content, `analysis` -> reasoning, a header with `to=` (a tool
+    call, e.g. `commentary to=functions.read_file`) -> held back, `commentary`
+    without a recipient (a preamble for the user) -> content; any other
+    channel -> held back. Framing tokens are never emitted.
+
+    `held_back` / `emitted_content` let the caller report a call whose whole
+    answer was held back (`tool_envelope_holdback`), so it is never silent.
     """
 
+    _HARMONY_TOKENS = ("<|channel|>", "<|message|>", "<|end|>", "<|start|>", "<|call|>", "<|return|>")
     _OPEN = "<think>"
     _CLOSE = "</think>"
     # Tool-call envelopes a local model may write as TEXT. AbstractCore's
@@ -6801,7 +6815,6 @@ class _LiveThinkSplitter:
         "<|tool_call_start|>",
         "<function_call>",
         "```tool_code",
-        "<|channel|>",
     )
 
     def __init__(self, emit: Any) -> None:
@@ -6810,6 +6823,82 @@ class _LiveThinkSplitter:
         self._hold = ""
         self._content_hold = ""
         self._tool_envelope_seen = False
+        self.held_back = False
+        self.emitted_content = False
+        # Harmony stage.
+        self._h_state = "text"  # text | header | role
+        self._h_mode = "content"  # content | reasoning | held
+        self._h_buf = ""
+        self._h_header = ""
+
+    # -- harmony stage -------------------------------------------------------
+    def _h_route(self, text: str) -> None:
+        if not text:
+            return
+        if self._h_state == "header":
+            self._h_header += text
+        elif self._h_state == "role":
+            return
+        elif self._h_mode == "content":
+            self._think_feed(text)
+        elif self._h_mode == "reasoning":
+            self._emit(text, "reasoning")
+        else:
+            self.held_back = True
+
+    def _h_open_body(self) -> None:
+        header = self._h_header.strip()
+        self._h_header = ""
+        name = header.split("<|", 1)[0].split()[0].lower() if header.split("<|", 1)[0].split() else ""
+        if "to=" in header:
+            self._h_mode = "held"
+            self.held_back = True
+        elif name == "analysis":
+            self._h_mode = "reasoning"
+        elif name in ("final", "commentary"):
+            self._h_mode = "content"
+        else:
+            self._h_mode = "held"
+            self.held_back = True
+        self._h_state = "text"
+
+    def _harmony_feed(self, text: str) -> None:
+        buf = self._h_buf + text
+        self._h_buf = ""
+        while buf:
+            if self._h_state == "header":
+                idx = buf.find("<|message|>")
+                if idx < 0:
+                    keep = self._partial_suffix(buf, "<|message|>")
+                    self._h_header += buf[: len(buf) - keep] if keep else buf
+                    self._h_buf = buf[len(buf) - keep:] if keep else ""
+                    return
+                self._h_header += buf[:idx]
+                buf = buf[idx + len("<|message|>"):]
+                self._h_open_body()
+                continue
+            hits = [(buf.find(t), t) for t in self._HARMONY_TOKENS]
+            hits = [(i, t) for i, t in hits if i >= 0]
+            if not hits:
+                keep = max(self._partial_suffix(buf, t) for t in self._HARMONY_TOKENS)
+                self._h_route(buf[: len(buf) - keep] if keep else buf)
+                self._h_buf = buf[len(buf) - keep:] if keep else ""
+                return
+            idx, token = min(hits)
+            self._h_route(buf[:idx])
+            buf = buf[idx + len(token):]
+            if token == "<|channel|>":
+                self._h_state = "header"
+                self._h_header = ""
+            elif token == "<|message|>":
+                # `<|start|>assistant<|message|>` (no channel): plain answer.
+                self._h_state = "text"
+                self._h_mode = "content"
+            elif token == "<|start|>":
+                self._h_state = "role"
+            else:  # <|end|> / <|call|> / <|return|>: segment closed
+                self._h_state = "text"
+                self._h_mode = "content"
 
     def _emit_content(self, text: str, *, final: bool = False) -> None:
         """Send content unless a tool envelope began; hold a possible partial marker."""
@@ -6822,13 +6911,16 @@ class _LiveThinkSplitter:
         cut = min((i for i in (lowered.find(m) for m in self._TOOL_MARKERS) if i >= 0), default=-1)
         if cut >= 0:
             self._tool_envelope_seen = True
+            self.held_back = True
             if cut:
                 self._emit(buf[:cut], "content")
+                self.emitted_content = True
             return
         keep = 0 if final else max(self._partial_suffix(buf, m) for m in self._TOOL_MARKERS)
         ready = buf[: len(buf) - keep] if keep else buf
         if ready:
             self._emit(ready, "content")
+            self.emitted_content = True
         self._content_hold = buf[len(buf) - keep:] if keep else ""
 
     @staticmethod
@@ -6840,6 +6932,9 @@ class _LiveThinkSplitter:
         return 0
 
     def feed(self, text: str) -> None:
+        self._harmony_feed(text)
+
+    def _think_feed(self, text: str) -> None:
         buf = self._hold + text
         self._hold = ""
         while buf:
@@ -6866,6 +6961,10 @@ class _LiveThinkSplitter:
             self._emit(text, channel)
 
     def finish(self) -> None:
+        if self._h_buf:
+            pending, self._h_buf = self._h_buf, ""
+            if self._h_state != "header":
+                self._h_route(pending)
         if self._hold:
             self._send(self._hold, "reasoning" if self._inside else "content")
             self._hold = ""
@@ -7105,6 +7204,10 @@ def _normalize_local_streaming_response(
 
     if delta_cb is not None:
         think_splitter.finish()
+        if think_splitter.held_back and not think_splitter.emitted_content:
+            # The whole answer was held back (a tool call, or a channel we do not
+            # show): say so rather than leave the live view silent.
+            _mark_stream_unavailable(on_delta, "tool_envelope_holdback")
 
     # `reasoning_delta` is a per-chunk DISPLAY fragment; the merged metadata
     # kept the LAST fragment, which the non-streamed record never has
@@ -7425,22 +7528,9 @@ class LocalAbstractCoreLLMClient:
         self._locked_model_residency: set = set()
         self._on_token: Optional[Any] = None
 
-    def _latch_stream_refusal(self, detail: str) -> None:
-        """Remember, for this client's lifetime, that its provider cannot stream with parity."""
-
-        if getattr(self, "_stream_refusal", None) is None:
-            self._stream_refusal = detail
-            logger.warning(
-                f"streaming refused for {self._provider}/{self._model} from now on: {detail} "
-                "(calls run non-streamed so the recorded result keeps its usage and telemetry)"
-            )
-
     def _stream_parity_refusal(self, params: Dict[str, Any]) -> Optional[str]:
         """Why a streamed call on this provider would record less than a non-streamed one, or None."""
 
-        latched = getattr(self, "_stream_refusal", None)
-        if latched is not None:
-            return latched
         if getattr(self._llm, "_stream_options_unsupported", False):
             # abstractcore openai_compatible_provider: the server rejected
             # `stream_options`, so streamed calls carry no usage.
@@ -8649,10 +8739,12 @@ class LocalAbstractCoreLLMClient:
                         on_delta=on_delta,
                     )
                     if streamed.get("usage") is None:
-                        # Found out only at the end: this answer is complete but
-                        # has no usage. Say so on this call, and run the next
-                        # calls of this client non-streamed.
-                        self._latch_stream_refusal("usage_unavailable")
+                        # Found out only at the end, for a reason the provider
+                        # did not flag: this call is reported, and the next call
+                        # tries streaming again (a one-off server hiccup must not
+                        # switch streaming off for the model). A server that
+                        # REJECTS usage in streams is the provider's own flag,
+                        # checked before every call in `_stream_parity_refusal`.
                         _mark_stream_unavailable(on_delta, "usage_unavailable")
                     return streamed, True
                 if stream_flag:

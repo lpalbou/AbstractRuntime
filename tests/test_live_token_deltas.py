@@ -1535,9 +1535,20 @@ def test_a_kill_reinvoke_gets_its_own_call_and_the_first_ends_cancelled() -> Non
     first, second = list(calls.values())
     assert [e["kind"] for e in first] == ["llm.delta", "llm.delta_end"]
     assert first[0]["text"] == "partial ans" and first[-1]["reason"] == "cancelled"
+    # The run goes on: clients word this as "reply restarted", not "stopped".
+    assert first[-1]["detail"] == "reinvoked"
+    assert "detail" not in second[-1]
     assert "".join(e["text"] for e in second if e["kind"] == "llm.delta") == "The full answer."
     assert second[-1]["kind"] == "llm.delta_end" and second[-1]["reason"] == "completed"
     # The first call is closed before the second one starts.
     assert events.index(first[-1]) < events.index(second[0])
     [step_id] = _llm_call_step_ids(ledger, run_id)
     assert first[0]["call_id"] == step_id and second[0]["call_id"] == f"{step_id}:reinvoke"
+
+
+def test_cancelled_detail_is_validated_and_plain_cancel_has_none() -> None:
+    events: List[Dict[str, Any]] = []
+    _emitter(events, _Clock()).end("cancelled")
+    assert "detail" not in events[-1]
+    with pytest.raises(ValueError):
+        _emitter([], _Clock()).end("cancelled", detail="because")

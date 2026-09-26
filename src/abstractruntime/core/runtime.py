@@ -3523,7 +3523,7 @@ class Runtime:
                         # first answer followed by the full second one.
                         if delta_emitter is not None:
                             try:
-                                delta_emitter.end("cancelled")
+                                delta_emitter.end("cancelled", detail="reinvoked")
                             except Exception:  # pragma: no cover - live preview must never break execution
                                 logger.warning("live delta_end failed for step %s", rec.step_id, exc_info=True)
                             delta_emitter = self._runtime_delta_callback(

@@ -65,6 +65,11 @@ LiveDeltaSink = Callable[[Dict[str, Any]], None]
 
 DELTA_CHANNELS = ("content", "reasoning")
 END_REASONS = ("completed", "failed", "cancelled", "unavailable")
+# Why a call ended `cancelled` although the RUN goes on (clients word it
+# differently from "the run was stopped").
+CANCEL_DETAILS = (
+    "reinvoked",  # a stray kill interrupted this call; the runtime re-runs it under a new call id
+)
 # Why a call did not stream. Every "no stream" outcome is named, never silent.
 UNAVAILABLE_DETAILS = (
     "usage_unavailable",  # the provider cannot report token usage when streaming
@@ -183,12 +188,18 @@ class LiveDeltaEmitter:
 
         A call that `completed` but was marked unavailable ends as
         `reason: "unavailable"` with its detail; failed and cancelled keep their
-        reason (the failure is the more important fact).
+        reason (the failure is the more important fact). A `cancelled` end may
+        carry a `detail` from `CANCEL_DETAILS` (e.g. "reinvoked").
         """
 
         if reason not in END_REASONS:
             raise ValueError(f"unknown delta_end reason {reason!r}; expected one of {END_REASONS}")
-        if detail is not None:
+        cancel_detail: Optional[str] = None
+        if detail is not None and reason == "cancelled":
+            if detail not in CANCEL_DETAILS:
+                raise ValueError(f"unknown cancelled detail {detail!r}; expected one of {CANCEL_DETAILS}")
+            cancel_detail = detail
+        elif detail is not None:
             self.mark_unavailable(detail)
         with self._lock:
             if self._ended:
@@ -211,6 +222,8 @@ class LiveDeltaEmitter:
             }
             if reason == "unavailable":
                 event["detail"] = self.unavailable_detail
+            elif reason == "cancelled" and cancel_detail is not None:
+                event["detail"] = cancel_detail
             # A sink that failed mid-call gets one more chance for the end
             # event, so the host can close its live view with the reason.
             if self._sink is None and self._failed_sink is not None:
@@ -288,6 +301,7 @@ class LiveDeltaEmitter:
 
 
 __all__ = [
+    "CANCEL_DETAILS",
     "UNAVAILABLE_DETAILS",
     "DEFAULT_FLUSH_INTERVAL_S",
     "DELTA_CHANNELS",

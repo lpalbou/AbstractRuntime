@@ -369,6 +369,45 @@ payload = {
 }
 ```
 
+## Live token streaming
+
+A host can show an answer while it is being generated. Streaming is opt-in per run and needs two things:
+
+1. The run asks for it: `run.vars["_runtime"]["stream"] = True` (only the boolean `True` enables it; `False` is an explicit off).
+2. The host registers a sink on the runtime: `runtime.set_live_delta_sink(sink)`.
+
+When both hold, every `LLM_CALL` of the run streams from the provider and the runtime calls `sink(event)` with plain dicts:
+
+```python
+{"kind": "llm.delta", "run_id": "…", "node_id": "reason", "call_id": "<step_id>",
+ "seq": 0, "text": "Hello", "channel": "content"}
+{"kind": "llm.delta_end", "run_id": "…", "node_id": "reason", "call_id": "<step_id>",
+ "seq": 5, "reason": "completed"}
+```
+
+- `call_id` is the `step_id` of the `LLM_CALL` ledger record that later holds the final answer, so a client can replace its live text with the durable result.
+- `seq` counts the events of one call from 0, `llm.delta_end` included.
+- `channel` is `content` (the answer) or `reasoning` (the model's thinking). Reasoning arrives from the provider's reasoning stream, and inline `<think>…</think>` markup is split out of the content live, so clients can hide or fold it. The markup itself is never sent.
+- `reason` is `completed`, `failed` or `cancelled`. Every call that streamed ends with exactly one `llm.delta_end`, sent after the call's durable record is in the ledger. Each retry attempt is its own call with its own `call_id`.
+- Text is coalesced: the first fragment is sent immediately, later fragments are grouped over about 40 ms.
+
+```python
+events = []
+runtime.set_live_delta_sink(events.append)
+run_id = runtime.start(workflow=wf, vars={"_runtime": {"stream": True}})
+runtime.tick(workflow=wf, run_id=run_id)
+```
+
+**The ledger is unchanged.** Deltas are never persisted. A streamed run records the same `LLM_CALL` result as a non-streamed one (`content`, `reasoning`, `tool_calls`, `usage`, `raw_response`), apart from the `stream` flag in the recorded provider request and the timings the stream measures (`gen_time`, `ttft_ms`). In streaming mode `raw_response` is the provider's terminal chunk.
+
+**Child runs inherit the switch.** Subworkflows, and the delegated children of AbstractAgent loops, receive the parent's `_runtime.stream` unless they set their own value.
+
+**When a call does not stream.** A call whose payload sets `params.stream: False`, and structured or media-output calls, run without streaming; they still send one `llm.delta_end` so the client can close its live view.
+
+**Remote mode does not stream.** With a remote runtime (AbstractCore server), the call is a single non-streaming request: the run completes with the same answer, without live deltas.
+
+**Writing a sink.** The sink is called from the provider's thread, in `seq` order for a given call. Keep it fast: put the event on a queue and return. A sink that raises is switched off for the rest of that call and the call itself continues normally.
+
 ## `TOOL_CALLS` payload
 
 ```json

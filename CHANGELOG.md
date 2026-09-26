@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Streamed LLM calls now record the same result as non-streamed ones: `raw_response` is present
+  (the provider's terminal chunk), and the last reasoning fragment no longer leaks into
+  `metadata.reasoning_delta`.
 - Changing the default text model no longer leaves the previous model in memory. The previous
   in-process model (MLX or HuggingFace) is unloaded from the whole process before the new default
   is loaded, unless the pool still uses it or it is locked. A call still generating on it is not
@@ -26,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live token streaming.** `Runtime.set_live_delta_sink(sink)` lets a host receive the text of an
+  answer while it is generated. For runs started with `_runtime.stream: true`, each LLM call streams
+  and the sink gets `llm.delta` events (`run_id`, `node_id`, `call_id` = the LLM call's step id,
+  `seq`, `text`, `channel` = `content` or `reasoning`) and one `llm.delta_end` (`completed`,
+  `failed` or `cancelled`) after the call's final record is written. Deltas are never written to the
+  ledger. Thinking is sent on its own `reasoning` channel, including inline `<think>` markup, so
+  clients can hide it. Child runs inherit `stream`. Remote mode (AbstractCore server) stays
+  non-streaming. See `docs/integrations/abstractcore.md#live-token-streaming`.
 - Embedding models loaded in the process appear in `list_model_residency` as `task: "embedding"`
   rows (`local:embedding:huggingface:<model>`, with holders and bytes) and can be unloaded like any
   other model.

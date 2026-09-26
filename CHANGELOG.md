@@ -45,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the response's top-level `warnings`.
 - A model load that fails part-way unloads what it had loaded.
 - Chat compaction summarizes a run with the model the run uses, instead of loading the default
-  model just for the summary.
-- The chat summarizer uses the current default model on each call. Before, it kept the model that
-  was the default at startup, kept it in memory, and kept summarizing with it after a switch.
+  model just for the summary. A run with no model of its own is summarized with the current
+  default model, resolved on each call; the summarizer no longer holds the model that was the
+  default at startup.
 - Unloading a model by `runtime_id` alone now works for every task: TTS, STT, image, music and
   embedding rows, not only text. A backend's own id is looked up in the listing.
 - Listings no longer report a task error on every call for `image_upscale`, `video_generation`,
@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HuggingFace models held in the process outside the runtime's pool are listed and unloaded like
   MLX ones.
 - Compatibility: these features need the AbstractCore changes released alongside this version.
+  Unloading the previous model on a default switch needs AbstractCore's process residency claim
+  registry; with an older AbstractCore the model is kept and `last_switch_ejects` says why. MLX
+  calls with a prompt-cache key record their prompt-cache telemetry when streamed only with the
+  AbstractCore release that puts it on the last streamed chunk.
 
 ## [0.4.36] - 2026-09-25
 

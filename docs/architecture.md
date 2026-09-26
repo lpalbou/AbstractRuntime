@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-09-25
+> Updated: 2026-09-26
 > Version: 0.4.36
 > Scope: this describes **what is implemented in this repository**.
 
@@ -85,6 +85,54 @@ engine installer, host job registry"]
 ```
 
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
+
+### Live token streaming (outside the ledger)
+
+Live text travels on a side channel next to the durable path. A run opts in with `_runtime.stream: true`, the host registers one sink with `Runtime.set_live_delta_sink(sink)`, and each `LLM_CALL` hands a per-call emitter (`src/abstractruntime/core/live_deltas.py`) to the AbstractCore client. The emitter batches fragments (about 40 ms), splits reasoning from content, holds back tool-call markup, and always closes the call with one `llm.delta_end` after the durable record is appended. Nothing on the live path is persisted, so replay and the ledger are the same with streaming on or off. See [Live token streaming](integrations/abstractcore.md#live-token-streaming).
+
+```mermaid
+flowchart LR
+  Provider["AbstractCore provider
+(stream=True)"] -->|"chunks"| Client["LLM client
+think / harmony split,
+tool-markup hold-back"]
+  Client -->|"content / reasoning fragments"| Emitter["LiveDeltaEmitter
+(per call, ~40 ms batches)"]
+  Emitter -->|"llm.delta / llm.delta_end"| Sink["host sink
+set_live_delta_sink"]
+  Client -->|"final result
+(content, usage, raw_response, prompt_cache)"| Handler["LLM_CALL handler"]
+  Handler -->|"StepRecord"| Ledger["LedgerStore"]
+  Handler -.->|"after the record: delta_end"| Emitter
+```
+
+### Model residency in a shared process
+
+In-process models (MLX, HuggingFace, embeddings) belong to the process, not to one runtime. Every multi-local client registers what it still needs (pooled, per-override, locked, being built, default) with AbstractCore's process residency registry. An unload after a default switch or a failed load goes through `eject_unclaimed`, which checks every owner's claims and unloads under one lock, so one service never unloads a model another service, user, entity runtime or the AbstractCore server still uses. A model that is still generating is unloaded when its call ends. See [Unloading and switching models](integrations/abstractcore.md#unloading-and-switching-models).
+
+```mermaid
+flowchart TB
+  subgraph Process["One host process"]
+    ClientA["multi-local client
+(service A)"]
+    ClientB["multi-local client
+(service B / entity runtime)"]
+    Server["AbstractCore server
+managed runtimes"]
+    Registry["process residency registry
+claims: pool, override, lock,
+building, default"]
+    Weights["in-process weights
+MLX / HuggingFace / embeddings"]
+  end
+
+  ClientA -->|"register claims"| Registry
+  ClientB -->|"register claims"| Registry
+  Server -->|"register claims"| Registry
+  ClientA -->|"default switch:
+eject_unclaimed(old model)"| Registry
+  Registry -->|"unload only if no owner claims it"| Weights
+```
 
 ## Component map
 
@@ -238,7 +286,7 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
-- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, and approval-gated local tool execution.
+- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
 ### Reliability: retries + idempotency

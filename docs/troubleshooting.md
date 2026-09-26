@@ -118,6 +118,54 @@ Docs:
 - `integrations/abstractcore.md#prompt-cache-control-plane-and-durable-blocs`
 - `faq.md#where-should-cached-session-or-prompt-cache-state-live`
 
+## Live replies do not stream
+
+Symptom:
+- A host registered a sink with `Runtime.set_live_delta_sink(...)`, but an answer arrives only when the call ends, or the
+  sink receives only an `llm.delta_end`.
+
+Checks:
+- The run must set `_runtime.stream` to the boolean `True`; `Runtime.start` refuses any other value with a `ValueError`.
+- Read the call's `llm.delta_end`: `reason: "unavailable"` carries a `detail`, and the `LLM_CALL` ledger record carries
+  the same value as `metadata._runtime_observability.stream_unavailable`.
+
+Fix, by `detail`:
+- `remote_core`: remote mode does not stream; use a local or multi-local runtime for live text.
+- `node_stream_off`: the node sets `params.stream: False`; remove it to stream that node.
+- `structured_output`: structured and media-output calls never stream; this is expected.
+- `usage_unavailable`: the provider's server cannot report token usage in streams; configure the server to accept
+  `stream_options`, or accept non-streamed answers for that model.
+- `tool_envelope_holdback`: the whole answer was a tool call or a hidden channel; this is expected.
+- `sink_error`: your sink raised. Keep the sink fast and non-raising (put the event on a queue and return).
+
+Verify:
+- Start a run with `vars={"_runtime": {"stream": True}}` and check that the sink receives `llm.delta` events before the
+  `llm.delta_end` with `reason: "completed"`.
+
+Docs:
+- `integrations/abstractcore.md#live-token-streaming`
+
+## The previous model stays in memory after a default switch
+
+Symptom:
+- After `set_default_provider_model(...)`, the previous MLX, HuggingFace or embedding model still appears in
+  `list_model_residency` and memory does not drop.
+
+Checks:
+- Read `list_model_residency` diagnostics. `pending_ejects` lists a model waiting for its running call to end.
+  `last_switch_ejects` shows, per model, whether it was unloaded, kept because another owner still uses or locked it
+  (`skipped` with a `reason`), or failed (`ok: false` with the remaining holders).
+
+Fix:
+- A pending model is unloaded when its call ends; no action is needed.
+- A model kept for another owner stays until that owner releases it. Unlock or unload it there. An explicit
+  `unload_model_residency(runtime_id=...)` frees the model from every holder in the process, including owners that
+  still use it, so use it only when you intend that.
+- A `skipped` reason that names the claim registry means the installed AbstractCore predates it; upgrade AbstractCore.
+
+Docs:
+- `integrations/abstractcore.md#unloading-and-switching-models`
+
 ## MCP worker command is not found
 
 Symptom:

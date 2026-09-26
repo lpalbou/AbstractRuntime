@@ -291,12 +291,12 @@ Generated binary media requires a runtime `ArtifactStore` and is stored there. T
 }
 ```
 
-LLM-call results that flow through the Core request/output path now also expose a replay-safe
+LLM-call results that flow through the Core request/output path also expose a replay-safe
 `metadata._runtime_resolved_action` summary. `history_bundle` collects those into top-level
 `resolved_actions`, so another client can replay which capability family, task, normalized
 request/output summary, and effective route actually ran.
 
-Media-only normalized results now distinguish orchestration identity from the actual media backend:
+Media-only normalized results distinguish orchestration identity from the actual media backend:
 
 - `runtime_provider` / `runtime_model`: the runtime-side orchestration identity, when relevant
 - `media_provider` / `media_model`: the actual image/video/voice/music backend identity surfaced from the generated output
@@ -331,7 +331,7 @@ One real record, from a `basic-agent` chat turn on `mlx/Qwen3.5-4B-4bit`:
 
 **Scope.** These records are `scope: "run"` and land in the ledger of the run that made the call. In a chat bundle the `llm_call` runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the `abstract.status` "Thinking…" event (`result.wait.details.sub_run_id` on the parent's waiting record).
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface now forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
@@ -410,7 +410,7 @@ runtime.tick(workflow=wf, run_id=run_id)
 | `detail` | Meaning |
 | --- | --- |
 | `usage_unavailable` | The provider cannot report token usage when streaming (for example an OpenAI-compatible server that rejects `stream_options`). When the server rejects usage in streams, calls on that model run non-streamed from then on; when usage is only missing at the end of one call, that call is reported and the next call streams again. |
-| `prompt_cache_unavailable` | The provider's streamed answers do not carry `metadata.prompt_cache` while its non-streamed answers do. No current provider is in this case: MLX streams carry it on their last chunk (AbstractCore release with that change required). |
+| `prompt_cache_unavailable` | Reserved for a provider whose streamed answers do not carry `metadata.prompt_cache` while its non-streamed answers do. No provider is in this case with a current AbstractCore. |
 | `structured_output` | Structured or media-output calls are never streamed. |
 | `provider_cannot_stream` | The provider answered in one piece. |
 | `remote_core` | Remote mode: the AbstractCore server call is not streamed. |
@@ -419,6 +419,10 @@ runtime.tick(workflow=wf, run_id=run_id)
 | `tool_envelope_holdback` | The whole answer was a tool call (or a channel that is not shown), so no answer text was streamed. |
 
 A streamed call records the same `usage`, `raw_response` and `metadata.prompt_cache` as a non-streamed one; where it cannot, the call does not stream.
+
+**AbstractCore dependency for MLX.** MLX calls with a prompt-cache key stream with a complete record only on an AbstractCore release that puts the prompt-cache record, usage and finish reason on the last streamed chunk. With an older AbstractCore these calls still stream, but their record has no `metadata.prompt_cache`; upgrade AbstractCore to keep streamed and non-streamed records identical.
+
+**Harmony output on raw lanes.** On a provider lane where AbstractCore itself buffers harmony (gpt-oss) output until the end of the answer, the text reaches the sink in one piece when the call ends. Lanes that separate reasoning on the server side (for example LM Studio) stream normally.
 
 **Writing a sink.** The sink is called from the provider's thread, in `seq` order for a given call. Keep it fast: put the event on a queue and return. A sink that raises is switched off for the rest of that call and the call itself continues normally.
 
@@ -479,9 +483,28 @@ tools = ApprovalToolExecutor(
 rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=tools)
 ```
 
+## Workspace-scoped tools
+
+When a run sets `workspace_root` in its vars, file tools (`read_file`, `write_file`, `edit_file`, `list_files`, `search_files`, `skim_files`, `skim_folders`, …) resolve paths against that folder, and the shell tools (`execute_command`, `shell_exec`, `local_helper_start`) start there. The policy is read from run vars (`src/abstractruntime/integrations/abstractcore/workspace_scoped_tools.py`):
+
+| Run var | Meaning |
+| --- | --- |
+| `workspace_root` | Base folder for relative paths and the shell's starting folder. Relative roots resolve against `ABSTRACT_WORKSPACE_BASE_DIR` when set. |
+| `workspace_access_mode` | `workspace_only` (default: paths stay under the root), `workspace_or_allowed` (also under `workspace_allowed_paths`), or `all_except_ignored` (anywhere except `workspace_ignored_paths`). |
+| `workspace_allowed_paths` | Extra folders a `workspace_or_allowed` run may use. |
+| `workspace_ignored_paths` | The operator's exclusions; always refused. |
+| `workspace_builtin_deny_prefixes` | The host's own protected folders (for example a gateway's data folder and credential folders), as path prefixes. Anything under one is refused. |
+| `workspace_builtin_allow` | Exceptions inside the host's protected folders (for example the run's own folder inside the data folder). The operator's `workspace_ignored_paths` still win over them. |
+
+Lists accept a JSON array, a JSON array pasted as a string, or newline-separated entries.
+
+- When an `LLM_CALL` offers tools and the run has a workspace scope, the runtime appends a short description of the scope to the system prompt: the root, the access mode, the authorized roots and the operator's `workspace_ignored_paths`. The host's built-in deny prefixes and allow entries are enforced but never described to the model, so the system prompt stays identical from turn to turn while the host's folders change, and the prompt cache stays warm. A refused path is reported as `Path is not accessible (protected by the host)` without listing the host's rules.
+- Child runs (subworkflows and agent delegation) inherit all six vars unless they set their own; VisualFlow file and document nodes (`read_file`, `write_file`, `read_pdf`, `write_pdf`, `write_docx`, `write_chart`) apply the same scope.
+- Shell tools are pinned to their starting folder only. A command can still reach other paths (`cd ..`, absolute paths); the workspace scope is a file-tool policy, not a sandbox.
+
 ## Prompt-cache control plane and durable blocs
 
-AbstractRuntime's AbstractCore integration now exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:
+AbstractRuntime's AbstractCore integration exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:
 
 - `get_abstractcore_host_facade(runtime)`
 - `AbstractCoreHostFacade`
@@ -529,7 +552,7 @@ Contract notes:
 - Unsupported operations return structured payloads with `supported=false`, `operation`, `code`, and `capabilities`.
 - When a provider reports `mode=local_control_plane` (for example MLX, or GGUF models whose llama.cpp chat format has an exact cached renderer), the runtime can maintain a compartmentalized `system | tools | history` cache path automatically.
 - When a provider reports `mode=keyed`, the runtime still forwards stable `prompt_cache_key`s but skips module preparation/fork/update orchestration.
-- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, but gateway/CLI hosts can now manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
+- This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, and gateway/CLI hosts manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 - Durable exact reuse uses `LLM_CALL.params.prompt_cache_binding`. If a binding includes `key`, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.
 - Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
@@ -687,7 +710,7 @@ Effect(
 
 ### Lifecycle operations
 
-- Runtime now exposes public host methods for:
+- Runtime exposes public host methods for:
   - listing durable bloc records
   - listing provider/model KV artifacts under those blocs
   - deleting one derived KV artifact while keeping the bloc text
@@ -792,7 +815,8 @@ except core.HostActionRefused as refused:
 
 - Unloading an in-process model (MLX, HuggingFace, embeddings) frees it from every holder in the process, not only from this runtime's instance, and the result carries a `process_eject` report. The result is `ok: false` when weights remain in memory. An embedding model loads again on the next embedding request.
 - Changing the default text model (`set_default_provider_model`, which the gateway calls when the console default changes) unloads the previous in-process model, unless the pool still uses it or it is locked. The previous model is freed before the new default is loaded, so the two are never in memory together. If the previous model is still generating, the switch does not cancel that call; the model is unloaded when the call ends.
-- A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, lock or are loading, and the unload skips a model any of them uses. `list_model_residency` diagnostics list `pending_ejects` (waiting for a running call to end) and `last_switch_ejects` (unloaded, kept because it is still in use, or failed, with the reason).
+- A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, override, lock, are loading or use as their default, and the unload skips a model any of them uses. Multi-local clients (the client `create_local_runtime(...)` builds) register these claims; a standalone `LocalAbstractCoreLLMClient` does not, so a host that shares a process between several runtimes should build them with `create_local_runtime(...)`.
+- The switch unload and the failed-load cleanup need an AbstractCore release with the process residency claim registry (`abstractcore.providers.process_residency.eject_unclaimed`). With an older AbstractCore the previous model stays loaded and `last_switch_ejects` reports `skipped` with the reason; unload it explicitly or upgrade AbstractCore. `list_model_residency` diagnostics list `pending_ejects` (waiting for a running call to end) and `last_switch_ejects` (unloaded, kept because it is still in use, or failed, with the reason).
 - Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.
 - A load with `ttl_s` or `keep_alive` for an in-process model, or for a model that is already loaded, lists them under `unsupported_options` with a warning. A load that fails part-way unloads what it loaded.
 - Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.
@@ -852,7 +876,7 @@ The `MODEL_RESIDENCY` effect supports the operations `list_loaded`, `load`, `unl
 Runtime also exposes the remaining Gateway-facing host/operator wrappers for
 email and Telegram:
 
-- `get_abstractcore_host_facade(runtime)` now includes:
+- `get_abstractcore_host_facade(runtime)` includes:
   - `list_email_accounts(...)`
   - `list_emails(...)`
   - `read_email(...)`

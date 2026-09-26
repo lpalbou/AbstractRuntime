@@ -118,7 +118,7 @@ If a binding includes `key`, Runtime uses it as the effective prompt-cache key a
 
 Gateway-specific prompt-cache environment variables should be consumed by Gateway and passed to Runtime explicitly; Runtime does not read the Gateway env namespace directly.
 
-Hosts can inspect, prepare, and now clean up caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as `upsert_text_bloc(...)`, `ensure_bloc_kv_artifact(...)`, `load_bloc_kv_artifact(...)`, `list_bloc_kv_artifacts(...)`, `delete_bloc_kv_artifact(...)`, and `delete_bloc(...)` without depending on the private runtime attachment directly.
+Hosts can inspect, prepare, and clean up caches through `abstractruntime.integrations.abstractcore.get_abstractcore_host_facade(runtime)`, which exposes the normal prompt-cache/model-residency controls plus durable bloc helpers such as `upsert_text_bloc(...)`, `ensure_bloc_kv_artifact(...)`, `load_bloc_kv_artifact(...)`, `list_bloc_kv_artifacts(...)`, `delete_bloc_kv_artifact(...)`, and `delete_bloc(...)` without depending on the private runtime attachment directly.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/host_facade.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
 ## Can a host still export or import local provider prompt caches?
@@ -285,6 +285,8 @@ If your `LedgerStore` supports subscriptions (or is wrapped with `ObservableLedg
 - `Runtime.subscribe_ledger(callback, run_id=...)`
 
 Long-running generated media uses the same ledger stream. Runtime converts provider progress callbacks into `EMIT_EVENT` ledger records named `abstract.progress` with JSON-safe payloads such as `phase`, `step`, `total_steps`, `frame`, `total_frames`, and `progress`.
+
+For the text of an answer while it is generated, register a live sink with `Runtime.set_live_delta_sink(sink)` and start the run with `_runtime.stream: True`. Live deltas never reach the ledger; see `integrations/abstractcore.md#live-token-streaming`.
 
 Docs: `architecture.md`. Code: `src/abstractruntime/core/runtime.py` (`subscribe_ledger`), `src/abstractruntime/storage/observable.py`.
 

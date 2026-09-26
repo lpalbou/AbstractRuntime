@@ -129,7 +129,7 @@ Drivers + distribution:
   Core media controls, including `count`/`n`, `seeds`, ordered
   `lora_adapters`, and video `flow_shift`, while keeping provider/model/task
   truth in AbstractCore and AbstractVision.
-- `history_bundle` now exports replay-safe `resolved_actions` summaries derived
+- `history_bundle` exports replay-safe `resolved_actions` summaries derived
   from Core request/output route resolution, so thin clients can reconstruct
   what capability ran without reverse-engineering prompt prose.
 - VisualFlow structured LLM/Agent results preserve `response` as text and expose
@@ -145,6 +145,9 @@ Runtime-owned integrations:
   depends on the light AbstractMemory contract; hosts choose storage backends
   such as LanceDB, SQLite, or in-memory stores.
 - comms toolset gating (email/WhatsApp/Telegram): `docs/tools-comms.md`
+- live token streaming: `Runtime.set_live_delta_sink(sink)` plus `_runtime.stream: true` delivers `llm.delta` / `llm.delta_end` events while an answer is generated, outside the ledger (`docs/integrations/abstractcore.md#live-token-streaming`)
+- model switching in a shared process: changing the default model unloads the previous in-process model unless another owner in the process still uses it (`docs/integrations/abstractcore.md#unloading-and-switching-models`)
+- workspace-scoped file and shell tools driven by `workspace_*` run vars, including host-only protected folders that are enforced without being shown to the model (`docs/integrations/abstractcore.md#workspace-scoped-tools`)
 
 ## Built-in scheduler (zero-config)
 

@@ -85,6 +85,8 @@ def test_missed_ticks_coalesce_into_one_admission():
     assert adm["event_id"] == "schedule@1:b-1:3"
     assert adm["fired_at"] == "2026-01-01T00:15:00+00:00"
     assert adm["coalesced"] == {"first_tick": 0, "last_tick": 3, "missed_count": 3}
+    assert adm["payload"] == {"tick": 3, "scheduled_at": "2026-01-01T00:15:00+00:00",
+                              "coalesced": {"first_tick": 0, "last_tick": 3, "missed_count": 3}}
     assert adm["state"]["tick"] == 4
     assert adm["state"]["scheduled_count"] == 1  # one coalesced firing counts once
     assert A.prepare(b, state=adm["state"], now="2026-01-01T00:17:00+00:00")["until"] == "2026-01-01T00:20:00+00:00"
@@ -175,3 +177,31 @@ def test_normalize_envelope():
     env = A.normalize(b, event_id="e", fired_at=T0, payload={"tick": 0, "scheduled_at": T0})
     assert env == {"event_id": "e", "source_id": "schedule", "source_version": 1,
                    "fired_at": T0, "payload": {"tick": 0, "scheduled_at": T0}, "binding_id": "b-1"}
+
+
+EDITOR_SCHEMA_KEYWORDS = {"type", "enum", "pattern", "format", "minimum", "maximum", "required",
+                          "additionalProperties", "properties"}
+
+
+def _schema_keywords(schema, out):
+    for key, value in schema.items():
+        out.add(key)
+        if key == "properties":
+            for sub in value.values():
+                _schema_keywords(sub, out)
+    return out
+
+
+@pytest.mark.parametrize("adapter_cls", ["schedule", "manual"])
+def test_descriptor_schemas_stay_in_the_editor_subset(adapter_cls):
+    from abstractruntime.triggers import ManualTriggerAdapter
+
+    adapter = A if adapter_cls == "schedule" else ManualTriggerAdapter()
+    for name in ("config_schema", "event_schema"):
+        schema = adapter.descriptor[name]
+        assert _schema_keywords(schema, set()) <= EDITOR_SCHEMA_KEYWORDS
+        assert schema["additionalProperties"] is False
+    if adapter_cls == "schedule":
+        every = A.descriptor["config_schema"]["properties"]["every"]
+        assert every["format"] == "duration" and every["pattern"] == "^[1-9][0-9]*[smhd]$"
+        assert set(A.descriptor["event_schema"]["properties"]) == {"tick", "scheduled_at", "coalesced"}

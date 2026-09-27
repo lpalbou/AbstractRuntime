@@ -100,6 +100,9 @@ def test_downtime_coalesces_into_one_occurrence(env):
     assert len(coalesced) == 1
     assert coalesced[0]["first_tick"] == 1 and coalesced[0]["last_tick"] == 5 and coalesced[0]["missed_count"] == 4
     assert automation_state(runtime, aid)["scheduled_count"] == 2
+    envelope = children(runtime, aid)[1].vars["_meta"]["occurrence"]["trigger_envelope"]
+    assert envelope["payload"] == {"tick": 5, "scheduled_at": "2026-01-01T00:10:00+00:00",
+                                   "coalesced": {"first_tick": 1, "last_tick": 5, "missed_count": 4}}
 
 
 @pytest.mark.parametrize("env", STORES, indirect=True)

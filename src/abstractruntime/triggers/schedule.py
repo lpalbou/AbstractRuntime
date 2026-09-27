@@ -10,8 +10,9 @@ Config: `{start_at?, every?, until?, count?, anchor?}`.
 - One-shot (no `every`): the only tick is `T_0 = start_at`; after its
   admission the binding is exhausted.
 - Missed ticks coalesce: when several ticks are due at once (downtime, or a
-  long occurrence), ONE admission happens for the latest due tick and the
-  admission reports the skipped range.
+  long occurrence), ONE admission happens for the latest due tick; its event
+  payload `{tick, scheduled_at, coalesced?: {first_tick, last_tick,
+  missed_count}}` reports the skipped range.
 - The anchor math lives only here; the `on_schedule` VisualFlow node keeps its
   own (drift-based) behaviour and is not used by automations.
 """
@@ -60,6 +61,16 @@ class ScheduleTriggerAdapter:
             "properties": {
                 "tick": {"type": "integer", "minimum": 0},
                 "scheduled_at": {"type": "string", "format": "date-time"},
+                "coalesced": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["first_tick", "last_tick", "missed_count"],
+                    "properties": {
+                        "first_tick": {"type": "integer", "minimum": 0},
+                        "last_tick": {"type": "integer", "minimum": 0},
+                        "missed_count": {"type": "integer", "minimum": 1},
+                    },
+                },
             },
         },
         "capabilities": {"kind": "time"},
@@ -192,7 +203,9 @@ class ScheduleTriggerAdapter:
             "state": new_state,
         }
         if fired > first:
-            admission["coalesced"] = {"first_tick": first, "last_tick": fired, "missed_count": fired - first}
+            coalesced = {"first_tick": first, "last_tick": fired, "missed_count": fired - first}
+            admission["coalesced"] = coalesced
+            admission["payload"]["coalesced"] = dict(coalesced)
         return admission
 
     def rearm(self, binding: TriggerBinding, *, state: TriggerState, now: str) -> TriggerState:

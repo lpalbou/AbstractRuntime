@@ -252,6 +252,8 @@ ENTITY_MEMORY_JSON_PINS = {
 # covers every `visual_type ==` dispatch in compiler.py.
 COMPILER_LAYER_NODE_TYPES = frozenset({
     "add_message",
+    # Automation controller nodes (abstractruntime.automations.adapters).
+    "automation",
     "memact_compose",
     "set_var_property",
     "set_vars",

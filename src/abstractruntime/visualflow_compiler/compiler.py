@@ -4804,6 +4804,16 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 data_aware_handler=data_aware_handler,
                 flow=flow,
             )
+        elif visual_type == "automation":
+            # Automation controller nodes: adapter `automation.<node_id>`
+            # (automations contract D); routing comes from the node's edges.
+            from ..automations.adapters import create_automation_node_handler
+
+            handlers[node_id] = create_automation_node_handler(
+                node_id=node_id,
+                next_node=next_node,
+                branch_map=branch_map,
+            )
         elif visual_type == "set_vars":
             from .adapters.variable_adapter import create_set_vars_node_handler
 

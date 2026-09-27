@@ -104,9 +104,11 @@ def _wake_until(controller: RunState) -> Optional[str]:
 def automation_summary(controller: RunState) -> Dict[str, Any]:
     """Summary fields for one controller run (what `list_automations` returns).
 
-    `next_fire_at` is the deadline of the controller's wake wait while no
-    occurrence is pending (the next scheduled tick); `retry_at` the same
-    deadline while an occurrence is in retry backoff. `occurrence_count` counts
+    `next_fire_at` is the deadline of the controller's wake wait
+    (`WAITING(EVENT)` on `automation:<id>:wake`): the next scheduled tick, or
+    the next attempt while an occurrence is in retry backoff (then `retry_at`
+    carries the same instant). None while an occurrence runs, when paused or
+    idle (manual trigger), and when exhausted. `occurrence_count` counts
     admitted occurrences (`_runtime.automation.next_index - 1`), manual ones
     included; a controller that has not ticked yet has the contract's initial
     state (no occurrence).
@@ -131,7 +133,7 @@ def automation_summary(controller: RunState) -> Dict[str, Any]:
         "target": definition.get("target"),
         "session_id": controller.session_id,
         "workspace_root": definition.get("workspace_root"),
-        "next_fire_at": until if (until and pending is None) else None,
+        "next_fire_at": until,
         "retry_at": until if (until and in_backoff) else None,
         "occurrence_count": max(0, int(next_index) - 1) if isinstance(next_index, int) else 0,
         "pending_occurrence": pending if isinstance(pending, dict) else None,

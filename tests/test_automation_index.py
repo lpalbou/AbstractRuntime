@@ -214,3 +214,19 @@ def test_json_sidecar_from_before_the_columns_is_reread(tmp_path) -> None:
     fresh = JsonFileRunStore(tmp_path / "runs")
     (row,) = fresh.list_run_index()
     assert (row["role"], row["automation_id"], row["occurrence_index"]) == ("occurrence", AUTO, 1)
+
+
+def test_next_fire_at_during_retry_backoff_is_the_retry_deadline(tmp_path) -> None:
+    store = make_store("sqlite", tmp_path)
+    _save(store, AUTO, session_id="s", created_at="2026-09-27T10:00:00+00:00", status=RunStatus.WAITING,
+          meta={"automation": {"title": "t"}},
+          runtime={"automation": {"next_index": 2, "pending_occurrence": {"phase": "backoff", "index": 1}}},
+          waiting=WaitState(reason=WaitReason.EVENT, wait_key=f"automation:{AUTO}:wake", until="2026-09-27T10:00:30+00:00"))
+    (summary,) = list_automations(store).items
+    assert summary["next_fire_at"] == summary["retry_at"] == "2026-09-27T10:00:30+00:00"
+    # A wait on any other key (a running occurrence) is not a fire time.
+    run = store.load(AUTO)
+    run.waiting = WaitState(reason=WaitReason.SUBWORKFLOW, wait_key="subworkflow:occ-1")
+    store.save(run)
+    (summary,) = list_automations(store).items
+    assert summary["next_fire_at"] is None

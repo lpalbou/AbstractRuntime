@@ -89,3 +89,18 @@ def normalize_run_lifecycle_vars(vars_obj: Dict[str, Any]) -> None:
 def run_lifecycle_index_fields(vars_obj: Any) -> Dict[str, Any]:
     lifecycle = extract_run_lifecycle(vars_obj)
     return {"run_lifecycle": lifecycle}
+
+
+DRAFT_RUN_PURPOSE = "draft_test"
+
+
+def is_draft_lifecycle(lifecycle: Any) -> bool:
+    """True for a draft-test run's lifecycle (`purpose == "draft_test"`).
+
+    Owned here so history selection (`session_turns`) and hosts share one
+    definition (the gateway's `is_draft_run_lifecycle` is the same rule).
+    """
+    if not isinstance(lifecycle, dict):
+        return False
+    purpose = lifecycle.get("purpose")
+    return isinstance(purpose, str) and purpose.strip() == DRAFT_RUN_PURPOSE

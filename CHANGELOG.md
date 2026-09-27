@@ -34,8 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listed) and `latest_occurrence(store, automation_id)`. `changed_since` is refused with
   `unsupported_feature`: clients poll complete pages.
 
+- `select_session_turns(store, session_id, ...)`: the one definition of a session's turns (runs without
+  a parent plus automation occurrences; never child runs, automation controllers, internal runs, legacy
+  scheduled wrappers or draft tests), with `include_occurrences`, `automation_id`,
+  `through_occurrence`, `until_ms`, `include_drafts` and `limit`. `is_draft_lifecycle` is exported too.
+
 ### Changed
 
+- Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)
+  now include automation occurrences as turns (kind `occurrence`, with `automation_id` and
+  `occurrence_index`); a retried occurrence counts once, as its last attempt. Draft-test runs are no
+  longer part of a session's history.
 - `list_run_index(root_only=True)` returns turn roots: runs without a parent, except automation
   controllers, plus automation occurrences. Apps that fold root runs into sessions (AbstractCode, the
   Assistant) therefore show an automation's session as a chat whose turns are its occurrences.

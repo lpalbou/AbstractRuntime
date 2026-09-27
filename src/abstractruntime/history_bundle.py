@@ -715,6 +715,11 @@ def _best_effort_session_turns(
         # durable session replay (live-proof finding, 2026-07-16).
         if wid.startswith("__") and wid.endswith("__"):
             return "internal"
+        if isinstance(vars_obj, dict):
+            meta0 = vars_obj.get("_meta")
+            occurrence = meta0.get("occurrence") if isinstance(meta0, dict) else None
+            if isinstance(occurrence, dict) and occurrence.get("role") == "occurrence":
+                return "occurrence"
         if wid.startswith("scheduled:"):
             return "scheduled"
         if isinstance(vars_obj, dict):
@@ -804,118 +809,15 @@ def _best_effort_session_turns(
     sid = str(session_id or "").strip()
     if not sid:
         return []
-    list_runs = getattr(run_store, "list_runs", None)
 
-    roots: List[RunState] = []
+    # The ONE selection of a session's turns (session_turns.select_session_turns):
+    # parent-less runs plus automation occurrences; never descendants,
+    # controllers, internal runs, legacy scheduled wrappers or drafts.
+    from .session_turns import select_session_turns
 
-    # Prefer the lightweight run index when available. It is the only current path
-    # that can query by session without scanning unrelated runs.
-    list_run_index = getattr(run_store, "list_run_index", None)
-    if callable(list_run_index):
-        try:
-            rows = list_run_index(session_id=sid, root_only=True, limit=max(1000, int(limit) * 5))
-        except Exception:
-            rows = []
-        # Load only a bounded newest-first window of full RunStates: the
-        # result is sliced to the newest `limit` turns anyway, and loading
-        # every root of a long-lived session made each session-replay read
-        # O(session length) in full JSON parses (audit finding #3). The 3x
-        # over-fetch absorbs rows that classify out (internal/scheduled).
-        load_window = max(int(limit) * 3, int(limit) + 8)
-        for row in (rows or [])[:load_window]:
-            if not isinstance(row, dict):
-                continue
-            rid0 = str(row.get("run_id") or "").strip()
-            if not rid0:
-                continue
-            try:
-                loaded = run_store.load(rid0)
-            except Exception:
-                loaded = None
-            if loaded is None:
-                continue
-            roots.append(loaded)
-
-    if not roots and callable(list_runs):
-        # Compatibility fallback for older stores.
-        try:
-            candidates = list_runs(limit=max(1000, int(limit) * 5))
-        except Exception:
-            candidates = []
-
-        for r in candidates or []:
-            try:
-                rid = str(getattr(r, "run_id", "") or "").strip()
-                if not rid:
-                    continue
-                if str(getattr(r, "session_id", "") or "").strip() != sid:
-                    continue
-                if str(getattr(r, "parent_run_id", "") or "").strip():
-                    continue
-                roots.append(r)
-            except Exception:
-                continue
-
+    roots: List[RunState] = select_session_turns(run_store, sid, until_ms=until_ms, limit=int(limit))
     if not roots:
         return []
-
-    roots0: List[RunState] = []
-    seen_roots: set[str] = set()
-    for r in roots:
-        try:
-            rid = str(getattr(r, "run_id", "") or "").strip()
-            if not rid or rid in seen_roots:
-                continue
-            seen_roots.add(rid)
-            if str(getattr(r, "session_id", "") or "").strip() != sid:
-                continue
-            if str(getattr(r, "parent_run_id", "") or "").strip():
-                continue
-            vars_obj = getattr(r, "vars", None)
-            wid = str(getattr(r, "workflow_id", "") or "")
-            kind = _classify_turn(workflow_id=wid, vars_obj=vars_obj)
-            if kind == "internal":
-                continue
-            roots0.append(r)
-        except Exception:
-            continue
-    roots = roots0
-
-    # Prefer chat-like turns when present (avoid scheduled wrapper runs polluting chat replay).
-    if roots:
-        chat_roots: List[RunState] = []
-        for r in roots:
-            wid = str(getattr(r, "workflow_id", "") or "")
-            vars_obj = getattr(r, "vars", None)
-            if _classify_turn(workflow_id=wid, vars_obj=vars_obj) == "chat":
-                chat_roots.append(r)
-        if chat_roots:
-            roots = chat_roots
-
-    if until_ms is not None:
-        bounded_roots: List[RunState] = []
-        for r in roots:
-            created_ms = _parse_iso_ms(getattr(r, "created_at", None))
-            if created_ms is None:
-                created_ms = _parse_iso_ms(getattr(r, "updated_at", None))
-            if created_ms is None or created_ms <= until_ms:
-                bounded_roots.append(r)
-        roots = bounded_roots
-
-    def _ts_key(r: Any) -> tuple:
-        # (parsed ms, raw ISO string): _parse_iso_ms rounds to milliseconds,
-        # and a stable ascending sort would otherwise keep the newest-first
-        # index order WITHIN a tie — reversing same-millisecond turns. The
-        # raw ISO string preserves sub-ms precision as the tiebreak.
-        for k in ("created_at", "updated_at"):
-            raw = getattr(r, k, None)
-            ms = _parse_iso_ms(raw)
-            if ms is not None:
-                return (float(ms), str(raw or ""))
-        return (0.0, "")
-
-    roots.sort(key=_ts_key)
-    roots = roots[-int(limit) :] if limit > 0 else roots
 
     ledger_cache: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -983,8 +885,13 @@ def _best_effort_session_turns(
                 limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
             )
 
+        turn: Dict[str, Any] = {}
+        if kind == "occurrence":
+            occ = (input_data.get("_meta") or {}).get("occurrence") or {}
+            turn = {"automation_id": occ.get("automation_id"), "occurrence_index": occ.get("occurrence_index")}
         out.append(
             {
+                **turn,
                 "run_id": rid,
                 "workflow_id": wid or None,
                 "kind": kind,

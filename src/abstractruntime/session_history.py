@@ -151,11 +151,9 @@ def session_chat_messages(
         rid = str(turn.get("run_id") or "").strip()
         if rid and rid in excluded:
             continue
-        kind = str(turn.get("kind") or "").strip().lower()
-        if kind in {"internal", "scheduled"}:
-            # Belt on top of the reconstruction's own filtering: scheduled
-            # wrapper runs are not conversation (audit finding #4).
-            continue
+        # Which runs are turns is decided in ONE place,
+        # `session_turns.select_session_turns` (internal runs and legacy
+        # scheduled wrappers excluded; automation occurrences included).
         status = str(turn.get("status") or "").strip().lower()
         if status != "completed":
             # v1: a run that never completed never answered — its half-turn

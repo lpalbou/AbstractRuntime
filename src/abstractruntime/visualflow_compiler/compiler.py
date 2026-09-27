@@ -2809,6 +2809,13 @@ def _create_visual_function_handler(
             input_data = run.vars.get("_last_output") if "_last_output" in run.vars else run.vars
 
         visual_node_type = getattr(func, "_visual_node_type", None)
+        # Trusted read-only policy (automations contract C4): when the RUN's
+        # workspace is read-only, file/artifact nodes get
+        # `workspace_read_only: True` OVER whatever their inputs say (the
+        # other ambient keys below only fill gaps with setdefault).
+        from ..utils.workspace_paths import READ_ONLY_KEY, is_workspace_read_only
+
+        run_read_only = is_workspace_read_only(run.vars)
         if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx", "write_chart"} and isinstance(run.vars, dict):
             ambient: Dict[str, Any] = {}
             for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths", "workspace_builtin_deny_prefixes", "workspace_builtin_allow"):
@@ -2821,13 +2828,15 @@ def _create_visual_function_handler(
                 wid = getattr(run, "workflow_id", None)
                 if isinstance(wid, str) and wid.strip():
                     ambient["_runtime_workflow_id"] = wid.strip()
-            if ambient:
+            if ambient or run_read_only:
                 if isinstance(input_data, dict):
                     merged_input = dict(input_data)
                 else:
                     merged_input = {"input": input_data}
                 for key, value in ambient.items():
                     merged_input.setdefault(key, value)
+                if run_read_only:
+                    merged_input[READ_ONLY_KEY] = True
                 input_data = merged_input
         if visual_node_type in {"read_artifact", "import_workspace_file", "export_artifact", "list_folder_files"}:
             if isinstance(input_data, dict):
@@ -2842,6 +2851,8 @@ def _create_visual_function_handler(
                 for key in ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_ignored_paths", "workspace_builtin_deny_prefixes", "workspace_builtin_allow"):
                     if key in run.vars:
                         merged_input.setdefault(key, run.vars.get(key))
+            if run_read_only:
+                merged_input[READ_ONLY_KEY] = True
             input_data = merged_input
 
         # Execute function (which is the data-aware wrapped handler)

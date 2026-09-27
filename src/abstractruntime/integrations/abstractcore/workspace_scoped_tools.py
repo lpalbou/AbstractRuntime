@@ -38,9 +38,12 @@ from abstractruntime.utils.workspace_paths import (
     WorkspacePathResolution,
     build_workspace_mounts,
     is_under_path,
+    is_workspace_read_only,
     resolve_no_strict,
     resolve_workspace_path as resolve_canonical_workspace_path,
 )
+
+from .tool_effects import read_only_refusal
 
 WorkspaceAccessMode = str  # "workspace_only" | "all_except_ignored" | "workspace_or_allowed"
 
@@ -467,6 +470,10 @@ class WorkspaceScope:
     # Host protection (see the module docstring): enforced, never described.
     builtin_deny_prefixes: Tuple[Path, ...] = ()
     builtin_allow: Tuple[Path, ...] = ()
+    # Host policy `workspace_read_only` (automations contract C4): every tool
+    # classified `write`/`exec` in `tool_effects.TOOL_EFFECT_CLASSES`, and
+    # every unclassified tool, is refused.
+    read_only: bool = False
 
     @classmethod
     def from_input_data(
@@ -476,8 +483,13 @@ class WorkspaceScope:
         key: str = "workspace_root",
         base_dir: Optional[Path] = None,
     ) -> Optional["WorkspaceScope"]:
+        read_only = is_workspace_read_only(input_data)
         raw = input_data.get(key)
         if not isinstance(raw, str) or not raw.strip():
+            if read_only:
+                # Fail closed: without a root there is no scope, and without a
+                # scope tool calls would run unwalled.
+                raise ValueError("workspace_read_only is set but the run has no workspace_root")
             return None
 
         base = base_dir or resolve_workspace_base_dir()
@@ -487,7 +499,12 @@ class WorkspaceScope:
         root = resolve_no_strict(root)
         if root.exists() and not root.is_dir():
             raise ValueError(f"workspace_root must be a directory (got file): {raw}")
-        root.mkdir(parents=True, exist_ok=True)
+        if read_only:
+            # A read-only mount never creates its directory.
+            if not root.is_dir():
+                raise ValueError(f"read-only workspace_root does not exist: {raw}")
+        else:
+            root.mkdir(parents=True, exist_ok=True)
 
         access_mode = _normalize_access_mode(input_data.get("workspace_access_mode") or input_data.get("workspaceAccessMode"))
         ignored = _parse_ignored_paths(input_data.get("workspace_ignored_paths") or input_data.get("workspaceIgnoredPaths"))
@@ -509,6 +526,7 @@ class WorkspaceScope:
             allowed_paths=allowed_paths,
             builtin_deny_prefixes=builtin_deny,
             builtin_allow=builtin_allow,
+            read_only=read_only,
         )
 
 
@@ -537,6 +555,10 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
     # resolver and deliberately never rendered here (see the module docstring).
     if scope.ignored_paths:
         lines.append("Excluded paths (override grants): " + json.dumps([str(p) for p in scope.ignored_paths]))
+    if scope.read_only:
+        lines.append(
+            "This workspace is READ-ONLY: tools that write files or run commands/code are refused."
+        )
     lines.append("Stay within this scope. Shell execution is not sandboxed by this file-tool policy.")
     return "\n".join(lines)
 
@@ -765,7 +787,14 @@ def _media_refusal(*, raw_media: str, refusal: ValueError) -> ValueError:
 
 
 def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: WorkspaceScope) -> Dict[str, Any]:
-    """Rewrite tool args so file operations follow the workspace policy."""
+    """Rewrite tool args so file operations follow the workspace policy.
+
+    Under a read-only scope, `write`/`exec` tools and unclassified tools are
+    refused first (`tool_effects.read_only_refusal`)."""
+    if scope.read_only:
+        refusal = read_only_refusal(tool_name)
+        if refusal is not None:
+            raise ValueError(refusal)
     root = scope.root
     out = dict(args or {})
 

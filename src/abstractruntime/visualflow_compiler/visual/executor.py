@@ -17,7 +17,12 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from ..flow import Flow
-from ...utils.workspace_paths import BUILTIN_ALLOW_KEY, BUILTIN_DENY_KEY, merge_builtin_workspace_protection
+from ...utils.workspace_paths import (
+    BUILTIN_ALLOW_KEY,
+    BUILTIN_DENY_KEY,
+    READ_ONLY_KEY,
+    merge_builtin_workspace_protection,
+)
 
 from .agent_ids import visual_react_workflow_id
 from .builtins import get_builtin_handler
@@ -600,9 +605,18 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     def _decode_separator(value: str) -> str:
         return value.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
 
-    def _resolve_user_file_path(payload: Dict[str, Any], file_path: str, *, operation: str):
+    def _resolve_user_file_path(payload: Dict[str, Any], file_path: str, *, operation: str, write: bool):
+        """Resolve a node's file path under the run's workspace policy.
+
+        `write` is REQUIRED at every call site: a node that writes to the
+        filesystem is refused in a read-only workspace (automations contract
+        C4), so a new writer cannot forget to declare itself."""
         from pathlib import Path
 
+        from abstractruntime.utils.workspace_paths import is_workspace_read_only
+
+        if write and is_workspace_read_only(payload):
+            raise ValueError(f"{operation} refused: this workspace is read-only")
         try:
             from abstractruntime.integrations.abstractcore.workspace_scoped_tools import (
                 WorkspaceScope,
@@ -742,7 +756,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("read_file requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_file")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_file", write=False)
 
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
@@ -786,7 +800,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("write_file requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_file")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_file", write=True)
 
             raw_content = payload.get("content")
 
@@ -824,7 +838,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("read_pdf requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_pdf")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="read_pdf", write=False)
 
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
@@ -886,7 +900,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("write_pdf requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_pdf")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_pdf", write=True)
             if path.suffix.lower() != ".pdf":
                 raise ValueError("write_pdf requires a .pdf file path.")
 
@@ -923,7 +937,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("write_docx requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_docx")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_docx", write=True)
             if path.suffix.lower() != ".docx":
                 raise ValueError("write_docx requires a .docx file path.")
 
@@ -966,7 +980,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("write_chart requires a non-empty 'file_path' input.")
 
             file_path = raw_path.strip()
-            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_chart")
+            path, virtual_path = _resolve_user_file_path(payload, file_path, operation="write_chart", write=True)
             if path.suffix.lower() != ".png":
                 raise ValueError("write_chart requires a .png file path.")
             # The .pdf sibling derives from the RESOLVED png path (same dir,
@@ -1008,7 +1022,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 raise ValueError("list_folder_files requires a non-empty 'folder_path' input.")
 
             folder_path = raw_path.strip()
-            folder, virtual_folder = _resolve_user_file_path(payload, folder_path, operation="list_folder_files")
+            folder, virtual_folder = _resolve_user_file_path(payload, folder_path, operation="list_folder_files", write=False)
             if not folder.exists():
                 raise FileNotFoundError(f"Folder not found: {folder_path}")
             if not folder.is_dir():
@@ -1112,7 +1126,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             raw_path = payload.get("file_path")
             if not isinstance(raw_path, str) or not raw_path.strip():
                 raise ValueError("import_workspace_file requires a non-empty 'file_path' input.")
-            path, virtual_path = _resolve_user_file_path(payload, raw_path.strip(), operation="import_workspace_file")
+            path, virtual_path = _resolve_user_file_path(payload, raw_path.strip(), operation="import_workspace_file", write=False)
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {raw_path}")
             if not path.is_file():
@@ -1166,7 +1180,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             artifact = store.load(artifact_id)
             if artifact is None:
                 raise FileNotFoundError(f"Artifact not found: {artifact_id}")
-            path, virtual_path = _resolve_user_file_path(payload, destination.strip(), operation="export_artifact")
+            path, virtual_path = _resolve_user_file_path(payload, destination.strip(), operation="export_artifact", write=True)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(bytes(artifact.content or b""))
             return {
@@ -4989,8 +5003,9 @@ def _create_data_aware_handler(
 
         # The host's built-in workspace protection is authoritative: whatever a
         # wire, default or expression put in these inputs, the run's deny
-        # prefixes stay and its allow list cannot be widened.
-        if any(k in resolved_input for k in (BUILTIN_DENY_KEY, BUILTIN_ALLOW_KEY)):
+        # prefixes stay, its allow list cannot be widened, and a read-only
+        # run's workspace stays read-only (`workspace_read_only`).
+        if any(k in resolved_input for k in (BUILTIN_DENY_KEY, BUILTIN_ALLOW_KEY, READ_ONLY_KEY)):
             run_vars = get_run_vars() if callable(get_run_vars) else None
             if isinstance(run_vars, dict):
                 resolved_input.update(merge_builtin_workspace_protection(run_vars, resolved_input))

@@ -191,6 +191,21 @@ def resolve_workspace_path(
 
 BUILTIN_DENY_KEY = "workspace_builtin_deny_prefixes"
 BUILTIN_ALLOW_KEY = "workspace_builtin_allow"
+# Host policy (automations contract C4): the run's workspace is mounted
+# READ-ONLY. Set by the host at the run's entry (top-level vars key, like
+# `workspace_root`) or as trusted runtime policy `_runtime.workspace_read_only`;
+# either one makes the scope read-only and no child can clear it.
+READ_ONLY_KEY = "workspace_read_only"
+
+
+def is_workspace_read_only(vars_obj: object) -> bool:
+    """True when `vars_obj` (run vars / node inputs) mounts its workspace read-only."""
+    if not isinstance(vars_obj, Mapping):
+        return False
+    if vars_obj.get(READ_ONLY_KEY) is True:
+        return True
+    runtime_ns = vars_obj.get("_runtime")
+    return isinstance(runtime_ns, Mapping) and runtime_ns.get(READ_ONLY_KEY) is True
 
 
 def _path_entries(raw: object) -> list[str]:
@@ -232,13 +247,20 @@ def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
       directory by pointing its root there). The child's own allow entries
       are ignored.
 
-    Returns the two keys to set on the child, or {} when the parent carries no
-    built-in deny (nothing to protect; the child's own values stand).
+    A read-only parent (`is_workspace_read_only`) makes the child read-only
+    too (`workspace_read_only: True`), whatever the child asked for; this is
+    decided BEFORE the no-deny early return, so it holds on hosts without
+    built-in protection.
+
+    Returns the keys to set on the child: the two protection keys (absent
+    when the parent carries no built-in deny — nothing to protect; the
+    child's own values stand) and `workspace_read_only` when inherited.
     """
 
+    out: dict = {READ_ONLY_KEY: True} if is_workspace_read_only(parent) else {}
     parent_deny = _path_entries(parent.get(BUILTIN_DENY_KEY))
     if not parent_deny:
-        return {}
+        return out
     deny = list(dict.fromkeys(parent_deny + _path_entries(child.get(BUILTIN_DENY_KEY))))
     parent_allow = _path_entries(parent.get(BUILTIN_ALLOW_KEY))
     allow = list(dict.fromkeys(parent_allow))
@@ -248,12 +270,14 @@ def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
         if root_path.is_absolute() and any(is_under_path(root_path, Path(a).expanduser()) for a in parent_allow):
             if child_root.strip() not in allow:
                 allow.append(child_root.strip())
-    return {BUILTIN_DENY_KEY: deny, BUILTIN_ALLOW_KEY: allow}
+    return {**out, BUILTIN_DENY_KEY: deny, BUILTIN_ALLOW_KEY: allow}
 
 
 __all__ = [
     "BUILTIN_ALLOW_KEY",
     "BUILTIN_DENY_KEY",
+    "READ_ONLY_KEY",
+    "is_workspace_read_only",
     "merge_builtin_workspace_protection",
     "WorkspacePathError",
     "WorkspacePathResolution",

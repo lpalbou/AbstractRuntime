@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scheduled wrappers or draft tests), with `include_occurrences`, `automation_id`,
   `through_occurrence`, `until_ms`, `include_drafts` and `limit`. `is_draft_lifecycle` is exported too.
 
+- Read-only workspaces: a run started with `workspace_read_only: true` (or trusted runtime policy
+  `_runtime.workspace_read_only: true`) can read its workspace but not change it. Tools that write
+  files or run commands or code (`write_file`, `edit_file`, `execute_command`, `shell_exec`,
+  `local_helper_start`, `execute_python`, ...) are refused, and so is any tool the runtime has not
+  classified; VisualFlow `write_file`, `write_pdf`, `write_docx`, `write_chart` and `export_artifact`
+  nodes are refused too. A read-only workspace folder is never created, and a read-only run without
+  one is refused. Child runs and VisualFlow nodes inherit the setting and cannot turn it off.
+  `tool_effects.TOOL_EFFECT_CLASSES` is the one table of what each tool can do (read, write, exec,
+  delegate, comms, memory-write).
+
 ### Changed
 
 - Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)

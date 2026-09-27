@@ -116,3 +116,25 @@ def test_commit_decision_checks_the_key_instead_of_assuming_uniqueness(tmp_path,
     assert find_by_idempotency_key(runtime.ledger_store, aid, key)["idempotency_key"] == key
     assert find_by_idempotency_key(runtime.ledger_store, aid, key + "x") is None
     assert len(automation_records(runtime.ledger_store, aid, "automation.command_result")) == 1
+
+
+def test_legacy_schedule_roots_are_projected_read_only():
+    from abstractruntime import RunState, RunStatus
+    from abstractruntime.automations import adopt_legacy_schedule_projection
+
+    run = RunState(run_id="legacy-1", workflow_id="scheduled:abc", status=RunStatus.WAITING, current_node="wait",
+                   vars={"_meta": {"schedule": {"kind": "scheduled_run", "target_workflow_id": "b@1:main",
+                                                "target_bundle_ref": "b@1", "target_flow_id": "main",
+                                                "start_at": NOW, "interval": "15m", "repeat_count": None,
+                                                "repeat_until": None, "share_context": True}},
+                         "_runtime": {"control": {"paused": True}}})
+    before = repr(run)
+    summary = adopt_legacy_schedule_projection(run)
+    assert repr(run) == before  # nothing written
+    assert summary["legacy"] is True and summary["revision"] is None and summary["automation_id"] == "legacy-1"
+    assert summary["status"] == "paused" and summary["context_mode"] == "growing"
+    assert summary["trigger"]["config"] == {"start_at": NOW, "every": "15m"}
+    assert summary["target"] == {"workflow_id": "b@1:main", "bundle_ref": "b@1", "flow_id": "main"}
+    with pytest.raises(AutomationError):
+        adopt_legacy_schedule_projection(RunState(run_id="x", workflow_id="w", status=RunStatus.COMPLETED,
+                                                  current_node="n", vars={}))

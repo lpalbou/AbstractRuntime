@@ -422,15 +422,15 @@ def add_delay(now: str, delay: timedelta) -> str:
 
 
 def automation_status(run: Any) -> str:
-    """`archived | failed | completed | paused | active` (contract A)."""
+    """`archived | failed | completed | paused | active` (contract A; a cancelled controller reads `failed`)."""
     vars_obj = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
     definition = (vars_obj.get("_meta") or {}).get("automation") or {}
     state = (vars_obj.get("_runtime") or {}).get("automation") or {}
     status = getattr(getattr(run, "status", None), "value", getattr(run, "status", None))
     if definition.get("archived_at"):
         return "archived"
-    if status == "failed":
-        return "failed"
+    if status in ("failed", "cancelled"):
+        return "failed"  # the controller itself ended abnormally (a cancelled controller never runs again)
     if status == "completed":
         return "completed"
     if state.get("paused"):

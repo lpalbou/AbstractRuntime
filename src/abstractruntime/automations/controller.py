@@ -285,6 +285,7 @@ def admit(turn: Turn) -> str:
         "command_id": command_id,
         "prepared": prepared,
         "retry": copy.deepcopy(definition["policy"]["retry"]),
+        "session_kind": "automation" if definition["context"]["mode"] == "growing" else "occurrence",
         "stop_requested": False,
     }
     if coalesced:
@@ -334,18 +335,23 @@ def prepare_context(turn: Turn) -> None:
 # --- dispatch --------------------------------------------------------------------------------
 
 
-def _occurrence_vars(turn: Turn, pending: Dict[str, Any], prepared: Dict[str, Any]) -> Dict[str, Any]:
-    definition = turn.definition
+def _occurrence_vars(pending: Dict[str, Any], prepared: Dict[str, Any], *, automation_id: str) -> Dict[str, Any]:
+    """The child's vars, built ONLY from what was frozen at admission.
+
+    A replayed dispatch must send byte-identical creation vars (create-if-absent
+    compares a digest of them), so nothing here may come from the current
+    definition, the clock or a re-rendering.
+    """
     child_vars = copy.deepcopy(prepared["input_data"])
     meta = child_vars.get("_meta") if isinstance(child_vars.get("_meta"), dict) else {}
     meta["occurrence"] = {
-        "automation_id": turn.automation_id,
+        "automation_id": automation_id,
         "occurrence_index": int(pending["index"]),
         "attempt": int(pending["attempt"]),
         "event_id": pending["event_id"],
         "revision": int(pending["revision"]),
         "role": "occurrence",
-        "session_kind": "automation" if definition["context"]["mode"] == "growing" else "occurrence",
+        "session_kind": pending["session_kind"],
         "fired_at": pending["envelope"]["fired_at"],
         "trigger_envelope": pending["envelope"],
     }
@@ -382,7 +388,7 @@ def dispatch(turn: Turn) -> Effect:
         type=EffectType.START_SUBWORKFLOW,
         payload={
             "workflow_id": prepared["workflow_id"],
-            "vars": _occurrence_vars(turn, pending, prepared),
+            "vars": _occurrence_vars(pending, prepared, automation_id=turn.automation_id),
             "session_id": prepared["session_id"],
             "run_id": pending["run_id"],
             "async": True,

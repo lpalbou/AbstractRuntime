@@ -141,3 +141,65 @@ def test_crash_before_the_parent_wait_is_saved_reattaches_to_the_same_child(tmp_
     assert [k.run_id for k in kids] == [occurrence_run_id(aid, revision=1, index=1)]
     done = [r["payload"] for r in automation_records(runtime.ledger_store, aid, "automation.completed")]
     assert [(d["status"], d["attempts"]) for d in done] == [("completed", 1)]
+
+
+def _crash_after_child_exists(tmp_path, monkeypatch, kind, *, revise_between=False):
+    """Run occurrence 1 up to 'child created, parent wait not saved', then restart."""
+    from abstractruntime.automations import apply_automation_command
+
+    clock = Clock(monkeypatch)
+    runtime = make_runtime(*make_stores(kind, tmp_path))
+    aid = create(runtime, clock, workflow_id="ask",
+                 trigger={"source_id": "schedule", "source_version": 1, "config": {"start_at": "2026-01-01T00:00:00Z", "every": "1h"}})
+    crashing = CrashingStores(*make_stores(kind, tmp_path), key_prefix="-", point="parent_wait_save")
+    with pytest.raises(Crash):
+        _wake_and_drive(make_runtime(crashing.run_store, crashing.ledger_store), aid)
+    runtime = make_runtime(*make_stores(kind, tmp_path))
+    assert len(children(runtime, aid)) == 1  # the child exists, the parent does not wait on it yet
+    if revise_between:
+        # A revision committed before the replay must not leak into the frozen occurrence.
+        receipt = apply_automation_command(
+            runtime, automation_id=aid, command_id="rev", type="automation.revise",
+            payload={"changes": {"title": "Renamed", "context": {"mode": "growing"},
+                                 "target": {"workflow_id": "echo", "bundle_ref": "fixtures@1.0.0", "flow_id": "echo",
+                                            "input_data": {"prompt": "REVISED"}}}},
+            now="2026-01-01T00:00:01+00:00",
+        )
+        assert receipt["status"] == "applied"
+    clock.set("2026-01-01T00:00:02+00:00")
+    return runtime, aid, clock
+
+
+@pytest.mark.parametrize("kind", STORES)
+@pytest.mark.parametrize("revise_between", [False, True])
+def test_replayed_dispatch_sends_the_frozen_vars_and_reattaches(tmp_path, monkeypatch, kind, revise_between):
+    runtime, aid, _ = _crash_after_child_exists(tmp_path, monkeypatch, kind, revise_between=revise_between)
+    state = drive(runtime, aid)  # replay: create-if-absent finds the SAME child, identity intact
+    assert state.status == RunStatus.WAITING and state.waiting.reason == WaitReason.SUBWORKFLOW
+    kids = children(runtime, aid)
+    assert [k.run_id for k in kids] == [occurrence_run_id(aid, revision=1, index=1)]
+    assert kids[0].workflow_id == "ask" and kids[0].vars["_meta"]["occurrence"]["session_kind"] == "occurrence"
+
+
+@pytest.mark.parametrize("kind", STORES)
+def test_a_dispatch_that_recomputes_a_field_is_an_identity_conflict(tmp_path, monkeypatch, kind):
+    """Proves the replay test bites: one recomputed value turns the replay into a conflict."""
+    from abstractruntime.automations import controller as controller_mod
+
+    runtime, aid, clock = _crash_after_child_exists(tmp_path, monkeypatch, kind)
+    real = controller_mod._occurrence_vars
+
+    def recomputing(pending, prepared, *, automation_id):
+        out = real(pending, prepared, automation_id=automation_id)
+        out["_meta"]["occurrence"]["fired_at"] = clock.now  # "fresh" timestamp at dispatch time
+        return out
+
+    monkeypatch.setattr(controller_mod, "_occurrence_vars", recomputing)
+    conflict = None
+    try:
+        state = drive(runtime, aid)
+        conflict = state.error if state.status == RunStatus.FAILED else None
+    except Exception as exc:  # the conflict may surface as a raised error
+        conflict = f"{type(exc).__name__}: {exc}"
+    assert conflict is not None and "already exists with a different" in conflict, conflict
+    assert len(children(runtime, aid)) == 1

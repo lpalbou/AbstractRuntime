@@ -453,16 +453,17 @@ class OffloadingRunStore(RunStore):
             raise NotImplementedError("Inner RunStore does not support list_runs")
         return fn(status=status, wait_reason=wait_reason, workflow_id=workflow_id, limit=limit)
 
-    def list_run_index(self, *, status=None, workflow_id=None, session_id=None, root_only: bool = False, limit: int = 100, oldest_first: bool = False):  # type: ignore[override]
+    def list_run_index(self, *, status=None, workflow_id=None, session_id=None, root_only: bool = False, limit: int = 100, oldest_first: bool = False, automation_id=None, role=None, session_kind=None):  # type: ignore[override]
         fn = getattr(self._inner, "list_run_index", None)
         if not callable(fn):
             raise NotImplementedError("Inner RunStore does not support list_run_index")
-        try:
-            return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit, oldest_first=oldest_first)
-        except TypeError:
-            if oldest_first:
-                raise  # inner store predates the kwarg: honest refusal beats a silently wrong order
-            return fn(status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only, limit=limit)
+        # Forwarded explicitly (the P1-4 lesson): an inner store without the
+        # attribution filters raises TypeError rather than silently ignoring them.
+        return fn(
+            status=status, workflow_id=workflow_id, session_id=session_id, root_only=root_only,
+            limit=limit, oldest_first=oldest_first,
+            automation_id=automation_id, role=role, session_kind=session_kind,
+        )
 
     def list_due_wait_until(self, *, now_iso: str, limit: int = 100):  # type: ignore[override]
         fn = getattr(self._inner, "list_due_wait_until", None)

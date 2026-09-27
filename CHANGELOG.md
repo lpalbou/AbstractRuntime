@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Runtime.resume` for its commit. Hosts take it around their own read-modify-save of a run so a tick
   can no longer overwrite their change. It is per process (one writer process per store).
 
+- Run index rows carry `automation_id`, `role` (`controller`, `occurrence`, `descendant`, `discussion`,
+  `legacy_schedule` or empty), `occurrence_index` and `session_kind` (`chat`, `automation`,
+  `occurrence`, `discussion`), and `list_run_index` filters on them (`session_kind="chat,discussion"`
+  works). Existing SQLite stores fill the new columns once on open; the JSON store re-reads each run
+  file once after the upgrade.
+- `abstractruntime.automation_queries`: `list_automations(store, status=, cursor=, limit=)` (pages of
+  automation summaries, newest first, with a cursor that survives restarts; archived automations stay
+  listed) and `latest_occurrence(store, automation_id)`. `changed_since` is refused with
+  `unsupported_feature`: clients poll complete pages.
+
+### Changed
+
+- `list_run_index(root_only=True)` returns turn roots: runs without a parent, except automation
+  controllers, plus automation occurrences. Apps that fold root runs into sessions (AbstractCode, the
+  Assistant) therefore show an automation's session as a chat whose turns are its occurrences.
+
 ### Fixed
 
 - A parent that crashes after starting a child with an explicit id, but before saving its wait, finds

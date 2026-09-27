@@ -177,10 +177,22 @@ class QueryableRunIndexStore(Protocol):
         root_only: bool = False,
         limit: int = 100,
         oldest_first: bool = False,
+        automation_id: Any = None,
+        role: Any = None,
+        session_kind: Any = None,
     ) -> List[Dict[str, Any]]:
         """List lightweight run index rows (most recent first by default;
         `oldest_first=True` inverts the order — required for stall queries,
-        where a newest-first window silently hides the oldest waits)."""
+        where a newest-first window silently hides the oldest waits).
+
+        Rows carry `automation_id`, `role`, `occurrence_index` and
+        `session_kind` (`core.run_attribution`). `automation_id` / `role` /
+        `session_kind` filter on them (a value, a comma-separated string or a
+        list). `root_only=True` returns TURN ROOTS: parent-less runs that are
+        not automation controllers, plus automation occurrence runs — so a
+        client folding root rows by session shows an automation's session as
+        a chat whose turns are its occurrences.
+        """
         ...
 
 

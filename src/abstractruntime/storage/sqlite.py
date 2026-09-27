@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, StepRecord, StepStatus, WaitReason, WaitState
+from ..core.run_attribution import automation_index_fields, filter_values
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
@@ -222,6 +223,42 @@ class SqliteDatabase:
                     "ON runs(run_id) WHERE paused IS NULL;"
                 )
                 self._backfill_run_hot_columns(conn)
+
+                # Automation attribution columns (automations contracts C11/E):
+                # `core.run_attribution.automation_index_fields` of the run's
+                # inline `_meta`, written by save()/create_if_absent() in the
+                # same statement as run_json. SQL NULL session_kind = row not
+                # yet backfilled (every indexed row has a session_kind).
+                runs_cols = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(runs);").fetchall()
+                }
+                for column, decl in (
+                    ("automation_id", "TEXT"),
+                    ("role", "TEXT"),
+                    ("occurrence_index", "INTEGER"),
+                    ("session_kind", "TEXT"),
+                ):
+                    if column in runs_cols:
+                        continue
+                    try:
+                        conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {decl};")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_automation "
+                    "ON runs(automation_id, role, occurrence_index);"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_session_kind_updated "
+                    "ON runs(session_kind, updated_at DESC);"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_unattributed "
+                    "ON runs(run_id) WHERE session_kind IS NULL;"
+                )
+                self._backfill_run_attribution(conn)
 
                 # --- WAIT_UNTIL index (scheduler) ---
                 conn.execute(
@@ -445,6 +482,66 @@ class SqliteDatabase:
             except Exception:  # noqa: BLE001 - commit failure: rows retry at the next boot
                 return
 
+    @classmethod
+    def _backfill_run_attribution(cls, conn: sqlite3.Connection) -> None:
+        """One-time backfill of the automation attribution columns.
+
+        Same discipline as `_backfill_run_hot_columns`: cursor-paged batches
+        with a commit per batch, and every UPDATE guarded `AND session_kind IS
+        NULL` so a concurrent save() (which always writes the columns) wins
+        over a stale backfill. Failures leave rows NULL; `list_run_index`
+        then derives the fields from run_json for that row.
+        """
+        try:
+            if conn.execute("SELECT 1 FROM runs WHERE session_kind IS NULL LIMIT 1;").fetchone() is None:
+                return
+        except Exception:  # noqa: BLE001 - probe failure: leave backfill to a later boot
+            return
+        batch = max(1, int(cls._BACKFILL_BATCH_ROWS))
+        cursor = ""
+        while True:
+            try:
+                rows = conn.execute(
+                    "SELECT run_id, run_json FROM runs "
+                    "WHERE session_kind IS NULL AND run_id > ? "
+                    "ORDER BY run_id LIMIT ?;",
+                    (cursor, batch),
+                ).fetchall()
+            except Exception:  # noqa: BLE001 - best-effort; NULL rows keep the run_json fallback
+                return
+            if not rows:
+                return
+            for row in rows:
+                try:
+                    data = json.loads(str(row["run_json"] or "{}"))
+                    vars_obj = data.get("vars") if isinstance(data, dict) else None
+                except Exception:  # noqa: BLE001 - torn row: indexed as a plain chat run
+                    vars_obj = None
+                fields = automation_index_fields(vars_obj, run_id=str(row["run_id"]))
+                try:
+                    conn.execute(
+                        "UPDATE runs SET automation_id = ?, role = ?, occurrence_index = ?, session_kind = ? "
+                        "WHERE run_id = ? AND session_kind IS NULL;",
+                        (
+                            fields["automation_id"],
+                            fields["role"],
+                            fields["occurrence_index"],
+                            fields["session_kind"],
+                            str(row["run_id"]),
+                        ),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "SqliteDatabase run attribution backfill failed for a row #FALLBACK "
+                        "(list_run_index derives it from run_json)",
+                        exc_info=True,
+                    )
+            cursor = str(rows[-1]["run_id"])
+            try:
+                conn.commit()
+            except Exception:  # noqa: BLE001 - commit failure: rows retry at the next boot
+                return
+
     @staticmethod
     def _backfill_ledger_idempotency(conn: sqlite3.Connection) -> None:
         """One-time column backfill for pre-0047 rows (idempotent: the WHERE
@@ -526,6 +623,7 @@ class SqliteRunStore(RunStore):
         "parent_run_id", "actor_id", "session_id",
         "created_at", "updated_at",
         "run_json", "paused", "run_lifecycle_json",
+        "automation_id", "role", "occurrence_index", "session_kind",
     )
 
     @staticmethod
@@ -566,6 +664,7 @@ class SqliteRunStore(RunStore):
             "run_json": dumps_compact(runstate_to_dict(run)),
             "paused": 1 if is_paused_vars(run.vars) else 0,
             "run_lifecycle_json": dumps_compact(lifecycle),
+            **automation_index_fields(run.vars, run_id=str(run.run_id)),
         }
 
     @staticmethod
@@ -743,7 +842,12 @@ class SqliteRunStore(RunStore):
         root_only: bool = False,
         limit: int = 100,
         oldest_first: bool = False,
+        automation_id: Any = None,
+        role: Any = None,
+        session_kind: Any = None,
     ) -> List[Dict[str, Any]]:
+        """Index rows, column-only. `root_only=True` returns turn roots
+        (parent-less non-controller runs plus occurrence runs)."""
         clauses: list[str] = []
         params: list[Any] = []
 
@@ -757,7 +861,19 @@ class SqliteRunStore(RunStore):
             clauses.append("session_id = ?")
             params.append(str(session_id))
         if bool(root_only):
-            clauses.append("(parent_run_id IS NULL OR parent_run_id = '')")
+            clauses.append(
+                "(role = 'occurrence' OR ((parent_run_id IS NULL OR parent_run_id = '') "
+                "AND (role IS NULL OR role <> 'controller')))"
+            )
+        for column, want in (("automation_id", automation_id), ("role", role), ("session_kind", session_kind)):
+            values = filter_values(want)
+            if values is None:
+                continue
+            if not values:
+                clauses.append("0")
+                continue
+            clauses.append(f"{column} IN ({', '.join('?' for _ in values)})")
+            params.extend(sorted(values))
 
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         lim = max(1, int(limit or 100))
@@ -781,7 +897,8 @@ class SqliteRunStore(RunStore):
               wait_reason, wait_until,
               parent_run_id, actor_id, session_id,
               created_at, updated_at,
-              run_lifecycle_json
+              run_lifecycle_json,
+              automation_id, role, occurrence_index, session_kind
             FROM runs
             {where}
             ORDER BY updated_at {direction}
@@ -790,8 +907,26 @@ class SqliteRunStore(RunStore):
             (*params, lim),
         ).fetchall()
 
+        def _document_vars(run_id: str) -> Any:
+            doc_row = conn.execute("SELECT run_json FROM runs WHERE run_id = ?;", (run_id,)).fetchone()
+            try:
+                run_payload = json.loads(str(doc_row["run_json"] or "{}")) if doc_row is not None else {}
+            except Exception:
+                run_payload = {}
+            return run_payload.get("vars") if isinstance(run_payload, dict) else None
+
         out: List[Dict[str, Any]] = []
         for row in rows or []:
+            if row["session_kind"] is not None:
+                attribution = {
+                    "automation_id": row["automation_id"],
+                    "role": row["role"],
+                    "occurrence_index": row["occurrence_index"],
+                    "session_kind": row["session_kind"],
+                }
+            else:
+                # Not yet backfilled: derive from the document (same truth).
+                attribution = automation_index_fields(_document_vars(str(row["run_id"] or "")), run_id=str(row["run_id"] or ""))
             lifecycle: Any = None
             lifecycle_raw = row["run_lifecycle_json"]
             if lifecycle_raw is not None:
@@ -825,6 +960,7 @@ class SqliteRunStore(RunStore):
                     "created_at": str(row["created_at"] or "") or None,
                     "updated_at": str(row["updated_at"] or "") or None,
                     **lifecycle_fields,
+                    **attribution,
                 }
             )
         return out

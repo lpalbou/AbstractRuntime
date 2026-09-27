@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason
+from ..core.run_attribution import automation_index_fields, is_turn_root, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
@@ -85,6 +86,9 @@ class InMemoryRunStore(RunStore):
         root_only: bool = False,
         limit: int = 100,
         oldest_first: bool = False,
+        automation_id: Any = None,
+        role: Any = None,
+        session_kind: Any = None,
     ) -> List[Dict[str, Any]]:
         lim = max(1, int(limit or 100))
         out: List[Dict[str, Any]] = []
@@ -96,7 +100,10 @@ class InMemoryRunStore(RunStore):
                 continue
             if session_id is not None and str(run.session_id or "").strip() != str(session_id or "").strip():
                 continue
-            if bool(root_only) and str(run.parent_run_id or "").strip():
+            attribution = automation_index_fields(run.vars, run_id=run.run_id)
+            if bool(root_only) and not is_turn_root(parent_run_id=run.parent_run_id, role=attribution["role"]):
+                continue
+            if not row_matches(attribution, automation_id=automation_id, role=role, session_kind=session_kind):
                 continue
 
             waiting = run.waiting
@@ -113,6 +120,7 @@ class InMemoryRunStore(RunStore):
                     "created_at": str(run.created_at) if run.created_at else None,
                     "updated_at": str(run.updated_at) if run.updated_at else None,
                     **run_lifecycle_index_fields(run.vars),
+                    **attribution,
                 }
             )
 

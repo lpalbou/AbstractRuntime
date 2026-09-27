@@ -22,10 +22,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
+from ..core.run_attribution import automation_index_fields, is_turn_root, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
 logger = logging.getLogger(__name__)
+
+# Scan-sidecar row shape version. 2 (automations, 2026-09-27): rows gained the
+# attribution fields `automation_id`, `role`, `occurrence_index`,
+# `session_kind`; a version-1 sidecar is ignored so every file is re-read once.
+_SCAN_SIDECAR_VERSION = 2
 
 
 class JsonFileRunStore(RunStore):
@@ -201,6 +207,7 @@ class JsonFileRunStore(RunStore):
             "wait_reason": str(getattr(getattr(waiting, "reason", None), "value", waiting.reason)) if waiting is not None else None,
             "wait_until": str(waiting.until) if (waiting is not None and waiting.until) else None,
             **run_lifecycle_index_fields(run.vars),
+            **automation_index_fields(run.vars, run_id=str(run.run_id)),
         }
 
     def _scan_memo_put(self, rid: str, token: tuple[int, int, int], fields: Dict[str, Any]) -> None:
@@ -249,7 +256,7 @@ class JsonFileRunStore(RunStore):
                 logger.warning("#FALLBACK scan sidecar unreadable (%s); cold scan", e)
                 return
             entries = raw.get("entries") if isinstance(raw, dict) else None
-            if int((raw or {}).get("version") or 0) != 1 or not isinstance(entries, dict):
+            if int((raw or {}).get("version") or 0) != _SCAN_SIDECAR_VERSION or not isinstance(entries, dict):
                 return
             for rid, item in entries.items():
                 try:
@@ -291,7 +298,7 @@ class JsonFileRunStore(RunStore):
             # instead of killing every persist. If you ADD a field with
             # non-str semantics, round-trip it explicitly.
             tmp.write_text(
-                json.dumps({"version": 1, "entries": snapshot}, separators=(",", ":"), default=str),
+                json.dumps({"version": _SCAN_SIDECAR_VERSION, "entries": snapshot}, separators=(",", ":"), default=str),
                 encoding="utf-8",
             )
             os.replace(tmp, self._scan_sidecar_path)
@@ -772,8 +779,13 @@ class JsonFileRunStore(RunStore):
         root_only: bool = False,
         limit: int = 100,
         oldest_first: bool = False,
+        automation_id: Any = None,
+        role: Any = None,
+        session_kind: Any = None,
     ) -> List[Dict[str, Any]]:
-        """List lightweight run index rows without depending on full RunState consumers."""
+        """List lightweight run index rows without depending on full RunState consumers.
+
+        `root_only=True` returns turn roots (see `QueryableRunIndexStore`)."""
         lim = max(1, int(limit or 100))
         self._load_scan_sidecar_once()
         ranked: list[tuple[int, Path]] = []
@@ -804,7 +816,9 @@ class JsonFileRunStore(RunStore):
                 continue
             if sid is not None and str(fields.get("session_id") or "").strip() != sid:
                 continue
-            if bool(root_only) and str(fields.get("parent_run_id") or "").strip():
+            if bool(root_only) and not is_turn_root(parent_run_id=fields.get("parent_run_id"), role=fields.get("role")):
+                continue
+            if not row_matches(fields, automation_id=automation_id, role=role, session_kind=session_kind):
                 continue
 
             rid = self._run_id_from_path(p)

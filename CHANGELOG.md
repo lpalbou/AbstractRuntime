@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `discussion`), and `list_run_index` filters on them (`session_kind="chat,discussion"` works). Existing SQLite stores
   fill the new columns once when opened; the JSON store re-reads each run file once. Every store has
   `session_kinds(session_id)` and `latest_occurrence_row(automation_id)`.
+- Run index rows carry `workspace_root`: the folder the run executes in (its top-level `vars["workspace_root"]` as
+  stored, stripped, never resolved; `None` when absent), so apps can open a session's folder without loading runs.
+  Existing SQLite stores fill it once when opened; the JSON store re-reads each run file once.
 - `session_attribution(store, session_id)` (`abstractruntime.core.run_attribution`) reports what kind of session an id
   is (`chat`, `automation`, `occurrence` or `discussion`, with the discussion's validated root, automation and
   workspace). Every root run started in a discussion session gets the discussion's own workspace, access settings and

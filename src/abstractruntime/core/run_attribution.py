@@ -94,6 +94,16 @@ def automation_index_fields(vars_obj: Any, *, run_id: Optional[str] = None) -> D
     return {"automation_id": None, "role": None, "occurrence_index": None, "session_kind": "chat"}
 
 
+def workspace_index_fields(vars_obj: Any) -> Dict[str, Any]:
+    """`{"workspace_root": ...}` for the run index: the run's INLINE top-level
+    `vars["workspace_root"]` as stored (the folder it executes in, including
+    host overrides and discussion folders), only `.strip()`-ed — no
+    resolution. None when absent or not a non-empty string."""
+    raw = vars_obj.get("workspace_root") if isinstance(vars_obj, Mapping) else None
+    text = raw.strip() if isinstance(raw, str) else ""
+    return {"workspace_root": text or None}
+
+
 def filter_values(want: Any) -> Optional[frozenset]:
     """A `list_run_index` filter argument as a set: None (no filter), one
     string, a comma-separated string ("chat,discussion"), or an iterable."""
@@ -281,6 +291,7 @@ __all__ = [
     "ROLES",
     "SESSION_KINDS",
     "automation_index_fields",
+    "workspace_index_fields",
     "filter_values",
     "SessionAttributionError",
     "is_turn_root",

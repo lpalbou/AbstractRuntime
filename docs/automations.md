@@ -510,6 +510,11 @@ comma-separated string (`session_kind="chat,discussion"`) or a list. Existing SQ
 when opened; the JSON store re-reads each run file once. Identity metadata (`vars._meta.automation`, `.occurrence`,
 `.discussion`, `.creation_digest`) always stays inline: the offloading store never moves it to the artifact store.
 
+Every row also carries `workspace_root`: the folder the run executes in, read from its top-level
+`vars["workspace_root"]` as stored (host overrides and discussion folders included), only stripped of surrounding
+whitespace and never resolved; `None` when the run has none. Existing SQLite stores fill it once when opened; the
+JSON store re-reads each run file once. The offloading store never moves the key.
+
 `session_attribution(run_store, session_id)` (`abstractruntime.core.run_attribution`) returns `None` for a session
 with no runs, or `{"kind": ...}` with the session's most specific kind (`discussion`, then `automation`, then
 `occurrence`, then `chat`). A discussion adds `discussion_root_run_id`, `automation_id`, `occurrence_index`,

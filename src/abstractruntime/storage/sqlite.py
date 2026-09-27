@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, StepRecord, StepStatus, WaitReason, WaitState
-from ..core.run_attribution import automation_index_fields, filter_values
+from ..core.run_attribution import automation_index_fields, filter_values, workspace_index_fields
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
@@ -262,6 +262,24 @@ class SqliteDatabase:
                     "ON runs(run_id) WHERE session_kind IS NULL;"
                 )
                 self._backfill_run_attribution(conn)
+
+                # workspace_root column (the folder a run executes in, from its
+                # inline vars["workspace_root"]; NULL when absent). NULL is a
+                # legitimate value, so completion of the one-time backfill is
+                # recorded in `index_migrations` instead of by a sentinel.
+                runs_cols = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(runs);").fetchall()
+                }
+                if "workspace_root" not in runs_cols:
+                    try:
+                        conn.execute("ALTER TABLE runs ADD COLUMN workspace_root TEXT;")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
+                conn.execute("CREATE TABLE IF NOT EXISTS index_migrations (name TEXT PRIMARY KEY);")
+                conn.commit()
+                self._backfill_run_workspace_root(conn)
 
                 # --- WAIT_UNTIL index (scheduler) ---
                 conn.execute(
@@ -545,6 +563,64 @@ class SqliteDatabase:
             except Exception:  # noqa: BLE001 - commit failure: rows retry at the next boot
                 return
 
+    _WORKSPACE_ROOT_MIGRATION = "runs.workspace_root.v1"
+
+    @classmethod
+    def _backfill_run_workspace_root(cls, conn: sqlite3.Connection) -> None:
+        """One-time backfill of `workspace_root` from each row's document.
+
+        Cursor-paged batches with a commit per batch (bounded memory; a crash
+        resumes on the next open because completion is only recorded at the
+        end). Each UPDATE is guarded on the row's `updated_at` as read, so a
+        concurrent save() (which always writes the column) wins over a stale
+        backfill value.
+        """
+        try:
+            done = conn.execute(
+                "SELECT 1 FROM index_migrations WHERE name = ?;", (cls._WORKSPACE_ROOT_MIGRATION,)
+            ).fetchone()
+        except Exception:  # noqa: BLE001 - probe failure: leave backfill to a later boot
+            return
+        if done is not None:
+            return
+        batch = max(1, int(cls._BACKFILL_BATCH_ROWS))
+        cursor = ""
+        while True:
+            try:
+                rows = conn.execute(
+                    "SELECT run_id, updated_at, run_json FROM runs "
+                    "WHERE workspace_root IS NULL AND run_id > ? ORDER BY run_id LIMIT ?;",
+                    (cursor, batch),
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                return
+            if not rows:
+                break
+            for row in rows:
+                try:
+                    data = json.loads(str(row["run_json"] or "{}"))
+                    vars_obj = data.get("vars") if isinstance(data, dict) else None
+                except Exception:  # noqa: BLE001 - torn row: no workspace
+                    vars_obj = None
+                value = workspace_index_fields(vars_obj)["workspace_root"]
+                if value is None:
+                    continue
+                conn.execute(
+                    "UPDATE runs SET workspace_root = ? "
+                    "WHERE run_id = ? AND workspace_root IS NULL AND updated_at IS ?;",
+                    (value, str(row["run_id"]), row["updated_at"]),
+                )
+            cursor = str(rows[-1]["run_id"])
+            try:
+                conn.commit()
+            except Exception:  # noqa: BLE001 - rows retry at the next boot
+                return
+        try:
+            conn.execute("INSERT OR IGNORE INTO index_migrations (name) VALUES (?);", (cls._WORKSPACE_ROOT_MIGRATION,))
+            conn.commit()
+        except Exception:  # noqa: BLE001 - the next boot re-runs the (idempotent) backfill
+            return
+
     @staticmethod
     def _backfill_ledger_idempotency(conn: sqlite3.Connection) -> None:
         """One-time column backfill for pre-0047 rows (idempotent: the WHERE
@@ -627,6 +703,7 @@ class SqliteRunStore(RunStore):
         "created_at", "updated_at",
         "run_json", "paused", "run_lifecycle_json",
         "automation_id", "role", "occurrence_index", "session_kind",
+        "workspace_root",
     )
 
     @staticmethod
@@ -668,6 +745,7 @@ class SqliteRunStore(RunStore):
             "paused": 1 if is_paused_vars(run.vars) else 0,
             "run_lifecycle_json": dumps_compact(lifecycle),
             **automation_index_fields(run.vars, run_id=str(run.run_id)),
+            **workspace_index_fields(run.vars),
         }
 
     @staticmethod
@@ -932,7 +1010,8 @@ class SqliteRunStore(RunStore):
               parent_run_id, actor_id, session_id,
               created_at, updated_at,
               run_lifecycle_json,
-              automation_id, role, occurrence_index, session_kind
+              automation_id, role, occurrence_index, session_kind,
+              workspace_root
             FROM runs
             {where}
             ORDER BY {order_sql}
@@ -995,6 +1074,7 @@ class SqliteRunStore(RunStore):
                     "updated_at": str(row["updated_at"] or "") or None,
                     **lifecycle_fields,
                     **attribution,
+                    "workspace_root": row["workspace_root"],
                 }
             )
         return out

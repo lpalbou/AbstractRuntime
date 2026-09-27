@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
+from ..core.run_attribution import workspace_index_fields
 from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
@@ -30,8 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Scan-sidecar row shape version. 2 (automations, 2026-09-27): rows gained the
 # attribution fields `automation_id`, `role`, `occurrence_index`,
-# `session_kind`; a version-1 sidecar is ignored so every file is re-read once.
-_SCAN_SIDECAR_VERSION = 2
+# `session_kind`; 3 (2026-09-27): rows gained `workspace_root`. An older
+# sidecar is ignored so every file is re-read once.
+_SCAN_SIDECAR_VERSION = 3
 
 
 class JsonFileRunStore(RunStore):
@@ -257,6 +259,7 @@ class JsonFileRunStore(RunStore):
             "wait_until": str(waiting.until) if (waiting is not None and waiting.until) else None,
             **run_lifecycle_index_fields(run.vars),
             **automation_index_fields(run.vars, run_id=str(run.run_id)),
+            **workspace_index_fields(run.vars),
         }
 
     def _scan_memo_put(self, rid: str, token: tuple[int, int, int], fields: Dict[str, Any]) -> None:

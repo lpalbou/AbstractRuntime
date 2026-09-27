@@ -122,7 +122,7 @@ Notes:
 
 Run index and creation (all built-in run stores, including the offloading wrapper):
 - `create_if_absent(run) -> (run, created)`: creates a run only if its id is free and never overwrites an existing one; `store_supports_create_if_absent(store)` / `require_create_if_absent(store)` check a store first. Process-crash safe; power-loss durability is not claimed
-- `list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)`: lightweight rows carrying `automation_id`, `role`, `occurrence_index` and `session_kind`; the three attribution filters take a value, a comma-separated string or a list; `root_only=True` returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
+- `list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)`: lightweight rows carrying `automation_id`, `role`, `occurrence_index`, `session_kind` and `workspace_root` (the run's top-level `vars["workspace_root"]` as stored, stripped; `None` when absent); the three attribution filters take a value, a comma-separated string or a list; `root_only=True` returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
 - `session_kinds(session_id) -> frozenset` and `latest_occurrence_row(automation_id)`: indexed lookups used by session attribution and automation listings
 - `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup. Store objects and processes sharing one JSON run folder see each other's created and deleted runs through the creation journal `.runs_created.log`; v1 supports one writer process per store
 

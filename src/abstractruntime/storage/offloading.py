@@ -214,6 +214,10 @@ def offload_large_values(
 # read these without an artifact store. Only a discussion's `seed_messages`
 # (potentially large conversation text) may be offloaded; readers resolve it.
 _INLINE_IDENTITY_PATHS = (
+    # The run index reads the folder a run executes in (`workspace_root`
+    # index column); public top-level vars are never offloaded anyway, and
+    # this pins it explicitly.
+    "vars.workspace_root",
     "vars._meta.automation",
     "vars._meta.occurrence",
     "vars._meta.discussion",

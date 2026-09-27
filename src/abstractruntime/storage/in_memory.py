@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason
+from ..core.run_attribution import workspace_index_fields
 from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
@@ -121,6 +122,7 @@ class InMemoryRunStore(RunStore):
                     "updated_at": str(run.updated_at) if run.updated_at else None,
                     **run_lifecycle_index_fields(run.vars),
                     **attribution,
+                    **workspace_index_fields(run.vars),
                 }
             )
 

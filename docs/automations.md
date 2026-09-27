@@ -38,7 +38,7 @@ flowchart LR
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
   Occurrence -->|"output: answer, notify"| Controller
   Controller -->|"automation.* records"| Ledger["Controller ledger<br/>occurrences, attention, commands"]
-  Occurrence -.->|"fork with read-only workspace"| Discussion["Discussion run<br/>own session"]
+  Occurrence -.->|"fork: own workspace + read-only mount"| Discussion["Discussion run<br/>own session"]
 ```
 
 ## Quick start
@@ -339,8 +339,10 @@ Errors: `occurrence_not_found` (the automation has no occurrence N), `invalid_re
 
 **Later turns stay anchored.** Every later root run started in a discussion session, by any caller, gets the
 discussion's provenance (`_meta.discussion` without the seed) and the root's own workspace setup, whatever the caller
-passed: `workspace_root`, `workspace_access_mode`, `workspace_allowed_paths` and `_runtime.workspace_read_only_paths`
-(a caller may add mounts, never remove one). The whole-workspace `workspace_read_only` flag is applied only when the
+passed: `workspace_root`, `workspace_access_mode`, `workspace_allowed_paths`, the root's exact
+`workspace_builtin_allow` when it has one (so the mount stays readable under the host's built-in protection and a
+caller cannot widen the list; deny prefixes are left as they are) and `_runtime.workspace_read_only_paths` (a caller
+may add mounts, never remove one). The whole-workspace `workspace_read_only` flag is applied only when the
 root carries it. The discussion's root is validated first: every discussion run of the session must name
 the same root, and that root must be a parent-less run of this session that carries the seed. If this check fails,
 `Runtime.start` raises `SessionAttributionError` and the run is not created. Children of discussion runs carry the

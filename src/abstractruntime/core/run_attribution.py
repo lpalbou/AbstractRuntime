@@ -245,7 +245,17 @@ def session_attribution(run_store: Any, session_id: str) -> Optional[Dict[str, A
 
 
 # Workspace keys a discussion's later turns inherit from the persisted root.
-_POLICY_TOP_KEYS = ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_read_only")
+# `workspace_builtin_allow` is the root's EXACT allow list under the host's
+# built-in protection ([own workspace, mount]); later turns get it verbatim, so
+# they keep reading the mount and a caller cannot widen it. Deny prefixes are
+# not restamped: they stay whatever the host (and the merge rules) set.
+_POLICY_TOP_KEYS = (
+    "workspace_root",
+    "workspace_access_mode",
+    "workspace_allowed_paths",
+    "workspace_read_only",
+    "workspace_builtin_allow",
+)
 _POLICY_RUNTIME_KEYS = ("workspace_read_only_paths", "workspace_read_only")
 
 

@@ -1576,7 +1576,8 @@ class Runtime:
         contract B, amendment 4; operator ruling 2026-09-27): every later ROOT
         start in such a session gets the root's `_meta.discussion` (without the
         seed) and the root's OWN workspace policy — `workspace_root`,
-        `workspace_access_mode`, `workspace_allowed_paths`, the read-only
+        `workspace_access_mode`, `workspace_allowed_paths`, the root's exact
+        `workspace_builtin_allow` when it has one, the read-only
         mounts `_runtime.workspace_read_only_paths` (unioned with any the
         caller adds) and the whole-root `workspace_read_only` flag only if the
         root carries it — OVER whatever the caller passed. A failed lookup

@@ -270,3 +270,41 @@ def test_the_summary_line_counts_against_the_seed_budget(env):
     assert sum(len(m["content"]) for m in seed) <= budget
     assert [p[0] for p in _pairs(seed)] == [4]
     assert "showing the last 1." in seed[0]["content"]
+
+
+@pytest.mark.parametrize("env", ["json", "sqlite"], indirect=True)
+def test_a_later_turn_under_host_protection_reads_the_mount_and_writes_its_own_root(env):
+    """Review 56 F1: a later discussion turn started directly on the runtime
+    (no gateway restamp) keeps the root's exact built-in allow list, so under
+    the host's deny prefixes it still reads the mount and writes its own root;
+    a caller cannot widen the list."""
+    from abstractruntime.integrations.abstractcore.workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
+    from abstractruntime.utils.workspace_paths import BUILTIN_ALLOW_KEY, BUILTIN_DENY_KEY
+
+    runtime, clock, tmp_path = env
+    data_dir = tmp_path / "gateway-data"
+    auto_ws = data_dir / "workspaces" / "automation"
+    own_ws = data_dir / "workspaces" / "discussion"
+    secrets = data_dir / "secrets"
+    for d in (auto_ws, own_ws, secrets):
+        d.mkdir(parents=True)
+    (auto_ws / "state.json").write_text("{}")
+    aid = create(runtime, clock, workspace_root=str(auto_ws),
+                 input_data={"prompt": "p", BUILTIN_DENY_KEY: [str(data_dir)], BUILTIN_ALLOW_KEY: [str(auto_ws)]})
+    drive(runtime, aid)
+    started = start_discussion(runtime, automation_id=aid, occurrence_index=1, request_id="h2", prompt="?",
+                               workspace_root=str(own_ws))
+    later = runtime.get_state(runtime.start(
+        workflow=runtime.workflow_registry.get("echo"),
+        vars={"prompt": "x", BUILTIN_DENY_KEY: [str(data_dir)], BUILTIN_ALLOW_KEY: [str(data_dir)]},  # tries to widen
+        session_id=started["session_id"]))
+    assert later.vars[BUILTIN_ALLOW_KEY] == [str(own_ws), str(auto_ws)]
+    assert later.vars[BUILTIN_DENY_KEY] == [str(data_dir)]
+    scope = WorkspaceScope.from_input_data(later.vars)
+    read = rewrite_tool_arguments(tool_name="read_file", args={"file_path": str(auto_ws / "state.json")}, scope=scope)
+    assert read["file_path"].endswith("state.json")  # the mount stays readable
+    assert rewrite_tool_arguments(tool_name="write_file", args={"file_path": str(own_ws / "a.md"), "content": "x"},
+                                  scope=scope)["file_path"].endswith("a.md")
+    for path in (auto_ws / "state.json", secrets / "token"):
+        with pytest.raises(ValueError):
+            rewrite_tool_arguments(tool_name="write_file", args={"file_path": str(path), "content": "x"}, scope=scope)

@@ -93,6 +93,12 @@ docs = [
 [project.scripts]
 abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_worker:main"
 
+# Automation trigger sources (automations contract C). Third-party packages
+# register their own sources in the same group.
+[project.entry-points."abstractruntime.trigger_sources"]
+schedule = "abstractruntime.triggers.schedule:ScheduleTriggerAdapter"
+manual = "abstractruntime.triggers.manual:ManualTriggerAdapter"
+
 [project.urls]
 "AbstractCore (website)" = "https://www.abstractcore.ai/"
 "AbstractRuntime (GitHub)" = "https://github.com/lpalbou/abstractruntime"

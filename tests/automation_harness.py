@@ -12,6 +12,7 @@ Targets are plain WorkflowSpecs (no provider, no tools):
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -100,7 +101,7 @@ class Clock:
 
 def request(
     *,
-    request_id: str = "req-1",
+    request_id: Optional[str] = None,
     workflow_id: str = "echo",
     trigger: Optional[Dict[str, Any]] = None,
     input_data: Optional[Dict[str, Any]] = None,
@@ -109,7 +110,9 @@ def request(
     workspace_root: str = "/tmp/automation-ws",
 ) -> Dict[str, Any]:
     req: Dict[str, Any] = {
-        "request_id": request_id,
+        # Unique by default: occurrence ids derive from the automation id, and the
+        # runtime keeps process-wide per-run-id state (effect cancellation marks).
+        "request_id": request_id or f"req-{uuid.uuid4()}",
         "title": "Memory watch",
         "target": {
             "workflow_id": workflow_id,

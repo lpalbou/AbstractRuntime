@@ -84,6 +84,19 @@ class JsonFileRunStore(RunStore):
         self._session_index_lock = threading.Lock()
         self._session_index: Optional[Dict[str, Dict[str, Optional[str]]]] = None
         self._run_session: Dict[str, str] = {}
+        # CREATION JOURNAL (review 51 J51-1): the session and children indexes
+        # change only when a run file is CREATED or DELETED (a run's session,
+        # parent and session_kind are fixed at creation). Every writer — this
+        # object, another store object, another process on the same folder —
+        # appends `+<run_id>` / `-<run_id>` to `.runs_created.log` (O_APPEND,
+        # one short line). A lookup stats the journal (one stat) and applies
+        # only the new lines, so a discussion created through another store
+        # object is seen before the next session lookup; standby/multi-worker
+        # gateways on one data folder stay consistent. A shrunk (rewritten)
+        # journal or an unreadable one drops both indexes for a full rebuild.
+        self._journal_path = self._base / ".runs_created.log"
+        self._journal_lock = threading.Lock()
+        self._journal_offset: Optional[int] = None
         self._run_parent_index: Dict[str, Optional[str]] = {}
         # EVENT-WAIT INDEX (2026-09-22, mission B2): wait_key -> {run_id} for
         # runs parked in WAITING(EVENT), plus the reverse map used to retract a
@@ -386,7 +399,10 @@ class JsonFileRunStore(RunStore):
 
     def _ensure_children_index(self) -> None:
         if self._children_index is not None:
-            return
+            self._sync_indexes()
+            if self._children_index is not None:
+                return
+        self._mark_journal_start()
         with self._index_lock:
             if self._children_index is not None:
                 return
@@ -422,9 +438,112 @@ class JsonFileRunStore(RunStore):
             self._run_parent_index = run_parent
         self._maybe_persist_scan_memo()
 
+    # --- creation journal ------------------------------------------------
+
+    def _journal_append(self, line: str) -> None:
+        """Append one entry. This object already applied the change to its own
+        indexes, so when nothing else was appended since its last sync it
+        skips its own line (no re-read)."""
+        data = (line + "\n").encode("utf-8")
+        try:
+            with self._journal_lock:
+                with open(self._journal_path, "ab") as f:
+                    f.write(data)
+                    f.flush()
+                    end = f.tell()
+                if self._journal_offset is not None and self._journal_offset == end - len(data):
+                    self._journal_offset = end
+        except OSError:
+            # Other store objects would miss this run until they rebuild:
+            # loud, because a missed discussion run weakens read-only anchoring.
+            logger.error("JsonFileRunStore: creation journal append failed for %s", line, exc_info=True)
+
+    def _journal_size(self) -> Optional[int]:
+        try:
+            return int(self._journal_path.stat().st_size)
+        except FileNotFoundError:
+            return 0
+        except OSError:
+            return None
+
+    def _mark_journal_start(self) -> None:
+        """Called BEFORE an index's full scan: entries appended from here on
+        are re-applied by `_sync_indexes` (idempotent), so nothing created
+        during the scan is lost."""
+        with self._journal_lock:
+            if self._journal_offset is None:
+                size = self._journal_size()
+                self._journal_offset = size if size is not None else 0
+
+    def _sync_indexes(self) -> None:
+        """Apply journal lines appended since the last sync (one stat when
+        nothing changed)."""
+        if self._journal_offset is None:
+            return
+        size = self._journal_size()
+        with self._journal_lock:
+            offset = self._journal_offset
+            if offset is None or size == offset:
+                return
+            if size is None or size < offset:
+                # Unreadable or rewritten journal: rebuild from disk.
+                with self._index_lock:
+                    self._children_index = None
+                with self._session_index_lock:
+                    self._session_index = None
+                self._journal_offset = None
+                return
+            try:
+                with open(self._journal_path, "rb") as f:
+                    f.seek(offset)
+                    chunk = f.read(size - offset)
+            except OSError:
+                with self._index_lock:
+                    self._children_index = None
+                with self._session_index_lock:
+                    self._session_index = None
+                self._journal_offset = None
+                return
+            complete = chunk.rfind(b"\n") + 1  # a torn last line waits for the next sync
+            self._journal_offset = offset + complete
+        for raw in chunk[:complete].decode("utf-8", "replace").splitlines():
+            op, rid = raw[:1], raw[1:].strip()
+            if not rid:
+                continue
+            p = self._path(rid)
+            fields = self._scan_fields(p) if p.exists() else None
+            if op == "+" and fields is not None:
+                self._index_fields_into_indexes(rid, fields)
+            elif not p.exists():
+                self._drop_from_children_index(rid)
+                self._drop_from_session_index(rid)
+
+    def _index_fields_into_indexes(self, rid: str, fields: Dict[str, Any]) -> None:
+        parent = fields.get("parent_run_id")
+        parent = str(parent) if parent else None
+        with self._index_lock:
+            if self._children_index is not None:
+                self._run_parent_index[rid] = parent
+                if parent:
+                    self._children_index.setdefault(parent, set()).add(rid)
+        sid = str(fields.get("session_id") or "").strip()
+        with self._session_index_lock:
+            if self._session_index is not None and sid:
+                self._session_index.setdefault(sid, {})[rid] = fields.get("session_kind")
+                self._run_session[rid] = sid
+
+    def warm_session_index(self) -> None:
+        """Build the session and children indexes now (host boot), so the
+        one-time scan (~0.75 s at 20k runs) is not paid by the first chat."""
+        self._ensure_session_index()
+        self._ensure_children_index()
+
     def _ensure_session_index(self) -> None:
         if self._session_index is not None:
-            return
+            self._sync_indexes()
+            if self._session_index is not None:
+                return
+        self._mark_journal_start()
         with self._session_index_lock:
             if self._session_index is not None:
                 return
@@ -476,7 +595,8 @@ class JsonFileRunStore(RunStore):
 
     def session_kinds(self, session_id: str) -> frozenset:
         """The `session_kind` values of the session's runs (empty: no runs).
-        O(1) from the session index — no stat, no parse."""
+        From the session index after one stat of the creation journal (runs
+        created through other store objects/processes are applied first)."""
         sid = str(session_id or "").strip()
         if not sid:
             return frozenset()
@@ -613,6 +733,7 @@ class JsonFileRunStore(RunStore):
 
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
+        is_new = not p.exists()
         # Atomic write to prevent corrupted/partial JSON when multiple threads/processes
         # (e.g. WS tick loop + UI pause/cancel) write the same run file concurrently.
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
@@ -632,6 +753,8 @@ class JsonFileRunStore(RunStore):
                     tmp.unlink()
             except Exception:
                 pass
+        if is_new:
+            self._journal_append(f"+{run.run_id}")
         self._update_children_index_on_save(run)
         self._update_event_wait_index_on_save(run)
         self._update_session_index_on_save(run)
@@ -671,6 +794,7 @@ class JsonFileRunStore(RunStore):
             with contextlib.suppress(FileNotFoundError):
                 tmp.unlink()
         if created:
+            self._journal_append(f"+{run.run_id}")
             self._update_children_index_on_save(run)
             self._update_event_wait_index_on_save(run)
             self._update_session_index_on_save(run)
@@ -705,6 +829,7 @@ class JsonFileRunStore(RunStore):
         try:
             if existed:
                 p.unlink()
+                self._journal_append(f"-{rid}")
         finally:
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)

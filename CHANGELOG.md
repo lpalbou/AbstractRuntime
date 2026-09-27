@@ -112,7 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Starting a run in a session no longer scans the whole JSON run store: the store keeps an index of
   each session's runs, so the discussion check on every new chat turn costs about 0.1 ms at 20,000
-  runs (it took hundreds of milliseconds). Every store gains `session_kinds(session_id)`.
+  runs (it took hundreds of milliseconds). Every store gains `session_kinds(session_id)`. Several
+  store objects or processes on one run folder see each other's new and deleted runs through a small
+  creation journal (`.runs_created.log`), so a discussion created by one gateway worker is enforced
+  read-only by another. `JsonFileRunStore.warm_session_index()` builds the index at startup instead of
+  on the first chat.
 - A discussion of an old occurrence in a long automation session gets the history up to that
   occurrence; before, a session with more than 1,000 turns could yield an empty or later history.
   Asking for the history through an occurrence the session does not have raises (`strict`) or returns

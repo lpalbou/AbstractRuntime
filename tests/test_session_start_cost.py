@@ -90,3 +90,46 @@ def test_json_session_index_follows_saves_creates_and_deletes(tmp_path) -> None:
     # A fresh store (restart) rebuilds the same view from disk.
     assert JsonFileRunStore(tmp_path / "runs").session_kinds("s") == frozenset({"chat"})
     assert store.session_kinds("nobody") == frozenset()
+
+
+def test_a_discussion_created_through_another_store_object_is_seen(tmp_path) -> None:
+    """Two store objects on one folder (standby / multi-worker gateway): A has
+    built its session index; the discussion root is created through B; a start
+    through A is restamped read-only and the history through A sees it."""
+    from abstractruntime import session_chat_messages
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    a = JsonFileRunStore(tmp_path / "runs")
+    b = JsonFileRunStore(tmp_path / "runs")
+    a.save(RunState(run_id="c0", workflow_id="wf", status=RunStatus.COMPLETED, current_node="n", vars={}, session_id="other"))
+    a.warm_session_index()
+    assert a.session_kinds("disc-s") == frozenset()
+
+    disc = {"automation_id": "auto-1", "occurrence_index": 1, "discussion_root_run_id": "root"}
+    seed = [{"role": "user", "content": "tick 1"}, {"role": "assistant", "content": "mem 41%"}]
+    b.create_if_absent(RunState(run_id="root", workflow_id="wf", status=RunStatus.COMPLETED, current_node="n",
+                                session_id="disc-s", output={"answer": "because"},
+                                vars={"prompt": "why?", "context": {"messages": []}, "workspace_root": str(ws),
+                                      "workspace_read_only": True, "_meta": {"discussion": {**disc, "seed_messages": seed}}}))
+
+    rt = Runtime(run_store=a, ledger_store=InMemoryLedgerStore())
+    rid = rt.start(workflow=WF, vars={"prompt": "and now?", "workspace_read_only": False}, session_id="disc-s")
+    vars_ = a.load(rid).vars
+    assert vars_["workspace_read_only"] is True and vars_["workspace_root"] == str(ws)
+    assert vars_["_meta"]["discussion"]["discussion_root_run_id"] == "root"
+    history = session_chat_messages(run_store=a, session_id="disc-s", strict=True)
+    assert [m["content"] for m in history][:4] == ["tick 1", "mem 41%", "why?", "because"]
+    # Deletes through B reach A's children/session indexes too.
+    b.delete("root")
+    b.delete(rid)
+    assert a.list_run_index(session_id="disc-s") == []
+    assert a.session_kinds("disc-s") == frozenset()
+
+
+def test_the_journal_check_costs_under_a_tenth_of_a_millisecond(tmp_path) -> None:
+    store = _json_store(tmp_path)
+    store.warm_session_index()
+    store.session_kinds("s7")
+    per_lookup = _median_ms(lambda: store.session_kinds("s7"), n=200)
+    assert per_lookup < 0.1, f"session_kinds {per_lookup:.3f} ms per lookup"

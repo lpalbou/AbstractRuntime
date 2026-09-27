@@ -17,6 +17,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+# ONE status rule, shared with `get_automation`: a cancelled controller that was
+# not archived reads `failed`.
+from .automations.models import AUTOMATION_STATUSES, automation_status
 from .core.models import RunState, RunStatus, WaitReason
 
 # Upper bound for one automation's index scan (occurrence rows, controllers).
@@ -24,7 +27,6 @@ from .core.models import RunState, RunStatus, WaitReason
 # summary into an unbounded walk.
 _SCAN_LIMIT = 1_000_000
 
-AUTOMATION_STATUSES = ("active", "paused", "completed", "failed", "cancelled", "archived")
 
 
 class ChangedSinceUnsupported(NotImplementedError):
@@ -62,23 +64,6 @@ def latest_occurrence(run_store: Any, automation_id: str) -> Optional[Dict[str, 
     `(automation_id, role, occurrence_index)`; JSON: the scan memo); a store
     without it fails loudly."""
     return run_store.latest_occurrence_row(str(automation_id))
-
-
-def automation_status(controller: RunState) -> str:
-    """Contract A status: archived > failed > completed > paused > active."""
-    meta = (controller.vars or {}).get("_meta") or {}
-    definition = meta.get("automation") if isinstance(meta, dict) else None
-    if isinstance(definition, dict) and definition.get("archived_at"):
-        return "archived"
-    if controller.status == RunStatus.FAILED:
-        return "failed"
-    if controller.status == RunStatus.COMPLETED:
-        return "completed"
-    if controller.status == RunStatus.CANCELLED:
-        return "cancelled"
-    if _automation_state(controller).get("paused") is True:
-        return "paused"
-    return "active"
 
 
 def _automation_state(controller: RunState) -> Dict[str, Any]:

@@ -433,8 +433,17 @@ def add_delay(now: str, delay: timedelta) -> str:
     return format_timestamp(parse_timestamp(now, field="now") + delay)
 
 
+AUTOMATION_STATUSES = ("active", "paused", "completed", "failed", "archived")
+
+
 def automation_status(run: Any) -> str:
-    """`archived | failed | completed | paused | active` (contract A; a cancelled controller reads `failed`)."""
+    """`archived | failed | completed | paused | active` (contract A) — the ONE rule.
+
+    Archived (`archived_at` set) wins over everything, including a controller
+    that ended when archived. Any other cancelled controller reads `failed`: the
+    automation can never run again and nobody archived it. Used by
+    `get_automation` and `automation_queries.list_automations`.
+    """
     vars_obj = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
     definition = (vars_obj.get("_meta") or {}).get("automation") or {}
     state = (vars_obj.get("_runtime") or {}).get("automation") or {}
@@ -455,6 +464,7 @@ __all__ = [
     "AutomationDefinition",
     "AutomationError",
     "AutomationState",
+    "AUTOMATION_STATUSES",
     "CONTROLLER_BUNDLE_ID",
     "CONTROLLER_BUNDLE_REF",
     "CONTROLLER_BUNDLE_VERSION",

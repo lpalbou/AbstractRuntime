@@ -439,9 +439,10 @@ Retries do not make external effects exactly-once: a target that sends an email 
 | `automation_queries.latest_occurrence(run_store, automation_id)` | the index row of the highest-numbered occurrence (its newest attempt), or `None` |
 | `adopt_legacy_schedule_projection(run)` | a read-only summary of a legacy `scheduled:*` gateway root, marked `legacy: true` with capabilities `pause`, `resume` and `cancel`; legacy roots are never migrated |
 
-Status is, in order of precedence: `archived` (the definition has `archived_at`), `failed` (the controller run
-failed), `completed` (the controller ended), `paused`, `active`. `get_automation` reports a cancelled controller as
-`failed`; `list_automations` summaries report it as `cancelled`. `next_fire_at` is the deadline of the controller's
+Status is, in order of precedence: `archived` (the definition has `archived_at`, whatever state the controller
+ended in), `failed` (the controller run failed, or was cancelled without being archived: it can never run again),
+`completed` (the controller ended), `paused`, `active`. `get_automation` and `list_automations` share this one rule
+(`automations.models.automation_status`). `next_fire_at` is the deadline of the controller's
 wake wait: the next tick, or the next attempt while an occurrence is in backoff (the summary then also sets
 `retry_at`). It is `None` while an occurrence runs, while paused, for a manual trigger and when exhausted.
 
@@ -491,7 +492,8 @@ bundles and session replay. It returns turns oldest first and never includes chi
 runtime-internal runs, legacy scheduled wrappers or (unless asked) draft-test runs. A retried occurrence is one turn,
 its newest attempt. `automation_id` keeps only that automation's occurrences (other turns stay);
 `through_occurrence=N` returns the history as it stood when occurrence N ran, however old N is, and raises
-`OccurrenceNotInSession` when the session has no occurrence N.
+`OccurrenceNotInSession` when the session has no occurrence N, or `SessionHistoryError` when the store has no run
+index to look it up in.
 
 `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)` replays those turns as
 user/assistant message pairs under a message and character budget. With `strict=True` it raises

@@ -119,11 +119,19 @@ def _occurrence_cutoff(
     """The order key of occurrence `index` (its newest attempt) in the
     session, read from the index directly — never from a newest-first window,
     so an old occurrence of a long session is found. Raises
-    `OccurrenceNotInSession` when there is none."""
+    `OccurrenceNotInSession` when there is none, and `SessionHistoryError`
+    when the store has no run index to find it in."""
+    list_run_index = getattr(run_store, "list_run_index", None)
+    if not callable(list_run_index):
+        from .session_history import SessionHistoryError  # lazy: session_history imports this module
+
+        raise SessionHistoryError(
+            f"through_occurrence needs a run index; {type(run_store).__name__} has none (session {session_id})"
+        )
     filters: Dict[str, Any] = {"session_id": session_id, "role": "occurrence", "limit": 1_000_000}
     if automation_id is not None:
         filters["automation_id"] = str(automation_id)
-    rows = [r for r in run_store.list_run_index(**filters) if r.get("occurrence_index") == index]
+    rows = [r for r in list_run_index(**filters) if r.get("occurrence_index") == index]
     if not rows:
         raise OccurrenceNotInSession(
             f"session {session_id} has no occurrence {index}"

@@ -107,6 +107,31 @@ def _candidate_rows(run_store: Any, session_id: str, fetch: int) -> tuple[List[D
     return rows, loaded
 
 
+class OccurrenceNotInSession(LookupError):
+    """`through_occurrence=N` names an occurrence the session does not hold."""
+
+    reason_code = "occurrence_not_found"
+
+
+def _occurrence_cutoff(
+    run_store: Any, session_id: str, automation_id: Optional[str], index: int
+) -> tuple:
+    """The order key of occurrence `index` (its newest attempt) in the
+    session, read from the index directly — never from a newest-first window,
+    so an old occurrence of a long session is found. Raises
+    `OccurrenceNotInSession` when there is none."""
+    filters: Dict[str, Any] = {"session_id": session_id, "role": "occurrence", "limit": 1_000_000}
+    if automation_id is not None:
+        filters["automation_id"] = str(automation_id)
+    rows = [r for r in run_store.list_run_index(**filters) if r.get("occurrence_index") == index]
+    if not rows:
+        raise OccurrenceNotInSession(
+            f"session {session_id} has no occurrence {index}"
+            + (f" of automation {automation_id}" if automation_id is not None else "")
+        )
+    return max(_order_key(r) for r in rows)
+
+
 def _is_chat_like(run: RunState, row: Dict[str, Any]) -> bool:
     if row.get("role") == "occurrence":
         return True  # occurrences count as chat (contract E)
@@ -131,7 +156,9 @@ def select_session_turns(
     - `include_occurrences`: include automation occurrence runs (default).
     - `automation_id`: keep only that automation's occurrences (other turns stay).
     - `through_occurrence=N`: drop occurrences after N and every turn created
-      after occurrence N (the history as it stood when N ran).
+      after occurrence N (the history as it stood when N ran). Occurrence N
+      is looked up in the index directly, however old; a session without it
+      raises `OccurrenceNotInSession`.
     - `until_ms`: drop turns created after this epoch-millisecond instant.
     - A retried occurrence contributes one turn: its newest attempt.
     - When the session holds chat-like turns (a `context.messages` list, or an
@@ -143,7 +170,15 @@ def select_session_turns(
     if not sid or lim <= 0:
         return []
 
-    rows, preloaded = _candidate_rows(run_store, sid, max(1000, lim * 5))
+    # A time bound (`through_occurrence`, `until_ms`) must be applied BEFORE
+    # any newest-first window, or an old bound selects the wrong turns in a
+    # long session (review 44 F1): bounded reads fetch the session's whole
+    # (column-only) index, unbounded reads the usual window.
+    cutoff: Optional[tuple] = None
+    if through_occurrence is not None:
+        cutoff = _occurrence_cutoff(run_store, sid, automation_id, int(through_occurrence))
+    bounded_read = through_occurrence is not None or until_ms is not None
+    rows, preloaded = _candidate_rows(run_store, sid, 1_000_000 if bounded_read else max(1000, lim * 5))
 
     by_id: Dict[str, Dict[str, Any]] = {}
     newest_attempt: Dict[tuple, Dict[str, Any]] = {}
@@ -180,17 +215,13 @@ def select_session_turns(
 
     selected = sorted(by_id.values(), key=_order_key)
 
-    if through_occurrence is not None:
-        target = int(through_occurrence)
-        cutoff_row = None
-        for row in selected:
-            if row.get("role") == "occurrence" and row.get("occurrence_index") == target:
-                cutoff_row = row
-        if cutoff_row is None:
-            selected = [r for r in selected if not (r.get("role") == "occurrence" and isinstance(r.get("occurrence_index"), int) and r["occurrence_index"] > target)]
-        else:
-            cutoff = _order_key(cutoff_row)
-            selected = [r for r in selected if _order_key(r) <= cutoff]
+    if cutoff is not None:
+        target = int(through_occurrence)  # type: ignore[arg-type]
+        selected = [
+            r for r in selected
+            if _order_key(r) <= cutoff
+            and not (r.get("role") == "occurrence" and isinstance(r.get("occurrence_index"), int) and r["occurrence_index"] > target)
+        ]
 
     if until_ms is not None:
         bounded = []
@@ -223,6 +254,7 @@ def select_session_turns(
 
 __all__ = [
     "LEGACY_SCHEDULED_WORKFLOW_PREFIX",
+    "OccurrenceNotInSession",
     "is_internal_workflow_id",
     "is_legacy_scheduled",
     "select_session_turns",

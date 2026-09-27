@@ -72,6 +72,18 @@ class JsonFileRunStore(RunStore):
         self._sweep_stale_temp_files()
         self._index_lock = threading.Lock()
         self._children_index: Optional[Dict[str, set[str]]] = None
+        # SESSION INDEX (automations review 45 H1): session_id -> {file run id:
+        # session_kind}. Session-scoped reads (turn selection, the discussion
+        # anchor on EVERY root start that names a session) used to glob+stat
+        # the whole directory — 277 ms median at 20k runs. Built lazily from
+        # one memo scan, maintained on save/create/delete, and every candidate
+        # is re-validated by stat (a deleted file drops out). Same single-
+        # writer scope as `_children_index`: runs another PROCESS adds to a
+        # session are seen after this process rebuilds (one writer process per
+        # store, automations contract C16).
+        self._session_index_lock = threading.Lock()
+        self._session_index: Optional[Dict[str, Dict[str, Optional[str]]]] = None
+        self._run_session: Dict[str, str] = {}
         self._run_parent_index: Dict[str, Optional[str]] = {}
         # EVENT-WAIT INDEX (2026-09-22, mission B2): wait_key -> {run_id} for
         # runs parked in WAITING(EVENT), plus the reverse map used to retract a
@@ -410,6 +422,69 @@ class JsonFileRunStore(RunStore):
             self._run_parent_index = run_parent
         self._maybe_persist_scan_memo()
 
+    def _ensure_session_index(self) -> None:
+        if self._session_index is not None:
+            return
+        with self._session_index_lock:
+            if self._session_index is not None:
+                return
+            index: Dict[str, Dict[str, Optional[str]]] = {}
+            by_run: Dict[str, str] = {}
+            self._load_scan_sidecar_once()
+            for p in self._base.glob("run_*.json"):
+                fields = self._scan_fields(p)
+                if fields is None:
+                    continue
+                sid = str(fields.get("session_id") or "").strip()
+                rid = self._run_id_from_path(p)
+                if not sid or not rid:
+                    continue
+                index.setdefault(sid, {})[rid] = fields.get("session_kind")
+                by_run[rid] = sid
+            self._session_index = index
+            self._run_session = by_run
+        self._maybe_persist_scan_memo()
+
+    def _update_session_index_on_save(self, run: RunState) -> None:
+        rid = str(run.run_id)
+        sid = str(run.session_id or "").strip()
+        kind = automation_index_fields(run.vars, run_id=rid)["session_kind"]
+        with self._session_index_lock:
+            if self._session_index is None:
+                return  # not built yet: the lazy build reads disk truth
+            old = self._run_session.pop(rid, None)
+            if old and old != sid:
+                members = self._session_index.get(old)
+                if members is not None:
+                    members.pop(rid, None)
+                    if not members:
+                        self._session_index.pop(old, None)
+            if sid:
+                self._session_index.setdefault(sid, {})[rid] = kind
+                self._run_session[rid] = sid
+
+    def _drop_from_session_index(self, run_id: str) -> None:
+        with self._session_index_lock:
+            if self._session_index is None:
+                return
+            sid = self._run_session.pop(run_id, None)
+            members = self._session_index.get(sid) if sid else None
+            if members is not None:
+                members.pop(run_id, None)
+                if not members:
+                    self._session_index.pop(sid, None)
+
+    def session_kinds(self, session_id: str) -> frozenset:
+        """The `session_kind` values of the session's runs (empty: no runs).
+        O(1) from the session index — no stat, no parse."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return frozenset()
+        self._ensure_session_index()
+        with self._session_index_lock:
+            members = dict((self._session_index or {}).get(sid) or {})
+        return frozenset(k for k in members.values() if k)
+
     def _drop_from_children_index(self, run_id: str) -> None:
         with self._index_lock:
             if self._children_index is None:
@@ -559,6 +634,7 @@ class JsonFileRunStore(RunStore):
                 pass
         self._update_children_index_on_save(run)
         self._update_event_wait_index_on_save(run)
+        self._update_session_index_on_save(run)
         try:
             token = self._stat_token(p.stat())
         except Exception:
@@ -597,6 +673,7 @@ class JsonFileRunStore(RunStore):
         if created:
             self._update_children_index_on_save(run)
             self._update_event_wait_index_on_save(run)
+            self._update_session_index_on_save(run)
             try:
                 token = self._stat_token(p.stat())
             except Exception:
@@ -609,6 +686,7 @@ class JsonFileRunStore(RunStore):
             raise ValueError(f"run file {p.name} exists but is unreadable; refusing to overwrite it")
         self._update_children_index_on_save(existing)
         self._update_event_wait_index_on_save(existing)
+        self._update_session_index_on_save(existing)
         verify_run_identity(existing, run)
         return existing, False
 
@@ -630,6 +708,7 @@ class JsonFileRunStore(RunStore):
         finally:
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)
+            self._drop_from_session_index(rid)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
             with self._scan_memo_lock:
@@ -806,8 +885,17 @@ class JsonFileRunStore(RunStore):
         `root_only=True` returns turn roots (see `QueryableRunIndexStore`)."""
         lim = max(1, int(limit or 100))
         self._load_scan_sidecar_once()
+        sid = str(session_id or "").strip() if session_id is not None else None
+        if sid is not None:
+            # Session-scoped: candidates from the session index, O(session).
+            self._ensure_session_index()
+            with self._session_index_lock:
+                candidates = list(((self._session_index or {}).get(sid) or {}).keys())
+            paths = [self._base / f"run_{rid}.json" for rid in candidates]
+        else:
+            paths = list(self._base.glob("run_*.json"))
         ranked: list[tuple[int, Path]] = []
-        for p in self._base.glob("run_*.json"):
+        for p in paths:
             try:
                 st = p.stat()
                 mtime_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
@@ -817,10 +905,10 @@ class JsonFileRunStore(RunStore):
         # mtime ranking approximates updated_at; oldest_first inverts so a
         # stall query's window keeps the OLDEST waits (0054 adversary P1-1).
         ranked.sort(key=lambda x: x[0], reverse=not oldest_first)
-        self._scan_memo_prune({self._run_id_from_path(p) for _m, p in ranked})
+        if sid is None:
+            self._scan_memo_prune({self._run_id_from_path(p) for _m, p in ranked})
 
         out: List[Dict[str, Any]] = []
-        sid = str(session_id or "").strip() if session_id is not None else None
 
         for _mtime_ns, p in ranked:
             # Memo-first (2026-07-15 scan-memo): index rows ARE the memo

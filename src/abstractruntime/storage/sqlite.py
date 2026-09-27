@@ -889,6 +889,22 @@ class SqliteRunStore(RunStore):
     _LATEST_OCCURRENCE_WHERE = "WHERE automation_id = ? AND role = 'occurrence'"
     _LATEST_OCCURRENCE_ORDER = "occurrence_index DESC, created_at DESC, run_id DESC"
 
+    def session_kinds(self, session_id: str) -> frozenset:
+        """The `session_kind` values of the session's runs (empty: no runs).
+        Served by idx_runs_session_role / the session_id prefix of the index;
+        a pre-backfill row (NULL) counts as unknown and is derived from its
+        document."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return frozenset()
+        conn = self._db.connection()
+        rows = conn.execute("SELECT DISTINCT session_kind FROM runs WHERE session_id = ?;", (sid,)).fetchall()
+        kinds = {row["session_kind"] for row in rows}
+        if None in kinds:
+            kinds.discard(None)
+            kinds |= {r["session_kind"] for r in self.list_run_index(session_id=sid, limit=1_000_000)}
+        return frozenset(k for k in kinds if k)
+
     def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:
         """Index row of the automation's highest-numbered occurrence (newest attempt), or None."""
         rows = self._select_index_rows(

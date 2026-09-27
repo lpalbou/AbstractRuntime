@@ -127,6 +127,14 @@ class InMemoryRunStore(RunStore):
         out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         return out[:lim]
 
+    def session_kinds(self, session_id: str) -> frozenset:
+        sid = str(session_id or "").strip()
+        return frozenset(
+            automation_index_fields(r.vars, run_id=r.run_id)["session_kind"]
+            for r in self._runs.values()
+            if sid and str(r.session_id or "").strip() == sid
+        )
+
     def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:
         """Index row of the automation's highest-numbered occurrence (newest attempt), or None."""
         return latest_occurrence_of(self.list_run_index(automation_id=str(automation_id), role="occurrence", limit=len(self._runs) or 1))

@@ -196,3 +196,78 @@ def test_strict_and_bounded_reads_of_an_automation_session(kind, tmp_path) -> No
     _save(store, "c1", 30, prompt="q", answer="a", session_id="plain")
     assert session_chat_messages(run_store=store, session_id="plain", strict=True) == session_chat_messages(
         run_store=store, session_id="plain")
+
+
+# --------------------------------------------------------------------------
+# Review 44 F1: `through_occurrence` is resolved from the index, never inside
+# a newest-first window. Review 44 F2: the discussion root is validated.
+# --------------------------------------------------------------------------
+
+from abstractruntime.core.run_attribution import SessionAttributionError, session_attribution  # noqa: E402
+from abstractruntime.session_history import discussion_seed_messages  # noqa: E402
+from abstractruntime.session_turns import OccurrenceNotInSession  # noqa: E402
+
+
+def _ts(i: int) -> str:
+    return f"2026-09-{1 + i // 1440:02d}T{(i // 60) % 24:02d}:{i % 60:02d}:00+00:00"
+
+
+def _save_at(store, run_id, ts, *, prompt, answer, parent=None, meta=None, session_id=SID):
+    store.save(RunState(run_id=run_id, workflow_id="wf", status=RunStatus.COMPLETED, current_node="n",
+                        vars={"prompt": prompt, "context": {"messages": []}, "_meta": dict(meta or {})},
+                        output={"answer": answer}, session_id=session_id, parent_run_id=parent,
+                        created_at=ts, updated_at=ts))
+
+
+@pytest.mark.parametrize("kind", ["json", "sqlite"])
+def test_through_an_old_occurrence_of_a_long_session(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    _save_at(store, "chat-0", _ts(0), prompt="setup", answer="ok")
+    for i in range(1, 1201):  # 1,200 occurrences: far beyond the 1,000-row window
+        _save_at(store, f"occ-{i}", _ts(i), prompt=f"tick {i}", answer=f"mem {i}", parent=AUTO, meta=_occ(i))
+    _save_at(store, "late-chat", _ts(1300), prompt="LATE", answer="late")
+
+    turns = select_session_turns(store, SID, through_occurrence=3, automation_id=AUTO)
+    assert [t.run_id for t in turns] == ["chat-0", "occ-1", "occ-2", "occ-3"]
+    messages = session_chat_messages(run_store=store, session_id=SID, automation_id=AUTO, through_occurrence=3, strict=True)
+    assert _contents(messages) == ["setup", "ok", "tick 1", "mem 1", "tick 2", "mem 2", "tick 3", "mem 3"]
+
+    with pytest.raises(OccurrenceNotInSession):
+        select_session_turns(store, SID, through_occurrence=5000)
+    with pytest.raises(SessionHistoryError):
+        session_chat_messages(run_store=store, session_id=SID, through_occurrence=5000, strict=True)
+    assert session_chat_messages(run_store=store, session_id=SID, through_occurrence=5000) == []
+
+
+def _plant_foreign(store, ws_meta):
+    # Another automation's discussion, in ANOTHER session.
+    foreign = {"automation_id": "auto-B", "occurrence_index": 1, "discussion_root_run_id": "foreign-root",
+               "seed_messages": [{"role": "user", "content": "FOREIGN-u"}, {"role": "assistant", "content": "FOREIGN-a"}]}
+    _save(store, "foreign-root", 25, prompt="f", answer="f", meta={"discussion": foreign}, session_id="s-other")
+    # A rogue member of s-disc pointing at it.
+    rogue = {k: v for k, v in foreign.items() if k != "seed_messages"}
+    _save(store, "rogue", 26, prompt="r", answer="r", meta={"discussion": rogue}, session_id="s-disc")
+
+
+@pytest.mark.parametrize("kind", ["memory", "json", "sqlite"])
+def test_a_planted_foreign_root_is_never_followed(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    _discussion(store)
+    _plant_foreign(store, None)
+    with pytest.raises(SessionHistoryError, match="disagree"):
+        session_chat_messages(run_store=store, session_id="s-disc", strict=True)
+    with pytest.raises(SessionAttributionError, match="disagree"):
+        session_attribution(store, "s-disc")
+    seed = discussion_seed_messages(run_store=store, session_id="s-disc")
+    assert seed == []  # non-strict: no seed rather than a foreign one
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_a_root_outside_the_session_is_refused(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    disc = {"automation_id": AUTO, "occurrence_index": 1, "discussion_root_run_id": "elsewhere-root"}
+    _save(store, "elsewhere-root", 20, prompt="x", answer="x",
+          meta={"discussion": {**disc, "seed_messages": SEED}}, session_id="s-else")
+    _save(store, "member", 21, prompt="q", answer="a", meta={"discussion": dict(disc)}, session_id="s-disc")
+    with pytest.raises(SessionHistoryError, match="not a run of this session"):
+        session_chat_messages(run_store=store, session_id="s-disc", strict=True)

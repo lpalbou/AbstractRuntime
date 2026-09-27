@@ -110,6 +110,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Starting a run in a session no longer scans the whole JSON run store: the store keeps an index of
+  each session's runs, so the discussion check on every new chat turn costs about 0.1 ms at 20,000
+  runs (it took hundreds of milliseconds). Every store gains `session_kinds(session_id)`.
+- A discussion of an old occurrence in a long automation session gets the history up to that
+  occurrence; before, a session with more than 1,000 turns could yield an empty or later history.
+  Asking for the history through an occurrence the session does not have raises (`strict`) or returns
+  nothing.
+- A discussion session's seed is only read from a verified root: every run of the session must name
+  the same root, and that root must be in the session and carry the seed. A run pointing elsewhere
+  makes strict reads and new starts in that session fail instead of using another discussion's seed.
 - The JSON run store removes run temp files left behind by a crash (older than 10 minutes) when it
   opens.
 - A parent that crashes after starting a child with an explicit id, but before saving its wait, finds

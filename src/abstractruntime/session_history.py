@@ -164,18 +164,26 @@ def session_chat_messages(
             f"run store {type(run_store).__name__} has no run index; strict history needs one"
         )
 
-    turns = _best_effort_session_turns(
-        run_store=run_store,
-        ledger_store=ledger_store,
-        artifact_store=artifact_store,
-        session_id=sid,
-        limit=turn_limit,
-        until_ms=until_ms,
-        include_stats=False,
-        include_artifacts=False,
-        automation_id=automation_id,
-        through_occurrence=through_occurrence,
-    )
+    from .session_turns import OccurrenceNotInSession
+
+    try:
+        turns = _best_effort_session_turns(
+            run_store=run_store,
+            ledger_store=ledger_store,
+            artifact_store=artifact_store,
+            session_id=sid,
+            limit=turn_limit,
+            until_ms=until_ms,
+            include_stats=False,
+            include_artifacts=False,
+            automation_id=automation_id,
+            through_occurrence=through_occurrence,
+        )
+    except OccurrenceNotInSession as exc:
+        # "History through occurrence N" without N has no correct answer.
+        if strict:
+            raise SessionHistoryError(str(exc)) from exc
+        return []
     seed_pairs = _seed_pairs(
         discussion_seed_messages(run_store=run_store, artifact_store=artifact_store, session_id=sid, strict=strict),
         max_chars=max_chars,
@@ -322,12 +330,12 @@ def discussion_seed_messages(
     An offloaded seed is resolved through the artifact store. Missing or
     unresolvable seeds raise `SessionHistoryError` when `strict`, else yield [].
     """
+    from .core.run_attribution import SessionAttributionError, resolve_discussion_root, store_session_kinds
+
     sid = str(session_id or "").strip()
-    list_run_index = getattr(run_store, "list_run_index", None)
-    if not sid or not callable(list_run_index):
+    if not sid or not callable(getattr(run_store, "list_run_index", None)):
         return []
-    rows = list_run_index(session_id=sid, role="discussion", limit=1)
-    if not rows:
+    if "discussion" not in store_session_kinds(run_store, sid):
         return []
 
     def _fail(message: str) -> List[Dict[str, Any]]:
@@ -335,17 +343,12 @@ def discussion_seed_messages(
             raise SessionHistoryError(f"discussion session {sid}: {message}")
         return []
 
-    member = run_store.load(str(rows[0]["run_id"]))
-    meta = ((member.vars or {}).get("_meta") or {}) if member is not None else {}
-    discussion = meta.get("discussion") if isinstance(meta, dict) else None
-    root_id = str((discussion or {}).get("discussion_root_run_id") or "").strip()
-    if not root_id:
-        return _fail("no discussion_root_run_id")
-    root = run_store.load(root_id)
-    root_meta = ((root.vars or {}).get("_meta") or {}) if root is not None else {}
-    root_discussion = root_meta.get("discussion") if isinstance(root_meta, dict) else None
-    if not isinstance(root_discussion, dict) or "seed_messages" not in root_discussion:
-        return _fail(f"discussion root {root_id} or its seed_messages is missing")
+    try:
+        root, root_discussion = resolve_discussion_root(run_store, sid)
+    except SessionAttributionError as exc:
+        # Never seed from an unvalidated (possibly foreign) root, strict or not.
+        return _fail(str(exc))
+    root_id = str(root.run_id)
     seed = _resolve_offloaded(root_discussion.get("seed_messages"), artifact_store=artifact_store)
     if _contains_artifact_ref(seed):
         return _fail(f"seed_messages of {root_id} are offloaded and cannot be resolved")

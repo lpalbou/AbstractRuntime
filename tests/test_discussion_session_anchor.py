@@ -74,7 +74,7 @@ def test_a_start_in_an_ordinary_session_is_untouched(kind, tmp_path) -> None:
     fresh = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
     baseline = fresh.get_state(fresh.start(workflow=WF, session_id="chat-s", vars=json.loads(json.dumps(request)))).vars
     assert json.dumps(in_session, sort_keys=True) == json.dumps(baseline, sort_keys=True)
-    assert session_attribution(store, "chat-s") == {"kind": "chat", "automation_id": None}
+    assert session_attribution(store, "chat-s") == {"kind": "chat"}
     assert session_attribution(store, "never-used") is None
 
 

@@ -133,3 +133,57 @@ def test_the_journal_check_costs_under_a_tenth_of_a_millisecond(tmp_path) -> Non
     store.session_kinds("s7")
     per_lookup = _median_ms(lambda: store.session_kinds("s7"), n=200)
     assert per_lookup < 0.1, f"session_kinds {per_lookup:.3f} ms per lookup"
+
+
+def _discussion_root(ws) -> RunState:
+    disc = {"automation_id": "auto-1", "occurrence_index": 1, "discussion_root_run_id": "root",
+            "seed_messages": [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]}
+    return RunState(run_id="root", workflow_id="wf", status=RunStatus.COMPLETED, current_node="n", session_id="disc-s",
+                    vars={"workspace_root": str(ws), "workspace_read_only": True, "_meta": {"discussion": disc}})
+
+
+def test_a_writer_crashing_right_after_publication_does_not_hide_the_run(tmp_path, monkeypatch) -> None:
+    """J53-1: the journal line precedes publication, so a writer that dies
+    right after publishing (before any later step) is still seen by a live
+    reader; a reader that looks between the line and the file keeps the entry
+    pending and picks the run up on its next lookup."""
+    import os as _os
+    import abstractruntime.storage.json_files as jf
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    a = JsonFileRunStore(tmp_path / "runs")
+    b = JsonFileRunStore(tmp_path / "runs")
+    a.warm_session_index()
+    real_link = _os.link
+    seen_before_publish: list = []
+
+    def link_then_crash(src, dst):
+        seen_before_publish.append(a.session_kinds("disc-s"))  # line written, file not yet published
+        real_link(src, dst)
+        raise RuntimeError("writer crashed right after publication")
+
+    monkeypatch.setattr(jf.os, "link", link_then_crash)
+    with pytest.raises(RuntimeError, match="crashed"):
+        b.create_if_absent(_discussion_root(ws))
+    monkeypatch.setattr(jf.os, "link", real_link)
+
+    assert seen_before_publish == [frozenset()]  # pending, not yet a run
+    assert a.session_kinds("disc-s") == frozenset({"discussion"})
+    rt = Runtime(run_store=a, ledger_store=InMemoryLedgerStore())
+    rid = rt.start(workflow=WF, vars={"workspace_read_only": False}, session_id="disc-s")
+    assert a.load(rid).vars["workspace_read_only"] is True
+
+
+def test_a_torn_journal_tail_does_not_swallow_the_next_record(tmp_path) -> None:
+    """J53-2: a crashed writer's unterminated line must not merge with the
+    next writer's record."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    a = JsonFileRunStore(tmp_path / "runs")
+    b = JsonFileRunStore(tmp_path / "runs")
+    a.warm_session_index()
+    with open(tmp_path / "runs" / ".runs_created.log", "ab") as f:
+        f.write(b"+torn-id-of-a-crashed-wri")  # no newline: the writer died mid-line
+    b.create_if_absent(_discussion_root(ws))
+    assert a.session_kinds("disc-s") == frozenset({"discussion"})

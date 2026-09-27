@@ -97,6 +97,12 @@ class JsonFileRunStore(RunStore):
         self._journal_path = self._base / ".runs_created.log"
         self._journal_lock = threading.Lock()
         self._journal_offset: Optional[int] = None
+        # Entries whose file change is not visible yet (review 53 J53-1): the
+        # journal line is written BEFORE the run file is published (or
+        # unlinked), so a reader can see `+id` with no file yet. They are
+        # re-checked on every lookup until the file appears (or disappears for
+        # `-id`), and forgotten after STALE_TEMP_AGE_S (the writer crashed).
+        self._journal_pending: Dict[str, tuple[str, float]] = {}
         self._run_parent_index: Dict[str, Optional[str]] = {}
         # EVENT-WAIT INDEX (2026-09-22, mission B2): wait_key -> {run_id} for
         # runs parked in WAITING(EVENT), plus the reverse map used to retract a
@@ -441,10 +447,15 @@ class JsonFileRunStore(RunStore):
     # --- creation journal ------------------------------------------------
 
     def _journal_append(self, line: str) -> None:
-        """Append one entry. This object already applied the change to its own
-        indexes, so when nothing else was appended since its last sync it
-        skips its own line (no re-read)."""
-        data = (line + "\n").encode("utf-8")
+        """Append one entry, BEFORE the file change it announces (a crash
+        after publication can then never hide a run from other processes).
+
+        Records are framed `\n<op><run_id>\n`: the leading newline ends any
+        torn line a crashed writer left, so a torn tail never merges with the
+        next record (review 53 J53-2). This object applies the change to its
+        own indexes itself, so when nothing else was appended since its last
+        sync it skips its own record (no re-read)."""
+        data = ("\n" + line + "\n").encode("utf-8")
         try:
             with self._journal_lock:
                 with open(self._journal_path, "ab") as f:
@@ -477,10 +488,19 @@ class JsonFileRunStore(RunStore):
 
     def _sync_indexes(self) -> None:
         """Apply journal lines appended since the last sync (one stat when
-        nothing changed)."""
+        nothing changed), then re-check pending entries."""
         if self._journal_offset is None:
             return
         size = self._journal_size()
+        with self._journal_lock:
+            offset = self._journal_offset
+            if offset is None or size == offset:
+                pending = dict(self._journal_pending)
+                offset = None
+        if offset is None:
+            if pending:
+                self._apply_journal_entries(pending.items())
+            return
         with self._journal_lock:
             offset = self._journal_offset
             if offset is None or size == offset:
@@ -504,19 +524,38 @@ class JsonFileRunStore(RunStore):
                     self._session_index = None
                 self._journal_offset = None
                 return
-            complete = chunk.rfind(b"\n") + 1  # a torn last line waits for the next sync
+            complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next sync
             self._journal_offset = offset + complete
+            pending = dict(self._journal_pending)
+        entries = list(pending.items())
+        now = time.time()
         for raw in chunk[:complete].decode("utf-8", "replace").splitlines():
             op, rid = raw[:1], raw[1:].strip()
-            if not rid:
-                continue
+            if op in ("+", "-") and rid:
+                entries.append((rid, (op, now)))
+        self._apply_journal_entries(entries)
+
+    def _apply_journal_entries(self, entries: Any) -> None:
+        cutoff = time.time() - float(self.STALE_TEMP_AGE_S)
+        for rid, (op, since) in entries:
             p = self._path(rid)
-            fields = self._scan_fields(p) if p.exists() else None
-            if op == "+" and fields is not None:
-                self._index_fields_into_indexes(rid, fields)
-            elif not p.exists():
+            exists = p.exists()
+            if op == "+" and exists:
+                fields = self._scan_fields(p)
+                if fields is not None:
+                    self._index_fields_into_indexes(rid, fields)
+                resolved = True
+            elif op == "-" and not exists:
                 self._drop_from_children_index(rid)
                 self._drop_from_session_index(rid)
+                resolved = True
+            else:
+                resolved = since < cutoff  # the announced change never happened: drop it
+            with self._journal_lock:
+                if resolved:
+                    self._journal_pending.pop(rid, None)
+                else:
+                    self._journal_pending[rid] = (op, since)
 
     def _index_fields_into_indexes(self, rid: str, fields: Dict[str, Any]) -> None:
         parent = fields.get("parent_run_id")
@@ -734,6 +773,8 @@ class JsonFileRunStore(RunStore):
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
         is_new = not p.exists()
+        if is_new:
+            self._journal_append(f"+{run.run_id}")  # before publication (J53-1)
         # Atomic write to prevent corrupted/partial JSON when multiple threads/processes
         # (e.g. WS tick loop + UI pause/cancel) write the same run file concurrently.
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
@@ -753,8 +794,6 @@ class JsonFileRunStore(RunStore):
                     tmp.unlink()
             except Exception:
                 pass
-        if is_new:
-            self._journal_append(f"+{run.run_id}")
         self._update_children_index_on_save(run)
         self._update_event_wait_index_on_save(run)
         self._update_session_index_on_save(run)
@@ -785,6 +824,8 @@ class JsonFileRunStore(RunStore):
         try:
             with tmp.open("w", encoding="utf-8") as f:
                 f.write(dumps_compact(runstate_to_dict(run)))
+            if not p.exists():
+                self._journal_append(f"+{run.run_id}")  # before publication (J53-1)
             try:
                 os.link(tmp, p)
                 created = True
@@ -794,7 +835,6 @@ class JsonFileRunStore(RunStore):
             with contextlib.suppress(FileNotFoundError):
                 tmp.unlink()
         if created:
-            self._journal_append(f"+{run.run_id}")
             self._update_children_index_on_save(run)
             self._update_event_wait_index_on_save(run)
             self._update_session_index_on_save(run)
@@ -828,8 +868,8 @@ class JsonFileRunStore(RunStore):
         existed = p.exists()
         try:
             if existed:
+                self._journal_append(f"-{rid}")  # before the unlink (J53-1)
                 p.unlink()
-                self._journal_append(f"-{rid}")
         finally:
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)

@@ -67,8 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `session_kinds(session_id)` and `latest_occurrence_row(automation_id)`.
 - `session_attribution(store, session_id)` (`abstractruntime.core.run_attribution`) reports what kind of session an id
   is (`chat`, `automation`, `occurrence` or `discussion`, with the discussion's validated root, automation and
-  workspace). Every root run started in a discussion session is read-only on the discussion's workspace and carries
-  the discussion's provenance, whatever the caller passed; when the session cannot be attributed (an invalid
+  workspace). Every root run started in a discussion session gets the discussion's own workspace, access settings and
+  read-only mounts (the whole-workspace read-only flag only when the discussion carries it) and its provenance,
+  whatever the caller passed; when the session cannot be attributed (an invalid
   discussion root, or a store without a run index) `Runtime.start` raises `SessionAttributionError`.
 - `select_session_turns(store, session_id, ...)`: the one definition of a session's turns (parent-less runs except
   automation controllers, plus automation occurrences; never child runs, internal runs, legacy scheduled wrappers or,
@@ -85,6 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a read-only run without one is refused, and child runs and nodes inherit the setting.
   `tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool (`read`, `write`, `exec`, `delegate`, `comms`,
   `memory-write`).
+- Read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders, symlinks resolved) makes those folders
+  readable but not writable by the file tools (`write_file`, `edit_file`) and the VisualFlow file/export writers,
+  while the run's own workspace stays writable. Commands and code (`execute_command`, `execute_python`, ...) are not
+  restricted by a mount: the shell cannot be sandboxed, so mounts protect the file tools only. Child runs and
+  VisualFlow nodes inherit the mounts and can only add more. Helpers `read_only_paths(vars)` and
+  `path_is_read_only(vars, path)` in `abstractruntime.utils.workspace_paths`.
+- `select_session_turns(..., automation_id=A)` gathers A's occurrences from every session (an independent-mode
+  automation runs each occurrence in its own session), interleaved with the session's own turns.
 - `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup.
 
 ### Changed

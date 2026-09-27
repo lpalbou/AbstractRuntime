@@ -43,8 +43,6 @@ from .ledger import (
     state_of,
 )
 from .models import (
-    GROWING_MAX_MESSAGES,
-    GROWING_MAX_TOTAL_CHARS,
     add_delay,
     backoff_delay,
     occurrence_run_id,
@@ -227,7 +225,9 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
     Independent: a fresh session (the attempt-1 run id), no history injected.
     Growing: the automation's session, with its prior turns as
     `context.messages` through the strict history path (a missing seed or an
-    unreadable history fails the admission instead of running without context).
+    unreadable history fails the admission instead of running without context),
+    windowed to the most recent `HISTORY_REPLAY_MAX_TOKENS` tokens of whole
+    turns; the window's report rides `_runtime.session_history`.
     """
     definition = turn.definition
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
@@ -241,13 +241,16 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
             ledger_store=turn.ledger_store,
             artifact_store=turn.artifact_store,
             session_id=definition["session_id"],
-            max_messages=GROWING_MAX_MESSAGES,
-            max_total_chars=GROWING_MAX_TOTAL_CHARS,
             automation_id=turn.automation_id,
             strict=True,
         )
         context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
         input_data["context"] = {**context, "messages": list(messages)}
+        # The history window's receipt (ADR-0026: explicit and observable),
+        # frozen with the inputs, so the occurrence run and its
+        # `automation.admitted` record both say what was replayed and dropped.
+        runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+        input_data["_runtime"] = {**runtime_ns, "session_history": {**messages.report, "strict": True, "session_kind": "automation"}}
         session_id = definition["session_id"]
     else:
         session_id = first_run_id

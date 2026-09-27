@@ -12,23 +12,29 @@ Contract (agora channel `durable-sessions`, v1):
   an assistant answer could be extracted (a failed run never spoke — its
   half-turn is invisible to replay; revisit if reviewers rule otherwise).
 - Internal (`__*`) and scheduled workflows never contribute.
-- Messages are chronological; the newest `max_messages` are kept, under a
-  cumulative `max_total_chars` budget (drop-oldest whole turns) so replay
-  can never blow past a small model's context window — the agent lane
-  deliberately disables downstream input trimming, so this budget is the
-  only guard.
-- Over-long message content is cut with a labeled `#TRUNCATION` marker —
-  never silently.
+- THE HISTORY WINDOW (operator ruling 2026-09-28, ADR-0026 §3 — a budget met
+  by SELECTION, never by cutting): replay keeps the most recent turns up to
+  `HISTORY_REPLAY_MAX_TOKENS` (50,000) estimated tokens, whole messages,
+  newest first. No message is ever cut, no message count is capped, and a
+  turn is never split (user + answer stay together: a dangling half-turn is
+  provider-hostile). Tokens are estimated by the framework's one estimator,
+  `memory.token_budget.estimate_message_tokens`. The window is the ONLY
+  bound this module applies; everything else in the model's context is the
+  model's to use (its full context window).
+- The window is observable: the returned `ReplayedHistory` carries a
+  `report` (replayed/dropped messages and tokens, the budget, the estimator)
+  that hosts record in the run (`vars._runtime.session_history`), and when
+  older turns were dropped the oldest surviving message starts with a
+  labeled `#TRUNCATION` notice (ADR-0026 §1: never silent).
 - The reconstruction rides `_best_effort_session_turns` (history bundles),
   so what a replayed model sees is exactly what thin clients already
   display as session history — except for the runtime grounding envelope,
   which replay must carry VERBATIM where display strips it (see the
   `prompt_verbatim` note at the fold below; mission A, 2026-09-22).
 
-Known v1 limits (documented, not silent): turns are dropped whole, never
-split. The original limit here — "$artifact-offloaded answers extract as
-empty and their turn is skipped" — was the deepest server link in the
-2026-07-23 401-incident chain (code-tui c4978 R2) and is CLOSED two ways:
+Offloaded answers: the original limit here — "$artifact-offloaded answers
+extract as empty and their turn is skipped" — was the deepest server link in
+the 2026-07-23 401-incident chain (code-tui c4978 R2) and is CLOSED two ways:
 the offloader now reduces largest-children-first so answers stay inline by
 size (R1), and root-replaced outputs from the existing corpus resolve
 boundedly at extraction (history_bundle._resolve_offloaded_output — offload-
@@ -37,14 +43,19 @@ minted refs only, size-capped, answer extraction only).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .history_bundle import _best_effort_session_turns
+from .memory.token_budget import estimate_message_tokens
 
 __all__ = [
+    "HISTORY_REPLAY_MAX_TOKENS",
+    "HISTORY_WINDOW_POLICY",
+    "ReplayedHistory",
     "SESSION_TURN_KIND",
     "SessionHistoryError",
     "discussion_seed_messages",
+    "fold_history_window",
     "session_chat_messages",
 ]
 
@@ -64,25 +75,162 @@ class SessionHistoryError(RuntimeError):
 # live turn.
 SESSION_TURN_KIND = "session_turn"
 
-_DEFAULT_MAX_MESSAGES = 40
-_DEFAULT_MAX_CHARS_PER_MESSAGE = 8000
-# Cumulative budget across ALL replayed messages (~6k tokens at 4 chars/tk):
-# small local models must survive replay even when every turn is long.
-_DEFAULT_MAX_TOTAL_CHARS = 24000
+# THE history window (operator ruling 2026-09-28, verbatim: "by default,
+# models must be allowed to use their full context if needed. for history, we
+# can limit it at the last 50k tokens."). One rule for every replay path
+# (gateway session seeding, automation growing mode, discussion seeds).
+HISTORY_REPLAY_MAX_TOKENS = 50_000
+HISTORY_WINDOW_POLICY = "most_recent_whole_turns"
+_TOKEN_ESTIMATOR = "abstractruntime.memory.token_budget.estimate_message_tokens"
+
+# First fetch of the newest turns; doubled while the window still has room
+# and older turns remain (a turn is 2 messages, so 32 turns is already more
+# than most windows hold).
+_FIRST_TURN_FETCH = 32
 
 
-def _truncate_labeled(text: str, *, max_chars: int, run_id: str) -> str:
-    """Cut over-long content with an explicit, labeled marker (house rule:
-    truncation is never silent).
+class ReplayedHistory(list):
+    """The replayed messages (a plain list of chat messages) plus `report`.
 
-    #[WARNING:TRUNCATION] caller-supplied `max_chars_per_message` (ADR-0026 §4):
-    the bound is a parameter with a documented default, the cut names its size
-    and the run holding the full text, and the run itself is never mutated.
+    `report` is the window's receipt, recorded by hosts in the run
+    (`vars._runtime.session_history`):
+    `{policy, max_tokens, token_estimator, replayed_messages, replayed_tokens,
+    dropped_messages, dropped_tokens, dropped_counts_complete,
+    oversize_turn_kept}`. `dropped_counts_complete` is False when the read
+    stopped at the window without walking the rest of a long session (cost
+    contract A1): the dropped counts then cover only the turns read, and more,
+    older turns were dropped too. `oversize_turn_kept` is True when the newest
+    turn alone exceeds the budget and was kept whole (see
+    `fold_history_window`).
     """
-    if max_chars <= 0 or len(text) <= max_chars:
-        return text
-    marker = f"\n[#TRUNCATION: replay cut at {max_chars} chars; full text in run {run_id}]"
-    return text[:max_chars].rstrip() + marker
+
+    report: Dict[str, Any]
+
+    def __init__(self, messages: Sequence[Dict[str, Any]] = (), *, report: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(messages)
+        self.report = dict(report) if isinstance(report, dict) else window_report(max_tokens=HISTORY_REPLAY_MAX_TOKENS)
+
+
+def window_report(
+    *,
+    max_tokens: int,
+    replayed_messages: int = 0,
+    replayed_tokens: int = 0,
+    dropped_messages: int = 0,
+    dropped_tokens: int = 0,
+    dropped_counts_complete: bool = True,
+    oversize_turn_kept: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "policy": HISTORY_WINDOW_POLICY,
+        "max_tokens": int(max_tokens),
+        "token_estimator": _TOKEN_ESTIMATOR,
+        "replayed_messages": int(replayed_messages),
+        "replayed_tokens": int(replayed_tokens),
+        "dropped_messages": int(dropped_messages),
+        "dropped_tokens": int(dropped_tokens),
+        "dropped_counts_complete": bool(dropped_counts_complete),
+        "oversize_turn_kept": bool(oversize_turn_kept),
+    }
+
+
+def _validated_max_tokens(max_tokens: Any) -> int:
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
+        raise ValueError(f"history window max_tokens must be a positive int, got {max_tokens!r}")
+    return int(max_tokens)
+
+
+def fold_history_window(
+    pairs: Sequence[Sequence[Dict[str, Any]]],
+    *,
+    max_tokens: int = HISTORY_REPLAY_MAX_TOKENS,
+    older_unread: bool = False,
+) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
+    """Keep the newest whole turns that fit `max_tokens`; return (kept, report).
+
+    `pairs` are chronological turns (each a list of whole messages, normally a
+    user/assistant pair). The fold walks newest-first and stops at the first
+    turn that does not fit — the window is contiguous: skipping one large turn
+    to keep older ones would hand the model a conversation with a hole in it.
+    Content is never cut (ADR-0026 §3: budgets are met by selection).
+
+    A total of exactly `max_tokens` fits. THE ONE EXCEPTION to the budget: when
+    the NEWEST turn alone is larger than `max_tokens` it is kept whole and
+    alone (`oversize_turn_kept`). Cutting it would be lossy truncation of the
+    most relevant turn (ADR-0026 §2/§3 forbid that on this path), and dropping
+    it would replay nothing — the model would answer a follow-up to its own
+    previous reply without that reply. The window exists to select history,
+    not to impose a context limit: models may use their full context, and a
+    turn the model's context cannot hold fails loudly at the provider instead
+    of silently disappearing here.
+
+    `older_unread=True` says the caller stopped reading before the session's
+    beginning; if the window is full, the dropped counts are then a lower
+    bound (`dropped_counts_complete=False`).
+    """
+    budget = _validated_max_tokens(max_tokens)
+    sized = [(list(pair), sum(estimate_message_tokens(m) for m in pair)) for pair in pairs]
+    kept: List[List[Dict[str, Any]]] = []
+    kept_tokens = 0
+    oversize = False
+    stop = len(sized)
+    for i in range(len(sized) - 1, -1, -1):
+        pair, tokens = sized[i]
+        if kept_tokens + tokens > budget:
+            if kept:
+                break
+            # The newest turn alone exceeds the window: kept whole (see docstring).
+            oversize = True
+            kept.append(pair)
+            kept_tokens += tokens
+            stop = i
+            break
+        kept.append(pair)
+        kept_tokens += tokens
+        stop = i
+    kept.reverse()
+    dropped = sized[:stop]
+    report = window_report(
+        max_tokens=budget,
+        replayed_messages=sum(len(p) for p in kept),
+        replayed_tokens=kept_tokens,
+        dropped_messages=sum(len(p) for p, _t in dropped),
+        dropped_tokens=sum(t for _p, t in dropped),
+        dropped_counts_complete=not (older_unread and bool(dropped)),
+        oversize_turn_kept=oversize,
+    )
+    return kept, report
+
+
+def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any]) -> None:
+    """Prefix the oldest surviving message with the labeled drop notice.
+
+    #[WARNING:TRUNCATION] whole turns dropped by the history window — stated, never silent
+
+    Dropping older turns is lossy by ADR-0026's own list ("trimming message
+    history"); unannounced, a replayed model reads a conversation whose
+    beginning was deleted as the whole session (§1: "no truncation may occur
+    quietly", attributed to the component and the budget that caused it).
+    Carried as a PREFIX on the oldest surviving user message rather than as an
+    extra message: the contract is strict user/assistant PAIRS. The notice is
+    not counted against the window (it is one line).
+    """
+    if not messages or int(report.get("dropped_messages") or 0) <= 0:
+        return
+    more = "" if report.get("dropped_counts_complete") else " (and older turns not counted)"
+    head = messages[0]
+    head["metadata"] = {
+        **(head.get("metadata") if isinstance(head.get("metadata"), dict) else {}),
+        "replay_truncated": True,
+        "history_window": dict(report),
+    }
+    head["content"] = (
+        f"[#TRUNCATION: {report['dropped_messages']} earlier message(s) of this session "
+        f"(~{report['dropped_tokens']} tokens){more} were dropped from replay by the history window "
+        f"(the most recent {report['max_tokens']} tokens, whole turns; abstractruntime.session_history); "
+        f"this history starts mid-conversation]\n"
+        f"{head.get('content') or ''}"
+    )
 
 
 def session_chat_messages(
@@ -91,15 +239,13 @@ def session_chat_messages(
     ledger_store: Any = None,
     artifact_store: Any = None,
     session_id: str,
-    max_messages: int = _DEFAULT_MAX_MESSAGES,
-    max_chars_per_message: int = _DEFAULT_MAX_CHARS_PER_MESSAGE,
-    max_total_chars: int = _DEFAULT_MAX_TOTAL_CHARS,
+    max_tokens: int = HISTORY_REPLAY_MAX_TOKENS,
     until_ms: Optional[int] = None,
     exclude_run_ids: Optional[Any] = None,
     automation_id: Optional[str] = None,
     through_occurrence: Optional[int] = None,
     strict: bool = False,
-) -> List[Dict[str, Any]]:
+) -> ReplayedHistory:
     """Reconstruct a session's prior conversation as chat messages.
 
     Turns come from `session_turns.select_session_turns` (so an automation's
@@ -107,7 +253,7 @@ def session_chat_messages(
     (e.g. a discussion seeded "through occurrence N"). In a DISCUSSION session
     (runs carrying `vars._meta.discussion`) the discussion root's
     `seed_messages` are prepended as the oldest history, dropped first under
-    the budget.
+    the window.
 
     `strict=True` (automation context preparation, discussion seeding) raises
     `SessionHistoryError` instead of degrading: a store without a run index,
@@ -115,49 +261,32 @@ def session_chat_messages(
     artifact that cannot be resolved. Non-strict reads keep the historical
     best-effort behavior.
 
-    Returns `[{"role": "user"|"assistant", "content": str, "metadata":
-    {"kind": "session_turn", "run_id": ..., "ts": ...}}, ...]` in
-    chronological order, capped to the newest `max_messages` under a
-    cumulative `max_total_chars` budget (whole turns dropped oldest-first).
-    Strictly alternating user/assistant PAIRS: a turn missing either side is
-    skipped whole (runtime review A3 — dangling user messages are
-    provider-hostile). Consequence: a turn needs 2 message slots, so
-    `max_messages=1` replays nothing.
+    Returns a `ReplayedHistory` — a list of `{"role": "user"|"assistant",
+    "content": str, "metadata": {"kind": "session_turn", "run_id": ...,
+    "ts": ...}}` in chronological order, the newest whole turns that fit
+    `max_tokens` (`fold_history_window`) — with the window's receipt in
+    `.report`. Strictly alternating user/assistant PAIRS: a turn missing
+    either side is skipped whole (runtime review A3 — dangling user messages
+    are provider-hostile). Content is replayed exactly as stored, never cut.
 
-    Cost contract (runtime review A1): O(turns) run loads plus at most one
+    Cost contract (runtime review A1): O(turns read) run loads plus at most one
     ledger read per ANSWERLESS run (flow-end fallback); never stats or
-    artifact walks. Passing `ledger_store` improves answer recall — some
-    flow-style runs carry their answer only in the ledger's flow-end record
-    (runtime review A2); with `ledger_store=None` those turns are skipped.
+    artifact walks. Turns are read newest-first in doubling batches and the
+    read stops as soon as the window is full, so a long session costs about
+    what its window holds. Passing `ledger_store` improves answer recall —
+    some flow-style runs carry their answer only in the ledger's flow-end
+    record (runtime review A2); with `ledger_store=None` those turns are
+    skipped.
 
     Pure read: nothing is written, nothing decays. Failures in individual
     turns are skipped (a corrupt run must not take the whole replay down);
     a broken store surfaces as the exception the caller must handle.
     """
+    budget = _validated_max_tokens(max_tokens)
     sid = str(session_id or "").strip()
     if not sid:
-        return []
-
-    max_msgs = int(max_messages) if isinstance(max_messages, int) else _DEFAULT_MAX_MESSAGES
-    if max_msgs <= 0:
-        return []
-    max_chars = (
-        int(max_chars_per_message)
-        if isinstance(max_chars_per_message, int) and int(max_chars_per_message) > 0
-        else _DEFAULT_MAX_CHARS_PER_MESSAGE
-    )
-    total_budget = (
-        int(max_total_chars)
-        if isinstance(max_total_chars, int) and int(max_total_chars) > 0
-        else _DEFAULT_MAX_TOTAL_CHARS
-    )
+        return ReplayedHistory(report=window_report(max_tokens=budget))
     excluded = {str(r).strip() for r in (exclude_run_ids or []) if str(r or "").strip()}
-
-    # Turn budget: each turn yields at most 2 messages, so fetching
-    # ceil(max_msgs / 2) newest turns is sufficient even before skips;
-    # over-fetch a little so skipped turns (failed, empty) don't starve
-    # the window.
-    turn_limit = max(4, (max_msgs + 1) // 2 + 8)
 
     if strict and not callable(getattr(run_store, "list_run_index", None)):
         raise SessionHistoryError(
@@ -166,33 +295,56 @@ def session_chat_messages(
 
     from .session_turns import OccurrenceNotInSession
 
-    try:
-        turns = _best_effort_session_turns(
-            run_store=run_store,
-            ledger_store=ledger_store,
-            artifact_store=artifact_store,
-            session_id=sid,
-            limit=turn_limit,
-            until_ms=until_ms,
-            include_stats=False,
-            include_artifacts=False,
-            automation_id=automation_id,
-            through_occurrence=through_occurrence,
-        )
-    except OccurrenceNotInSession as exc:
-        # "History through occurrence N" without N has no correct answer.
-        if strict:
-            raise SessionHistoryError(str(exc)) from exc
-        return []
     seed_pairs = _seed_pairs(
         discussion_seed_messages(run_store=run_store, artifact_store=artifact_store, session_id=sid, strict=strict),
-        max_chars=max_chars,
         strict=strict,
     )
 
-    # Build whole turns first: caps below must drop turns atomically — a
-    # leading assistant message with its user half cut off would
-    # misattribute the reply to the wrong question.
+    fetch = _FIRST_TURN_FETCH
+    while True:
+        try:
+            turns = _best_effort_session_turns(
+                run_store=run_store,
+                ledger_store=ledger_store,
+                artifact_store=artifact_store,
+                session_id=sid,
+                limit=fetch,
+                until_ms=until_ms,
+                include_stats=False,
+                include_artifacts=False,
+                automation_id=automation_id,
+                through_occurrence=through_occurrence,
+            )
+        except OccurrenceNotInSession as exc:
+            # "History through occurrence N" without N has no correct answer.
+            if strict:
+                raise SessionHistoryError(str(exc)) from exc
+            return ReplayedHistory(report=window_report(max_tokens=budget))
+        older_unread = len(turns or []) >= fetch
+        # The discussion seed is the OLDEST history: prepended, dropped first —
+        # and only once the session's own turns were all read.
+        pairs = _turn_pairs(turns, excluded=excluded)
+        if not older_unread:
+            pairs = seed_pairs + pairs
+        kept, report = fold_history_window(pairs, max_tokens=budget, older_unread=older_unread)
+        if not older_unread or len(kept) < len(pairs):
+            # Either everything was read, or the window filled before the
+            # oldest turn read — reading further cannot change what is kept.
+            break
+        fetch *= 2
+
+    messages: List[Dict[str, Any]] = [m for pair in kept for m in pair]
+    _announce_dropped(messages, report)
+    return ReplayedHistory(messages, report=report)
+
+
+def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
+    """Whole user/assistant pairs from session turns, chronological.
+
+    Built whole first: the window drops turns atomically — a leading assistant
+    message with its user half cut off would misattribute the reply to the
+    wrong question.
+    """
     turn_pairs: List[List[Dict[str, Any]]] = []
     for turn in turns or []:
         if not isinstance(turn, dict):
@@ -229,74 +381,11 @@ def session_chat_messages(
             meta["ts"] = ts
         turn_pairs.append(
             [
-                {
-                    "role": "user",
-                    "content": _truncate_labeled(prompt, max_chars=max_chars, run_id=rid),
-                    "metadata": dict(meta),
-                },
-                {
-                    "role": "assistant",
-                    "content": _truncate_labeled(answer, max_chars=max_chars, run_id=rid),
-                    "metadata": dict(meta),
-                },
+                {"role": "user", "content": prompt, "metadata": dict(meta)},
+                {"role": "assistant", "content": answer, "metadata": dict(meta)},
             ]
         )
-
-    # The discussion seed is the OLDEST history: prepended, dropped first.
-    turn_pairs = seed_pairs + turn_pairs
-
-    # Newest-first fold under both caps, then restore chronology.
-    kept: List[List[Dict[str, Any]]] = []
-    kept_messages = 0
-    kept_chars = 0
-    dropped_by = ""
-    for pair in reversed(turn_pairs):
-        pair_chars = sum(len(str(m.get("content") or "")) for m in pair)
-        if kept_messages + len(pair) > max_msgs:
-            dropped_by = f"max_messages={max_msgs}"
-            break
-        if kept and kept_chars + pair_chars > total_budget:
-            # Always keep at least the newest turn, even when it alone
-            # exceeds the budget: replaying nothing would be worse than
-            # replaying one long turn (per-message caps already bound it).
-            dropped_by = f"max_total_chars={total_budget}"
-            break
-        kept.append(pair)
-        kept_messages += len(pair)
-        kept_chars += pair_chars
-
-    messages: List[Dict[str, Any]] = []
-    for pair in reversed(kept):
-        messages.extend(pair)
-
-    dropped_turns = len(turn_pairs) - len(kept)
-    if dropped_turns > 0 and messages:
-        #[WARNING:TRUNCATION] whole turns dropped by the replay budget — stated, never silent
-        #
-        # Per-MESSAGE cuts were already labeled (`_truncate_labeled`); dropping
-        # a whole TURN was not, so a replayed model received a conversation
-        # whose beginning had been deleted and read it as the whole session
-        # (ADR-0026 §1: "no truncation may occur quietly", and §1's attribution
-        # rule — the marker names the budget that caused the cut).
-        #
-        # Carried as a PREFIX on the oldest surviving user message rather than
-        # as an extra message: this function's contract is strict user/assistant
-        # PAIRS (a dangling half-turn is provider-hostile), and the message
-        # count is what the `max_messages` window means. A prefix is visible to
-        # the model and to any transcript without breaking either.
-        head = messages[0]
-        head["metadata"] = {
-            **(head.get("metadata") if isinstance(head.get("metadata"), dict) else {}),
-            "replay_truncated": True,
-            "dropped_turns": dropped_turns,
-            "dropped_by": dropped_by,
-        }
-        head["content"] = (
-            f"[#TRUNCATION: {dropped_turns} earlier turn(s) of this session were dropped from replay "
-            f"by {dropped_by} (abstractruntime.session_history); this history starts mid-conversation]\n"
-            f"{head.get('content') or ''}"
-        )
-    return messages
+    return turn_pairs
 
 
 def _resolve_offloaded(value: Any, *, artifact_store: Any) -> Any:
@@ -360,7 +449,7 @@ def discussion_seed_messages(
     return [dict(m) for m in seed]
 
 
-def _seed_pairs(seed: List[Dict[str, Any]], *, max_chars: int, strict: bool) -> List[List[Dict[str, Any]]]:
+def _seed_pairs(seed: List[Dict[str, Any]], *, strict: bool) -> List[List[Dict[str, Any]]]:
     """Seed messages as whole user/assistant pairs (the fold drops turns atomically)."""
     pairs: List[List[Dict[str, Any]]] = []
     for i in range(0, len(seed) - 1, 2):
@@ -373,12 +462,7 @@ def _seed_pairs(seed: List[Dict[str, Any]], *, max_chars: int, strict: bool) -> 
         for m in (user, assistant):
             meta = dict(m.get("metadata")) if isinstance(m.get("metadata"), dict) else {}
             meta["discussion_seed"] = True
-            run_id = str(meta.get("run_id") or "seed")
-            pair.append({
-                "role": m["role"],
-                "content": _truncate_labeled(str(m["content"]), max_chars=max_chars, run_id=run_id),
-                "metadata": meta,
-            })
+            pair.append({"role": m["role"], "content": str(m["content"]), "metadata": meta})
         pairs.append(pair)
     if len(seed) % 2 and strict:
         raise SessionHistoryError("discussion seed_messages end with an unpaired message")

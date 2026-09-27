@@ -140,8 +140,11 @@ from .history_bundle import (
     persist_workflow_snapshot,
 )
 from .session_history import (
+    HISTORY_REPLAY_MAX_TOKENS,
     SESSION_TURN_KIND,
+    ReplayedHistory,
     SessionHistoryError,
+    fold_history_window,
     discussion_seed_messages,
     session_chat_messages,
 )
@@ -274,7 +277,10 @@ __all__ = [
     "export_run_history_bundle",
     "persist_workflow_snapshot",
     # Durable session conversation replay (read side)
+    "HISTORY_REPLAY_MAX_TOKENS",
+    "ReplayedHistory",
     "SESSION_TURN_KIND",
+    "fold_history_window",
     "session_chat_messages",
     "SessionHistoryError",
     "discussion_seed_messages",

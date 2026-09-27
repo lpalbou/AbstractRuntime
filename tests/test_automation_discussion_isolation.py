@@ -18,6 +18,7 @@ from abstractruntime.automations import AutomationError, start_discussion
 from abstractruntime.automations.ledger import automation_records
 from abstractruntime.automations.service import automation_timeline_messages
 from abstractruntime.core.models import RunStatus
+from abstractruntime.memory.token_budget import estimate_message_tokens
 from abstractruntime.session_history import session_chat_messages
 from abstractruntime.session_turns import select_session_turns
 from abstractruntime.utils.workspace_paths import READ_ONLY_KEY, READ_ONLY_PATHS_KEY, read_only_paths
@@ -106,10 +107,17 @@ def test_the_seed_keeps_failures_and_drops_the_oldest_under_the_budget(env):
     drive(runtime, aid)
     for now in TICKS:
         at(runtime, clock, aid, now)
-    seed = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
+    full = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
                                         mounted_workspace=auto_ws)
-    # Four ~7 000-char turns do not fit 24 000 chars: the oldest go first.
+    # Four ~7 000-char turns are far inside the default 50k-token window: all replay, uncut.
+    assert [p[0] for p in _pairs(full)] == [1, 2, 3, 4] and full.report["dropped_messages"] == 0
+    assert all("#TRUNCATION" not in m["content"] for m in full)
+    # A window holding exactly the newest three turns drops the oldest, whole.
+    newest3 = sum(estimate_message_tokens(m) for m in full[2:])
+    seed = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
+                                        mounted_workspace=auto_ws, max_tokens=newest3)
     assert [p[0] for p in _pairs(seed)] == [2, 3, 4]
+    assert seed.report["replayed_tokens"] == newest3 and seed.report["dropped_messages"] == 2
     assert "4 occurrence(s) through occurrence 4, showing the last 3" in seed[0]["content"]
     assert seed[1]["content"].startswith("(This occurrence failed after 1 attempt(s): ")
 
@@ -253,23 +261,22 @@ def test_host_protection_allows_both_discussion_roots_and_nothing_else(env):
 
 
 @pytest.mark.parametrize("env", ["json"], indirect=True)
-def test_the_summary_line_counts_against_the_seed_budget(env):
+def test_the_discussion_run_records_its_seed_window(env):
+    """ADR-0026 (explicit, observable): the discussion root records the history
+    window its seed went through; the summary line is framing, not budget."""
     runtime, clock, tmp_path = env
     auto_ws, own_ws = _workspaces(tmp_path)
     aid = create(runtime, clock, workspace_root=auto_ws, input_data={"prompt": "p" * 50})
-    kids = _four_occurrences(runtime, clock, aid)
-    last = len(kids[-1].vars["prompt"]) + len(kids[-1].output["response"])
-    full = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
-                                        mounted_workspace=auto_ws)
-    summary = len(full[0]["content"]) - len(kids[0].vars["prompt"])  # the summary line and its newline
-    # Two turns fit without the summary line; with it, only the newest does.
-    budget = last + summary + 10
-    assert 2 * last <= budget < 2 * last + summary
-    seed = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
-                                        mounted_workspace=auto_ws, max_total_chars=budget)
-    assert sum(len(m["content"]) for m in seed) <= budget
-    assert [p[0] for p in _pairs(seed)] == [4]
-    assert "showing the last 1." in seed[0]["content"]
+    _four_occurrences(runtime, clock, aid)
+    started = start_discussion(runtime, automation_id=aid, occurrence_index=4, request_id="w", prompt="?",
+                               workspace_root=own_ws)
+    root = runtime.get_state(started["run_id"])
+    note = root.vars["_runtime"]["session_history"]
+    assert note["max_tokens"] == 50_000 and note["policy"] == "most_recent_whole_turns"
+    assert note["replayed_messages"] == 8 and note["dropped_messages"] == 0
+    assert note["session_kind"] == "discussion" and note["strict"] is True
+    seed = root.vars["_meta"]["discussion"]["seed_messages"]
+    assert "showing the last 4." in seed[0]["content"]
 
 
 @pytest.mark.parametrize("env", ["json", "sqlite"], indirect=True)

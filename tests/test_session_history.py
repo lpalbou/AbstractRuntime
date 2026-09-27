@@ -7,14 +7,21 @@ as chat messages for host-side seeding of new runs in the same session.
 
 from __future__ import annotations
 
+import inspect
+
+import pytest
+
 from abstractruntime import (
+    HISTORY_REPLAY_MAX_TOKENS,
     InMemoryLedgerStore,
     InMemoryRunStore,
     RunState,
     RunStatus,
     SESSION_TURN_KIND,
+    fold_history_window,
     session_chat_messages,
 )
+from abstractruntime.memory.token_budget import estimate_message_tokens
 
 
 def _turn_run(
@@ -235,98 +242,173 @@ def test_session_chat_messages_works_on_json_file_store(tmp_path) -> None:
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
 
 
-def test_session_chat_messages_caps_to_newest_window_without_splitting_turns() -> None:
+def _pair_tokens(prompt: str, answer: str) -> int:
+    return estimate_message_tokens({"role": "user", "content": prompt}) + estimate_message_tokens(
+        {"role": "assistant", "content": answer}
+    )
+
+
+def _text_with_tokens(role: str, tokens: int) -> str:
+    """A prose string whose message estimate is exactly `tokens` (the one estimator)."""
+    unit = "the history window keeps whole turns "
+    text = unit * (tokens // 2 + 4)
+    lo, hi = 1, len(text)
+    while lo < hi:  # smallest prefix whose estimate reaches `tokens`
+        mid = (lo + hi) // 2
+        if estimate_message_tokens({"role": role, "content": text[:mid]}) >= tokens:
+            hi = mid
+        else:
+            lo = mid + 1
+    out = text[:lo]
+    assert estimate_message_tokens({"role": role, "content": out}) == tokens
+    return out
+
+
+def test_history_window_default_is_50k_tokens_and_no_message_or_char_cap() -> None:
+    """Operator ruling 2026-09-28: no message-count cap, no char cap, no per-
+    message cut — one window of the most recent 50,000 tokens."""
+    assert HISTORY_REPLAY_MAX_TOKENS == 50_000
+    params = inspect.signature(session_chat_messages).parameters
+    assert params["max_tokens"].default == 50_000
+    for gone in ("max_messages", "max_chars_per_message", "max_total_chars"):
+        assert gone not in params
+
+    run_store = InMemoryRunStore()
+    # 60 short turns (120 messages, far past the old 40-message cap) and one
+    # 30,000-char answer (past the old 8,000-char cut and 24,000-char budget):
+    # all of it fits 50k tokens, so all of it replays, byte for byte.
+    long_answer = "word " * 6000
+    for i in range(60):
+        run_store.save(
+            _turn_run(
+                run_id=f"run-{i:02d}",
+                prompt=f"q{i}",
+                answer=long_answer.strip() if i == 30 else f"a{i}",
+                created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00",
+            )
+        )
+    messages = session_chat_messages(run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1")
+    assert len(messages) == 120
+    assert messages[61]["content"] == long_answer.strip()
+    assert all("#TRUNCATION" not in m["content"] for m in messages)
+    report = messages.report
+    assert report["max_tokens"] == 50_000
+    assert report["replayed_messages"] == 120
+    assert report["dropped_messages"] == 0 and report["dropped_tokens"] == 0
+    assert report["replayed_tokens"] == sum(estimate_message_tokens(m) for m in messages)
+    assert report["token_estimator"] == "abstractruntime.memory.token_budget.estimate_message_tokens"
+
+
+def test_history_window_exactly_50k_fits_and_one_more_token_drops_the_oldest_turn() -> None:
+    """Boundary: a window whose turns total EXACTLY 50,000 tokens is replayed
+    whole; one token more and the oldest turn falls out, whole, announced."""
+    older = [(_text_with_tokens("user", 10_000), _text_with_tokens("assistant", 10_000))]
+    newest = [(_text_with_tokens("user", 15_000), _text_with_tokens("assistant", 15_000))]
+    pairs = [[{"role": "user", "content": u}, {"role": "assistant", "content": a}] for u, a in older + newest]
+
+    kept, report = fold_history_window(pairs)
+    assert report["replayed_tokens"] == 50_000
+    assert len(kept) == 2 and report["dropped_messages"] == 0
+
+    one_more = [[{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}]] + pairs
+    kept2, report2 = fold_history_window(one_more)
+    assert kept2 == pairs  # the tiny oldest turn cannot join a full window
+    assert report2["dropped_messages"] == 2 and report2["replayed_tokens"] == 50_000
+
+    over = [[{"role": "user", "content": _text_with_tokens("user", 10_001)}, pairs[0][1]], pairs[1]]
+    kept3, report3 = fold_history_window(over)
+    assert kept3 == [pairs[1]]
+    assert report3["dropped_messages"] == 2
+    assert report3["dropped_tokens"] == 20_001 and report3["replayed_tokens"] == 30_000
+    # Never a cut: every kept message is byte-identical to its source.
+    assert kept3[0][0]["content"] == pairs[1][0]["content"]
+
+
+def test_history_window_drops_oldest_whole_turns_and_announces_it() -> None:
     run_store = InMemoryRunStore()
     for i in range(10):
         run_store.save(
             _turn_run(
                 run_id=f"run-{i}",
-                prompt=f"q{i}",
-                answer=f"a{i}",
+                prompt=f"question number {i}",
+                answer=f"answer number {i}",
                 created_at=f"2026-01-01T00:{i:02d}:00+00:00",
             )
         )
+    newest3 = sum(_pair_tokens(f"question number {i}", f"answer number {i}") for i in (7, 8, 9))
 
     messages = session_chat_messages(
-        run_store=run_store,
-        ledger_store=InMemoryLedgerStore(),
-        session_id="sess-1",
-        max_messages=5,
+        run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1", max_tokens=newest3
     )
-
-    # 5 would split a turn — the leading assistant half is dropped.
-    assert len(messages) == 4
+    assert [m["metadata"]["run_id"] for m in messages] == ["run-7", "run-7", "run-8", "run-8", "run-9", "run-9"]
     assert messages[0]["role"] == "user"
-    # Whole-turn drops are LOUD (ADR-0026 §1, budget audit 2026-08-02): the
-    # oldest surviving message carries a labeled marker naming the budget that
-    # caused the cut. The pair shape and the message count are untouched.
-    assert messages[0]["content"].endswith("q8")
-    assert "#TRUNCATION" in messages[0]["content"]
-    assert "max_messages=5" in messages[0]["content"]
-    assert messages[0]["metadata"]["dropped_turns"] == 8
-    assert [m["content"] for m in messages[1:]] == ["a8", "q9", "a9"]
-
-
-def test_session_chat_messages_truncates_long_content_with_label() -> None:
-    run_store = InMemoryRunStore()
-    run_store.save(
-        _turn_run(run_id="run-big", prompt="short q", answer="x" * 500)
+    # Loud (ADR-0026 §1): the oldest surviving message names the window.
+    head = messages[0]["content"]
+    assert head.startswith("[#TRUNCATION: 14 earlier message(s)")
+    assert f"the most recent {newest3} tokens" in head
+    assert head.endswith("question number 7")
+    assert messages[0]["metadata"]["replay_truncated"] is True
+    assert messages.report == {
+        **messages.report,
+        "max_tokens": newest3,
+        "replayed_messages": 6,
+        "replayed_tokens": newest3,
+        "dropped_messages": 14,
+        "dropped_counts_complete": True,
+        "oversize_turn_kept": False,
+    }
+    # One token short: the oldest of the three falls out.
+    tighter = session_chat_messages(
+        run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1", max_tokens=newest3 - 1
     )
-
-    messages = session_chat_messages(
-        run_store=run_store,
-        ledger_store=InMemoryLedgerStore(),
-        session_id="sess-1",
-        max_chars_per_message=100,
-    )
-
-    assistant = messages[1]
-    assert assistant["content"].startswith("x" * 100)
-    assert "#TRUNCATION" in assistant["content"]
-    assert "run-big" in assistant["content"]
+    assert [m["metadata"]["run_id"] for m in tighter][::2] == ["run-8", "run-9"]
 
 
-def test_session_chat_messages_total_char_budget_drops_oldest_whole_turns() -> None:
-    """Audit #2: the cumulative budget is the ONLY input guard on the agent
-    lane (ReAct disables downstream trimming) — oldest turns fall first,
-    whole, and the newest turn survives even when it alone exceeds budget."""
+def test_history_window_keeps_an_oversize_newest_turn_whole_and_says_so() -> None:
+    """A newest turn larger than the whole window is kept WHOLE (never cut —
+    ADR-0026 §2/§3; dropping it would replay nothing), alone, and the report
+    records the exception."""
     run_store = InMemoryRunStore()
-    for i in range(3):
+    huge = "token " * 60_000
+    for i, answer in enumerate(["a0", huge.strip()]):
         run_store.save(
-            _turn_run(
-                run_id=f"run-{i}",
-                prompt=f"q{i}",
-                answer="a" * 300,
-                created_at=f"2026-01-01T00:{i:02d}:00+00:00",
-            )
+            _turn_run(run_id=f"run-{i}", prompt=f"q{i}", answer=answer, created_at=f"2026-01-01T00:0{i}:00+00:00")
         )
-
-    messages = session_chat_messages(
-        run_store=run_store,
-        ledger_store=InMemoryLedgerStore(),
-        session_id="sess-1",
-        max_total_chars=700,
-    )
-    # Each turn ~303 chars; budget 700 keeps the newest two turns only.
-    assert [m["metadata"]["run_id"] for m in messages] == [
-        "run-1",
-        "run-1",
-        "run-2",
-        "run-2",
-    ]
-    # ...and says so (ADR-0026 §1): the drop names max_total_chars.
+    messages = session_chat_messages(run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1")
+    assert [m["metadata"]["run_id"] for m in messages] == ["run-1", "run-1"]
+    assert messages[1]["content"] == huge.strip()
+    assert messages.report["oversize_turn_kept"] is True
+    assert messages.report["replayed_tokens"] > 50_000
+    assert messages.report["dropped_messages"] == 2
     assert "#TRUNCATION" in messages[0]["content"]
-    assert "max_total_chars=700" in messages[0]["content"]
-    assert messages[0]["metadata"]["dropped_turns"] == 1
 
-    # A single over-budget newest turn still replays (never an empty seed).
-    tight = session_chat_messages(
-        run_store=run_store,
-        ledger_store=InMemoryLedgerStore(),
-        session_id="sess-1",
-        max_total_chars=100,
+
+def test_history_window_reads_past_the_first_batch_and_flags_uncounted_older_turns() -> None:
+    """The read is newest-first in doubling batches: a window that holds more
+    than one batch keeps reading; one that fills early stops and says the
+    dropped counts cover only what was read."""
+    run_store = InMemoryRunStore()
+    for i in range(100):
+        run_store.save(
+            _turn_run(run_id=f"run-{i:03d}", prompt=f"q{i}", answer=f"a{i}",
+                      created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00")
+        )
+    everything = session_chat_messages(run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1")
+    assert len(everything) == 200 and everything.report["dropped_counts_complete"] is True
+
+    small = session_chat_messages(
+        run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1",
+        max_tokens=_pair_tokens("q99", "a99") + _pair_tokens("q98", "a98"),
     )
-    assert [m["metadata"]["run_id"] for m in tight] == ["run-2", "run-2"]
+    assert [m["metadata"]["run_id"] for m in small][::2] == ["run-098", "run-099"]
+    assert small.report["dropped_counts_complete"] is False
+    assert "(and older turns not counted)" in small[0]["content"]
+
+
+def test_history_window_rejects_a_non_positive_budget() -> None:
+    for bad in (0, -1, None, True, 1.5):
+        with pytest.raises(ValueError):
+            session_chat_messages(run_store=InMemoryRunStore(), session_id="sess-1", max_tokens=bad)
 
 
 def test_session_chat_messages_skips_scheduled_turns() -> None:

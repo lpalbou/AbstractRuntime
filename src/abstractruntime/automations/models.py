@@ -48,9 +48,8 @@ DEFAULT_POLICY = {
 }
 
 CONTEXT_MODES = ("independent", "growing")
-# Growing-mode history window (contract D): 40 messages / 24 000 chars.
-GROWING_MAX_MESSAGES = 40
-GROWING_MAX_TOTAL_CHARS = 24_000
+# Growing-mode history: the one session history window
+# (`session_history.HISTORY_REPLAY_MAX_TOKENS`, most recent 50k tokens of whole turns).
 
 
 class AutomationDefinition(TypedDict):

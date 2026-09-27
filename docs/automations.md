@@ -293,13 +293,15 @@ controller is woken with `max_steps=0`; the host (or `drive_automation`) then ti
 | | Independent (default) | Growing |
 |---|---|---|
 | Session | a new session per occurrence, named after its attempt-1 run id | the automation's session, `automation:<automation_id>` |
-| History given to the occurrence | none | the automation's previous turns as `input_data.context.messages`, at most 40 messages and 24,000 characters |
+| History given to the occurrence | none | the automation's previous turns as `input_data.context.messages`: the most recent 50,000 tokens of whole turns (the session history window) |
 | `_meta.occurrence.session_kind` | `occurrence` | `automation` |
 
 Growing history is read at admission and frozen with the occurrence's inputs, so every retry sees the same history.
 It is read strictly: when it cannot be read (a store without a run index, for example), the admission fails instead
 of running the occurrence without its context. History keeps whole turns, newest first, and says so in the oldest
-kept message when older turns were dropped.
+kept message when older turns were dropped. The occurrence run records what was replayed in
+`vars._runtime.session_history` (`replayed_messages`, `replayed_tokens`, `dropped_messages`, `dropped_tokens`,
+`max_tokens`, ...), and the `automation.admitted` record carries the same values in its frozen inputs.
 
 Only completed turns with both a prompt and an answer are replayed. A retried occurrence counts once, as its last
 attempt.
@@ -318,8 +320,8 @@ actor_id=None)` starts a separate conversation about the automation as it stood 
 - It is seeded **once** with the automation's whole conversation through occurrence N, whatever the context mode:
   one user/assistant pair per finished occurrence 1..N (its last attempt), the occurrence's trigger/task turn and its
   answer, oldest first (`automation_timeline_messages(...)`). A failed or stopped occurrence stays in the timeline,
-  its answer saying so. The pairs fit the history budget (40 messages, 24 000 characters, 8 000 per message); the
-  oldest are dropped first. The first user message starts with a summary line: `[Automation "<title>": <n>
+  its answer saying so. The pairs go through the session history window (the most recent 50,000 tokens of whole
+  turns, no message ever cut); the oldest are dropped first. The first user message starts with a summary line: `[Automation "<title>": <n>
   occurrence(s) through occurrence N, showing the last K. The automation's files are mounted READ-ONLY at <path>;
   your own workspace <path> is writable.]`. The seed is stored in `_meta.discussion.seed_messages` of the root run.
 - It works in its **own writable workspace**, `workspace_root`, which the host allocates (it must differ from the
@@ -349,7 +351,7 @@ the same root, and that root must be a parent-less run of this session that carr
 discussion provenance too.
 
 In a discussion session, `session_chat_messages` replays the seed first, as the oldest history, and drops it first
-under the budget.
+under the history window.
 
 ### Read-only mounts
 
@@ -547,7 +549,8 @@ its newest attempt. `automation_id` keeps only that automation's occurrences (ot
 index to look it up in.
 
 `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)` replays those turns as
-user/assistant message pairs under a message and character budget. With `strict=True` it raises
+user/assistant message pairs under the session history window (the most recent `HISTORY_REPLAY_MAX_TOKENS` = 50,000
+tokens of whole turns; see [API](api.md#sessions-and-history)). With `strict=True` it raises
 `SessionHistoryError` (`reason_code = "history_unavailable"`) instead of returning a partial history: a store without
 a run index, a missing occurrence, or a discussion whose seed is missing or cannot be read. Automation admission and
 discussion seeding always read strictly.
@@ -606,7 +609,8 @@ receives its result directly.
   controller does not wait on `event` sources.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
-- Growing history is bounded (40 messages, 24,000 characters, whole turns) and is not summarized automatically.
+- Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
+  drop out of the replay (they stay in the store).
 - Tools outside `TOOL_EFFECT_CLASSES`, such as third-party MCP tools, still ask for approval under `auto`.
 - Retries repeat external effects.
 - One writer process per store; the mutation lock does not coordinate separate processes.

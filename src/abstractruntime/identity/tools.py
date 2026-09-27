@@ -86,9 +86,11 @@ WORKSPACE_FILE_CAP_BYTES = 20 * 1024 * 1024  # per file acceptance; loud refusal
 # slice must never split a multibyte character), the SAME number as
 # _EXEC_OUTPUT_CAP below (one bound for the class "one workspace payload
 # entering one turn"), ~6k tokens = 12% of the 50k recommended working
-# context (15% of the 40k it was derived against), and level with the
-# gateway's DEFAULT whole-history session-seeding budget (bundle_host:
-# 24k chars for an entire replayed session, 200k hard ceiling).
+# context (15% of the 40k it was derived against). (It was also sized level
+# with the gateway's old 24k-char whole-history seeding budget; that budget
+# is gone since 2026-09-28 — history replay is the most recent 50k TOKENS of
+# whole turns, session_history.HISTORY_REPLAY_MAX_TOKENS — and this per-call
+# read slice is a bounded, labeled tool-output preview, not history replay.)
 WORKSPACE_TEXT_READ_CAP_CHARS = 24_000
 
 TOOLS_CONTRACT_PARAGRAPH = """You can also use a few tools, read-only, by putting a fenced block in your

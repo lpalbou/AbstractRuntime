@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from abstractruntime import RunState, RunStatus, session_chat_messages
+from abstractruntime.memory.token_budget import estimate_message_tokens
 from abstractruntime.history_bundle import _best_effort_session_turns
 from abstractruntime.session_turns import select_session_turns
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
@@ -138,9 +139,11 @@ def test_discussion_history_prepends_the_seed(kind, tmp_path) -> None:
     assert _contents(messages) == ["tick 1", "mem 41%", "why 41?", "because", "and now?", "stable"]
     assert messages[0]["metadata"]["discussion_seed"] is True
     # Under a tight budget the seed is dropped first (it is the oldest history).
-    tight = session_chat_messages(run_store=store, session_id="s-disc", max_messages=4)
+    newest2 = sum(estimate_message_tokens(m) for m in messages[2:])
+    tight = session_chat_messages(run_store=store, session_id="s-disc", max_tokens=newest2)
     assert _contents(tight)[1:] == ["because", "and now?", "stable"]
-    assert tight[0]["content"].endswith("why 41?") and tight[0]["metadata"]["dropped_turns"] == 1
+    assert tight[0]["content"].endswith("why 41?")
+    assert tight[0]["metadata"]["history_window"]["dropped_messages"] == 2
 
 
 def test_missing_seed_raises_when_strict_only(tmp_path) -> None:

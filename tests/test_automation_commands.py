@@ -123,13 +123,54 @@ def test_replayed_command_ids_are_idempotent(env):
     assert first == {"status": "applied", "duplicate": False}
     assert again == {"status": "applied", "duplicate": True}
     rejected = cmd(runtime, aid, "bad", "revise", "2026-01-01T00:06:00+00:00", payload={"changes": {"title": ""}})
-    replay = cmd(runtime, aid, "bad", "revise", "2026-01-01T00:07:00+00:00", payload={"changes": {"title": "ok now"}})
+    replay = cmd(runtime, aid, "bad", "revise", "2026-01-01T00:07:00+00:00", payload={"changes": {"title": ""}})
     assert rejected["status"] == "rejected" and replay["status"] == "rejected" and replay["duplicate"] is True
     assert replay["error"] == rejected["error"]
     assert names(runtime, aid, "automation.command_result", "automation.paused") == [
         "automation.command_result", "automation.paused", "automation.command_result",
     ]
     assert automation_state(runtime, aid)["state_version"] == 5  # 3 controller decisions + 2 command results
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_a_reused_command_id_for_a_different_command_is_refused_and_not_recorded(env):
+    runtime, clock = env
+    aid = create(runtime, clock, trigger=HOURLY)
+    drive(runtime, aid)
+    assert cmd(runtime, aid, "p2", "pause", "2026-01-01T00:05:00+00:00")["status"] == "applied"
+    before = names(runtime, aid)
+    version = automation_state(runtime, aid)["state_version"]
+    for type_, payload in (("archive", None), ("pause", {"reason": "other"}), ("revise", {"changes": {"title": "x"}})):
+        r = cmd(runtime, aid, "p2", type_, "2026-01-01T00:06:00+00:00", payload=payload)
+        assert r["status"] == "rejected" and r["duplicate"] is False, type_
+        assert (r["error"]["reason_code"], r["error"]["field"]) == ("identity_conflict", "command_id")
+    r = cmd(runtime, aid, "p2", "pause", "2026-01-01T00:06:00+00:00", expected_revision=1)
+    assert r["error"]["reason_code"] == "identity_conflict"
+    assert names(runtime, aid) == before  # no false automation.archived (or any) record
+    assert automation_state(runtime, aid)["state_version"] == version
+    assert get_automation(runtime.run_store, aid)["definition"]["archived_at"] is None
+    assert cmd(runtime, aid, "p2", "pause", "2026-01-01T00:07:00+00:00") == {"status": "applied", "duplicate": True}
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_revising_policy_keeps_the_fields_not_sent(env):
+    runtime, clock = env
+    req_policy = {"tool_approval": "ask", "retry": {"max_attempts": 5}}
+    from automation_harness import request
+    from abstractruntime.automations import create_automation
+
+    req = request(trigger=HOURLY)
+    req["policy"] = req_policy
+    aid = create_automation(runtime, req, now=clock.now)[0]
+    r = cmd(runtime, aid, "r", "revise", "2026-01-01T00:01:00+00:00",
+            payload={"changes": {"policy": {"retry": {"max_attempts": 2}}}})
+    assert r["status"] == "applied"
+    policy = get_automation(runtime.run_store, aid)["definition"]["policy"]
+    assert policy["tool_approval"] == "ask" and policy["retry"]["max_attempts"] == 2
+    r = cmd(runtime, aid, "r2", "revise", "2026-01-01T00:02:00+00:00",
+            payload={"changes": {"policy": {"tool_approval": "auto"}}})
+    policy = get_automation(runtime.run_store, aid)["definition"]["policy"]
+    assert policy["tool_approval"] == "auto" and policy["retry"]["max_attempts"] == 2
 
 
 @pytest.mark.parametrize("env", STORES, indirect=True)

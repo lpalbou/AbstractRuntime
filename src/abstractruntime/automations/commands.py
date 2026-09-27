@@ -131,6 +131,17 @@ def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, e
     return _reject("invalid_request", f"unknown automation command type {command_type!r}", field="type")
 
 
+def command_digest(type: str, payload: Optional[Dict[str, Any]], expected_revision: Optional[int]) -> str:
+    """`sha256:<hex>` of the whole command, recorded with its result so a reused
+    `command_id` is recognized only for the SAME command."""
+    import hashlib
+
+    from .models import canonical_json
+
+    body = {"type": type, "payload": payload or {}, "expected_revision": expected_revision}
+    return "sha256:" + hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()
+
+
 def _cancel_tree(runtime: Any, run_id: str) -> None:
     run_store = runtime.run_store
     stack = [run_id]
@@ -226,15 +237,26 @@ def apply_automation_command(
             return {**_reject("automation_not_found", f"Automation {automation_id} does not exist."), "duplicate": False}
         reconcile(run, run_store=runtime.run_store, ledger_store=runtime.ledger_store)
 
+        digest = command_digest(type, payload, expected_revision)
         existing = find_by_idempotency_key(runtime.ledger_store, automation_id, key)
         if existing is not None:
             recorded = record_payload(existing)
+            if recorded.get("command_digest") != digest:
+                # The same id for a DIFFERENT command: never "applied", never recorded.
+                return {
+                    **_reject(
+                        "identity_conflict",
+                        f"command_id {command_id!r} was already used for a different command ({recorded.get('type')}).",
+                        field="command_id",
+                    ),
+                    "duplicate": False,
+                }
             result = {"status": recorded["status"], "duplicate": True}
             if recorded.get("error"):
                 result["error"] = recorded["error"]
         else:
             decision = _decide(run, type, {**(payload or {}), "_command_id": command_id}, now=at, expected_revision=expected_revision)
-            fields: Dict[str, Any] = {"command_id": command_id, "type": type, "actor": actor}
+            fields: Dict[str, Any] = {"command_id": command_id, "type": type, "actor": actor, "command_digest": digest}
             if decision.get("status") == "rejected":
                 fields.update(status="rejected", error=decision["error"])
                 delta: Dict[str, Any] = {}
@@ -310,8 +332,14 @@ def record_automation_command_result(
     error: Dict[str, Any],
     actor: Optional[str] = None,
     now: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    expected_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Record a host-side failure of a command as a rejected `command_result` (same protocol)."""
+    """Record a host-side failure of a command as a rejected `command_result` (same protocol).
+
+    Pass the command's `payload`/`expected_revision` so a later replay of the
+    same command is recognized as a duplicate (a different one is refused).
+    """
     from ..core.runtime import run_mutation_lock
 
     at = now or _now()
@@ -327,7 +355,8 @@ def record_automation_command_result(
             ledger_store=runtime.ledger_store,
             name="automation.command_result",
             key=key,
-            fields={"command_id": command_id, "type": type, "actor": actor, "status": "rejected", "error": dict(error)},
+            fields={"command_id": command_id, "type": type, "actor": actor, "status": "rejected", "error": dict(error),
+                    "command_digest": command_digest(type, payload, expected_revision)},
             delta={},
             at=at,
             node_id="command",

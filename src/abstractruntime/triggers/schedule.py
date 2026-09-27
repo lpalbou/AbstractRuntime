@@ -36,6 +36,7 @@ from .protocol import (
 )
 
 _CONFIG_KEYS = ("start_at", "every", "until", "count", "anchor")
+MAX_COUNT = 1_000_000
 
 
 class ScheduleTriggerAdapter:
@@ -50,7 +51,7 @@ class ScheduleTriggerAdapter:
                 "start_at": {"type": "string", "format": "date-time"},
                 "every": {"type": "string", "format": "duration", "pattern": "^[1-9][0-9]*[smhd]$"},
                 "until": {"type": "string", "format": "date-time"},
-                "count": {"type": "integer", "minimum": 1},
+                "count": {"type": "integer", "minimum": 1, "maximum": 1000000},
                 "anchor": {"type": "string", "format": "date-time"},
             },
         },
@@ -102,8 +103,8 @@ class ScheduleTriggerAdapter:
 
         if config.get("count") is not None:
             count = config["count"]
-            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-                raise TriggerConfigError("count must be an integer >= 1", field="config.count")
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_COUNT:
+                raise TriggerConfigError(f"count must be an integer 1..{MAX_COUNT}", field="config.count")
             if "every" not in out and count != 1:
                 raise TriggerConfigError("count > 1 requires every", field="config.count")
             out["count"] = count

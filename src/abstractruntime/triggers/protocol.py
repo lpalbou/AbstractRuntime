@@ -135,10 +135,11 @@ class TriggerAdapter(Protocol):
 
 _DURATION_RE = re.compile(r"^([1-9][0-9]*)([smhd])$")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+MAX_DURATION_SECONDS = 366 * 86400  # durations above a year are refused at validation
 
 
 def parse_duration(value: Any, *, field: str) -> timedelta:
-    """`^[1-9][0-9]*[smhd]$` -> timedelta (s=1, m=60, h=3600, d=86400 seconds)."""
+    """`^[1-9][0-9]*[smhd]$` -> timedelta (s=1, m=60, h=3600, d=86400 seconds), at most 366 days."""
     if not isinstance(value, str):
         raise TriggerConfigError(f"{field} must be a duration string like '5m'", field=field)
     m = _DURATION_RE.match(value)
@@ -147,7 +148,10 @@ def parse_duration(value: Any, *, field: str) -> timedelta:
             f"{field} must match ^[1-9][0-9]*[smhd]$ (whole seconds, minutes, hours or days), got {value!r}",
             field=field,
         )
-    return timedelta(seconds=int(m.group(1)) * _UNIT_SECONDS[m.group(2)])
+    seconds = int(m.group(1)) * _UNIT_SECONDS[m.group(2)]
+    if seconds > MAX_DURATION_SECONDS:
+        raise TriggerConfigError(f"{field} must be at most 366d, got {value!r}", field=field)
+    return timedelta(seconds=seconds)
 
 
 def parse_timestamp(value: Any, *, field: str) -> datetime:

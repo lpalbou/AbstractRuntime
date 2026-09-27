@@ -54,11 +54,11 @@ def test_discussion_is_a_seeded_read_only_fork(env):
     before_records = len(automation_records(runtime.ledger_store, aid))
 
     started = start_discussion(runtime, automation_id=aid, occurrence_index=2, request_id="d1", prompt="Why did it rise?")
-    assert started["session_id"] == "discussion-session:d1" and started["session_kind"] == "discussion"
+    assert started["session_id"] == f"discussion-session:{started['run_id']}" and started["session_kind"] == "discussion"
     # Idempotent per request id.
     assert start_discussion(runtime, automation_id=aid, occurrence_index=2, request_id="d1", prompt="Why did it rise?") == started
     disc = runtime.get_state(started["run_id"])
-    assert disc.parent_run_id is None and disc.session_id == "discussion-session:d1"
+    assert disc.parent_run_id is None and disc.session_id == started["session_id"]
     meta = disc.vars["_meta"]["discussion"]
     assert (meta["automation_id"], meta["occurrence_index"], meta["seed_run_id"]) == (aid, 2, occurrences[1].run_id)
     # Seeded through occurrence 2 only: two turns, never occurrence 3.
@@ -75,10 +75,10 @@ def test_discussion_is_a_seeded_read_only_fork(env):
         workflow=runtime.workflow_registry.get("echo"),
         vars={"prompt": "And then?", "_meta": {"discussion": {k: v for k, v in meta.items() if k != "seed_messages"}},
               "workspace_root": str(workspace), "workspace_read_only": True},
-        session_id="discussion-session:d1",
+        session_id=started["session_id"],
     )
     history = session_chat_messages(run_store=runtime.run_store, ledger_store=runtime.ledger_store,
-                                    session_id="discussion-session:d1", strict=True)
+                                    session_id=started["session_id"], strict=True)
     assert [m["content"] for m in history][:4] == [m["content"] for m in meta["seed_messages"]]
     assert len(history) == 6  # seed (4) + the first discussion turn (2)
     assert _tick(runtime, follow_up).status == RunStatus.COMPLETED
@@ -115,3 +115,28 @@ def test_a_raw_start_in_a_discussion_session_is_restamped_read_only(env):
     assert later.vars["workspace_read_only"] is True and later.vars["workspace_root"] == str(workspace)
     assert later.vars["_meta"]["discussion"]["discussion_root_run_id"] == started["run_id"]
     assert "seed_messages" not in later.vars["_meta"]["discussion"]
+
+
+@pytest.mark.parametrize("env", ["json", "sqlite"], indirect=True)
+def test_request_ids_are_scoped_to_the_automation(env):
+    runtime, clock, tmp_path = env
+    ws_a, ws_b = tmp_path / "a", tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    a = create(runtime, clock, workspace_root=str(ws_a))
+    b = create(runtime, clock, workspace_root=str(ws_b))
+    drive(runtime, a)
+    drive(runtime, b)
+    da = start_discussion(runtime, automation_id=a, occurrence_index=1, request_id="disc-1", prompt="?", actor_id="ana")
+    db = start_discussion(runtime, automation_id=b, occurrence_index=1, request_id="disc-1", prompt="?", actor_id="ana")
+    assert da["session_id"] != db["session_id"] and da["run_id"] != db["run_id"]
+    root_b = runtime.get_state(db["run_id"])
+    assert root_b.vars["_meta"]["discussion"]["automation_id"] == b
+    assert root_b.vars["workspace_root"] == str(ws_b)
+    assert root_b.vars["_meta"]["discussion"]["seed_messages"]
+    assert root_b.actor_id == "ana"
+    # The same request replays; a different request under the same id is refused.
+    assert start_discussion(runtime, automation_id=a, occurrence_index=1, request_id="disc-1", prompt="?", actor_id="ana") == da
+    with pytest.raises(AutomationError) as exc:
+        start_discussion(runtime, automation_id=a, occurrence_index=1, request_id="disc-1", prompt="something else")
+    assert (exc.value.reason_code, exc.value.field) == ("identity_conflict", "request_id")

@@ -68,6 +68,9 @@ policy?: {retry?, tool_approval?}, workspace_root, tenant?, user?}`. The automat
 "<tenant>:<user>:<request_id>")`. Sending the same request again returns the same automation. Reusing a
 `request_id` with a different request fails with `identity_conflict`.
 
+`create_automation(runtime, request, *, now=None, actor_id=None)` and `start_discussion(..., actor_id=None)` stamp
+`actor_id` (the owner) on the root run in the same create-if-absent step.
+
 Validation failures raise `AutomationError`, whose `reason_code` is one of `invalid_definition`,
 `unsupported_feature` or `unknown_trigger_source`, and whose `field` names the offending field.
 
@@ -81,11 +84,12 @@ does I/O. `trigger_sources()` lists every source; `get_trigger_adapter(id, versi
 
 Config: `{start_at?, every?, until?, count?, anchor?}`.
 
-- `every` is a whole number followed by `s`, `m`, `h` or `d` (`^[1-9][0-9]*[smhd]$`). Units have fixed lengths in UTC,
+- `every` is a whole number followed by `s`, `m`, `h` or `d` (`^[1-9][0-9]*[smhd]$`), at most `366d`. Units have fixed lengths in UTC,
   so there are no months and no daylight-saving shifts: "every 24 hours" is exactly 24 hours. Write weeks as `7d`.
 - Ticks sit on a fixed grid, `T_k = anchor + k·every`. They do not drift: an occurrence that starts 7 seconds late
   does not move the next tick. `start_at` defaults to the creation time, and `anchor` must equal `start_at` in v1.
-- `until` is exclusive. `count` counts scheduled admissions; manual runs and retries do not count.
+- `until` is exclusive. `count` (1 to 1 000 000) counts scheduled admissions; manual runs and retries do not
+  count.
 - Without `every`, the automation fires once, at `start_at`, and then stops.
 - Missed ticks are **coalesced**. When several ticks are due at once (downtime, or a long occurrence), one
   occurrence runs, for the latest due tick. Its event payload is `{tick, scheduled_at, coalesced: {first_tick,
@@ -228,7 +232,7 @@ error?, duplicate}` and never raises for a rejection.
 | `automation.pause` | stops **scheduled** admissions. The current occurrence and its retries finish; `run_now` still works. This is not the runtime's pause gate. |
 | `automation.resume` | re-arms at the first tick after now. It never fires on resume and never catches up the paused time. |
 | `automation.run_now` | runs once at the next controller step, even while paused (the automation stays paused). Rejected with `automation_busy` while an occurrence or a manual run is pending, and with `invalid_state` when archived or exhausted. There is no queue. |
-| `automation.revise` | `payload.changes = {title?, target?, trigger?, context?, policy?}`; each field is replaced whole. It creates the next revision, which the controller uses from its next step. A changed trigger is re-armed after now, so no past tick fires. |
+| `automation.revise` | `payload.changes = {title?, target?, trigger?, context?, policy?}`; each field is replaced whole, except `policy`, whose fields are merged (a field you do not send keeps its value, so a retry-only change never resets `tool_approval`). It creates the next revision, which the controller uses from its next step. A changed trigger is re-armed after now, so no past tick fires. |
 | `automation.stop_current` | cancels the running occurrence tree, or its pending retry. The occurrence completes as `cancelled`, quietly. `invalid_state` when nothing is running. |
 | `automation.archive` | stops further admissions; the current occurrence finishes and then the controller ends. History is kept. |
 
@@ -237,7 +241,9 @@ is applied; a mismatch is rejected with `revision_conflict`.
 
 Commands are idempotent per `command_id`. The `automation.command_result` record is the decision, keyed
 `automation:command_result:<automation_id>:<command_id>`. Replaying a command returns the recorded result with
-`duplicate: true`, and only re-runs the follow-ups that are safe to repeat: the observation record
+`duplicate: true`, and only re-runs the follow-ups that are safe to repeat. A `command_id` is tied to its whole command
+(type, payload and `expected_revision`): reusing it for a different command is rejected with `identity_conflict`
+(field `command_id`), and nothing is recorded. The safe-to-repeat follow-ups are: the observation record
 (`automation.paused`, `resumed`, `revised`, `archived`), waking the controller, and cancelling the child. Hosts
 record their own failures with `record_automation_command_result(...)`.
 
@@ -283,7 +289,9 @@ acknowledge only the cursor of the last item it displayed, so items it never sho
 occurrence:
 
 - It starts a new **root** run (`uuid5(automation_id, "discuss:<request_id>")`) in its own session,
-  `discussion-session:<request_id>`. The same `request_id` returns the same discussion.
+  `discussion-session:<that run id>`, so request ids are scoped to the automation. The same request returns the
+  same discussion; the same `request_id` with a different request on that automation is rejected with
+  `identity_conflict`.
 - The run uses the occurrence's workflow, its frozen inputs, and `prompt` as the new user turn.
 - It is seeded **once** with the automation's conversation up to and including that occurrence. The seed is stored
   in `_meta.discussion.seed_messages` and comes first in the discussion's later history.

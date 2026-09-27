@@ -72,14 +72,18 @@ def _load_automation(run_store: Any, automation_id: str) -> RunState:
 # --- creation -----------------------------------------------------------------
 
 
-def create_automation(runtime: Any, request: Mapping[str, Any], *, now: Optional[str] = None) -> Tuple[str, int]:
+def create_automation(
+    runtime: Any, request: Mapping[str, Any], *, now: Optional[str] = None, actor_id: Optional[str] = None
+) -> Tuple[str, int]:
     """Validate `request` and create (or re-find) the automation; returns `(automation_id, revision)`.
 
     Request: `{request_id, title, target: {workflow_id, bundle_ref, flow_id,
     input_data?}, trigger: {source_id, source_version, config}, context?,
     policy?, workspace_root, tenant?, user?}`. Raises AutomationError
     (`invalid_definition`, `unsupported_feature`, `unknown_trigger_source`,
-    `identity_conflict`). The host ticks the controller afterwards like any run.
+    `identity_conflict`). `actor_id` is stamped on the controller root in the
+    same create-if-absent step (hosts pass the owning principal). The host
+    ticks the controller afterwards like any run.
     """
     from ..core.run_identity import RunIdentityConflict
 
@@ -104,6 +108,7 @@ def create_automation(runtime: Any, request: Mapping[str, Any], *, now: Optional
             },
             session_id=definition["session_id"],
             run_id=automation_id,
+            actor_id=actor_id,
         )
     except RunIdentityConflict as exc:
         raise AutomationError(
@@ -238,11 +243,14 @@ def start_discussion(
     occurrence_index: int,
     request_id: str,
     prompt: str,
+    actor_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """Start (or re-find) a discussion forked from occurrence `occurrence_index`.
 
-    A new ROOT run in session `discussion-session:<request_id>` (run id
-    `uuid5(automation_id, "discuss:" + request_id)`), running the occurrence's
+    A new ROOT run (run id `uuid5(automation_id, "discuss:" + request_id)`) in
+    session `discussion-session:<that run id>`, so request ids are scoped to
+    the automation; the same request replays to the same discussion and a
+    different request under the same id is an `identity_conflict`. It runs the occurrence's
     workflow with its frozen inputs, `prompt` as the new user turn, the
     automation's conversation through that occurrence as `context.messages`
     (read strictly: no seed, no discussion), and the occurrence's workspace
@@ -310,7 +318,18 @@ def start_discussion(
     input_data[READ_ONLY_KEY] = True
     runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
     input_data["_runtime"] = {**runtime_ns, READ_ONLY_KEY: True}
-    runtime.start(workflow=workflow, vars=input_data, session_id=ids["session_id"], run_id=ids["run_id"])
+    from ..core.run_identity import RunIdentityConflict
+
+    try:
+        runtime.start(
+            workflow=workflow, vars=input_data, session_id=ids["session_id"], run_id=ids["run_id"], actor_id=actor_id
+        )
+    except RunIdentityConflict as exc:
+        raise AutomationError(
+            f"request_id {request_id!r} was already used for a different discussion of this automation",
+            reason_code="identity_conflict",
+            field="request_id",
+        ) from exc
     return {"session_id": ids["session_id"], "run_id": ids["run_id"], "session_kind": "discussion"}
 
 

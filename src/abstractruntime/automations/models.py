@@ -165,10 +165,13 @@ def wake_wait_key(automation_id: str) -> str:
 
 
 def discussion_ids(automation_id: str, request_id: str) -> Dict[str, str]:
-    return {
-        "run_id": _child_uuid(automation_id, f"discuss:{request_id}"),
-        "session_id": f"discussion-session:{request_id}",
-    }
+    """Discussion root run id and session id, both scoped to the automation.
+
+    The session id embeds the (automation-scoped) run id, so two automations
+    using the same client `request_id` never share a discussion session.
+    """
+    run_id = _child_uuid(automation_id, f"discuss:{request_id}")
+    return {"run_id": run_id, "session_id": f"discussion-session:{run_id}"}
 
 
 # --- validation ---------------------------------------------------------------
@@ -363,7 +366,9 @@ def revise_definition(
     if "context" in ch:
         new["context"] = validate_context(ch["context"])
     if "policy" in ch:
-        new["policy"] = validate_policy(ch["policy"])
+        # Merge: a field the client did not send keeps its current value (a
+        # retry-only change must never reset tool_approval to its default).
+        new["policy"] = validate_policy({**dict(definition["policy"]), **dict(_require_mapping(ch["policy"], "changes.policy"))})
     if "trigger" in ch:
         old = definition["trigger"]
         candidate = validate_trigger_request(ch["trigger"], now=now, binding_id=old["binding_id"])

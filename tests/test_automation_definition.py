@@ -55,6 +55,11 @@ def test_definition_defaults():
         ({"target": {"workflow_id": "w", "bundle_ref": "b", "flow_id": "f", "extra": 1}}, "invalid_definition", "target.extra"),
         ({"trigger": {"source_id": "cron", "source_version": 1, "config": {}}}, "unknown_trigger_source", "trigger.source_id"),
         ({"trigger": {"source_id": "schedule", "source_version": 1, "config": {"every": "1w"}}}, "invalid_definition", "trigger.config.every"),
+        ({"trigger": {"source_id": "schedule", "source_version": 1, "config": {"every": "9999999d"}}}, "invalid_definition", "trigger.config.every"),
+        ({"trigger": {"source_id": "schedule", "source_version": 1, "config": {"every": "99999999999d"}}}, "invalid_definition", "trigger.config.every"),
+        ({"trigger": {"source_id": "schedule", "source_version": 1, "config": {"every": "367d"}}}, "invalid_definition", "trigger.config.every"),
+        ({"trigger": {"source_id": "schedule", "source_version": 1, "config": {"every": "1m", "count": 1_000_001}}}, "invalid_definition", "trigger.config.count"),
+        ({"policy": {"retry": {"backoff": {"max": "400d"}}}}, "invalid_definition", "policy.retry.backoff.max"),
         ({"context": {"mode": "growing", "growing": {"summary": {"enabled": True, "every_n": 2, "max_tokens": 9}}}},
          "unsupported_feature", "context.growing.summary"),
         ({"context": {"mode": "forking"}}, "invalid_definition", "context.mode"),
@@ -91,6 +96,7 @@ def test_create_replays_and_refuses_a_different_request(tmp_path, monkeypatch, k
     assert aid == str(uuid.uuid5(AUTOMATION_NAMESPACE, "acme:ana:same")) and rev == 1
     assert runtime.get_state(aid).vars["_meta"]["creation_digest"] == request_digest(req)
     # Same request later (created_at would differ): the same automation, untouched.
+    assert runtime.get_state(aid).actor_id is None
     assert create_automation(runtime, req, now="2026-01-02T00:00:00+00:00") == (aid, 1)
     assert get_automation(runtime.run_store, aid)["definition"]["created_at"] == NOW
     assert [r["name"] for r in automation_records(runtime.ledger_store, aid)] == ["automation.created"]
@@ -141,3 +147,20 @@ def test_legacy_schedule_roots_are_projected_read_only():
     with pytest.raises(AutomationError):
         adopt_legacy_schedule_projection(RunState(run_id="x", workflow_id="w", status=RunStatus.COMPLETED,
                                                   current_node="n", vars={}))
+
+
+@pytest.mark.parametrize("kind", ["json", "sqlite"])
+def test_create_stamps_the_owner_in_the_same_step(tmp_path, kind):
+    runtime = make_runtime(*make_stores(kind, tmp_path))
+    aid, _ = create_automation(runtime, request(request_id="owned"), now=NOW, actor_id="tenant:ana")
+    assert runtime.get_state(aid).actor_id == "tenant:ana"
+
+
+def test_the_longest_accepted_interval_runs():
+    from abstractruntime.triggers import ScheduleTriggerAdapter
+
+    a = ScheduleTriggerAdapter()
+    cfg = a.validate({"every": "366d", "count": 1_000_000}, now=NOW)
+    binding = {"binding_id": "b", "source_id": "schedule", "source_version": 1, "config": cfg}
+    state = a.admit(binding, state=a.initial_state(cfg), now=NOW)["state"]
+    assert a.prepare(binding, state=state, now=NOW)["until"] == "2027-01-02T00:00:00+00:00"

@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `_runtime.tool_policy.auto_approve_tools` grant, frozen at admission; discussions never inherit it.
     `pending_waits` returns typed waits (`kind`: `ask_user`, `tool_approval` with the calls to approve in
     `details`, or `event`).
+  - `create_automation` and `start_discussion` take `actor_id=` (the owner, stamped when the run is
+    created). Discussion sessions are scoped to their automation. Reusing a `command_id` for a
+    different command is refused with `identity_conflict`. Revising `policy` changes only the fields
+    sent. `every` is at most `366d` and `count` at most 1 000 000.
 - Trigger sources (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or
   `24h` on a grid that does not drift; `start_at`, `until` (exclusive) and `count`; one-shot when
   `every` is absent; missed ticks run once, marked `coalesced`) and `manual@1`. Other packages add

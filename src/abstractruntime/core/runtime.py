@@ -523,6 +523,28 @@ class _PerRunLocks:
 
 
 _RESUME_LOCKS = _PerRunLocks()
+
+
+@contextmanager
+def run_mutation_lock(run_id: str):
+    """Hold the per-run mutation lock for `run_id` (re-entrant, per PROCESS).
+
+    One lock serializes every in-process writer of a run: `Runtime.tick`
+    holds it for the WHOLE tick (the tick keeps the RunState in memory across
+    steps, so a writer that slipped in between two steps would be overwritten
+    by the tick's next save), `Runtime.resume` holds it while it validates and
+    commits a resume, and hosts/controllers take it around their own
+    load-modify-save of the run (automation command application, controller
+    boundaries). A resume from another thread therefore waits for a running
+    tick to end — that is the intent. Re-entrant: a step that resumes or ticks
+    the same run on the same thread does not deadlock.
+
+    Scope: this is a `threading.RLock` pool shared by every Runtime in the
+    process. It does NOT serialize separate processes; v1 supports one
+    writer process per store (automations contract C16).
+    """
+    with _RESUME_LOCKS.hold(str(run_id)):
+        yield
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -2240,7 +2262,12 @@ class Runtime:
 
         t0 = _time.perf_counter()
         try:
-            state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
+            # The whole tick holds the run's mutation lock (see
+            # `run_mutation_lock`): writers that load-modify-save the run
+            # between two of this tick's steps would otherwise be overwritten
+            # by the next save of the in-memory RunState.
+            with run_mutation_lock(run_id):
+                state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
         except EffectKilled:
             # A hard-stop injection that landed BETWEEN effects (its target
             # finished a moment before it was delivered): nothing of this tick's
@@ -2419,6 +2446,9 @@ class Runtime:
             try:
                 setattr(run, "_runtime_artifact_store", self._artifact_store)
                 setattr(run, "_runtime_run_store", self._run_store)
+                # Controller node handlers append their decision records to
+                # the ledger inside the tick (automations contract A).
+                setattr(run, "_runtime_ledger_store", self._ledger_store)
                 setattr(run, "_runtime_run_id", run.run_id)
                 setattr(run, "_runtime_session_id", run.session_id)
             except Exception:
@@ -2809,8 +2839,9 @@ class Runtime:
         # caller (2026-09-26: the gateway's tick-thread parent resume and its
         # repair pass both resumed one `subworkflow:` wait, and the parent ran
         # its Agent node twice) re-reads the committed state and is refused
-        # as "Run is not waiting". The tick after the commit runs unlocked.
-        with _RESUME_LOCKS.hold(str(run_id)):
+        # as "Run is not waiting". The tick after the commit takes the same
+        # lock again for its whole duration (`run_mutation_lock`).
+        with run_mutation_lock(run_id):
             run, finished = self._resume_commit(
                 workflow=workflow, run_id=run_id, wait_key=wait_key, payload=payload
             )

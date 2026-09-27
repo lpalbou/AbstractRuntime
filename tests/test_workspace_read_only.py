@@ -265,3 +265,99 @@ def test_visualflow_writer_still_writes_when_not_read_only(ws) -> None:
     rid = rt.start(workflow=workflow, vars={"workspace_root": str(ws)})
     rt.tick(workflow=workflow, run_id=rid, max_steps=20)
     assert (ws / "ok.md").read_text() == "x"
+
+
+# --------------------------------------------------------------------------
+# 4. Read-only MOUNTS (operator ruling 2026-09-27): the discussion's own
+#    workspace is writable; the automation's workspace is mounted read-only.
+# --------------------------------------------------------------------------
+
+import os  # noqa: E402
+
+from abstractruntime.utils.workspace_paths import path_is_read_only, read_only_paths  # noqa: E402
+
+
+@pytest.fixture()
+def mounted(tmp_path: Path):
+    own = tmp_path / "discussion-ws"
+    own.mkdir()
+    mount = tmp_path / "automation-ws"
+    mount.mkdir()
+    (mount / "report.md").write_text("price: 101.2")
+    link = tmp_path / "mount-link"
+    link.symlink_to(mount)
+    vars_ = {"workspace_root": str(own), "workspace_access_mode": "all_except_ignored",
+             "_runtime": {"workspace_read_only_paths": [str(link)]}}  # realpath'd like `pwd -P`
+    return own, mount, vars_
+
+
+def test_mount_paths_are_realpathed_and_detected(mounted) -> None:
+    own, mount, vars_ = mounted
+    assert read_only_paths(vars_) == (os.path.realpath(str(mount)),)
+    assert path_is_read_only(vars_, mount / "report.md")
+    assert not path_is_read_only(vars_, own / "notes.md")
+
+
+def test_writes_into_a_mount_are_refused_reads_and_exec_are_allowed(mounted) -> None:
+    own, mount, vars_ = mounted
+    scope = WorkspaceScope.from_input_data(vars_)
+    assert not scope.read_only and scope.read_only_paths
+    for tool, args in (("write_file", {"file_path": str(mount / "x.md"), "content": "y"}),
+                       ("edit_file", {"file_path": str(mount / "report.md"), "pattern": "1", "replacement": "2"})):
+        with pytest.raises(ValueError, match="read-only mount") as info:
+            rewrite_tool_arguments(tool_name=tool, args=args, scope=scope)
+        assert str(info.value).startswith(f"Tool '{tool}' is refused")
+    # Own workspace: writable.
+    out = rewrite_tool_arguments(tool_name="write_file", args={"file_path": "notes.md", "content": "y"}, scope=scope)
+    assert out["file_path"] == str((own / "notes.md").resolve())
+    # Reads inside the mount and exec tools are allowed.
+    rewrite_tool_arguments(tool_name="read_file", args={"file_path": str(mount / "report.md")}, scope=scope)
+    rewrite_tool_arguments(tool_name="execute_command", args={"command": "ls"}, scope=scope)
+    rewrite_tool_arguments(tool_name="execute_python", args={"code": "print(1)"}, scope=scope)
+    assert "Read-only mounts" in describe_workspace_scope(scope)
+
+
+def test_a_child_cannot_clear_or_shrink_the_mounts(mounted, tmp_path) -> None:
+    own, mount, vars_ = mounted
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    merged = merge_builtin_workspace_protection(vars_, {"workspace_read_only_paths": [str(extra)],
+                                                        "_runtime": {"workspace_read_only_paths": []}})
+    assert merged["workspace_read_only_paths"] == sorted([os.path.realpath(str(mount)), os.path.realpath(str(extra))])
+
+    child = WorkflowSpec(workflow_id="child", entry_node="n", nodes={
+        "n": lambda r, c: StepPlan(node_id="n", complete_output={})})
+    parent = WorkflowSpec(workflow_id="parent", entry_node="spawn", nodes={
+        "spawn": lambda r, c: StepPlan(node_id="spawn", effect=Effect(
+            type=EffectType.START_SUBWORKFLOW,
+            payload={"workflow_id": "child", "async": True, "wait": True,
+                     "vars": {"workspace_read_only_paths": [], "_runtime": {"workspace_read_only_paths": []}}},
+            result_key="child"))})
+    reg = WorkflowRegistry()
+    reg.register(child)
+    reg.register(parent)
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=reg)
+    rid = rt.start(workflow=parent, vars=dict(vars_))
+    state = rt.tick(workflow=parent, run_id=rid, max_steps=1)
+    child_vars = rt.get_state(state.waiting.wait_key.split(":", 1)[1]).vars
+    assert path_is_read_only(child_vars, mount / "report.md")
+    with pytest.raises(ValueError, match="read-only mount"):
+        rewrite_tool_arguments(tool_name="write_file", args={"file_path": str(mount / "x"), "content": "y"},
+                               scope=WorkspaceScope.from_input_data(child_vars))
+
+
+@pytest.mark.parametrize("pins", [{}, {"workspace_read_only_paths": []}], ids=["ambient", "pin-says-none"])
+def test_visualflow_writers_refuse_into_a_mount_and_write_in_the_own_root(mounted, pins) -> None:
+    own, mount, vars_ = mounted
+    target = str(mount / "evil.md")
+    workflow = _visual_writer_flow("write_file", target, pins)
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+    rid = rt.start(workflow=workflow, vars=dict(vars_))
+    state = rt.tick(workflow=workflow, run_id=rid, max_steps=20)
+    assert not (mount / "evil.md").exists()
+    assert "read-only mount" in str(state.error or state.output)
+
+    ok = _visual_writer_flow("write_file", "mine.md", {})
+    rid2 = rt.start(workflow=ok, vars=dict(vars_))
+    rt.tick(workflow=ok, run_id=rid2, max_steps=20)
+    assert (own / "mine.md").read_text() == "x"

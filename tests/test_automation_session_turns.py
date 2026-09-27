@@ -271,3 +271,40 @@ def test_a_root_outside_the_session_is_refused(kind, tmp_path) -> None:
     _save(store, "member", 21, prompt="q", answer="a", meta={"discussion": dict(disc)}, session_id="s-disc")
     with pytest.raises(SessionHistoryError, match="not a run of this session"):
         session_chat_messages(run_store=store, session_id="s-disc", strict=True)
+
+
+# --------------------------------------------------------------------------
+# Independent mode: each occurrence has its own session; the history through
+# occurrence N is gathered across sessions by the index.
+# --------------------------------------------------------------------------
+
+def _occ_independent(i):
+    return {"occurrence": {"automation_id": AUTO, "occurrence_index": i, "attempt": 1,
+                           "role": "occurrence", "session_kind": "occurrence"}}
+
+
+@pytest.mark.parametrize("kind", ["memory", "json", "sqlite"])
+def test_independent_automation_history_through_n_spans_sessions(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    _save(store, AUTO, 0, meta={"automation": {"title": "t"}}, session_id=f"automation:{AUTO}")
+    for i in range(1, 5):
+        _save(store, f"occ-{i}", i, prompt=f"tick {i}", answer=f"mem {i}", parent=AUTO,
+              meta=_occ_independent(i), session_id=f"occ-session-{i}")
+    _save(store, "other-auto-occ", 3, prompt="x", answer="x", parent="other",
+          meta={"occurrence": {"automation_id": "other", "occurrence_index": 1, "role": "occurrence",
+                               "session_kind": "occurrence"}}, session_id="occ-session-3")
+
+    # A discussion of occurrence 3 seeds from occurrence 3's own session.
+    turns = select_session_turns(store, "occ-session-3", automation_id=AUTO, through_occurrence=3)
+    assert [t.run_id for t in turns] == ["occ-1", "occ-2", "occ-3"]
+    seed = session_chat_messages(run_store=store, session_id="occ-session-3", automation_id=AUTO,
+                                 through_occurrence=3, strict=True)
+    assert _contents(seed) == ["tick 1", "mem 1", "tick 2", "mem 2", "tick 3", "mem 3"]
+    with pytest.raises(SessionHistoryError):
+        session_chat_messages(run_store=store, session_id="occ-session-3", automation_id=AUTO,
+                              through_occurrence=9, strict=True)
+    # From the automation's own session (which holds no occurrence) too.
+    from_automation = select_session_turns(store, f"automation:{AUTO}", automation_id=AUTO, through_occurrence=2)
+    assert [t.run_id for t in from_automation] == ["occ-1", "occ-2"]
+    # Without an automation, a session is still only its own turns.
+    assert [t.run_id for t in select_session_turns(store, "occ-session-3")] == ["occ-3", "other-auto-occ"]

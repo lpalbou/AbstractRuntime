@@ -33,12 +33,16 @@ def make_store(kind, tmp_path):
     return SqliteRunStore(SqliteDatabase(tmp_path / "runs.sqlite"))
 
 
-def _root(store, ws, *, meta=None):
+def _root(store, ws, *, meta=None, mount=None, whole_root_read_only=True):
+    vars_ = {"workspace_root": str(ws),
+             "_meta": {"discussion": meta if meta is not None else {**DISC, "seed_messages": [{"role": "user", "content": "x"}]}}}
+    if whole_root_read_only:
+        vars_["workspace_read_only"] = True
+    if mount is not None:  # the mount model (operator ruling 2026-09-27)
+        vars_.update({"workspace_access_mode": "workspace_or_allowed", "workspace_allowed_paths": [str(mount)],
+                      "_runtime": {"workspace_read_only_paths": [str(mount)]}})
     store.save(RunState(run_id="disc-root", workflow_id="wf", status=RunStatus.COMPLETED, current_node="n",
-                        session_id="disc-s", vars={
-                            "workspace_root": str(ws), "workspace_read_only": True,
-                            "_meta": {"discussion": meta if meta is not None else {**DISC, "seed_messages": [{"role": "user", "content": "x"}]}},
-                        }))
+                        session_id="disc-s", vars=vars_))
 
 
 @pytest.mark.parametrize("kind", ["memory", "json", "sqlite"])
@@ -56,7 +60,7 @@ def test_a_caller_cannot_start_a_writable_turn_in_a_discussion_session(kind, tmp
         "_meta": {"discussion": {"discussion_root_run_id": "forged"}},
     })
     vars_ = store.load(rid).vars
-    assert vars_["workspace_read_only"] is True and vars_["_runtime"]["workspace_read_only"] is True
+    assert vars_["workspace_read_only"] is True  # the root carries the whole-root flag
     assert vars_["workspace_root"] == str(ws)
     assert vars_["_meta"]["discussion"] == DISC  # the root's provenance, without the seed
     assert vars_["prompt"] == "go on"
@@ -94,3 +98,26 @@ def test_a_failed_lookup_refuses_the_start(broken, tmp_path) -> None:
         rt.start(workflow=WF, session_id="disc-s", vars={"prompt": "?"})
     assert info.value.reason_code == "session_attribution_failed"
     assert {r["run_id"] for r in store.list_run_index(limit=100)} == before
+
+
+@pytest.mark.parametrize("kind", ["memory", "json", "sqlite"])
+def test_later_turns_keep_the_roots_writable_workspace_and_its_mount(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    own = tmp_path / "own"
+    own.mkdir()
+    mount = tmp_path / "automation-ws"
+    mount.mkdir()
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    _root(store, own, mount=mount, whole_root_read_only=False)
+    rt = Runtime(run_store=store, ledger_store=InMemoryLedgerStore())
+    rid = rt.start(workflow=WF, session_id="disc-s", vars={
+        "workspace_root": str(mount), "workspace_access_mode": "all_except_ignored", "workspace_allowed_paths": [],
+        "_runtime": {"workspace_read_only_paths": [str(extra)]},
+    })
+    vars_ = store.load(rid).vars
+    assert vars_["workspace_root"] == str(own)
+    assert vars_["workspace_access_mode"] == "workspace_or_allowed"
+    assert vars_["workspace_allowed_paths"] == [str(mount)]
+    assert vars_["_runtime"]["workspace_read_only_paths"] == [str(mount), str(extra)]  # caller may only add
+    assert "workspace_read_only" not in vars_

@@ -1573,32 +1573,43 @@ class Runtime:
         self, vars: Optional[Dict[str, Any]], *, session_id: str, run_id: Optional[str]
     ) -> Optional[Dict[str, Any]]:
         """Discussion sessions are anchored by their persisted root (automations
-        contract B, amendment 4): every later ROOT start in such a session gets
-        the root's `_meta.discussion` (without the seed), its `workspace_root`
-        and a read-only workspace, OVER whatever the caller passed. A failed
-        lookup refuses the start (`SessionAttributionError`). Other sessions
-        are untouched."""
+        contract B, amendment 4; operator ruling 2026-09-27): every later ROOT
+        start in such a session gets the root's `_meta.discussion` (without the
+        seed) and the root's OWN workspace policy — `workspace_root`,
+        `workspace_access_mode`, `workspace_allowed_paths`, the read-only
+        mounts `_runtime.workspace_read_only_paths` (unioned with any the
+        caller adds) and the whole-root `workspace_read_only` flag only if the
+        root carries it — OVER whatever the caller passed. A failed lookup
+        refuses the start (`SessionAttributionError`). Other sessions are
+        untouched."""
         attribution = session_attribution(self._run_store, session_id)
         if attribution is None or attribution.get("kind") != "discussion":
             return vars
         # Imported here: `abstractruntime.utils` pulls optional capability
         # stacks, which the package root must not import (install boundary).
-        from ..utils.workspace_paths import READ_ONLY_KEY as WORKSPACE_READ_ONLY_KEY
+        from ..utils.workspace_paths import READ_ONLY_PATHS_KEY, read_only_paths
 
         if run_id is not None and run_id == attribution["discussion_root_run_id"]:
             return vars  # the root itself (an idempotent re-start): created as requested
-        if not attribution.get("workspace_root"):
+        policy = attribution["workspace_policy"]
+        if not policy["top"].get("workspace_root"):
             raise SessionAttributionError(
                 f"discussion session {session_id}: root {attribution['discussion_root_run_id']} has no workspace_root"
             )
         out = dict(vars or {})
+        caller_mounts = read_only_paths(out)
         meta = dict(out["_meta"]) if isinstance(out.get("_meta"), dict) else {}
         meta["discussion"] = dict(attribution["discussion"])
         out["_meta"] = meta
-        out["workspace_root"] = attribution["workspace_root"]
-        out[WORKSPACE_READ_ONLY_KEY] = True
+        for key, value in policy["top"].items():
+            out[key] = copy.deepcopy(value)
         runtime_ns = dict(out["_runtime"]) if isinstance(out.get("_runtime"), dict) else {}
-        runtime_ns[WORKSPACE_READ_ONLY_KEY] = True
+        for key, value in policy["runtime"].items():
+            runtime_ns[key] = copy.deepcopy(value)
+        root_mounts = list(runtime_ns.get(READ_ONLY_PATHS_KEY) or [])
+        extra = [m for m in caller_mounts if m not in root_mounts]
+        if extra:  # the caller may add mounts, never drop the root's
+            runtime_ns[READ_ONLY_PATHS_KEY] = root_mounts + extra
         out["_runtime"] = runtime_ns
         return out
 

@@ -128,9 +128,14 @@ def _occurrence_cutoff(
         raise SessionHistoryError(
             f"through_occurrence needs a run index; {type(run_store).__name__} has none (session {session_id})"
         )
-    filters: Dict[str, Any] = {"session_id": session_id, "role": "occurrence", "limit": 1_000_000}
+    # With an automation, its occurrences are found in EVERY session
+    # (independent mode: one session per occurrence); without one, only the
+    # session's own occurrences count.
+    filters: Dict[str, Any] = {"role": "occurrence", "limit": 1_000_000}
     if automation_id is not None:
         filters["automation_id"] = str(automation_id)
+    else:
+        filters["session_id"] = session_id
     rows = [r for r in list_run_index(**filters) if r.get("occurrence_index") == index]
     if not rows:
         raise OccurrenceNotInSession(
@@ -162,7 +167,12 @@ def select_session_turns(
     """The session's turns, chronological (oldest first), the newest `limit`.
 
     - `include_occurrences`: include automation occurrence runs (default).
-    - `automation_id`: keep only that automation's occurrences (other turns stay).
+    - `automation_id`: keep only that automation's occurrences (other turns
+      stay), gathered from EVERY session by the index: an independent-mode
+      automation runs each occurrence in its own session, so its history is
+      its occurrences 1..N wherever they ran, interleaved by creation time
+      with this session's own turns. Growing mode is unchanged (its
+      occurrences all live in the automation's session).
     - `through_occurrence=N`: drop occurrences after N and every turn created
       after occurrence N (the history as it stood when N ran). Occurrence N
       is looked up in the index directly, however old; a session without it
@@ -187,6 +197,14 @@ def select_session_turns(
         cutoff = _occurrence_cutoff(run_store, sid, automation_id, int(through_occurrence))
     bounded_read = through_occurrence is not None or until_ms is not None
     rows, preloaded = _candidate_rows(run_store, sid, 1_000_000 if bounded_read else max(1000, lim * 5))
+    automation = str(automation_id) if automation_id is not None else None
+    if automation is not None and include_occurrences:
+        # The automation's occurrences ACROSS sessions (independent mode keeps
+        # each occurrence in its own session), selected by the index, then
+        # interleaved with this session's own turns by creation time.
+        rows = list(rows) + list(
+            run_store.list_run_index(automation_id=automation, role="occurrence", limit=1_000_000) or []
+        )
 
     by_id: Dict[str, Dict[str, Any]] = {}
     newest_attempt: Dict[tuple, Dict[str, Any]] = {}
@@ -196,9 +214,11 @@ def select_session_turns(
         rid = str(row.get("run_id") or "").strip()
         if not rid or rid in by_id:
             continue
-        if str(row.get("session_id") or "").strip() != sid:
-            continue
         role = row.get("role")
+        in_session = str(row.get("session_id") or "").strip() == sid
+        automation_occurrence = role == "occurrence" and automation is not None and row.get("automation_id") == automation
+        if not (in_session or automation_occurrence):
+            continue
         if not is_turn_root(parent_run_id=row.get("parent_run_id"), role=role):
             continue
         if is_internal_workflow_id(row.get("workflow_id")) or is_legacy_scheduled(row):

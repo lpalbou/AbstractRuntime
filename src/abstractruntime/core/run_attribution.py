@@ -239,6 +239,21 @@ def session_attribution(run_store: Any, session_id: str) -> Optional[Dict[str, A
         "revision": root_discussion.get("revision"),
         "workspace_root": workspace_root if isinstance(workspace_root, str) and workspace_root.strip() else None,
         "discussion": {k: v for k, v in root_discussion.items() if k != "seed_messages"},
+        # The root's workspace policy, restamped on every later turn.
+        "workspace_policy": _workspace_policy(root.vars or {}),
+    }
+
+
+# Workspace keys a discussion's later turns inherit from the persisted root.
+_POLICY_TOP_KEYS = ("workspace_root", "workspace_access_mode", "workspace_allowed_paths", "workspace_read_only")
+_POLICY_RUNTIME_KEYS = ("workspace_read_only_paths", "workspace_read_only")
+
+
+def _workspace_policy(root_vars: Mapping[str, Any]) -> Dict[str, Any]:
+    runtime_ns = root_vars.get("_runtime") if isinstance(root_vars.get("_runtime"), Mapping) else {}
+    return {
+        "top": {k: root_vars[k] for k in _POLICY_TOP_KEYS if k in root_vars},
+        "runtime": {k: runtime_ns[k] for k in _POLICY_RUNTIME_KEYS if k in runtime_ns},
     }
 
 

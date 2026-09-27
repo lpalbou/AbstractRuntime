@@ -198,6 +198,56 @@ BUILTIN_ALLOW_KEY = "workspace_builtin_allow"
 READ_ONLY_KEY = "workspace_read_only"
 
 
+# Read-only MOUNTS (operator ruling 2026-09-27, discussions): absolute roots
+# the run may read but never write through file tools or VisualFlow writers,
+# while its own workspace stays writable. Trusted runtime policy
+# `_runtime.workspace_read_only_paths`; the same top-level key is honoured too
+# (it can only ADD protection) and is how the value rides node inputs and
+# child runs. The shell/exec tools are NOT sandboxed by it: a mount is enforced
+# for the file tools and the VisualFlow writers only.
+READ_ONLY_PATHS_KEY = "workspace_read_only_paths"
+
+
+def _real_root(raw: object) -> Optional[str]:
+    import os
+
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    path = Path(raw.strip()).expanduser()
+    if not path.is_absolute():
+        return None  # a mount is an absolute root; relative entries are ignored
+    return os.path.realpath(str(path))  # `pwd -P`: symlinks resolved
+
+
+def read_only_paths(vars_obj: object) -> tuple:
+    """The run's read-only roots (realpath, sorted, unique), from
+    `_runtime.workspace_read_only_paths` and the top-level key."""
+    if not isinstance(vars_obj, Mapping):
+        return ()
+    found: set = set()
+    runtime_ns = vars_obj.get("_runtime")
+    for raw in (
+        vars_obj.get(READ_ONLY_PATHS_KEY),
+        runtime_ns.get(READ_ONLY_PATHS_KEY) if isinstance(runtime_ns, Mapping) else None,
+    ):
+        for entry in _path_entries(raw):
+            root = _real_root(entry)
+            if root:
+                found.add(root)
+    return tuple(sorted(found))
+
+
+def path_is_read_only(vars_obj: object, path: object) -> bool:
+    """True when `path` (realpath) lies under one of the run's read-only roots."""
+    roots = read_only_paths(vars_obj)
+    if not roots:
+        return False
+    import os
+
+    target = Path(os.path.realpath(str(Path(str(path)).expanduser())))
+    return any(is_under_path(target, Path(root)) for root in roots)
+
+
 def is_workspace_read_only(vars_obj: object) -> bool:
     """True when `vars_obj` (run vars / node inputs) mounts its workspace read-only."""
     if not isinstance(vars_obj, Mapping):
@@ -258,6 +308,10 @@ def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
     """
 
     out: dict = {READ_ONLY_KEY: True} if is_workspace_read_only(parent) else {}
+    parent_mounts = read_only_paths(parent)
+    if parent_mounts:
+        # Union: a child may add read-only roots, never clear or shrink them.
+        out[READ_ONLY_PATHS_KEY] = sorted(set(parent_mounts) | set(read_only_paths(child)))
     parent_deny = _path_entries(parent.get(BUILTIN_DENY_KEY))
     if not parent_deny:
         return out
@@ -277,7 +331,10 @@ __all__ = [
     "BUILTIN_ALLOW_KEY",
     "BUILTIN_DENY_KEY",
     "READ_ONLY_KEY",
+    "READ_ONLY_PATHS_KEY",
     "is_workspace_read_only",
+    "path_is_read_only",
+    "read_only_paths",
     "merge_builtin_workspace_protection",
     "WorkspacePathError",
     "WorkspacePathResolution",

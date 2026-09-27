@@ -177,8 +177,6 @@ def test_a_later_turn_in_the_discussion_session_is_anchored_to_the_root(env):
     assert len(history) == 4  # seed (1 occurrence) + the first discussion turn
 
 
-@pytest.mark.xfail(strict=True, reason="needs R1: the discussion anchor restamps the read-only MOUNT model "
-                   "(own workspace_root + _runtime.workspace_read_only_paths), not the whole-root read-only flag")
 @pytest.mark.parametrize("env", ["json"], indirect=True)
 def test_a_later_turn_keeps_the_writable_workspace_and_the_read_only_mount(env):
     runtime, clock, tmp_path = env

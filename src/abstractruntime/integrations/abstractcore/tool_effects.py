@@ -115,9 +115,22 @@ def tool_effect_class(tool_name: str) -> Optional[str]:
     return TOOL_EFFECT_CLASSES.get(str(tool_name or "").strip())
 
 
-def read_only_refusal(tool_name: str) -> Optional[str]:
-    """Why `tool_name` is refused in a read-only workspace, or None when allowed."""
+def read_only_refusal(tool_name: str, *, path: Optional[str] = None) -> Optional[str]:
+    """Why `tool_name` is refused, or None when allowed.
+
+    Without `path`: the whole workspace is read-only (`workspace_read_only`).
+    With `path`: the call writes `path`, which lies under a read-only mount
+    (`workspace_read_only_paths`); only `write`-class tools are refused there
+    (reads and exec tools are allowed — the shell is not sandboxed by mounts).
+    """
     name = str(tool_name or "").strip()
+    if path is not None:
+        if TOOL_EFFECT_CLASSES.get(name) != WRITE:
+            return None
+        return (
+            f"Tool '{name}' is refused: '{path}' is inside a read-only mount (a discussion can read "
+            "the automation's workspace but never change it; write in your own workspace instead)."
+        )
     effect = TOOL_EFFECT_CLASSES.get(name)
     if effect is None:
         return (

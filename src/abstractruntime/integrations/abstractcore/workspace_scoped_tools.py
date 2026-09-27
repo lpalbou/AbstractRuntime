@@ -39,6 +39,7 @@ from abstractruntime.utils.workspace_paths import (
     build_workspace_mounts,
     is_under_path,
     is_workspace_read_only,
+    read_only_paths as _read_only_paths,
     resolve_no_strict,
     resolve_workspace_path as resolve_canonical_workspace_path,
 )
@@ -474,6 +475,10 @@ class WorkspaceScope:
     # classified `write`/`exec` in `tool_effects.TOOL_EFFECT_CLASSES`, and
     # every unclassified tool, is refused.
     read_only: bool = False
+    # Read-only mounts (`_runtime.workspace_read_only_paths`, realpath): file
+    # WRITE tools targeting a path under one are refused; reads and exec tools
+    # are allowed (the shell is not sandboxed — mounts protect file tools).
+    read_only_paths: Tuple[str, ...] = ()
 
     @classmethod
     def from_input_data(
@@ -484,8 +489,11 @@ class WorkspaceScope:
         base_dir: Optional[Path] = None,
     ) -> Optional["WorkspaceScope"]:
         read_only = is_workspace_read_only(input_data)
+        mounts = _read_only_paths(input_data)
         raw = input_data.get(key)
         if not isinstance(raw, str) or not raw.strip():
+            if mounts:
+                raise ValueError("workspace_read_only_paths is set but the run has no workspace_root")
             if read_only:
                 # Fail closed: without a root there is no scope, and without a
                 # scope tool calls would run unwalled.
@@ -527,6 +535,7 @@ class WorkspaceScope:
             builtin_deny_prefixes=builtin_deny,
             builtin_allow=builtin_allow,
             read_only=read_only,
+            read_only_paths=mounts,
         )
 
 
@@ -555,6 +564,11 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
     # resolver and deliberately never rendered here (see the module docstring).
     if scope.ignored_paths:
         lines.append("Excluded paths (override grants): " + json.dumps([str(p) for p in scope.ignored_paths]))
+    if scope.read_only_paths:
+        lines.append(
+            "Read-only mounts (read them, never write into them; write in your own workspace): "
+            + json.dumps(list(scope.read_only_paths))
+        )
     if scope.read_only:
         lines.append(
             "This workspace is READ-ONLY: tools that write files or run commands/code are refused."
@@ -795,6 +809,35 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
         refusal = read_only_refusal(tool_name)
         if refusal is not None:
             raise ValueError(refusal)
+    out_args = _rewrite_tool_arguments(tool_name=tool_name, args=args, scope=scope)
+    if scope.read_only_paths:
+        for target in _written_paths(out_args):
+            if _under_mount(target, scope.read_only_paths):
+                refusal = read_only_refusal(tool_name, path=target)
+                if refusal is not None:
+                    raise ValueError(refusal)
+    return out_args
+
+
+def _written_paths(args: Dict[str, Any]) -> List[str]:
+    """Path arguments a write-class tool may write (after the rewrite)."""
+    out: List[str] = []
+    for field in ("file_path", "path", "destination", "target"):
+        value = args.get(field)
+        if isinstance(value, str) and value.strip():
+            out.append(value)
+    paths = args.get("paths")
+    if isinstance(paths, list):
+        out.extend(v for v in paths if isinstance(v, str) and v.strip())
+    return out
+
+
+def _under_mount(path: str, mounts: Tuple[str, ...]) -> bool:
+    target = Path(os.path.realpath(str(Path(path).expanduser())))
+    return any(is_under_path(target, Path(m)) for m in mounts)
+
+
+def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: WorkspaceScope) -> Dict[str, Any]:
     root = scope.root
     out = dict(args or {})
 

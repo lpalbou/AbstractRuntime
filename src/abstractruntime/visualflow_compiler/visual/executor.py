@@ -21,6 +21,7 @@ from ...utils.workspace_paths import (
     BUILTIN_ALLOW_KEY,
     BUILTIN_DENY_KEY,
     READ_ONLY_KEY,
+    READ_ONLY_PATHS_KEY,
     merge_builtin_workspace_protection,
 )
 
@@ -613,10 +614,11 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         C4), so a new writer cannot forget to declare itself."""
         from pathlib import Path
 
-        from abstractruntime.utils.workspace_paths import is_workspace_read_only
+        from abstractruntime.utils.workspace_paths import is_workspace_read_only, path_is_read_only
 
         if write and is_workspace_read_only(payload):
             raise ValueError(f"{operation} refused: this workspace is read-only")
+        resolved_pair = None
         try:
             from abstractruntime.integrations.abstractcore.workspace_scoped_tools import (
                 WorkspaceScope,
@@ -627,14 +629,18 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             scope = WorkspaceScope.from_input_data(payload)
             if scope is not None:
                 resolved = resolve_user_workspace_path(scope=scope, user_path=file_path)
-                return resolved.resolved_path, resolved.virtual_path
+                resolved_pair = (resolved.resolved_path, resolved.virtual_path)
         except Exception as e:
             raise ValueError(f"{operation} path rejected by workspace policy: {e}") from e
 
-        path = Path(file_path).expanduser()
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        return path, str(path)
+        if resolved_pair is None:
+            path = Path(file_path).expanduser()
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            resolved_pair = (path, str(path))
+        if write and path_is_read_only(payload, resolved_pair[0]):
+            raise ValueError(f"{operation} refused: '{resolved_pair[1]}' is inside a read-only mount")
+        return resolved_pair
 
     def _workspace_root_for(resolved_path: Any, virtual_path: Any):
         """Derive the workspace root that `virtual_path` was resolved against.
@@ -5005,7 +5011,7 @@ def _create_data_aware_handler(
         # wire, default or expression put in these inputs, the run's deny
         # prefixes stay, its allow list cannot be widened, and a read-only
         # run's workspace stays read-only (`workspace_read_only`).
-        if any(k in resolved_input for k in (BUILTIN_DENY_KEY, BUILTIN_ALLOW_KEY, READ_ONLY_KEY)):
+        if any(k in resolved_input for k in (BUILTIN_DENY_KEY, BUILTIN_ALLOW_KEY, READ_ONLY_KEY, READ_ONLY_PATHS_KEY)):
             run_vars = get_run_vars() if callable(get_run_vars) else None
             if isinstance(run_vars, dict):
                 resolved_input.update(merge_builtin_workspace_protection(run_vars, resolved_input))

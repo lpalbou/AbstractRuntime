@@ -12,9 +12,9 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 30
+- Planned: 29
 - Proposed: 12
-- Completed: 34
+- Completed: 35
 - Deprecated: 13
 - Recurrent: 0
 
@@ -25,13 +25,20 @@ forwarding; it does not add another provider. Core's deferred backend/capability
 and pressure-eviction work is tracked separately by its planned 0848–0853.
 
 2026-09-26: counts reconciled to disk (30 planned). Added the Automations
-pair: [0847](planned/0847_automations_v1_controller_contracts_occurrences_triggers.md)
+pair: [0847](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md)
 (P1, v1: controller bundle, definition/state contracts, deterministic
 occurrence creation, trigger-source registry, session-turn selector, index
 queries) and [0848](planned/0848_automations_v2_external_event_inbox_and_run_triggers.md)
 (P2, planned after v1: durable external-event inbox, `event` and
 `run.finished`/`run.failed` sources with reconciliation). Umbrella:
 abstractframework backlog 0928.
+
+2026-09-27: [0847](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md)
+completed, UNRELEASED: `79d9bf6` … `d02578a`, suite 2957 passed / 26 skipped, reviews 43/44/45/50/51/53 GO after fixes,
+framework E2E 9/9 with a real model. It ships in the next minor release after the operator's validation (root backlog
+0941). Counts reconciled to disk: 29 planned, 35 completed. Follow-ups are filed in the ROOT backlog because they cross
+packages: 0937 (exact-key lookups and read cost, with 0047/0068 here), 0938 (duck-typed stores), 0939 (JSON order by
+mtime). The anticipated ADR ("an automation is its controller root run") is not written yet.
 
 ## Topic tracks
 
@@ -52,9 +59,10 @@ abstractframework backlog 0928.
 
 ## Next recommended work
 
-0. `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md`
-   P1, leads the next minor wave (Automations v1); the gateway and apps
-   integrate against its contracts. `0848` (v2 external triggers) follows it.
+0. Automations v1 ([0847](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md))
+   is built and unreleased. Next: the release that carries it (root 0941; the
+   gateway floors on it). Then the automation read cost (root 0937, with 0047
+   below) and `0848` (v2 external triggers).
 1. `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md`
    The keystone: kill-and-replay harness + ONE written crash-ordering
    invariant + the two ordering-inversion fixes. Every other track item is a
@@ -85,6 +93,7 @@ abstractframework backlog 0928.
 
 | ID | Item |
 |----|------|
+| 0847 | [Automations v1: controller, contracts, occurrences, triggers](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md): completed 2026-09-27, moved from planned; UNRELEASED; `79d9bf6`…`d02578a`, 2957 passed / 26 skipped; reviews GO after fixes; E2E 9/9. |
 | 0846 | [Existing MLX instance scheduling and execution controls](completed/0846_mlx_instance_scheduling_and_execution_controls.md): completed 2026-09-20; moved from planned, 237 Runtime tests + 616 Core tests and four real-model integration cases; independent review approved, unreleased. |
 | 001 | `completed/001_runtime_kernel.md` |
 | 002 | `completed/002_persistence_and_ledger.md` |
@@ -133,8 +142,7 @@ abstractframework backlog 0928.
 | 027* | `planned/027_quote_provenance_discipline.md` |
 | 028* | `planned/028_selective_artifact_rehydration.md` |
 | 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
-| 0847 | `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md` (P1, Automations v1; contracts pass 2026-09-27) |
-| 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, planned after 0847; contracts pass 2026-09-27) |
+| 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, after 0847's release; contracts pass 2026-09-27) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

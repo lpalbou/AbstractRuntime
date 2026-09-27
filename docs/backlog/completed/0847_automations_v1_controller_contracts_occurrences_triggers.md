@@ -1,7 +1,8 @@
 # 0847-abstractruntime: [FEATURE] Automations v1: controller bundle, definition/state contracts, deterministic occurrence creation, trigger-source registry, session-turn selector, index queries
 
 > Created: 2026-09-26
-> Status: Planned
+> Status: Completed — UNRELEASED (local commits on `main`; ships in the next minor release after the operator's validation)
+> Completed: 2026-09-27
 > Type: feature
 > Priority: P1 (leads the next minor wave; every other package's Automations work integrates against it)
 > Labels: automations, triggers, durability, session-history, run-index
@@ -512,3 +513,97 @@ Final contracts: untracked/design/automations-CONTRACTS.md (root repo; rev 2 wit
 - Index columns `automation_id, role, occurrence_index, session_kind` (+ `legacy_schedule` role), SQLite guarded backfill, JSON memo v2; `_meta` identity never offloaded; offloaded seeds/outputs resolved. No change cursor in v1 (`changed_since` unsupported); new `list_attention` (oldest unseen first).
 - One controller-writer process per store; lock held for the whole controller tick and command application; async dispatch; pause gates scheduled admission only; admission only from persisted due tick or `manual_pending` (stale wakes re-arm).
 - New tests: `test_trigger_schedule.py`, `test_automation_retry.py`, `test_workspace_read_only.py`, `test_controller_bundle_packaged.py` (plus the six listed above).
+
+## Completion report (2026-09-27)
+
+**Status: completed — UNRELEASED.** Local commits on `main`, no version bump (pyproject still `0.5.1`), not pushed. The
+release is the first step of the framework's wave (root backlog 0941). Umbrella record: abstractframework backlog 0928
+(completed).
+
+**Commits:** `79d9bf6` … `d02578a` (26 commits). Missions R1 (storage, attribution, history, read-only, anchor) and R2
+(automations, triggers, controller, commands, attention, D1).
+- **Seams and storage:**
+  - `79d9bf6`: `run_mutation_lock` held for the whole tick.
+  - `e1ee1a7`: `create_if_absent` on every store; `Runtime.start(run_id=)`; `START_SUBWORKFLOW.payload.run_id`.
+  - `efb3e44`: index columns, turn-root listing, `list_automations` / `latest_occurrence`.
+  - `e8af087`: `latest_occurrence` is one index seek; stale temp files swept on open.
+- **History:**
+  - `93c540f`: `select_session_turns`.
+  - `cebf348`: strict `session_chat_messages`, discussion seed.
+- **Read-only:** `ab30729` `workspace_read_only` + `TOOL_EFFECT_CLASSES`.
+- **Discussion anchor:** `035cfdf` `session_attribution` + the `Runtime.start` restamp.
+- **Automations:**
+  - `58ade60`: trigger registry, `schedule@1`, `manual@1`.
+  - `3a91de9`: the automation node type.
+  - `478441b`: contracts, decision ledger, controller bundle, commands, attention, service.
+  - `53e00e8`, `866c13c`, `ab8b9a0`, `f43b708`, `3f58bf8`, `8df97a9`: tests, the crash matrix and the dispatch-from-frozen
+    fix.
+  - `a7138b0`: docs.
+- **Decision D1:**
+  - `3cc9900`: `policy.tool_approval` and typed `pending_waits`.
+  - `ba2b303`: typed wait details.
+- **Review fixes:**
+  - `e690b55`: H2, M1, D1-M1, M3 and `actor_id`.
+  - `af2de4a`: 44 F1/F2 and **45 H1, the release blocker**. The JSON start cost fell from a 269 ms median to 0.34 ms at 20k
+    runs.
+  - `b000036`: J51-1, the creation journal, `warm_session_index`.
+  - `aa0b1f1`: one `automation_status` rule.
+  - `d02578a`: J53-1 / J53-2.
+- **Docs:** `a7a1fae` (`docs/automations.md`: controller, triggers, context, discussions, tool approval, storage
+  guarantees).
+
+**Tests.** The full suite is **2957 passed / 26 skipped** at `d02578a`. The acceptance criteria above map onto:
+`test_automation_{occurrence_recovery, controller_recovery, commands, session_turns, discussion_isolation, index,
+replay_read_only, retry, growing_context, definition, controller, status, tool_approval}.py`,
+`test_trigger_{registry, schedule_math}.py`, `test_workspace_read_only.py`, `test_controller_bundle_packaged.py`,
+`test_discussion_session_anchor.py` and `test_session_start_cost.py`. Every test runs on JSON and SQLite, with SIGKILL
+crash points around every controller decision (18/18 held, reviews 45 and 47).
+
+**Reviews** (`untracked/missions-2026-09-25/REVIEW/` in the root repo):
+- 43 GO.
+- 44 GO for history and read-only, NO-GO for the discussion path (F1, F2) → fixed `af2de4a`.
+- 45 GO for the controller core, NO-GO for discussion (H2), and **H1 release blocker** → fixed `e690b55` / `af2de4a`.
+- 45 addendum (D1) GO.
+- Job 50 (`e690b55`) GO.
+- Job 51 (`af2de4a`) GO; history is byte-identical to 0.5.1 for ordinary sessions.
+- Job 53 (`b000036`) GO. J53-1/J53-2 were fixed afterwards in `d02578a` (not re-reviewed).
+
+**E2E.** Root `untracked/missions-2026-09-27/E2E/REPORT.md` passed 9/9 with the operator's MLX model. It covered
+deterministic child ids (also after a target revise), coalescing, growing context, `kill -9` twice with one child per
+tick, and a replay with 0 provider/tool calls and 201 files byte-identical.
+
+**Acceptance criteria:** all met as written, with these differences:
+- Discussions run with the target's tools on a read-only workspace (ruling 8).
+- The controller is driven by the gateway's ordinary runner. `drive_automation` exists for hosts without one; the gateway
+  does not use it.
+- One controller-writer process per store (documented).
+
+**Decisions recorded here** (full list in root 0928):
+- Discussion sessions are `discussion-session:<uuid5(automation_id, "discuss:"+request_id)>`.
+- An independent occurrence's session is its first attempt's run id.
+- Tool classes use the spelling `exec`.
+- `pending_waits` is live, not stored.
+- Under `auto` the grant covers the target's `allowed_tools`, else every classified tool (65). MCP and unclassified tools
+  still ask.
+- Bounds: `every` ≤ 366 d, `count` ≤ 1,000,000.
+
+**ADR impact:** the ADR this item anticipated ("an automation is its controller root run; occurrences are deterministic
+child runs") is **not written yet**. It stays open, recorded in root 0928's residuals.
+
+**Residuals and follow-ups:**
+- The store-level exact-key lookup and read cost (review 45 M2) → root 0937, together with runtime 0047 / 0068.
+- Duck-typed stores and `Runtime.start` → root 0938.
+- JSON order by mtime (review 43 F5) → root 0939.
+- Structured failure reason codes on attempts (every failure is `occurrence_failed` at the gateway).
+- Review 45 lows:
+  - L1: silent cuts at 280 / 2,000 characters (`automations/controller.py:449`);
+  - L2: re-anchoring on a resend without `start_at`;
+  - L3: a possible second coalesced record;
+  - L5: a failed occurrence is absent from its discussion seed.
+- Review 44 F5/F6 notes.
+- J50-1: a release-notes line.
+- abstractagent 0034: the agent-side tool effect declaration is still open. The runtime's central table covers today's
+  tools.
+- `resolve_discussion_root` is O(turns) per discussion turn.
+
+**Next:** [0848](../planned/0848_automations_v2_external_event_inbox_and_run_triggers.md) (v2) is unchanged.

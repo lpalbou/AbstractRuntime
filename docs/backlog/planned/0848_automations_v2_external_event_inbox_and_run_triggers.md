@@ -3,7 +3,7 @@
 > Created: 2026-09-26
 > Status: Planned (after v1)
 > Type: feature
-> Priority: P2 (next phase; starts only after [0847](0847_automations_v1_controller_contracts_occurrences_triggers.md) ships)
+> Priority: P2 (next phase; starts only after [0847](../completed/0847_automations_v1_controller_contracts_occurrences_triggers.md) ships)
 > Labels: automations, triggers, event-inbox, durability, reconciliation
 > Design: untracked/design/automations-PLAN.md (2026-09-26)
 
@@ -110,7 +110,7 @@ Verified 2026-09-26 against `2100d1f`:
 
 ## Dependencies and ADR status
 
-- Depends on [0847](0847_automations_v1_controller_contracts_occurrences_triggers.md)
+- Depends on [0847](../completed/0847_automations_v1_controller_contracts_occurrences_triggers.md)
   (contracts, deterministic ids, registry, index cursors).
 - Should share its store shape with
   [0051](runtime_systemic_reliability/0051_runtime_owned_durable_event_mailbox.md);

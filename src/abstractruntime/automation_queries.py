@@ -56,16 +56,12 @@ def _list_index(run_store: Any, **filters: Any) -> List[Dict[str, Any]]:
 
 def latest_occurrence(run_store: Any, automation_id: str) -> Optional[Dict[str, Any]]:
     """The index row of the automation's highest-numbered occurrence (its
-    newest attempt when retried), or None when it has not fired yet."""
-    rows = _list_index(run_store, automation_id=str(automation_id), role="occurrence")
-    best: Optional[Dict[str, Any]] = None
-    best_key: Any = None
-    for row in rows:
-        index = row.get("occurrence_index")
-        key = (index if isinstance(index, int) else -1, str(row.get("created_at") or ""), str(row.get("run_id") or ""))
-        if best_key is None or key > best_key:
-            best, best_key = row, key
-    return best
+    newest attempt when retried), or None when it has not fired yet.
+
+    Served by the store's `latest_occurrence_row` (SQLite: one index seek on
+    `(automation_id, role, occurrence_index)`; JSON: the scan memo); a store
+    without it fails loudly."""
+    return run_store.latest_occurrence_row(str(automation_id))
 
 
 def automation_status(controller: RunState) -> str:

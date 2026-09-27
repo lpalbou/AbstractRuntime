@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LedgerStore, RunStore
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason
-from ..core.run_attribution import automation_index_fields, is_turn_root, row_matches
+from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
@@ -126,6 +126,10 @@ class InMemoryRunStore(RunStore):
 
         out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         return out[:lim]
+
+    def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:
+        """Index row of the automation's highest-numbered occurrence (newest attempt), or None."""
+        return latest_occurrence_of(self.list_run_index(automation_id=str(automation_id), role="occurrence", limit=len(self._runs) or 1))
 
     def list_due_wait_until(
         self,

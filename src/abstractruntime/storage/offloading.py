@@ -465,6 +465,10 @@ class OffloadingRunStore(RunStore):
             automation_id=automation_id, role=role, session_kind=session_kind,
         )
 
+    def latest_occurrence_row(self, automation_id: str):
+        # Direct forward: an inner store without it raises AttributeError.
+        return self._inner.latest_occurrence_row(automation_id)
+
     def list_due_wait_until(self, *, now_iso: str, limit: int = 100):  # type: ignore[override]
         fn = getattr(self._inner, "list_due_wait_until", None)
         if not callable(fn):

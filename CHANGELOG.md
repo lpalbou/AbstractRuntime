@@ -94,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The JSON run store removes run temp files left behind by a crash (older than 10 minutes) when it
+  opens.
 - A parent that crashes after starting a child with an explicit id, but before saving its wait, finds
   the same child on replay (exactly one) and waits on it again; if the child already finished, the
   parent receives its result directly instead of waiting forever.

@@ -119,6 +119,19 @@ def row_matches(
     return True
 
 
+def latest_occurrence_of(rows: Any) -> Optional[Dict[str, Any]]:
+    """Among occurrence index rows, the highest `occurrence_index`, newest
+    attempt (latest `created_at`, then `run_id`), or None."""
+    best: Optional[Dict[str, Any]] = None
+    best_key: Any = None
+    for row in rows or []:
+        index = row.get("occurrence_index")
+        key = (index if isinstance(index, int) else -1, str(row.get("created_at") or ""), str(row.get("run_id") or ""))
+        if best_key is None or key > best_key:
+            best, best_key = row, key
+    return best
+
+
 def is_turn_root(*, parent_run_id: Any, role: Any) -> bool:
     """A session turn root: parent-less and not a controller, or an occurrence."""
     if role == "occurrence":
@@ -135,5 +148,6 @@ __all__ = [
     "automation_index_fields",
     "filter_values",
     "is_turn_root",
+    "latest_occurrence_of",
     "row_matches",
 ]

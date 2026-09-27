@@ -877,7 +877,23 @@ class SqliteRunStore(RunStore):
 
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         lim = max(1, int(limit or 100))
+        direction = "ASC" if oldest_first else "DESC"
+        return self._select_index_rows(where, params, f"updated_at {direction}", lim)
 
+    # The newest attempt of the highest occurrence index, served by
+    # idx_runs_automation (automation_id, role, occurrence_index): one index
+    # seek, never a walk over the automation's occurrences.
+    _LATEST_OCCURRENCE_WHERE = "WHERE automation_id = ? AND role = 'occurrence'"
+    _LATEST_OCCURRENCE_ORDER = "occurrence_index DESC, created_at DESC, run_id DESC"
+
+    def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:
+        """Index row of the automation's highest-numbered occurrence (newest attempt), or None."""
+        rows = self._select_index_rows(
+            self._LATEST_OCCURRENCE_WHERE, [str(automation_id)], self._LATEST_OCCURRENCE_ORDER, 1
+        )
+        return rows[0] if rows else None
+
+    def _select_index_rows(self, where: str, params: List[Any], order_sql: str, lim: int) -> List[Dict[str, Any]]:
         conn = self._db.connection()
         # Column-first (backlog 0068), and deliberately WITHOUT run_json in
         # the page query: fetching the multi-MB document column dominates the
@@ -889,7 +905,6 @@ class SqliteRunStore(RunStore):
         # 100x json.loads, not all I/O; a narrow side table could recover
         # the rest and was judged not worth the migration. Pre-0068 rows
         # (SQL NULL lifecycle) fetch their document individually below.
-        direction = "ASC" if oldest_first else "DESC"
         rows = conn.execute(
             f"""
             SELECT
@@ -901,7 +916,7 @@ class SqliteRunStore(RunStore):
               automation_id, role, occurrence_index, session_kind
             FROM runs
             {where}
-            ORDER BY updated_at {direction}
+            ORDER BY {order_sql}
             LIMIT ?;
             """,
             (*params, lim),

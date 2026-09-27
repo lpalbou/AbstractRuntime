@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
-from ..core.run_attribution import automation_index_fields, is_turn_root, row_matches
+from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
@@ -62,9 +62,14 @@ class JsonFileRunStore(RunStore):
     mtime and re-reads on any external write.
     """
 
+    # A run temp file older than this is an orphan of a crashed writer (a
+    # save()/create_if_absent() publishes its temp within milliseconds).
+    STALE_TEMP_AGE_S = 600.0
+
     def __init__(self, base_dir: str | Path, *, run_cache_max: int = 512):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
+        self._sweep_stale_temp_files()
         self._index_lock = threading.Lock()
         self._children_index: Optional[Dict[str, set[str]]] = None
         self._run_parent_index: Dict[str, Optional[str]] = {}
@@ -139,6 +144,19 @@ class JsonFileRunStore(RunStore):
         # the save() hot path.
         self._scan_dirty = 0
         self._scan_last_persist = time.monotonic()
+
+    def _sweep_stale_temp_files(self) -> None:
+        """Delete `run_<id>.json.<hex>.tmp` orphans left by a crash between a
+        temp write and its publication (os.link / replace). Fresh temps may
+        belong to a live writer in another process and are kept. Best effort:
+        a failed unlink only leaves the orphan for the next open."""
+        cutoff = time.time() - float(self.STALE_TEMP_AGE_S)
+        for tmp in self._base.glob("run_*.json.*.tmp"):
+            try:
+                if tmp.stat().st_mtime < cutoff:
+                    tmp.unlink()
+            except OSError:
+                continue
 
     @staticmethod
     def _stat_token(st: Any) -> tuple[int, int, int]:
@@ -840,6 +858,14 @@ class JsonFileRunStore(RunStore):
         out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         self._maybe_persist_scan_memo()
         return out[:lim]
+
+    def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:
+        """Index row of the automation's highest-numbered occurrence (newest
+        attempt), or None — answered from the scan memo (one stat per file,
+        no parse for unchanged files)."""
+        return latest_occurrence_of(
+            self.list_run_index(automation_id=str(automation_id), role="occurrence", limit=1_000_000)
+        )
 
     def list_due_wait_until(
         self,

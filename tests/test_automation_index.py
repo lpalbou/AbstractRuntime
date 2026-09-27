@@ -230,3 +230,46 @@ def test_next_fire_at_during_retry_backoff_is_the_retry_deadline(tmp_path) -> No
     store.save(run)
     (summary,) = list_automations(store).items
     assert summary["next_fire_at"] is None
+
+
+def test_sqlite_latest_occurrence_is_one_index_seek(tmp_path) -> None:
+    store = make_store("sqlite", tmp_path)
+    for i in range(1, 41):
+        _save(store, f"occ-{i}", session_id="s", parent=AUTO, meta=_occ(i), created_at=f"2026-09-27T10:{i:02d}:00+00:00")
+    assert latest_occurrence(store, AUTO)["run_id"] == "occ-40"
+    conn = sqlite3.connect(tmp_path / "runs.sqlite")
+    plan = " ".join(str(r[-1]) for r in conn.execute(
+        f"EXPLAIN QUERY PLAN SELECT run_id FROM runs {SqliteRunStore._LATEST_OCCURRENCE_WHERE} "
+        f"ORDER BY {SqliteRunStore._LATEST_OCCURRENCE_ORDER} LIMIT 1", (AUTO,)))
+    assert "idx_runs_automation" in plan and "SCAN runs" not in plan, plan
+    # The call path issues that one indexed statement (no scan of every occurrence row).
+    fetched: list = []
+    raw = store._db.connection()
+    raw.set_trace_callback(fetched.append)
+    try:
+        latest_occurrence(store, AUTO)
+    finally:
+        raw.set_trace_callback(None)
+    (query,) = [q for q in fetched if "FROM runs" in q]  # exactly one statement
+    assert SqliteRunStore._LATEST_OCCURRENCE_ORDER in query and "run_json" not in query
+
+
+def test_json_latest_occurrence_parses_no_run_file_when_warm(tmp_path, monkeypatch) -> None:
+    store = make_store("json", tmp_path)
+    for i in range(1, 21):
+        _save(store, f"occ-{i}", session_id="s", parent=AUTO, meta=_occ(i), created_at=f"2026-09-27T10:{i:02d}:00+00:00")
+    store.list_run_index()  # warm the scan memo
+    loads: list = []
+    real = store._load_from_path
+    monkeypatch.setattr(store, "_load_from_path", lambda p: loads.append(p) or real(p))
+    assert latest_occurrence(store, AUTO)["run_id"] == "occ-20"
+    assert loads == []
+
+
+def test_latest_occurrence_requires_the_store_primitive() -> None:
+    class NoPrimitive:
+        def list_run_index(self, **kw):
+            return []
+
+    with pytest.raises(AttributeError):
+        latest_occurrence(NoPrimitive(), AUTO)

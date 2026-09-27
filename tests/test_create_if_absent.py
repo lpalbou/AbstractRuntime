@@ -211,3 +211,17 @@ def test_offloading_keeps_identity_meta_inline_on_terminal_runs(kind, tmp_path) 
     assert stored.vars["_meta"]["creation_digest"] == "sha256:abc"
     # Non-identity private vars still offload.
     assert stored.vars["_temp"]["blob"] != big
+
+
+def test_json_store_sweeps_stale_temp_files_on_open(tmp_path) -> None:
+    runs = tmp_path / "runs"
+    JsonFileRunStore(runs)
+    stale = runs / "run_child-1.json.deadbeef.tmp"
+    fresh = runs / "run_child-2.json.cafebabe.tmp"
+    stale.write_text("{partial")
+    fresh.write_text("{in flight")
+    old = stale.stat().st_mtime - JsonFileRunStore.STALE_TEMP_AGE_S - 60
+    os.utime(stale, (old, old))
+    JsonFileRunStore(runs)
+    assert not stale.exists()
+    assert fresh.exists()  # may belong to a live writer

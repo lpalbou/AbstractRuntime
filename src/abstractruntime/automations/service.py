@@ -344,7 +344,7 @@ def start_discussion(
     (`_runtime.workspace_read_only_paths`). Nothing is ever written back into
     the automation's session, state or workspace.
     """
-    from ..utils.workspace_paths import READ_ONLY_PATHS_KEY
+    from ..utils.workspace_paths import BUILTIN_ALLOW_KEY, BUILTIN_DENY_KEY, READ_ONLY_PATHS_KEY
 
     if not isinstance(prompt, str) or not prompt.strip():
         raise AutomationError("prompt must be a non-empty string", reason_code="invalid_request", field="prompt")
@@ -408,6 +408,14 @@ def start_discussion(
     allowed = input_data.get("workspace_allowed_paths")
     allowed = [a for a in allowed if isinstance(a, str)] if isinstance(allowed, list) else []
     input_data["workspace_allowed_paths"] = [*allowed, mounted] if mounted not in allowed else allowed
+    # Host protection: the occurrence's frozen inputs carry the host's built-in
+    # deny prefixes (its data dir, credential folders) and allow ONLY the
+    # automation's workspace. The discussion's own folder is host-allocated
+    # (often under that data dir) and was checked above to differ from the
+    # mount, so both roots are allowed explicitly; the deny prefixes stay as
+    # they are and nothing client-controlled is widened.
+    if input_data.get(BUILTIN_DENY_KEY):
+        input_data[BUILTIN_ALLOW_KEY] = [own_workspace, mounted]
     input_data.pop(READ_ONLY_KEY, None)
     runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
     runtime_ns = {k: v for k, v in runtime_ns.items() if k != READ_ONLY_KEY}

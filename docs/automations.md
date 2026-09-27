@@ -327,6 +327,9 @@ actor_id=None)` starts a separate conversation about the automation as it stood 
   (`workspace_access_mode: "workspace_or_allowed"`, listed in `workspace_allowed_paths`) and protected by
   `_runtime.workspace_read_only_paths`, so reads work and writes, edits and moves into it are refused. Commands and
   tools run normally in the discussion's own workspace. `_meta.discussion.mounted_workspace` names the mount.
+  When the occurrence's inputs carry the host's built-in protection (`workspace_builtin_deny_prefixes`, e.g. the
+  gateway's data dir), the discussion keeps those deny prefixes unchanged and sets `workspace_builtin_allow` to
+  exactly its own workspace and the mount, so both roots are usable and nothing else in the protected folders is.
 - The automation's tool grant is removed: tools in a discussion ask for approval as in any chat.
 - Nothing is ever written back into the automation's session, state, ledger or workspace.
 

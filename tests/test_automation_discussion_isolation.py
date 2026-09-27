@@ -220,3 +220,35 @@ def test_request_ids_are_scoped_to_the_automation(env):
         start_discussion(runtime, automation_id=a, occurrence_index=1, request_id="disc-1", prompt="something else",
                          workspace_root=own_ws)
     assert (exc.value.reason_code, exc.value.field) == ("identity_conflict", "request_id")
+
+
+@pytest.mark.parametrize("env", ["json"], indirect=True)
+def test_host_protection_allows_both_discussion_roots_and_nothing_else(env):
+    from abstractruntime.integrations.abstractcore.workspace_scoped_tools import WorkspaceScope, rewrite_tool_arguments
+    from abstractruntime.utils.workspace_paths import BUILTIN_ALLOW_KEY, BUILTIN_DENY_KEY
+
+    runtime, clock, tmp_path = env
+    data_dir = tmp_path / "gateway-data"
+    auto_ws = data_dir / "workspaces" / "automation"
+    own_ws = data_dir / "workspaces" / "discussion"
+    secrets = data_dir / "secrets"
+    for d in (auto_ws, own_ws, secrets):
+        d.mkdir(parents=True)
+    aid = create(runtime, clock, workspace_root=str(auto_ws),
+                 input_data={"prompt": "p", BUILTIN_DENY_KEY: [str(data_dir)], BUILTIN_ALLOW_KEY: [str(auto_ws)]})
+    drive(runtime, aid)
+    started = start_discussion(runtime, automation_id=aid, occurrence_index=1, request_id="h", prompt="?",
+                               workspace_root=str(own_ws))
+    disc = runtime.get_state(started["run_id"])
+    assert disc.vars[BUILTIN_DENY_KEY] == [str(data_dir)]  # unchanged
+    assert disc.vars[BUILTIN_ALLOW_KEY] == [str(own_ws), str(auto_ws)]
+    scope = WorkspaceScope.from_input_data(disc.vars)
+
+    def write(path):
+        return rewrite_tool_arguments(tool_name="write_file", args={"file_path": str(path), "content": "x"}, scope=scope)
+
+    assert write(own_ws / "analysis.md")["file_path"].endswith("analysis.md")  # own root: allowed
+    with pytest.raises(ValueError):
+        write(auto_ws / "state.json")  # the mount: read-only
+    with pytest.raises(ValueError):
+        write(secrets / "token")  # elsewhere in the data dir: denied

@@ -1,6 +1,6 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-09-26
+> Updated: 2026-09-27
 > Version: 0.5.1
 > Scope: this describes **what is implemented in this repository**.
 
@@ -315,6 +315,70 @@ The scheduler is an in-process driver loop that resumes due waits and can delive
 - `Scheduler` (`src/abstractruntime/scheduler/scheduler.py`) polls `QueryableRunStore.list_due_wait_until(...)`
 - `ScheduledRuntime` + `create_scheduled_runtime()` (`src/abstractruntime/scheduler/convenience.py`) is the "zero-config" wrapper used in `examples/`
 
+## Automations
+
+An automation runs a target workflow on a trigger, and is itself a durable run. The controller is a packaged
+VisualFlow bundle (`abstractframework.automation-controller@1.0.0`) whose nodes are `automation` adapters; it waits on
+one `WAIT_EVENT` with a deadline, starts each occurrence as an asynchronous `START_SUBWORKFLOW` child with a
+deterministic id, and records every transition as an `automation.*` ledger record. No new effect type or driver is
+involved: a host drives a controller like any other run. See [automations.md](automations.md).
+
+```mermaid
+flowchart LR
+  subgraph Host["Host (AbstractGateway run loop, or drive_automation)"]
+    Loop["tick due runs /<br/>resume finished subworkflow parents"]
+    API["commands + reads"]
+  end
+  subgraph Automations["automations/ + triggers/"]
+    Commands["apply_automation_command"]
+    Controller["controller run<br/>(automation-controller@1.0.0)"]
+    Triggers["trigger registry<br/>schedule@1, manual@1,<br/>entry-point sources"]
+    Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
+  end
+  subgraph Runs["runs"]
+    Occ["occurrence run<br/>(session turn)"]
+    Desc["descendant runs"]
+    Disc["discussion run<br/>(read-only workspace)"]
+  end
+  subgraph Stores["storage/"]
+    RS["RunStore<br/>create_if_absent + run index"]
+    LS["LedgerStore<br/>automation.* records"]
+  end
+
+  API --> Commands
+  API --> Queries
+  Commands -->|"run_mutation_lock,<br/>decision, wake"| Controller
+  Loop --> Controller
+  Loop --> Occ
+  Controller -->|"prepare / admit / rearm"| Triggers
+  Controller -->|"START_SUBWORKFLOW run_id"| Occ
+  Occ --> Desc
+  Controller --> RS
+  Controller --> LS
+  Occ --> RS
+  Disc --> RS
+  Queries --> RS
+  Queries --> LS
+```
+
+Invariants the design rests on:
+
+- **Create-if-absent.** Controllers, occurrences and discussions are created under explicit ids through
+  `RunStore.create_if_absent`, so replaying a creation after a crash finds the same run and never starts a second
+  one (`Runtime.start(..., run_id=...)`, `START_SUBWORKFLOW` `payload.run_id`).
+- **One decision protocol.** Every controller step and command reconciles, looks its decision key up exactly, saves
+  an intent, appends the record and applies it, so a crash at any point yields exactly one record and one
+  application.
+- **One lock per run.** `run_mutation_lock(run_id)` serializes `tick`, `resume` commits and automation commands in a
+  process. v1 supports one writer process per store.
+- **Turns are defined once.** `select_session_turns` decides which runs are a session's turns (parent-less runs
+  except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
+  use it, and `list_run_index(root_only=True)` returns the same turn roots.
+- **Attribution is indexed.** Each run index row carries `automation_id`, `role`, `occurrence_index` and
+  `session_kind`, derived from inline `vars._meta` that the offloading store never moves. `Runtime.start` uses
+  `session_attribution` to anchor every root run in a discussion session to the discussion's validated root and its
+  read-only workspace, and refuses the start when the attribution cannot be read.
+
 ## Observability: what you can export
 
 - Ledger (source of truth): `Runtime.get_ledger(run_id)` (`src/abstractruntime/core/runtime.py`)
@@ -343,6 +407,7 @@ AbstractRuntime includes a compiler and a portable bundle format:
 - `../README.md` — install + quick start
 - `getting-started.md` — first steps
 - `api.md` — public API surface (imports + pointers)
+- `automations.md` — automations: controller, triggers, commands, context, discussions, storage guarantees
 - `limits.md` — `_limits` and RuntimeConfig
 - `snapshots.md` — snapshot/bookmark stores
 - `provenance.md` — hash chain and verification

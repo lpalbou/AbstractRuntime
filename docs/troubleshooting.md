@@ -166,6 +166,115 @@ Fix:
 Docs:
 - `integrations/abstractcore.md#unloading-and-switching-models`
 
+## An automation does not fire
+
+Symptom:
+- `get_automation(...)` shows the automation, but no new occurrence appears in `list_occurrences(...)`.
+
+Likely causes:
+- Nothing drives the controller. Without a host run loop, `drive_automation` returns when the controller parks; a
+  later tick needs the controller to be ticked again after its deadline.
+- The automation is `paused`, `archived`, `completed` (its schedule is exhausted: `count` reached, `until` passed, or
+  a one-shot schedule already fired) or `failed`.
+- An occurrence is still running or waiting on a person, or is in retry backoff. Occurrences run one at a time.
+- The trigger is `manual@1`, which only fires on `automation.run_now`.
+
+Checks:
+
+```python
+from abstractruntime.automations import get_automation, list_occurrences, pending_waits
+
+info = get_automation(runtime.run_store, automation_id)
+print(info["status"], info["next_fire_at"], info["state"]["pending_occurrence"])
+print(pending_waits(runtime.run_store, automation_id))
+```
+
+Fix:
+- Standalone hosts: tick the controller after `next_fire_at`, then drive it:
+  `runtime.tick(workflow=controller_workflow_spec(), run_id=automation_id)` and `drive_automation(runtime, automation_id)`.
+- Answer a pending wait with `Runtime.resume(...)` and the payload of its `kind`, or send
+  `automation.stop_current`.
+- Send `automation.resume` for a paused automation. It re-arms at the next tick; `automation.run_now` fires once
+  immediately.
+
+Verify:
+- `list_occurrences(...)` shows a new item, and `next_fire_at` moves to the following tick.
+
+Docs:
+- `automations.md#the-controller`, `automations.md#commands`
+
+## A start fails with `identity_conflict`
+
+Symptom:
+- `Runtime.start(..., run_id=...)` raises `RunIdentityConflict`, or `create_automation`, `start_discussion` or
+  `apply_automation_command` report `identity_conflict`.
+
+Likely causes:
+- The id (or `request_id`, or `command_id`) was already used for a different request. Ids are idempotency keys: the
+  same request returns the existing run or result, a different one is refused.
+
+Fix:
+- Use a new `request_id` / `command_id` for a new request, or resend exactly the original request to get the
+  existing result.
+
+Docs:
+- `api.md#runtime-start--tick--resume`, `automations.md#creating-an-automation`, `automations.md#commands`
+
+## A start fails with `SessionAttributionError`
+
+Symptom:
+- `Runtime.start(..., session_id=...)` raises `SessionAttributionError` (`reason_code = "session_attribution_failed"`).
+
+Likely causes:
+- The run store has no run index (neither `session_kinds` nor `list_run_index`), so the runtime cannot tell whether
+  the session is a discussion.
+- The session is a discussion whose root cannot be validated: its runs name different roots, or the root is missing,
+  has a parent, lives in another session, carries no seed, or has no `workspace_root`.
+
+Fix:
+- Use one of the built-in run stores (SQLite, JSON files, in-memory, optionally wrapped by the offloading store), or
+  add `list_run_index` / `session_kinds` to your store.
+- For a damaged discussion session, start a new discussion with `start_discussion(...)` instead of adding turns to it.
+
+Docs:
+- `automations.md#discussions`, `automations.md#storage-guarantees`
+
+## Growing context or a discussion fails with `history_unavailable`
+
+Symptom:
+- An automation's admission fails, or `start_discussion` raises `SessionHistoryError` (`reason_code =
+  "history_unavailable"`).
+
+Likely causes:
+- The run store has no run index; strict history needs one.
+- A discussion's seed is missing, malformed or offloaded to an artifact the artifact store cannot load.
+- `through_occurrence` names an occurrence the session does not hold.
+
+Fix:
+- Use a store with a run index and pass the runtime's artifact store to history reads.
+- Check the occurrence number against `list_occurrences(...)`.
+
+Docs:
+- `automations.md#context-independent-or-growing`, `automations.md#runs-sessions-and-history`
+
+## A tool is refused because the workspace is read-only
+
+Symptom:
+- A tool or VisualFlow node fails with "this workspace is read-only", or a run fails because a read-only
+  `workspace_root` does not exist.
+
+Likely causes:
+- The run is a discussion, or was started with `workspace_read_only: true`. Tools classified `write` or `exec`, tools
+  the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is never created.
+
+Fix:
+- Continue the work in the automation itself or in an ordinary chat session, where the workspace is writable.
+- Check a tool's class with `tool_effect_class(name)` from
+  `abstractruntime.integrations.abstractcore.tool_effects`.
+
+Docs:
+- `automations.md#read-only-workspaces`
+
 ## MCP worker command is not found
 
 Symptom:

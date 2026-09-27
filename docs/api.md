@@ -62,8 +62,10 @@ Durability invariant: `RunState.vars` must remain JSON-serializable (`src/abstra
 
 Implementation: `src/abstractruntime/core/runtime.py`.
 
-- `Runtime.start(workflow, vars=..., actor_id=..., session_id=...) -> run_id`
+- `Runtime.start(workflow, vars=..., actor_id=..., session_id=..., parent_run_id=..., run_id=...) -> run_id`
   - creates and persists a new `RunState`
+  - `run_id` starts the run under an id you choose (`[A-Za-z0-9_-]+`). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, `vars._meta.occurrence`, `vars._meta.creation_digest`) returns the existing run untouched, and a different identity raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). The store must support `create_if_absent` (otherwise `NotImplementedError`). `START_SUBWORKFLOW` accepts the same explicit id as `payload.run_id`
+  - a root run that names a session is checked against the session's attribution: in a discussion session it becomes read-only on the discussion's workspace with the discussion's provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises `SessionAttributionError` (see [automations.md](automations.md#discussions))
 - `Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
@@ -71,6 +73,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
   - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`), for example when another caller resumed it first
   - the check and the commit run under a per-run lock, and tools approved with `{"approved": true}` execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused
+- `run_mutation_lock(run_id)` (package root): the per-run, per-process, re-entrant lock that `tick` holds for the whole tick and `resume` for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
   - host-facing read APIs for checkpoints and the append-only ledger
 - `Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -> RunState`
@@ -116,6 +119,12 @@ Notes:
 - `abstractruntime.storage` intentionally exports only the most common store types. SQLite types are available via:
   - `from abstractruntime import SqliteRunStore, SqliteLedgerStore`, or
   - `from abstractruntime.storage.sqlite import SqliteRunStore, SqliteLedgerStore`
+
+Run index and creation (all built-in run stores, including the offloading wrapper):
+- `create_if_absent(run) -> (run, created)`: creates a run only if its id is free and never overwrites an existing one; `store_supports_create_if_absent(store)` / `require_create_if_absent(store)` check a store first. Process-crash safe; power-loss durability is not claimed
+- `list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)`: lightweight rows carrying `automation_id`, `role`, `occurrence_index` and `session_kind`; the three attribution filters take a value, a comma-separated string or a list; `root_only=True` returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
+- `session_kinds(session_id) -> frozenset` and `latest_occurrence_row(automation_id)`: indexed lookups used by session attribution and automation listings
+- `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup. Store objects and processes sharing one JSON run folder see each other's created and deleted runs through the creation journal `.runs_created.log`; v1 supports one writer process per store
 
 Common decorators:
 - `ObservableLedgerStore` for subscriptions (`src/abstractruntime/storage/observable.py`)
@@ -204,6 +213,48 @@ Public bundle APIs are exported from `src/abstractruntime/workflow_bundle/__init
 - pack/unpack: `pack_workflow_bundle(...)`, `unpack_workflow_bundle(...)`
 
 Docs: `workflow-bundles.md`.
+
+## Automations
+
+Implementation: `src/abstractruntime/automations/*`, `src/abstractruntime/triggers/*`, `src/abstractruntime/automation_queries.py`.
+Deep dive: [automations.md](automations.md).
+
+```python
+from abstractruntime.automations import (
+    apply_automation_command,   # pause / resume / run_now / revise / stop_current / archive
+    create_automation,          # -> (automation_id, revision)
+    drive_automation,           # standalone run loop
+    get_automation,
+    list_attention,
+    list_occurrences,
+    pending_waits,
+    register_controller_bundle,
+    start_discussion,
+)
+from abstractruntime.automation_queries import latest_occurrence, list_automations
+from abstractruntime.triggers import get_trigger_adapter, trigger_sources
+```
+
+- `create_automation(runtime, request, *, now=None, actor_id=None)`: creates the controller root run (the automation) with a deterministic id; raises `AutomationError` (`invalid_definition`, `unsupported_feature`, `unknown_trigger_source`, `identity_conflict`)
+- `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None, expected_revision=None)`: the only writer of automation state; returns `{status: "applied" | "rejected", error?, duplicate}`; idempotent per `command_id`
+- `record_automation_command_result(...)`: records a host-side failure of a command as a rejected result
+- reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
+- `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, actor_id=None)`: a separate, seeded conversation about one occurrence, on its workspace mounted read-only
+- controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1` and `manual@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
+- read-only workspaces: run vars `workspace_read_only: true` (or `_runtime.workspace_read_only: true`); `abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool as `read`, `write`, `exec`, `delegate`, `comms` or `memory-write`
+
+## Sessions and history
+
+Implementation: `src/abstractruntime/session_turns.py`, `src/abstractruntime/session_history.py`, `src/abstractruntime/core/run_attribution.py`.
+
+- `select_session_turns(run_store, session_id, *, include_occurrences=True, until_ms=None, automation_id=None, through_occurrence=None, include_drafts=False, limit=50)` (package root): a session's turns, oldest first. Turns are parent-less runs except automation controllers, plus automation occurrences (a retried occurrence counts once, as its newest attempt); child runs, runtime-internal runs, legacy scheduled wrappers and draft-test runs are left out
+- `session_chat_messages(run_store=, ledger_store=, artifact_store=, session_id=, max_messages=40, max_total_chars=24000, ..., automation_id=None, through_occurrence=None, strict=False)` (package root): the session's completed turns as user/assistant message pairs, newest kept under the budget; in a discussion session the discussion's seed comes first. `strict=True` raises `SessionHistoryError` (`reason_code = "history_unavailable"`) instead of returning a partial history
+- `session_attribution(run_store, session_id)` (`abstractruntime.core.run_attribution`): `None` or `{"kind": "chat" | "automation" | "occurrence" | "discussion", ...}`; a discussion adds its validated root, automation, occurrence and workspace. Raises `SessionAttributionError` when the lookup cannot be completed
+- `is_draft_lifecycle(run_lifecycle)` (package root): whether a run's lifecycle value marks a draft test run
+
+History bundles (`export_run_history_bundle`) and session replay use the same turn selection, so automation occurrences appear as turns (kind `occurrence`, with `automation_id` and `occurrence_index`) in both.
 
 ## Run history bundle export (portable replay artifact)
 

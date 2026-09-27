@@ -46,6 +46,60 @@ Docs: `getting-started.md`, `architecture.md`. Code: `src/abstractruntime/core/r
 
 Docs: `getting-started.md`. Code: `src/abstractruntime/core/runtime.py`, `src/abstractruntime/scheduler/convenience.py`.
 
+## How do I run a workflow on a schedule or on request?
+
+Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
+occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`) or `manual@1` (run now only).
+`create_automation(...)` creates it, `apply_automation_command(...)` pauses, resumes, runs now, edits, stops the
+current occurrence or archives it, and the host drives it like any run (`drive_automation` does this in-process).
+
+The `Scheduler` is different: it is a driver loop that resumes due waits of existing runs. It does not create runs.
+
+Docs: `automations.md`. Code: `src/abstractruntime/automations/*`, `src/abstractruntime/triggers/*`.
+
+## What happens to scheduled ticks while the host is down?
+
+When the controller next runs, the missed ticks are coalesced: one occurrence runs, for the latest due tick, and its
+event payload reports the skipped range (`coalesced: {first_tick, last_tick, missed_count}`). Resuming a paused
+automation never catches up: it re-arms at the first tick after now. Occurrences are created under deterministic ids
+through create-if-absent, so a crash never loses one or starts one twice.
+
+Docs: `automations.md#schedule1`, `automations.md#crash-safety`.
+
+## Why does an automation appear as a chat in my session list?
+
+Session views are built from turn roots: runs without a parent, except automation controllers, plus automation
+occurrences. In growing mode every occurrence joins the automation's session (`automation:<id>`), so that session
+reads as a chat whose turns are the occurrences. In independent mode (the default) each occurrence has its own
+session. Filter the run index with `session_kind="chat,discussion"` to list only interactive sessions.
+
+Docs: `automations.md#runs-sessions-and-history`, `api.md#sessions-and-history`.
+
+## Do an automation's tools ask for approval?
+
+Not by default. With `policy.tool_approval: "auto"`, creating the automation is the consent: each occurrence gets a
+frozen grant for the target's tools (its `allowed_tools`, or every tool the runtime classifies). Tools the runtime
+does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person. Use
+`"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval` waits.
+
+Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
+
+## Can a discussion of an automation run change my files?
+
+No. A discussion runs on the occurrence's workspace mounted read-only: tools that write files or run commands or code
+are refused, and so is any tool the runtime has not classified. Every later turn in the discussion session is
+read-only too, whoever starts it, and nothing is written back into the automation.
+
+Docs: `automations.md#discussions`, `automations.md#read-only-workspaces`.
+
+## Can several processes share one run store?
+
+v1 supports one writer process per store: one process ticks, resumes and commands runs. `run_mutation_lock` serializes
+writers inside that process only. Several store objects or read-only processes on one JSON run folder stay
+consistent through the creation journal (`.runs_created.log`).
+
+Docs: `automations.md#storage-guarantees`.
+
 ## Why is my `ASK_USER` answer a dict?
 
 `Runtime.resume(..., payload=...)` always takes a **dict** payload. If the wait has a `result_key`, the runtime stores that dict into `RunState.vars` at `result_key`.  

@@ -34,6 +34,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Features (reference)
 
+- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, entry-point sources), commands, independent or growing context, discussions on a read-only workspace, tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

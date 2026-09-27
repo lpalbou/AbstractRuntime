@@ -9,131 +9,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Runtime.start(..., run_id=...)` and `START_SUBWORKFLOW` `payload.run_id`: start a run under an id you
-  choose. The run is created only if that id is free; starting it again with the same request returns
-  the existing run untouched (never reset or re-seeded), and a different request under the same id
-  raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). Identity is the
-  workflow, session, parent run, `vars._meta.occurrence` and a `vars._meta.creation_digest` (the
-  caller's own, or a sha256 of the start request).
-- `RunStore.create_if_absent(run) -> (run, created)` on the SQLite, JSON-file, in-memory and
-  offloading stores (JSON files publish a fully written temp file with an atomic hard link, so an
-  existing run file is never replaced). Stores without it raise; `store_supports_create_if_absent` /
-  `require_create_if_absent` check a store (through the offloading wrapper) before relying on it.
-  Recovery after a process crash is covered; power-loss durability is not claimed.
-- `run_mutation_lock(run_id)`: the per-run lock that `Runtime.tick` now holds for the whole tick and
-  `Runtime.resume` for its commit. Hosts take it around their own read-modify-save of a run so a tick
-  can no longer overwrite their change. It is per process (one writer process per store).
-
-- Run index rows carry `automation_id`, `role` (`controller`, `occurrence`, `descendant`, `discussion`,
-  `legacy_schedule` or empty), `occurrence_index` and `session_kind` (`chat`, `automation`,
-  `occurrence`, `discussion`), and `list_run_index` filters on them (`session_kind="chat,discussion"`
-  works). Existing SQLite stores fill the new columns once on open; the JSON store re-reads each run
-  file once after the upgrade.
-- `abstractruntime.automation_queries`: `list_automations(store, status=, cursor=, limit=)` (pages of
-  automation summaries, newest first, with a cursor that survives restarts; archived automations stay
-  listed) and `latest_occurrence(store, automation_id)`. `changed_since` is refused with
-  `unsupported_feature`: clients poll complete pages.
-
-- `select_session_turns(store, session_id, ...)`: the one definition of a session's turns (runs without
-  a parent plus automation occurrences; never child runs, automation controllers, internal runs, legacy
-  scheduled wrappers or draft tests), with `include_occurrences`, `automation_id`,
-  `through_occurrence`, `until_ms`, `include_drafts` and `limit`. `is_draft_lifecycle` is exported too.
-
-- Read-only workspaces: a run started with `workspace_read_only: true` (or trusted runtime policy
-  `_runtime.workspace_read_only: true`) can read its workspace but not change it. Tools that write
-  files or run commands or code (`write_file`, `edit_file`, `execute_command`, `shell_exec`,
-  `local_helper_start`, `execute_python`, ...) are refused, and so is any tool the runtime has not
-  classified; VisualFlow `write_file`, `write_pdf`, `write_docx`, `write_chart` and `export_artifact`
-  nodes are refused too. A read-only workspace folder is never created, and a read-only run without
-  one is refused. Child runs and VisualFlow nodes inherit the setting and cannot turn it off.
-  `tool_effects.TOOL_EFFECT_CLASSES` is the one table of what each tool can do (read, write, exec,
-  delegate, comms, memory-write).
-
-- `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)`: bound the
-  replayed turns to one automation or to the history as it stood at occurrence N. In a discussion
-  session the discussion's seed messages are replayed first (and dropped first under the budget).
-  `strict=True` raises `SessionHistoryError` (`reason_code = "history_unavailable"`) instead of
-  returning a partial history: a store without a run index, or a discussion whose seed is missing
-  or cannot be read back from the artifact store.
-
-- Automations (`abstractruntime.automations`, see `docs/automations.md`). An automation runs a workflow
-  on a trigger and is itself a durable run: the controller, from the packaged bundle
-  `abstractframework.automation-controller@1.0.0`. Each firing (an occurrence) is a child run with a
-  predictable id, so a crash never loses one or starts it twice. `create_automation`,
-  `get_automation`, `list_occurrences`, `start_discussion` (a separate conversation started from an
-  occurrence, with its workspace read-only) and `drive_automation` (a small run loop for hosts
-  without one).
-  - Independent occurrences (the default) start fresh; in growing mode each occurrence sees the
-    previous ones as conversation history.
-  - Failed occurrences are retried: 3 attempts by default, 30 s then 60 s apart (at most 10 minutes).
-    A later edit never changes an occurrence already under way.
-  - Automations are quiet unless the workflow's output carries `notify: true` or
-    `notify: {title, body}`, or an occurrence still fails after its last retry.
-    `list_attention` pages those items, oldest first; `pending_waits` lists occurrences waiting on a
-    person.
-  - `apply_automation_command` pauses, resumes, runs now, edits (`revise`), stops the current
-    occurrence or archives. Commands are safe to send twice (one `command_id`, one effect), are
-    checked against `expected_revision`, and never interleave with the controller. Pause stops
-    scheduled runs only ("run now" still works); resume never fires the missed runs.
-  - `policy.tool_approval` (`"auto"` by default, or `"ask"`): under `auto` an occurrence's tools run without
-    asking (creating the automation is the consent), through the existing
-    `_runtime.tool_policy.auto_approve_tools` grant, frozen at admission; discussions never inherit it.
-    `pending_waits` returns typed waits (`kind`: `ask_user`, `tool_approval` with the calls to approve in
-    `details`, or `event`).
-  - `create_automation` and `start_discussion` take `actor_id=` (the owner, stamped when the run is
-    created). Discussion sessions are scoped to their automation. Reusing a `command_id` for a
-    different command is refused with `identity_conflict`. Revising `policy` changes only the fields
-    sent. `every` is at most `366d` and `count` at most 1 000 000.
-- Trigger sources (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or
-  `24h` on a grid that does not drift; `start_at`, `until` (exclusive) and `count`; one-shot when
-  `every` is absent; missed ticks run once, marked `coalesced`) and `manual@1`. Other packages add
-  sources through the `abstractruntime.trigger_sources` entry-point group; a broken third-party
-  source is listed as unavailable, a missing built-in is an error.
+- **Automations** (`abstractruntime.automations`, see `docs/automations.md`): run a workflow on a trigger. An
+  automation is a durable controller run (the packaged bundle `abstractframework.automation-controller@1.0.0`), and
+  each firing (an occurrence) is a child run with a deterministic id, so a crash never loses an occurrence or starts
+  one twice. Every transition is an `automation.*` record in the controller's ledger.
+  - `create_automation(runtime, request, *, actor_id=None)` returns `(automation_id, revision)`; the same request
+    returns the same automation and a reused `request_id` with a different request raises `identity_conflict`.
+    `get_automation`, `list_occurrences` and `drive_automation` (a run loop for hosts without one) complete the
+    service API.
+  - `apply_automation_command` pauses, resumes, runs now, revises, stops the current occurrence or archives. Commands
+    are idempotent per `command_id` (a reused id for a different command is refused with `identity_conflict`), are
+    checked against `expected_revision`, and never interleave with the controller. Pause stops scheduled runs only;
+    resume never fires missed runs; revising `policy` changes only the fields sent.
+  - Context: independent occurrences (the default) start fresh in their own session; in growing mode each occurrence
+    joins the automation's session and receives its previous turns (at most 40 messages / 24,000 characters).
+  - Failed occurrences are retried: 3 attempts by default, 30 s then 60 s apart, capped at 10 minutes. An occurrence's
+    inputs are frozen when it is admitted, so a later revision never changes it.
+  - Automations are quiet unless the output carries `notify: true` or `notify: {title, body}`, or an occurrence still
+    fails after its last retry. `list_attention` pages these items oldest first.
+  - `policy.tool_approval`: `"auto"` (default; creating the automation is the consent, and each occurrence receives a
+    frozen `_runtime.tool_policy.auto_approve_tools` grant) or `"ask"`. Unclassified tools still ask.
+  - `pending_waits` lists occurrence runs waiting on a person as typed waits: `ask_user`, `tool_approval` (with the
+    calls to approve in `details`) or `event` (with `{scope, name}` when known); `ANSWER_PAYLOADS` gives the resume
+    payload for each kind.
+  - `start_discussion(...)` forks a separate conversation from an occurrence: a new root run in its own session,
+    seeded once with the conversation through that occurrence, on the occurrence's workspace mounted read-only, and
+    without the automation's tool grant. Discussion sessions are scoped to their automation.
+  - `adopt_legacy_schedule_projection(run)` summarizes a legacy gateway `scheduled:*` root read-only.
+  - Limits: `every` is at most `366d`, `count` at most 1,000,000.
+- **Trigger sources** (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or `24h` on a grid
+  that does not drift; `start_at`, exclusive `until` and `count`; one-shot when `every` is absent; missed ticks run
+  once, marked `coalesced`) and `manual@1`. Other packages add sources through the `abstractruntime.trigger_sources`
+  entry-point group; a broken third-party source is listed as unavailable, and a missing built-in source is an error.
 - VisualFlow node type `automation` (the controller's nodes, adapters `automation.<node_id>`).
-
-- `session_attribution(store, session_id)` (`abstractruntime.core.run_attribution`) tells what kind of
-  session an id is (`chat`, `automation`, `occurrence` or `discussion`, with the discussion's root,
-  automation and workspace). In a discussion session, `Runtime.start` makes every new top-level run
-  read-only on the discussion's workspace and gives it the discussion's provenance, whatever the
-  caller passed; if the session's discussion root cannot be found the start is refused
-  (`SessionAttributionError`). Starts in other sessions are unchanged.
+- `abstractruntime.automation_queries`: `list_automations(store, status=, cursor=, limit=)` (automation summaries,
+  newest first, with a cursor that survives restarts; archived automations stay listed) and
+  `latest_occurrence(store, automation_id)`. `changed_since` is refused with `unsupported_feature`.
+- Explicit run ids: `Runtime.start(..., run_id=...)` and `START_SUBWORKFLOW` `payload.run_id` create a run only if the
+  id is free. Starting it again with the same identity (workflow, session, parent, `vars._meta.occurrence`,
+  `vars._meta.creation_digest`) returns the existing run untouched; a different identity raises
+  `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). A parent that crashes after starting
+  such a child, but before saving its wait, finds the same child on replay; if the child already finished, the parent
+  receives its result directly.
+- `RunStore.create_if_absent(run) -> (run, created)` on the SQLite, JSON-file, in-memory and offloading stores (the JSON
+  store publishes a fully written temp file with an atomic hard link and never replaces an existing run file).
+  `store_supports_create_if_absent` / `require_create_if_absent` check a store. Recovery after a process crash is
+  covered; power-loss durability is not claimed.
+- `run_mutation_lock(run_id)`: the per-run, per-process lock that `Runtime.tick` holds for the whole tick and
+  `Runtime.resume` for its commit. Hosts take it around their own read-modify-save of a run. v1 supports one writer
+  process per store.
+- Run index attribution: rows carry `automation_id`, `role` (`controller`, `occurrence`, `descendant`, `discussion`,
+  `legacy_schedule` or empty), `occurrence_index` and `session_kind` (`chat`, `automation`, `occurrence`,
+  `discussion`), and `list_run_index` filters on them (`session_kind="chat,discussion"` works). Existing SQLite stores
+  fill the new columns once when opened; the JSON store re-reads each run file once. Every store has
+  `session_kinds(session_id)` and `latest_occurrence_row(automation_id)`.
+- `session_attribution(store, session_id)` (`abstractruntime.core.run_attribution`) reports what kind of session an id
+  is (`chat`, `automation`, `occurrence` or `discussion`, with the discussion's validated root, automation and
+  workspace). Every root run started in a discussion session is read-only on the discussion's workspace and carries
+  the discussion's provenance, whatever the caller passed; when the session cannot be attributed (an invalid
+  discussion root, or a store without a run index) `Runtime.start` raises `SessionAttributionError`.
+- `select_session_turns(store, session_id, ...)`: the one definition of a session's turns (parent-less runs except
+  automation controllers, plus automation occurrences; never child runs, internal runs, legacy scheduled wrappers or,
+  unless asked, draft-test runs), with `include_occurrences`, `automation_id`, `through_occurrence`, `until_ms`,
+  `include_drafts` and `limit`. `is_draft_lifecycle` is exported too.
+- `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)`: bound the replayed turns to
+  one automation or to the history as it stood at occurrence N, however old. In a discussion session the seed is
+  replayed first and dropped first under the budget. `strict=True` raises `SessionHistoryError`
+  (`reason_code = "history_unavailable"`) instead of returning a partial history.
+- Read-only workspaces: a run started with `workspace_read_only: true` (or trusted runtime policy
+  `_runtime.workspace_read_only: true`) can read its workspace but not change it. Tools that write files or run
+  commands or code, and any tool the runtime has not classified, are refused, as are the VisualFlow `write_file`,
+  `write_pdf`, `write_docx`, `write_chart` and `export_artifact` nodes. A read-only workspace folder is never created,
+  a read-only run without one is refused, and child runs and nodes inherit the setting.
+  `tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool (`read`, `write`, `exec`, `delegate`, `comms`,
+  `memory-write`).
+- `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup.
 
 ### Changed
 
-- Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)
-  now include automation occurrences as turns (kind `occurrence`, with `automation_id` and
-  `occurrence_index`); a retried occurrence counts once, as its last attempt. Draft-test runs are no
-  longer part of a session's history.
-- `list_run_index(root_only=True)` returns turn roots: runs without a parent, except automation
-  controllers, plus automation occurrences. Apps that fold root runs into sessions (AbstractCode, the
-  Assistant) therefore show an automation's session as a chat whose turns are its occurrences.
+- Session history bundles and session replay include automation occurrences as turns (kind `occurrence`, with
+  `automation_id` and `occurrence_index`); a retried occurrence counts once, as its last attempt. Draft-test runs are
+  left out of a session's history.
+- `list_run_index(root_only=True)` returns turn roots: parent-less runs except automation controllers, plus automation
+  occurrences. Apps that fold root runs into sessions show an automation's session as a chat whose turns are its
+  occurrences.
+- Children of an automation occurrence carry `vars._meta.occurrence` with `role = "descendant"`, and children of a
+  discussion carry its `vars._meta.discussion` (without the seed); a child cannot clear or change either.
 
 ### Fixed
 
-- Starting a run in a session no longer scans the whole JSON run store: the store keeps an index of
-  each session's runs, so the discussion check on every new chat turn costs about 0.1 ms at 20,000
-  runs (it took hundreds of milliseconds). Every store gains `session_kinds(session_id)`. Several
-  store objects or processes on one run folder see each other's new and deleted runs through a small
-  creation journal (`.runs_created.log`), so a discussion created by one gateway worker is enforced
-  read-only by another. `JsonFileRunStore.warm_session_index()` builds the index at startup instead of
-  on the first chat.
-- A discussion of an old occurrence in a long automation session gets the history up to that
-  occurrence; before, a session with more than 1,000 turns could yield an empty or later history.
-  Asking for the history through an occurrence the session does not have raises (`strict`) or returns
-  nothing.
-- A discussion session's seed is only read from a verified root: every run of the session must name
-  the same root, and that root must be in the session and carry the seed. A run pointing elsewhere
-  makes strict reads and new starts in that session fail instead of using another discussion's seed.
-- The JSON run store removes run temp files left behind by a crash (older than 10 minutes) when it
-  opens.
-- A parent that crashes after starting a child with an explicit id, but before saving its wait, finds
-  the same child on replay (exactly one) and waits on it again; if the child already finished, the
-  parent receives its result directly instead of waiting forever.
-- Children of an automation occurrence are marked `vars._meta.occurrence.role = "descendant"` and
-  children of a discussion carry its `vars._meta.discussion` (without the seed messages); a child
-  cannot clear or forge either.
-- Automation identity metadata (`vars._meta.automation`, `.occurrence`, `.discussion`,
-  `.creation_digest`) is never moved to the artifact store when a finished run is offloaded.
+- Session lookups on the JSON run store use an index of each session's runs instead of scanning the store (about
+  0.1 ms per new chat turn at 20,000 runs). Several store objects or processes on one run folder see each other's
+  created and deleted runs through a creation journal (`.runs_created.log`).
+- History "through occurrence N" returns the history up to that occurrence in sessions of any length, and raises
+  (`strict`) or returns nothing when the session has no occurrence N.
+- A discussion session's seed is read only from a validated root: every run of the session must name the same root,
+  and that root must belong to the session and carry the seed.
+- The JSON run store removes run temp files left behind by a crash (older than 10 minutes) when it opens.
+- Automation identity metadata (`vars._meta.automation`, `.occurrence`, `.discussion`, `.creation_digest`) always
+  stays inline when a finished run is offloaded.
 
 ## [0.5.1] - 2026-09-26
 

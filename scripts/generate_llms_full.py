@@ -33,6 +33,7 @@ DOCUMENTS = [
     "docs/proposal.md",
     "docs/limits.md",
     "docs/artifacts.md",
+    "docs/automations.md",
     "docs/tool-approval.md",
     "docs/tools-comms.md",
     "docs/entity-runtime.md",

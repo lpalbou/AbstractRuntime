@@ -59,6 +59,7 @@ from .effect_cancellation import (
 from .tool_scope import ToolScopeError, resolve_tool_scope
 from ..storage.base import LedgerStore, RunStore, QueryableRunStore, require_create_if_absent
 from .run_identity import creation_digest
+from .run_attribution import SessionAttributionError, session_attribution
 from ..storage.ledger_slim import (
     build_started_payload_index,
     capture_started_payload_digests,
@@ -1377,6 +1378,9 @@ class Runtime:
             caller_vars["_meta"] = meta
             vars = caller_vars
 
+        if session_id and not parent_run_id:
+            vars = self._anchor_discussion_session(vars, session_id=str(session_id), run_id=explicit_id)
+
         # Seed `_limits` PER KEY, never all-or-nothing (adversarial budget
         # audit 2026-08-02, CONFIRMED defect).
         #
@@ -1564,6 +1568,39 @@ class Runtime:
             self._run_store.save(run)
             return run, True
         return self._run_store.create_if_absent(run)
+
+    def _anchor_discussion_session(
+        self, vars: Optional[Dict[str, Any]], *, session_id: str, run_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Discussion sessions are anchored by their persisted root (automations
+        contract B, amendment 4): every later ROOT start in such a session gets
+        the root's `_meta.discussion` (without the seed), its `workspace_root`
+        and a read-only workspace, OVER whatever the caller passed. A failed
+        lookup refuses the start (`SessionAttributionError`). Other sessions
+        are untouched."""
+        attribution = session_attribution(self._run_store, session_id)
+        if attribution is None or attribution.get("kind") != "discussion":
+            return vars
+        # Imported here: `abstractruntime.utils` pulls optional capability
+        # stacks, which the package root must not import (install boundary).
+        from ..utils.workspace_paths import READ_ONLY_KEY as WORKSPACE_READ_ONLY_KEY
+
+        if run_id is not None and run_id == attribution["discussion_root_run_id"]:
+            return vars  # the root itself (an idempotent re-start): created as requested
+        if not attribution.get("workspace_root"):
+            raise SessionAttributionError(
+                f"discussion session {session_id}: root {attribution['discussion_root_run_id']} has no workspace_root"
+            )
+        out = dict(vars or {})
+        meta = dict(out["_meta"]) if isinstance(out.get("_meta"), dict) else {}
+        meta["discussion"] = dict(attribution["discussion"])
+        out["_meta"] = meta
+        out["workspace_root"] = attribution["workspace_root"]
+        out[WORKSPACE_READ_ONLY_KEY] = True
+        runtime_ns = dict(out["_runtime"]) if isinstance(out.get("_runtime"), dict) else {}
+        runtime_ns[WORKSPACE_READ_ONLY_KEY] = True
+        out["_runtime"] = runtime_ns
+        return out
 
     def cancel_run(
         self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"

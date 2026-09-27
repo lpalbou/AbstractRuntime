@@ -132,6 +132,62 @@ def latest_occurrence_of(rows: Any) -> Optional[Dict[str, Any]]:
     return best
 
 
+class SessionAttributionError(LookupError):
+    """A session's attribution could not be resolved (fail closed)."""
+
+    reason_code = "session_attribution_failed"
+
+
+def session_attribution(run_store: Any, session_id: str) -> Optional[Dict[str, Any]]:
+    """What kind of session `session_id` is, from its run index rows.
+
+    Returns None for a session with no runs yet, else
+    `{"kind": chat|automation|occurrence|discussion, ...}`; a discussion adds
+    `discussion_root_run_id`, `automation_id`, `occurrence_index`, `revision`,
+    `workspace_root` and `discussion` (the root's `_meta.discussion` without
+    its seed). The persisted discussion root is the authority (automations
+    contract B, amendment 4). Raises `SessionAttributionError` when the
+    lookup cannot be completed: a store without a run index, a discussion
+    member without a root id, or a missing root.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    list_run_index = getattr(run_store, "list_run_index", None)
+    if not callable(list_run_index):
+        raise SessionAttributionError(
+            f"run store {type(run_store).__name__} has no run index; session {sid} cannot be attributed"
+        )
+    members = list_run_index(session_id=sid, role="discussion", limit=1)
+    if members:
+        member = run_store.load(str(members[0]["run_id"]))
+        meta = ((member.vars or {}).get("_meta") or {}) if member is not None else {}
+        discussion = meta.get("discussion") if isinstance(meta, Mapping) else None
+        root_id = _text((discussion or {}).get("discussion_root_run_id")) if isinstance(discussion, Mapping) else None
+        if not root_id:
+            raise SessionAttributionError(f"discussion session {sid}: member run has no discussion_root_run_id")
+        root = run_store.load(root_id)
+        root_meta = ((root.vars or {}).get("_meta") or {}) if root is not None else {}
+        root_discussion = root_meta.get("discussion") if isinstance(root_meta, Mapping) else None
+        if not isinstance(root_discussion, Mapping):
+            raise SessionAttributionError(f"discussion session {sid}: root run {root_id} is missing")
+        workspace_root = (root.vars or {}).get("workspace_root")
+        return {
+            "kind": "discussion",
+            "discussion_root_run_id": root_id,
+            "automation_id": _text(root_discussion.get("automation_id")),
+            "occurrence_index": _index(root_discussion.get("occurrence_index")),
+            "revision": root_discussion.get("revision"),
+            "workspace_root": workspace_root if isinstance(workspace_root, str) and workspace_root.strip() else None,
+            "discussion": {k: v for k, v in root_discussion.items() if k != "seed_messages"},
+        }
+    rows = list_run_index(session_id=sid, limit=1)
+    if not rows:
+        return None
+    row = rows[0]
+    return {"kind": row.get("session_kind") or "chat", "automation_id": row.get("automation_id")}
+
+
 def is_turn_root(*, parent_run_id: Any, role: Any) -> bool:
     """A session turn root: parent-less and not a controller, or an occurrence."""
     if role == "occurrence":
@@ -147,7 +203,9 @@ __all__ = [
     "SESSION_KINDS",
     "automation_index_fields",
     "filter_values",
+    "SessionAttributionError",
     "is_turn_root",
+    "session_attribution",
     "latest_occurrence_of",
     "row_matches",
 ]

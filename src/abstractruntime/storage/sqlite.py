@@ -250,6 +250,9 @@ class SqliteDatabase:
                     "CREATE INDEX IF NOT EXISTS idx_runs_automation "
                     "ON runs(automation_id, role, occurrence_index);"
                 )
+                # Session-scoped reads (turn selection, discussion anchor on
+                # every root start in a session) filter on session_id.
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_session_role ON runs(session_id, role);")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_runs_session_kind_updated "
                     "ON runs(session_kind, updated_at DESC);"

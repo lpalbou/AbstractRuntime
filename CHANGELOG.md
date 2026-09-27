@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source is listed as unavailable, a missing built-in is an error.
 - VisualFlow node type `automation` (the controller's nodes, adapters `automation.<node_id>`).
 
+- `session_attribution(store, session_id)` (`abstractruntime.core.run_attribution`) tells what kind of
+  session an id is (`chat`, `automation`, `occurrence` or `discussion`, with the discussion's root,
+  automation and workspace). In a discussion session, `Runtime.start` makes every new top-level run
+  read-only on the discussion's workspace and gives it the discussion's provenance, whatever the
+  caller passed; if the session's discussion root cannot be found the start is refused
+  (`SessionAttributionError`). Starts in other sessions are unchanged.
+
 ### Changed
 
 - Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)

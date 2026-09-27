@@ -141,6 +141,8 @@ from .history_bundle import (
 )
 from .session_history import (
     SESSION_TURN_KIND,
+    SessionHistoryError,
+    discussion_seed_messages,
     session_chat_messages,
 )
 
@@ -274,4 +276,6 @@ __all__ = [
     # Durable session conversation replay (read side)
     "SESSION_TURN_KIND",
     "session_chat_messages",
+    "SessionHistoryError",
+    "discussion_seed_messages",
 ]

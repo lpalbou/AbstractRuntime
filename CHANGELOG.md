@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tool_effects.TOOL_EFFECT_CLASSES` is the one table of what each tool can do (read, write, exec,
   delegate, comms, memory-write).
 
+- `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)`: bound the
+  replayed turns to one automation or to the history as it stood at occurrence N. In a discussion
+  session the discussion's seed messages are replayed first (and dropped first under the budget).
+  `strict=True` raises `SessionHistoryError` (`reason_code = "history_unavailable"`) instead of
+  returning a partial history: a store without a run index, or a discussion whose seed is missing
+  or cannot be read back from the artifact store.
+
 ### Changed
 
 - Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)

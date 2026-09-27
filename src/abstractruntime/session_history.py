@@ -43,8 +43,21 @@ from .history_bundle import _best_effort_session_turns
 
 __all__ = [
     "SESSION_TURN_KIND",
+    "SessionHistoryError",
+    "discussion_seed_messages",
     "session_chat_messages",
 ]
+
+
+class SessionHistoryError(RuntimeError):
+    """A strict history read could not produce the session's history.
+
+    Raised only with `strict=True` (automation context preparation and
+    discussion seeding, automations contract C3): starting those without their
+    context would silently change what the model sees, so they fail instead.
+    """
+
+    reason_code = "history_unavailable"
 
 # Metadata marker carried by every replayed message so downstream consumers
 # (context folds, transcripts, ledgers) can tell replayed history from the
@@ -83,8 +96,24 @@ def session_chat_messages(
     max_total_chars: int = _DEFAULT_MAX_TOTAL_CHARS,
     until_ms: Optional[int] = None,
     exclude_run_ids: Optional[Any] = None,
+    automation_id: Optional[str] = None,
+    through_occurrence: Optional[int] = None,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     """Reconstruct a session's prior conversation as chat messages.
+
+    Turns come from `session_turns.select_session_turns` (so an automation's
+    occurrences are turns); `automation_id` / `through_occurrence` bound them
+    (e.g. a discussion seeded "through occurrence N"). In a DISCUSSION session
+    (runs carrying `vars._meta.discussion`) the discussion root's
+    `seed_messages` are prepended as the oldest history, dropped first under
+    the budget.
+
+    `strict=True` (automation context preparation, discussion seeding) raises
+    `SessionHistoryError` instead of degrading: a store without a run index,
+    a discussion whose root or seed is missing, or a seed offloaded to an
+    artifact that cannot be resolved. Non-strict reads keep the historical
+    best-effort behavior.
 
     Returns `[{"role": "user"|"assistant", "content": str, "metadata":
     {"kind": "session_turn", "run_id": ..., "ts": ...}}, ...]` in
@@ -130,6 +159,11 @@ def session_chat_messages(
     # the window.
     turn_limit = max(4, (max_msgs + 1) // 2 + 8)
 
+    if strict and not callable(getattr(run_store, "list_run_index", None)):
+        raise SessionHistoryError(
+            f"run store {type(run_store).__name__} has no run index; strict history needs one"
+        )
+
     turns = _best_effort_session_turns(
         run_store=run_store,
         ledger_store=ledger_store,
@@ -139,6 +173,13 @@ def session_chat_messages(
         until_ms=until_ms,
         include_stats=False,
         include_artifacts=False,
+        automation_id=automation_id,
+        through_occurrence=through_occurrence,
+    )
+    seed_pairs = _seed_pairs(
+        discussion_seed_messages(run_store=run_store, artifact_store=artifact_store, session_id=sid, strict=strict),
+        max_chars=max_chars,
+        strict=strict,
     )
 
     # Build whole turns first: caps below must drop turns atomically — a
@@ -193,6 +234,9 @@ def session_chat_messages(
             ]
         )
 
+    # The discussion seed is the OLDEST history: prepended, dropped first.
+    turn_pairs = seed_pairs + turn_pairs
+
     # Newest-first fold under both caps, then restore chronology.
     kept: List[List[Dict[str, Any]]] = []
     kept_messages = 0
@@ -245,3 +289,94 @@ def session_chat_messages(
             f"{head.get('content') or ''}"
         )
     return messages
+
+
+def _resolve_offloaded(value: Any, *, artifact_store: Any) -> Any:
+    from .core.runtime import _resolve_artifact_backed_value
+
+    return _resolve_artifact_backed_value(value, artifact_store=artifact_store)
+
+
+def _contains_artifact_ref(value: Any, *, depth: int = 0) -> bool:
+    from .storage.artifacts import is_artifact_ref
+
+    if depth > 12:
+        return False
+    if is_artifact_ref(value):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_artifact_ref(v, depth=depth + 1) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_artifact_ref(v, depth=depth + 1) for v in value)
+    return False
+
+
+def discussion_seed_messages(
+    *, run_store: Any, artifact_store: Any = None, session_id: str, strict: bool = False
+) -> List[Dict[str, Any]]:
+    """The seed messages of a discussion session, or [] for any other session.
+
+    A discussion session's runs carry `vars._meta.discussion` (index role
+    `discussion`); its root run (`discussion_root_run_id`) holds the
+    `seed_messages` — the automation's history through occurrence N — once.
+    An offloaded seed is resolved through the artifact store. Missing or
+    unresolvable seeds raise `SessionHistoryError` when `strict`, else yield [].
+    """
+    sid = str(session_id or "").strip()
+    list_run_index = getattr(run_store, "list_run_index", None)
+    if not sid or not callable(list_run_index):
+        return []
+    rows = list_run_index(session_id=sid, role="discussion", limit=1)
+    if not rows:
+        return []
+
+    def _fail(message: str) -> List[Dict[str, Any]]:
+        if strict:
+            raise SessionHistoryError(f"discussion session {sid}: {message}")
+        return []
+
+    member = run_store.load(str(rows[0]["run_id"]))
+    meta = ((member.vars or {}).get("_meta") or {}) if member is not None else {}
+    discussion = meta.get("discussion") if isinstance(meta, dict) else None
+    root_id = str((discussion or {}).get("discussion_root_run_id") or "").strip()
+    if not root_id:
+        return _fail("no discussion_root_run_id")
+    root = run_store.load(root_id)
+    root_meta = ((root.vars or {}).get("_meta") or {}) if root is not None else {}
+    root_discussion = root_meta.get("discussion") if isinstance(root_meta, dict) else None
+    if not isinstance(root_discussion, dict) or "seed_messages" not in root_discussion:
+        return _fail(f"discussion root {root_id} or its seed_messages is missing")
+    seed = _resolve_offloaded(root_discussion.get("seed_messages"), artifact_store=artifact_store)
+    if _contains_artifact_ref(seed):
+        return _fail(f"seed_messages of {root_id} are offloaded and cannot be resolved")
+    if not isinstance(seed, list) or not all(
+        isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)
+        for m in seed
+    ):
+        return _fail(f"seed_messages of {root_id} are malformed")
+    return [dict(m) for m in seed]
+
+
+def _seed_pairs(seed: List[Dict[str, Any]], *, max_chars: int, strict: bool) -> List[List[Dict[str, Any]]]:
+    """Seed messages as whole user/assistant pairs (the fold drops turns atomically)."""
+    pairs: List[List[Dict[str, Any]]] = []
+    for i in range(0, len(seed) - 1, 2):
+        user, assistant = seed[i], seed[i + 1]
+        if user.get("role") != "user" or assistant.get("role") != "assistant":
+            if strict:
+                raise SessionHistoryError("discussion seed_messages are not user/assistant pairs")
+            continue
+        pair = []
+        for m in (user, assistant):
+            meta = dict(m.get("metadata")) if isinstance(m.get("metadata"), dict) else {}
+            meta["discussion_seed"] = True
+            run_id = str(meta.get("run_id") or "seed")
+            pair.append({
+                "role": m["role"],
+                "content": _truncate_labeled(str(m["content"]), max_chars=max_chars, run_id=run_id),
+                "metadata": meta,
+            })
+        pairs.append(pair)
+    if len(seed) % 2 and strict:
+        raise SessionHistoryError("discussion seed_messages end with an unpaired message")
+    return pairs

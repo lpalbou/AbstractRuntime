@@ -103,3 +103,96 @@ def test_legacy_scheduled_prefix_alone_is_not_a_turn(tmp_path) -> None:
     _save(store, "chat", 1, prompt="p", answer="a")
     _save(store, "wrapper", 2, prompt="p", answer="a", workflow_id="scheduled:abc")  # no _meta.schedule
     assert ids(select_session_turns(store, SID)) == ["chat"]
+
+
+# --------------------------------------------------------------------------
+# Strict history (contract C3 amendment): automation preparation and
+# discussion seeding fail instead of starting without context.
+# --------------------------------------------------------------------------
+
+from abstractruntime import SessionHistoryError  # noqa: E402
+from abstractruntime.storage.artifacts import InMemoryArtifactStore, artifact_ref  # noqa: E402
+
+SEED = [
+    {"role": "user", "content": "tick 1", "metadata": {"run_id": "occ-1"}},
+    {"role": "assistant", "content": "mem 41%", "metadata": {"run_id": "occ-1"}},
+]
+
+
+def _discussion(store, *, seed=SEED, root_has_seed=True):
+    disc = {"automation_id": AUTO, "occurrence_index": 1, "discussion_root_run_id": "disc-root"}
+    root_meta = {"discussion": {**disc, **({"seed_messages": seed} if root_has_seed else {})}}
+    _save(store, "disc-root", 20, prompt="why 41?", answer="because", meta=root_meta, session_id="s-disc")
+    _save(store, "disc-2", 21, prompt="and now?", answer="stable", meta={"discussion": dict(disc)}, session_id="s-disc")
+
+
+def _contents(messages):
+    return [m["content"] for m in messages]
+
+
+@pytest.mark.parametrize("kind", ["memory", "json", "sqlite"])
+def test_discussion_history_prepends_the_seed(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    _discussion(store)
+    messages = session_chat_messages(run_store=store, session_id="s-disc", strict=True)
+    assert _contents(messages) == ["tick 1", "mem 41%", "why 41?", "because", "and now?", "stable"]
+    assert messages[0]["metadata"]["discussion_seed"] is True
+    # Under a tight budget the seed is dropped first (it is the oldest history).
+    tight = session_chat_messages(run_store=store, session_id="s-disc", max_messages=4)
+    assert _contents(tight)[1:] == ["because", "and now?", "stable"]
+    assert tight[0]["content"].endswith("why 41?") and tight[0]["metadata"]["dropped_turns"] == 1
+
+
+def test_missing_seed_raises_when_strict_only(tmp_path) -> None:
+    store = make_store("sqlite", tmp_path)
+    _discussion(store, root_has_seed=False)
+    with pytest.raises(SessionHistoryError) as info:
+        session_chat_messages(run_store=store, session_id="s-disc", strict=True)
+    assert info.value.reason_code == "history_unavailable"
+    assert _contents(session_chat_messages(run_store=store, session_id="s-disc")) == [
+        "why 41?", "because", "and now?", "stable"]
+
+
+def test_offloaded_seed_is_resolved_or_strictly_refused(tmp_path) -> None:
+    store = make_store("sqlite", tmp_path)
+    arts = InMemoryArtifactStore()
+    import json as _json
+
+    meta = arts.store(_json.dumps(SEED).encode("utf-8"), content_type="application/json", run_id="disc-root")
+    _discussion(store, seed=artifact_ref(meta.artifact_id))
+    resolved = session_chat_messages(run_store=store, artifact_store=arts, session_id="s-disc", strict=True)
+    assert _contents(resolved)[:2] == ["tick 1", "mem 41%"]
+    with pytest.raises(SessionHistoryError, match="cannot be resolved"):
+        session_chat_messages(run_store=store, artifact_store=None, session_id="s-disc", strict=True)
+
+
+def test_strict_refuses_a_store_without_a_run_index(tmp_path) -> None:
+    class ScanOnly:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def list_runs(self, **kw):
+            return self._inner.list_runs(**kw)
+
+        def load(self, run_id):
+            return self._inner.load(run_id)
+
+    inner = make_store("memory", tmp_path)
+    populate(inner)
+    with pytest.raises(SessionHistoryError, match="no run index"):
+        session_chat_messages(run_store=ScanOnly(inner), session_id=SID, strict=True)
+    assert session_chat_messages(run_store=ScanOnly(inner), session_id=SID)  # best-effort path unchanged
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_strict_and_bounded_reads_of_an_automation_session(kind, tmp_path) -> None:
+    store = make_store(kind, tmp_path)
+    populate(store)
+    through = session_chat_messages(run_store=store, session_id=SID, through_occurrence=2, strict=True)
+    assert _contents(through) == ["hello", "hi", "tick 1", "mem 41%", "tick 2", "mem 43%"]
+    other = session_chat_messages(run_store=store, session_id=SID, automation_id="other", strict=True)
+    assert _contents(other) == ["hello", "hi", "why up?", "because"]
+    # An ordinary chat reads the same strict or not.
+    _save(store, "c1", 30, prompt="q", answer="a", session_id="plain")
+    assert session_chat_messages(run_store=store, session_id="plain", strict=True) == session_chat_messages(
+        run_store=store, session_id="plain")

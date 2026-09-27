@@ -693,8 +693,10 @@ def _best_effort_session_turns(
     until_ms: Optional[int] = None,
     include_stats: bool = True,
     include_artifacts: bool = True,
+    automation_id: Optional[str] = None,
+    through_occurrence: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Best-effort session turn list (root runs only).
+    """Best-effort session turn list (turn roots, see `session_turns`).
 
     This is a pragmatic bridge for thin clients (AbstractCode Web/mobile) until a more
     explicit session history contract exists.
@@ -815,7 +817,14 @@ def _best_effort_session_turns(
     # controllers, internal runs, legacy scheduled wrappers or drafts.
     from .session_turns import select_session_turns
 
-    roots: List[RunState] = select_session_turns(run_store, sid, until_ms=until_ms, limit=int(limit))
+    roots: List[RunState] = select_session_turns(
+        run_store,
+        sid,
+        until_ms=until_ms,
+        automation_id=automation_id,
+        through_occurrence=through_occurrence,
+        limit=int(limit),
+    )
     if not roots:
         return []
 

@@ -58,13 +58,13 @@ Unknown fields are rejected everywhere.
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow (hosts resolve `@default` first) |
 | `trigger` | `{binding_id, source_id, source_version, config}` (the binding id is created by the runtime) |
 | `context` | `{mode: "independent" \| "growing", growing: {}}`; `growing.summary` is `unsupported_feature` in v1 |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry: {max_attempts: 3, backoff: {initial: "30s", factor: 2, max: "10m"}}}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry: {max_attempts: 3, backoff: {initial: "30s", factor: 2, max: "10m"}}, tool_approval: "auto"}` |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
 | `created_at`, `archived_at` | UTC timestamps; `archived_at` is `null` until archived |
 
 The creation request is `{request_id, title, target, trigger: {source_id, source_version, config}, context?,
-policy?: {retry?}, workspace_root, tenant?, user?}`. The automation id is `uuid5(AUTOMATION_NAMESPACE,
+policy?: {retry?, tool_approval?}, workspace_root, tenant?, user?}`. The automation id is `uuid5(AUTOMATION_NAMESPACE,
 "<tenant>:<user>:<request_id>")`. Sending the same request again returns the same automation. Reusing a
 `request_id` with a different request fails with `identity_conflict`.
 
@@ -178,6 +178,43 @@ child run with the frozen inputs. An `automation.retry_scheduled` record marks e
 `automation.completed` carries `attempts`. Retries do not make external effects exactly-once: a target that sends an
 email may send it again when it is retried.
 
+## Tool approval
+
+`policy.tool_approval` decides whether the target's tools may run without asking:
+
+- `"auto"` (the default): an automation runs unattended, so it cannot ask a person before every tool call.
+  **Creating the automation is the consent**: client forms state that its tools run without asking and list them.
+  At admission, the runtime freezes into the occurrence's inputs the runtime's existing per-run grant,
+  `_runtime.tool_policy = {auto_approve_tools: [...], source: "automation-policy"}`. Child runs inherit it. The
+  tools named are the target's explicit `_runtime.allowed_tools` when it has that list, and otherwise every tool the
+  runtime can expose (`TOOL_EFFECT_CLASSES`). Naming a tool outside the run's tool ceiling grants nothing, and a tool
+  outside that table (a third-party MCP tool, for example) still asks. A `tool_policy` that the target's own
+  `input_data` already carries is left untouched.
+- `"ask"`: no grant. Tool calls that need approval wait on a `tool_approval` wait, as in a chat.
+
+The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
+occurrence and never changes one already admitted. Questions a flow asks a person (`ask_user`) still wait in both
+modes. Discussions never inherit the grant: they approve tools interactively, like any chat.
+
+## Waits on a person
+
+`pending_waits(run_store, automation_id)` lists the occurrence runs that are waiting on a person. Each wait has a
+type, read from the wait record's structure and never from its text:
+
+```text
+{run_id, wait_key, kind: "ask_user" | "tool_approval" | "event", reason, index, prompt?, choices?, details?}
+```
+
+| `kind` | When | Answer with `Runtime.resume(run_id=..., wait_key=..., payload=...)` |
+|---|---|---|
+| `ask_user` | a `USER` wait that is not a pause (a question from the flow) | `{response: "..."}` |
+| `tool_approval` | a tool batch waiting for approval (`details.mode == "approval_required"`) | `{approved: true}` or `{approved: false}` |
+| `event` | an `EVENT` wait carrying a prompt or choices | `{payload: ...}` |
+
+For `tool_approval`, `details.tool_calls` lists the calls that approving will run (name, arguments, call id).
+Paused runs and the controller's own wake wait are never listed. `ANSWER_PAYLOADS` and `wait_kind(run)` expose the
+same mapping to hosts.
+
 ## Commands
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,
@@ -227,8 +264,8 @@ Automations are **quiet by default**. An occurrence needs your attention only wh
 - its output carries `notify: {title, body}` (title at most 120, body at most 2000 characters). A missing, `false` or
   empty `notify` stays quiet;
 - it **failed after its last retry**. A failure that a retry fixed is quiet, and so is a cancelled occurrence;
-- it is waiting on a human: a `USER` wait that is not a pause, or an `EVENT` wait with a prompt or choices.
-  `pending_waits(run_store, automation_id)` reports these live; they are not attention items.
+- it is waiting on a person (see [Waits on a person](#waits-on-a-person)). `pending_waits` reports these live;
+  they are not attention items.
 
 The output is read by structure. An agent-interface target ends with `response`/`success`/`meta`; a plain flow ends
 with its end-node pins or `{success, result}`. A workflow that must flag a result adds `notify` to what it returns.

@@ -12,11 +12,15 @@
 """
 
 from .attention import (
+    ANSWER_PAYLOADS,
+    WAIT_KINDS,
     is_interactive_wait,
     list_attention,
     normalize_occurrence_output,
     notify_payload,
     pending_waits,
+    typed_wait,
+    wait_kind,
 )
 from .bundle import (
     ControllerBundleError,
@@ -46,6 +50,7 @@ from .service import (
 )
 
 __all__ = [
+    "ANSWER_PAYLOADS",
     "AUTOMATION_COMMAND_TYPES",
     "AUTOMATION_NAMESPACE",
     "AutomationDefinition",
@@ -73,4 +78,7 @@ __all__ = [
     "record_automation_command_result",
     "register_controller_bundle",
     "start_discussion",
+    "typed_wait",
+    "wait_kind",
+    "WAIT_KINDS",
 ]

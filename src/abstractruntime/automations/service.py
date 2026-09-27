@@ -29,6 +29,7 @@ from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
 from .attention import resolve_strict
 from .bundle import controller_workflow_spec
+from .controller import AUTOMATION_GRANT_SOURCE
 from .ledger import (
     append_observation,
     automation_records,
@@ -282,6 +283,11 @@ def start_discussion(
     ids = discussion_ids(automation_id, request_id)
     input_data = copy.deepcopy(prepared["input_data"])
     input_data["prompt"] = prompt
+    # A discussion is an ordinary interactive chat: the automation's unattended
+    # tool grant never rides into it (tools ask as in any chat).
+    rt_in = input_data.get("_runtime")
+    if isinstance(rt_in, dict) and (rt_in.get("tool_policy") or {}).get("source") == AUTOMATION_GRANT_SOURCE:
+        input_data["_runtime"] = {k: v for k, v in rt_in.items() if k != "tool_policy"}
     context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
     input_data["context"] = {**context, "messages": list(seed)}
     meta = input_data.get("_meta") if isinstance(input_data.get("_meta"), dict) else {}

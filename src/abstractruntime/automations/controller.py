@@ -192,6 +192,35 @@ def _render_prompt(input_data: Dict[str, Any], *, envelope: Dict[str, Any], inde
     return out
 
 
+AUTOMATION_GRANT_SOURCE = "automation-policy"
+
+
+def grant_tool_approval(input_data: Dict[str, Any]) -> None:
+    """`policy.tool_approval == "auto"`: pre-approve the target's tools for this occurrence.
+
+    Creating the automation is the consent (an unattended run cannot ask a
+    person every tick). The grant is the runtime's existing per-run policy
+    `_runtime.tool_policy.auto_approve_tools`, which child runs inherit. The
+    tools named are the target's explicit `_runtime.allowed_tools` when it has
+    one, else every tool the runtime can expose (`TOOL_EFFECT_CLASSES`); a name
+    outside the run's tool ceiling grants nothing. A tool_policy the target
+    already carries is the target author's word and is left untouched.
+    `ask_user` questions are not tool approvals and still wait for a person.
+    """
+    from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
+
+    runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+    if "tool_policy" in runtime_ns:
+        return
+    allowed = runtime_ns.get("allowed_tools")
+    names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
+    tools = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
+    input_data["_runtime"] = {
+        **runtime_ns,
+        "tool_policy": {"auto_approve_tools": tools, "source": AUTOMATION_GRANT_SOURCE},
+    }
+
+
 def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_run_id: str) -> Dict[str, Any]:
     """Freeze the occurrence's inputs (contract D `prepare_context`).
 
@@ -202,6 +231,8 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
     """
     definition = turn.definition
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
+    if definition["policy"].get("tool_approval", "auto") == "auto":
+        grant_tool_approval(input_data)
     if definition["context"]["mode"] == "growing":
         from ..session_history import session_chat_messages
 

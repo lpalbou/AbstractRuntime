@@ -127,8 +127,60 @@ def is_interactive_wait(run: RunState) -> bool:
     return False
 
 
+WAIT_KINDS = ("ask_user", "tool_approval", "event")
+# The resume payload each kind accepts (`Runtime.resume(..., payload=...)`).
+ANSWER_PAYLOADS = {"ask_user": "{response}", "tool_approval": "{approved: true|false}", "event": "{payload}"}
+
+
+def wait_kind(run: RunState) -> Optional[str]:
+    """The kind of an interactive wait, from the wait record's structure only.
+
+    - `tool_approval`: a tool batch awaiting approval (`details.mode ==
+      "approval_required"`, the TOOL_CALLS approval wait);
+    - `ask_user`: any other USER wait (a question to a person);
+    - `event`: an EVENT wait carrying a prompt or choices.
+    None when the run is not waiting on a person.
+    """
+    if not is_interactive_wait(run):
+        return None
+    details = run.waiting.details if isinstance(run.waiting.details, dict) else {}
+    if details.get("mode") == "approval_required":
+        return "tool_approval"
+    if run.waiting.reason == WaitReason.USER:
+        return "ask_user"
+    return "event"
+
+
+def typed_wait(run: RunState) -> Optional[Dict[str, Any]]:
+    """`{run_id, wait_key, kind, reason, prompt?, choices?, details?}` for a run waiting on a person."""
+    kind = wait_kind(run)
+    if kind is None:
+        return None
+    waiting = run.waiting
+    item: Dict[str, Any] = {
+        "run_id": run.run_id,
+        "wait_key": waiting.wait_key,
+        "kind": kind,
+        "reason": waiting.reason.value,
+    }
+    if waiting.prompt:
+        item["prompt"] = waiting.prompt
+    if waiting.choices:
+        item["choices"] = list(waiting.choices)
+    if kind == "tool_approval":
+        details = waiting.details or {}
+        item["details"] = {"tool_calls": list(details.get("tool_calls") or [])}
+    return item
+
+
 def pending_waits(run_store: Any, automation_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
-    """Interactive waits in the automation's occurrence trees (children of the controller)."""
+    """Waits on a person in the automation's occurrence trees, typed by `kind`.
+
+    Item: `{run_id, wait_key, kind: "ask_user"|"tool_approval"|"event", reason,
+    index, prompt?, choices?, details?}`; `details.tool_calls` lists the calls
+    a `tool_approval` wait would run. Answer with the kind's payload
+    (`ANSWER_PAYLOADS`).
+    """
     out: List[Dict[str, Any]] = []
     stack = [str(automation_id)]
     seen = set()
@@ -139,18 +191,10 @@ def pending_waits(run_store: Any, automation_id: str, *, limit: int = 20) -> Lis
                 continue
             seen.add(child.run_id)
             stack.append(child.run_id)
-            if is_interactive_wait(child):
+            item = typed_wait(child)
+            if item is not None:
                 meta = (child.vars.get("_meta") or {}).get("occurrence") or {}
-                item: Dict[str, Any] = {
-                    "run_id": child.run_id,
-                    "wait_key": child.waiting.wait_key,
-                    "reason": child.waiting.reason.value,
-                    "index": meta.get("occurrence_index"),
-                }
-                if child.waiting.prompt:
-                    item["prompt"] = child.waiting.prompt
-                if child.waiting.choices:
-                    item["choices"] = list(child.waiting.choices)
+                item["index"] = meta.get("occurrence_index")
                 out.append(item)
     return out
 
@@ -211,7 +255,9 @@ def list_attention(
 
 
 __all__ = [
+    "ANSWER_PAYLOADS",
     "ATTENTION_CURSOR_PREFIX",
+    "WAIT_KINDS",
     "UnresolvableReference",
     "attention_cursor",
     "is_interactive_wait",
@@ -220,4 +266,6 @@ __all__ = [
     "notify_payload",
     "pending_waits",
     "resolve_strict",
+    "typed_wait",
+    "wait_kind",
 ]

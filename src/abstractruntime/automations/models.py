@@ -42,7 +42,10 @@ NOTIFY_BODY_MAX = 2000
 NOTIFY_DEFAULT_BODY_MAX = 280
 
 DEFAULT_RETRY = {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}}
-DEFAULT_POLICY = {"serial": True, "misfire": "coalesce", "failure": "continue", "retry": DEFAULT_RETRY}
+TOOL_APPROVAL_MODES = ("auto", "ask")
+DEFAULT_POLICY = {
+    "serial": True, "misfire": "coalesce", "failure": "continue", "retry": DEFAULT_RETRY, "tool_approval": "auto",
+}
 
 CONTEXT_MODES = ("independent", "growing")
 # Growing-mode history window (contract D): 40 messages / 24 000 chars.
@@ -248,7 +251,10 @@ def _duration(value: Any, field: str) -> str:
 
 def validate_policy(value: Any) -> Dict[str, Any]:
     policy = _require_mapping(value if value is not None else {}, "policy")
-    _reject_unknown(policy, ("serial", "misfire", "failure", "retry"), "policy")
+    _reject_unknown(policy, ("serial", "misfire", "failure", "retry", "tool_approval"), "policy")
+    tool_approval = policy.get("tool_approval", "auto")
+    if tool_approval not in TOOL_APPROVAL_MODES:
+        raise _invalid(f"policy.tool_approval must be one of {list(TOOL_APPROVAL_MODES)}", "policy.tool_approval")
     for key, fixed in (("serial", True), ("misfire", "coalesce"), ("failure", "continue")):
         if key in policy and policy[key] != fixed:
             raise _invalid(f"policy.{key} must be {fixed!r} in v1", f"policy.{key}", reason_code="unsupported_feature")
@@ -274,6 +280,7 @@ def validate_policy(value: Any) -> Dict[str, Any]:
                 "max": _duration(backoff.get("max", DEFAULT_RETRY["backoff"]["max"]), "policy.retry.backoff.max"),
             },
         },
+        "tool_approval": tool_approval,
     }
 
 

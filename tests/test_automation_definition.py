@@ -38,7 +38,8 @@ def test_definition_defaults():
     assert d["controller"] == {"bundle_ref": "abstractframework.automation-controller@1.0.0", "flow_id": "controller"}
     assert d["context"] == {"mode": "independent", "growing": {}}
     assert d["policy"] == {"serial": True, "misfire": "coalesce", "failure": "continue",
-                           "retry": {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}}}
+                           "retry": {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}},
+                           "tool_approval": "auto"}
     assert d["trigger"]["binding_id"] == str(uuid.uuid5(uuid.UUID(AID), "binding:1"))
     assert d["trigger"]["config"] == {"start_at": NOW, "anchor": NOW, "every": "2m"}
     assert d["session_id"] == f"automation:{AID}" and d["archived_at"] is None and d["created_at"] == NOW
@@ -59,6 +60,8 @@ def test_definition_defaults():
         ({"context": {"mode": "forking"}}, "invalid_definition", "context.mode"),
         ({"policy": {"retry": {"max_attempts": 11}}}, "invalid_definition", "policy.retry.max_attempts"),
         ({"policy": {"serial": False}}, "unsupported_feature", "policy.serial"),
+        ({"policy": {"tool_approval": "never"}}, "invalid_definition", "policy.tool_approval"),
+        ({"policy": {"tool_approval": True}}, "invalid_definition", "policy.tool_approval"),
         ({"policy": {"retry": {"backoff": {"initial": "30"}}}}, "invalid_definition", "policy.retry.backoff.initial"),
         ({"workspace_root": "relative/dir"}, "invalid_definition", "workspace_root"),
         ({"workspace_root": None}, "invalid_definition", "workspace_root"),

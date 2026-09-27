@@ -75,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     occurrence or archives. Commands are safe to send twice (one `command_id`, one effect), are
     checked against `expected_revision`, and never interleave with the controller. Pause stops
     scheduled runs only ("run now" still works); resume never fires the missed runs.
+  - `policy.tool_approval` (`"auto"` by default, or `"ask"`): under `auto` an occurrence's tools run without
+    asking (creating the automation is the consent), through the existing
+    `_runtime.tool_policy.auto_approve_tools` grant, frozen at admission; discussions never inherit it.
+    `pending_waits` returns typed waits (`kind`: `ask_user`, `tool_approval` with the calls to approve in
+    `details`, or `event`).
 - Trigger sources (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or
   `24h` on a grid that does not drift; `start_at`, `until` (exclusive) and `count`; one-shot when
   `every` is absent; missed ticks run once, marked `coalesced`) and `manual@1`. Other packages add

@@ -32,9 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `pending_waits` lists occurrence runs waiting on a person as typed waits: `ask_user`, `tool_approval` (with the
     calls to approve in `details`) or `event` (with `{scope, name}` when known); `ANSWER_PAYLOADS` gives the resume
     payload for each kind.
-  - `start_discussion(...)` forks a separate conversation from an occurrence: a new root run in its own session,
-    seeded once with the conversation through that occurrence, on the occurrence's workspace mounted read-only, and
-    without the automation's tool grant. Discussion sessions are scoped to their automation.
+  - `start_discussion(..., workspace_root=...)` forks a separate conversation at occurrence N: a new root run in its
+    own session, seeded once with the automation's whole conversation through N (every occurrence 1..N, in either
+    context mode, oldest dropped first under the history budget), working in its own writable workspace with the
+    automation's workspace mounted read-only alongside, and without the automation's tool grant. Discussion sessions
+    are scoped to their automation.
   - `adopt_legacy_schedule_projection(run)` summarizes a legacy gateway `scheduled:*` root read-only.
   - Limits: `every` is at most `366d`, `count` at most 1,000,000.
 - **Trigger sources** (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or `24h` on a grid

@@ -306,28 +306,36 @@ attempt.
 
 ## Discussions
 
-`start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, actor_id=None)` starts a separate
-conversation about one occurrence and returns `{session_id, run_id, session_kind: "discussion"}`.
+`start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root,
+actor_id=None)` starts a separate conversation about the automation as it stood at occurrence N, and returns
+`{session_id, run_id, session_kind: "discussion"}`. Forking at a different point in time means choosing another N.
 
 - It creates a new **root** run, `uuid5(automation_id, "discuss:<request_id>")`, in its own session
   `discussion-session:<run id>`. Request ids are therefore scoped to the automation. The same request returns the same
   discussion; a different request under the same `request_id` on that automation raises `identity_conflict`.
 - The run uses the occurrence's workflow and frozen inputs, with `prompt` as the new user turn. The workflow must be
   registered on the runtime.
-- It is seeded **once** with the conversation up to and including that occurrence: the automation's session through
-  occurrence N in growing mode, the occurrence's own session in independent mode. The seed is read strictly and
-  stored in `_meta.discussion.seed_messages` of the discussion's root run.
-- The occurrence's workspace is mounted **read-only**: reads work, and writes, edits and command execution are
-  refused (see [Read-only workspaces](#read-only-workspaces)). The workspace folder must already exist.
+- It is seeded **once** with the automation's whole conversation through occurrence N, whatever the context mode:
+  one user/assistant pair per finished occurrence 1..N (its last attempt), the occurrence's trigger/task turn and its
+  answer, oldest first (`automation_timeline_messages(...)`). A failed or stopped occurrence stays in the timeline,
+  its answer saying so. The pairs fit the history budget (40 messages, 24 000 characters, 8 000 per message); the
+  oldest are dropped first. The first user message starts with a summary line: `[Automation "<title>": <n>
+  occurrence(s) through occurrence N, showing the last K. The automation's files are mounted READ-ONLY at <path>;
+  your own workspace <path> is writable.]`. The seed is stored in `_meta.discussion.seed_messages` of the root run.
+- It works in its **own writable workspace**, `workspace_root`, which the host allocates (it must differ from the
+  automation's). The automation's workspace is **mounted read-only** alongside it: it is reachable
+  (`workspace_access_mode: "workspace_or_allowed"`, listed in `workspace_allowed_paths`) and protected by
+  `_runtime.workspace_read_only_paths`, so reads work and writes, edits and moves into it are refused. Commands and
+  tools run normally in the discussion's own workspace. `_meta.discussion.mounted_workspace` names the mount.
 - The automation's tool grant is removed: tools in a discussion ask for approval as in any chat.
-- Nothing is ever written back into the automation's session, state or ledger.
+- Nothing is ever written back into the automation's session, state, ledger or workspace.
 
 Errors: `occurrence_not_found` (the automation has no occurrence N), `invalid_request` (empty `prompt` or
 `request_id`), `automation_not_found`, `identity_conflict`, and `SessionHistoryError` when the seed cannot be read.
 
 **Later turns stay anchored.** Every later root run started in a discussion session, by any caller, gets the
-discussion's provenance (`_meta.discussion` without the seed), its `workspace_root` and a read-only workspace,
-whatever the caller passed. The discussion's root is validated first: every discussion run of the session must name
+discussion's provenance (`_meta.discussion` without the seed) and its workspace setup (its own `workspace_root`
+and the read-only mount), whatever the caller passed. The discussion's root is validated first: every discussion run of the session must name
 the same root, and that root must be a parent-less run of this session that carries the seed. If this check fails,
 `Runtime.start` raises `SessionAttributionError` and the run is not created. Children of discussion runs carry the
 discussion provenance too.
@@ -338,7 +346,8 @@ under the budget.
 ### Read-only workspaces
 
 A run is read-only when its vars carry `workspace_read_only: true` or the trusted runtime key
-`_runtime.workspace_read_only: true`. Discussions set both. Under a read-only workspace:
+`_runtime.workspace_read_only: true`. (Discussions use read-only MOUNTS instead: see above.) Under a read-only
+workspace:
 
 - tools classified `write` or `exec` in `TOOL_EFFECT_CLASSES` are refused (`write_file`, `edit_file`,
   `execute_command`, `shell_exec`, `local_helper_start`, `execute_python`, `self_improve`, ...), and so is every tool

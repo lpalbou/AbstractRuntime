@@ -152,7 +152,10 @@ def test_discussions_never_inherit_the_grant(env, tmp_path):
     req = request(workflow_id="uses_tool", trigger=HOURLY, input_data={"prompt": "memory?"}, workspace_root=str(ws))
     aid = create_automation(runtime, req, now=clock.now)[0]
     drive(runtime, aid)
-    started = start_discussion(runtime, automation_id=aid, occurrence_index=1, request_id="d", prompt="why?")
+    own = tmp_path / "discussion-ws"
+    own.mkdir()
+    started = start_discussion(runtime, automation_id=aid, occurrence_index=1, request_id="d", prompt="why?",
+                               workspace_root=str(own))
     disc = runtime.get_state(started["run_id"])
     assert "tool_policy" not in disc.vars["_runtime"]
 

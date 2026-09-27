@@ -20,14 +20,15 @@
 from __future__ import annotations
 
 import copy
+import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, WaitReason
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
-from .attention import resolve_strict
+from .attention import normalize_occurrence_output, resolve_strict
 from .bundle import controller_workflow_spec
 from .controller import AUTOMATION_GRANT_SOURCE
 from .ledger import (
@@ -47,6 +48,7 @@ from .models import (
     discussion_ids,
     initial_state,
     request_digest,
+    validate_workspace_root,
     wake_wait_key,
 )
 
@@ -236,6 +238,86 @@ def list_occurrences(
 # --- discussion --------------------------------------------------------------------------
 
 
+def _cut(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n[#TRUNCATION: {len(text) - limit} characters cut (discussion seed, {limit} per message)]"
+
+
+def automation_timeline_messages(
+    runtime: Any,
+    automation_id: str,
+    *,
+    through_occurrence: int,
+    workspace_root: str,
+    mounted_workspace: str,
+    max_messages: int = 40,
+    max_chars_per_message: int = 8000,
+    max_total_chars: int = 24_000,
+) -> List[Dict[str, Any]]:
+    """The automation's conversation through occurrence N, whatever its context mode.
+
+    One user/assistant pair per finished occurrence 1..N, oldest first (its
+    last attempt): the occurrence's trigger/task turn and its answer. A failed
+    or stopped occurrence is kept, its answer stating so (the timeline stays
+    whole). The pairs fold newest-first under the history budget (oldest
+    dropped first); the first kept user message starts with a summary line
+    naming the automation, how many occurrences exist and how many are shown,
+    and where the automation's files are mounted (read-only) next to the
+    discussion's own writable workspace.
+    """
+    definition = definition_of(_load_automation(runtime.run_store, automation_id))
+    admitted: Dict[int, Dict[str, Any]] = {}
+    completed: Dict[int, Dict[str, Any]] = {}
+    for rec in automation_records(runtime.ledger_store, automation_id, "automation.admitted", "automation.completed"):
+        p = rec["payload"]
+        (admitted if rec["name"] == "automation.admitted" else completed)[int(p["index"])] = p
+    pairs: List[List[Dict[str, Any]]] = []
+    for index in sorted(i for i in completed if i <= through_occurrence and i in admitted):
+        done = completed[index]
+        prepared = resolve_strict(admitted[index]["prepared"], artifact_store=runtime.artifact_store)
+        prompt = (prepared.get("input_data") or {}).get("prompt")
+        envelope = admitted[index].get("trigger_envelope") or {}
+        user = prompt if isinstance(prompt, str) and prompt.strip() else (
+            f"[Trigger {envelope.get('source_id')}@{envelope.get('source_version')} · occurrence {index}"
+            f" · fired {envelope.get('fired_at')}]"
+        )
+        if done["status"] == "completed":
+            child = runtime.run_store.load(done["run_id"])
+            if child is None:
+                raise LookupError(f"occurrence {index} run {done['run_id']} is missing")
+            answer = normalize_occurrence_output(child, artifact_store=runtime.artifact_store)["answer"]
+            answer = answer if answer.strip() else "(The occurrence completed without a text answer.)"
+        elif done["status"] == "failed":
+            body = (done.get("attention") or {}).get("body") or "no error recorded"
+            answer = f"(This occurrence failed after {done['attempts']} attempt(s): {body})"
+        else:
+            answer = "(This occurrence was stopped before it finished.)"
+        meta = {"kind": "automation_occurrence", "run_id": done["run_id"], "occurrence_index": index}
+        pairs.append([
+            {"role": "user", "content": _cut(user, max_chars_per_message), "metadata": dict(meta)},
+            {"role": "assistant", "content": _cut(answer, max_chars_per_message), "metadata": dict(meta)},
+        ])
+    kept: List[List[Dict[str, Any]]] = []
+    chars = 0
+    for pair in reversed(pairs):
+        size = sum(len(m["content"]) for m in pair)
+        if 2 * (len(kept) + 1) > max_messages or (kept and chars + size > max_total_chars):
+            break
+        kept.append(pair)
+        chars += size
+    kept.reverse()
+    if not kept:
+        return []
+    summary = (
+        f"[Automation \"{definition['title']}\": {len(pairs)} occurrence(s) through occurrence {through_occurrence}, "
+        f"showing the last {len(kept)}. The automation's files are mounted READ-ONLY at {mounted_workspace}; "
+        f"your own workspace {workspace_root} is writable.]"
+    )
+    kept[0][0] = {**kept[0][0], "content": f"{summary}\n{kept[0][0]['content']}"}
+    return [m for pair in kept for m in pair]
+
+
 def start_discussion(
     runtime: Any,
     *,
@@ -243,6 +325,7 @@ def start_discussion(
     occurrence_index: int,
     request_id: str,
     prompt: str,
+    workspace_root: str,
     actor_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """Start (or re-find) a discussion forked from occurrence `occurrence_index`.
@@ -250,17 +333,24 @@ def start_discussion(
     A new ROOT run (run id `uuid5(automation_id, "discuss:" + request_id)`) in
     session `discussion-session:<that run id>`, so request ids are scoped to
     the automation; the same request replays to the same discussion and a
-    different request under the same id is an `identity_conflict`. It runs the occurrence's
-    workflow with its frozen inputs, `prompt` as the new user turn, the
-    automation's conversation through that occurrence as `context.messages`
-    (read strictly: no seed, no discussion), and the occurrence's workspace
-    mounted read-only. The seed is stored once in `_meta.discussion`; nothing
-    is ever written back into the automation's session or state.
+    different request under the same id is an `identity_conflict`.
+
+    It runs the occurrence's workflow with its frozen inputs and `prompt` as
+    the new user turn, seeded once (`_meta.discussion.seed_messages`) with the
+    automation's whole conversation through that occurrence
+    (`automation_timeline_messages`). It works in its OWN writable
+    `workspace_root` (allocated by the host); the automation's workspace is
+    mounted alongside, readable and read-only
+    (`_runtime.workspace_read_only_paths`). Nothing is ever written back into
+    the automation's session, state or workspace.
     """
+    from ..utils.workspace_paths import READ_ONLY_PATHS_KEY
+
     if not isinstance(prompt, str) or not prompt.strip():
         raise AutomationError("prompt must be a non-empty string", reason_code="invalid_request", field="prompt")
     if not isinstance(request_id, str) or not request_id.strip():
         raise AutomationError("request_id must be a non-empty string", reason_code="invalid_request", field="request_id")
+    own_workspace = validate_workspace_root(workspace_root)
     _load_automation(runtime.run_store, automation_id)
     index = int(occurrence_index)
     admitted = find_by_idempotency_key(runtime.ledger_store, automation_id, record_key("automation.admitted", automation_id, index))
@@ -272,21 +362,18 @@ def start_discussion(
     completed = find_by_idempotency_key(runtime.ledger_store, automation_id, record_key("automation.completed", automation_id, index))
     seed_run_id = record_payload(completed)["run_id"] if completed is not None else admitted_p["run_id"]
     prepared = resolve_strict(admitted_p["prepared"], artifact_store=runtime.artifact_store)
+    mounted = prepared["workspace_root"]
+    if os.path.normpath(own_workspace) == os.path.normpath(mounted):
+        raise AutomationError(
+            "a discussion needs its own workspace, not the automation's", reason_code="invalid_request", field="workspace_root"
+        )
 
     workflow = runtime.workflow_registry.get(prepared["workflow_id"]) if runtime.workflow_registry is not None else None
     if workflow is None:
         raise LookupError(f"workflow {prepared['workflow_id']!r} of occurrence {index} is not registered on this runtime")
 
-    from ..session_history import session_chat_messages
-
-    seed = session_chat_messages(
-        run_store=runtime.run_store,
-        ledger_store=runtime.ledger_store,
-        artifact_store=runtime.artifact_store,
-        session_id=prepared["session_id"],
-        automation_id=automation_id,
-        through_occurrence=index,
-        strict=True,
+    seed = automation_timeline_messages(
+        runtime, automation_id, through_occurrence=index, workspace_root=own_workspace, mounted_workspace=mounted
     )
     ids = discussion_ids(automation_id, request_id)
     input_data = copy.deepcopy(prepared["input_data"])
@@ -306,18 +393,25 @@ def start_discussion(
         "seed_run_id": seed_run_id,
         "request_id": request_id,
         "discussion_root_run_id": ids["run_id"],
+        "mounted_workspace": mounted,
         "seed_messages": list(seed),
     }
     meta["creation_digest"] = request_digest(
-        {"automation_id": automation_id, "occurrence_index": index, "request_id": request_id, "prompt": prompt}
+        {"automation_id": automation_id, "occurrence_index": index, "request_id": request_id, "prompt": prompt,
+         "workspace_root": own_workspace}
     )
     input_data["_meta"] = meta
-    input_data["workspace_root"] = prepared["workspace_root"]
-    # Host key (contract C4) and the trusted runtime-policy key, which a client
-    # payload cannot carry: both mean "this workspace is mounted read-only".
-    input_data[READ_ONLY_KEY] = True
+    # Own workspace, writable; the automation's workspace mounted alongside
+    # (reachable through the allowed-paths mount) and read-only.
+    input_data["workspace_root"] = own_workspace
+    input_data["workspace_access_mode"] = "workspace_or_allowed"
+    allowed = input_data.get("workspace_allowed_paths")
+    allowed = [a for a in allowed if isinstance(a, str)] if isinstance(allowed, list) else []
+    input_data["workspace_allowed_paths"] = [*allowed, mounted] if mounted not in allowed else allowed
+    input_data.pop(READ_ONLY_KEY, None)
     runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
-    input_data["_runtime"] = {**runtime_ns, READ_ONLY_KEY: True}
+    runtime_ns = {k: v for k, v in runtime_ns.items() if k != READ_ONLY_KEY}
+    input_data["_runtime"] = {**runtime_ns, READ_ONLY_PATHS_KEY: [mounted]}
     from ..core.run_identity import RunIdentityConflict
 
     try:
@@ -433,5 +527,6 @@ __all__ = [
     "drive_automation",
     "get_automation",
     "list_occurrences",
+    "automation_timeline_messages",
     "start_discussion",
 ]

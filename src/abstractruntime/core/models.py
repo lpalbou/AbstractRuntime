@@ -225,9 +225,10 @@ class RunState:
         session_id: Optional[str] = None,
         vars: Optional[Dict[str, Any]] = None,
         parent_run_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> "RunState":
         return cls(
-            run_id=str(uuid.uuid4()),
+            run_id=str(run_id) if run_id else str(uuid.uuid4()),
             workflow_id=workflow_id,
             status=RunStatus.RUNNING,
             current_node=entry_node,

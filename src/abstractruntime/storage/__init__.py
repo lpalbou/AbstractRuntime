@@ -1,6 +1,14 @@
 """Storage backends for durability."""
 
-from .base import DeletableLedgerStore, DeletableRunStore, LedgerStore, QueryableRunStore, RunStore
+from .base import (
+    DeletableLedgerStore,
+    DeletableRunStore,
+    LedgerStore,
+    QueryableRunStore,
+    RunStore,
+    require_create_if_absent,
+    store_supports_create_if_absent,
+)
 from .in_memory import InMemoryRunStore, InMemoryLedgerStore
 from .json_files import JsonFileRunStore, JsonlLedgerStore
 from .lease import (
@@ -23,6 +31,8 @@ from .snapshots import Snapshot, SnapshotStore, InMemorySnapshotStore, JsonSnaps
 
 __all__ = [
     "RunStore",
+    "require_create_if_absent",
+    "store_supports_create_if_absent",
     "LedgerStore",
     "QueryableRunStore",
     "DeletableRunStore",

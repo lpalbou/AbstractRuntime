@@ -8,7 +8,7 @@ These are intentionally minimal for v0.1.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from ..core.models import RunState, RunStatus, StepRecord, StepStatus, WaitReason
 
@@ -19,6 +19,48 @@ class RunStore(ABC):
 
     @abstractmethod
     def load(self, run_id: str) -> Optional[RunState]: ...
+
+    def create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
+        """Atomically create `run` unless a run with its id exists.
+
+        Returns `(run, True)` when this call created it, `(existing, False)`
+        when the id was taken by a run with the same creation identity
+        (`core.run_identity.verify_run_identity`), and raises
+        `RunIdentityConflict` otherwise. Never overwrites, never reseeds.
+
+        Mandatory for explicit-id starts (`Runtime.start(run_id=...)`,
+        `START_SUBWORKFLOW.payload.run_id`). The base class does NOT emulate
+        it with load-then-save (that is a race, not a primitive): stores
+        without a real implementation raise, and callers preflight with
+        `store_supports_create_if_absent` / `require_create_if_absent`.
+
+        Durability claim: process-crash recovery (the run is either fully
+        present or absent). Power-loss durability would additionally need
+        file and directory fsync and is not claimed.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement create_if_absent "
+            "(required for runs started with an explicit run_id)"
+        )
+
+    def supports_create_if_absent(self) -> bool:
+        """True when this store (through any wrapped store) implements `create_if_absent`."""
+        return type(self).create_if_absent is not RunStore.create_if_absent
+
+
+def store_supports_create_if_absent(store: Any) -> bool:
+    """Capability preflight for `create_if_absent` (sees through wrappers)."""
+    probe = getattr(store, "supports_create_if_absent", None)
+    return bool(probe()) if callable(probe) else False
+
+
+def require_create_if_absent(store: Any) -> None:
+    """Raise `NotImplementedError` unless `store` supports `create_if_absent`."""
+    if not store_supports_create_if_absent(store):
+        raise NotImplementedError(
+            f"run store {type(store).__name__} does not support create_if_absent; "
+            "explicit-id starts (automations, discussions) need a store that does"
+        )
 
 
 @runtime_checkable

@@ -5,6 +5,36 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `Runtime.start(..., run_id=...)` and `START_SUBWORKFLOW` `payload.run_id`: start a run under an id you
+  choose. The run is created only if that id is free; starting it again with the same request returns
+  the existing run untouched (never reset or re-seeded), and a different request under the same id
+  raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). Identity is the
+  workflow, session, parent run, `vars._meta.occurrence` and a `vars._meta.creation_digest` (the
+  caller's own, or a sha256 of the start request).
+- `RunStore.create_if_absent(run) -> (run, created)` on the SQLite, JSON-file, in-memory and
+  offloading stores (JSON files publish a fully written temp file with an atomic hard link, so an
+  existing run file is never replaced). Stores without it raise; `store_supports_create_if_absent` /
+  `require_create_if_absent` check a store (through the offloading wrapper) before relying on it.
+  Recovery after a process crash is covered; power-loss durability is not claimed.
+- `run_mutation_lock(run_id)`: the per-run lock that `Runtime.tick` now holds for the whole tick and
+  `Runtime.resume` for its commit. Hosts take it around their own read-modify-save of a run so a tick
+  can no longer overwrite their change. It is per process (one writer process per store).
+
+### Fixed
+
+- A parent that crashes after starting a child with an explicit id, but before saving its wait, finds
+  the same child on replay (exactly one) and waits on it again; if the child already finished, the
+  parent receives its result directly instead of waiting forever.
+- Children of an automation occurrence are marked `vars._meta.occurrence.role = "descendant"` and
+  children of a discussion carry its `vars._meta.discussion` (without the seed messages); a child
+  cannot clear or forge either.
+- Automation identity metadata (`vars._meta.automation`, `.occurrence`, `.discussion`,
+  `.creation_digest`) is never moved to the artifact store when a finished run is offloaded.
+
 ## [0.5.1] - 2026-09-26
 
 ### Added

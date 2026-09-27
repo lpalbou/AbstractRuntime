@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, StepRecord, StepStatus, WaitReason, WaitState
+from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
 from .base import LedgerStore, RunStore
@@ -519,7 +520,17 @@ class SqliteRunStore(RunStore):
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
-    def save(self, run: RunState) -> None:
+    # Columns written for every run row, in INSERT order.
+    _RUN_COLUMNS = (
+        "run_id", "workflow_id", "status", "wait_reason", "wait_until",
+        "parent_run_id", "actor_id", "session_id",
+        "created_at", "updated_at",
+        "run_json", "paused", "run_lifecycle_json",
+    )
+
+    @staticmethod
+    def _run_row(run: RunState) -> Dict[str, Any]:
+        """Column values for one run (shared by `save` and `create_if_absent`)."""
         wait_reason: Optional[str] = None
         wait_until: Optional[str] = None
         if run.waiting is not None:
@@ -534,78 +545,95 @@ class SqliteRunStore(RunStore):
             if run.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT):
                 wait_until = str(run.waiting.until) if run.waiting.until else None
 
-        # Compact + by-reference serialization (backlog 0067): save() runs
-        # for every step of every run; `asdict` deep-copied the whole vars
-        # tree per save under a single-writer contract that makes the copy
-        # pure waste (see storage/serialize.py).
-        payload = dumps_compact(runstate_to_dict(run))
-
         # Hot-path read columns (backlog 0068): derived from run.vars in the
-        # SAME upsert as run_json — one write, one truth, two read speeds.
-        paused = 1 if is_paused_vars(run.vars) else 0
+        # SAME statement as run_json — one write, one truth, two read speeds.
         lifecycle = run_lifecycle_index_fields(run.vars).get("run_lifecycle")
-        lifecycle_json = dumps_compact(lifecycle)
+        return {
+            "run_id": str(run.run_id),
+            "workflow_id": str(run.workflow_id),
+            "status": str(getattr(run.status, "value", run.status)),
+            "wait_reason": wait_reason,
+            "wait_until": wait_until,
+            "parent_run_id": str(run.parent_run_id) if run.parent_run_id else None,
+            "actor_id": str(run.actor_id) if run.actor_id else None,
+            "session_id": str(run.session_id) if run.session_id else None,
+            "created_at": str(run.created_at),
+            "updated_at": str(run.updated_at),
+            # Compact + by-reference serialization (backlog 0067): save() runs
+            # for every step of every run; `asdict` deep-copied the whole vars
+            # tree per save under a single-writer contract that makes the copy
+            # pure waste (see storage/serialize.py).
+            "run_json": dumps_compact(runstate_to_dict(run)),
+            "paused": 1 if is_paused_vars(run.vars) else 0,
+            "run_lifecycle_json": dumps_compact(lifecycle),
+        }
 
+    @staticmethod
+    def _sync_wait_index(conn: sqlite3.Connection, run: RunState, row: Dict[str, Any]) -> None:
+        # Maintain the due index (WAITING runs with a deadline: UNTIL
+        # always; EVENT when it carries an idle deadline — D3).
+        wait_until = row["wait_until"]
+        if run.status == RunStatus.WAITING and wait_until:
+            index_status = (
+                "waiting_until" if row["wait_reason"] == WaitReason.UNTIL.value else "waiting_event_deadline"
+            )
+            conn.execute(
+                """
+                INSERT INTO wait_index (run_id, next_due_iso, updated_at_iso, status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                  next_due_iso=excluded.next_due_iso,
+                  updated_at_iso=excluded.updated_at_iso,
+                  status=excluded.status;
+                """,
+                (row["run_id"], str(wait_until), str(run.updated_at), index_status),
+            )
+        else:
+            conn.execute("DELETE FROM wait_index WHERE run_id = ?;", (row["run_id"],))
+
+    def save(self, run: RunState) -> None:
+        row = self._run_row(run)
+        cols = self._RUN_COLUMNS
+        updates = ",\n                  ".join(f"{c}=excluded.{c}" for c in cols if c not in ("run_id", "created_at"))
         conn = self._db.connection()
         with conn:
             conn.execute(
-                """
-                INSERT INTO runs (
-                  run_id, workflow_id, status, wait_reason, wait_until,
-                  parent_run_id, actor_id, session_id,
-                  created_at, updated_at,
-                  run_json, paused, run_lifecycle_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""
+                INSERT INTO runs ({", ".join(cols)})
+                VALUES ({", ".join("?" for _ in cols)})
                 ON CONFLICT(run_id) DO UPDATE SET
-                  workflow_id=excluded.workflow_id,
-                  status=excluded.status,
-                  wait_reason=excluded.wait_reason,
-                  wait_until=excluded.wait_until,
-                  parent_run_id=excluded.parent_run_id,
-                  actor_id=excluded.actor_id,
-                  session_id=excluded.session_id,
-                  updated_at=excluded.updated_at,
-                  run_json=excluded.run_json,
-                  paused=excluded.paused,
-                  run_lifecycle_json=excluded.run_lifecycle_json;
+                  {updates};
                 """,
-                (
-                    str(run.run_id),
-                    str(run.workflow_id),
-                    str(getattr(run.status, "value", run.status)),
-                    wait_reason,
-                    wait_until,
-                    str(run.parent_run_id) if run.parent_run_id else None,
-                    str(run.actor_id) if run.actor_id else None,
-                    str(run.session_id) if run.session_id else None,
-                    str(run.created_at),
-                    str(run.updated_at),
-                    payload,
-                    paused,
-                    lifecycle_json,
-                ),
+                tuple(row[c] for c in cols),
             )
+            self._sync_wait_index(conn, run, row)
 
-            # Maintain the due index (WAITING runs with a deadline: UNTIL
-            # always; EVENT when it carries an idle deadline — D3).
-            if run.status == RunStatus.WAITING and wait_until:
-                index_status = (
-                    "waiting_until" if wait_reason == WaitReason.UNTIL.value else "waiting_event_deadline"
-                )
-                conn.execute(
-                    """
-                    INSERT INTO wait_index (run_id, next_due_iso, updated_at_iso, status)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(run_id) DO UPDATE SET
-                      next_due_iso=excluded.next_due_iso,
-                      updated_at_iso=excluded.updated_at_iso,
-                      status=excluded.status;
-                    """,
-                    (str(run.run_id), str(wait_until), str(run.updated_at), index_status),
-                )
-            else:
-                conn.execute("DELETE FROM wait_index WHERE run_id = ?;", (str(run.run_id),))
+    def create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
+        """`INSERT … ON CONFLICT(run_id) DO NOTHING` and the read-back of the
+        winning row in ONE transaction: the first creation wins, a later one
+        loads it (identity-checked) and never overwrites or reseeds it."""
+        row = self._run_row(run)
+        cols = self._RUN_COLUMNS
+        conn = self._db.connection()
+        with conn:
+            cur = conn.execute(
+                f"""
+                INSERT INTO runs ({", ".join(cols)})
+                VALUES ({", ".join("?" for _ in cols)})
+                ON CONFLICT(run_id) DO NOTHING;
+                """,
+                tuple(row[c] for c in cols),
+            )
+            created = int(getattr(cur, "rowcount", 0) or 0) == 1
+            if created:
+                self._sync_wait_index(conn, run, row)
+                return run, True
+            existing_row = conn.execute("SELECT run_json FROM runs WHERE run_id = ?;", (row["run_id"],)).fetchone()
+        if existing_row is None:  # pragma: no cover - the conflict implies the row
+            raise ValueError(f"run {row['run_id']} conflicted on insert but is not readable")
+        existing = _runstate_from_dict(json.loads(str(existing_row["run_json"] or "{}")))
+        verify_run_identity(existing, run)
+        return existing, False
 
     def load(self, run_id: str) -> Optional[RunState]:
         rid = str(run_id or "").strip()

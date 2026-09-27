@@ -209,6 +209,29 @@ def offload_large_values(
     return out
 
 
+# Run identity/attribution metadata stays INLINE (automations contract C11):
+# the run index, create-if-absent identity checks and session-turn selection
+# read these without an artifact store. Only a discussion's `seed_messages`
+# (potentially large conversation text) may be offloaded; readers resolve it.
+_INLINE_IDENTITY_PATHS = (
+    "vars._meta.automation",
+    "vars._meta.occurrence",
+    "vars._meta.discussion",
+    "vars._meta.creation_digest",
+)
+_OFFLOADABLE_IDENTITY_PATHS = ("vars._meta.discussion.seed_messages",)
+
+
+def _is_inline_identity_path(path: str) -> bool:
+    for allowed in _OFFLOADABLE_IDENTITY_PATHS:
+        if path == allowed or path.startswith(allowed + ".") or path.startswith(allowed + "["):
+            return False
+    for pinned in _INLINE_IDENTITY_PATHS:
+        if path == pinned or path.startswith(pinned + ".") or path.startswith(pinned + "["):
+            return True
+    return False
+
+
 def _offload_run_state(
     run: RunState,
     *,
@@ -240,6 +263,8 @@ def _offload_run_state(
         # e.g. vars._temp.<...>, vars._runtime.<...>, vars._last_output.<...>
         p = str(path or "")
         if p == "vars":
+            return False
+        if _is_inline_identity_path(p):
             return False
         if p.startswith("vars._") and p.count(".") >= 2:
             return True
@@ -385,6 +410,18 @@ class OffloadingRunStore(RunStore):
 
     def load(self, run_id: str) -> Optional[RunState]:
         return self._inner.load(run_id)
+
+    def create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
+        """Offload like `save`, then delegate: the inner store's primitive is
+        the atomicity, never bypassed (raises when the inner store lacks it)."""
+        persisted = _offload_run_state(run, artifact_store=self._artifact_store, max_inline_bytes=self._max_inline_bytes)
+        stored, created = self._inner.create_if_absent(persisted)
+        return (run if created else stored), created
+
+    def supports_create_if_absent(self) -> bool:
+        from .base import store_supports_create_if_absent
+
+        return store_supports_create_if_absent(self._inner)
 
     def probe_control(self, run_id: str):
         """Pass through the cheap `(status, paused)` control probe (0068).

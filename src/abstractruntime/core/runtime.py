@@ -57,7 +57,8 @@ from .effect_cancellation import (
     run_cancel_requested,
 )
 from .tool_scope import ToolScopeError, resolve_tool_scope
-from ..storage.base import LedgerStore, RunStore, QueryableRunStore
+from ..storage.base import LedgerStore, RunStore, QueryableRunStore, require_create_if_absent
+from .run_identity import creation_digest
 from ..storage.ledger_slim import (
     build_started_payload_index,
     capture_started_payload_digests,
@@ -1319,7 +1320,63 @@ class Runtime:
         actor_id: Optional[str] = None,
         session_id: Optional[str] = None,
         parent_run_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
+        """Create a run and return its id.
+
+        `run_id` (automations contract C1): an explicit, caller-chosen id. The
+        run is then created through the store's atomic `create_if_absent`: if
+        a run with that id already exists with the same creation identity
+        (workflow, session, parent, `vars._meta.occurrence`,
+        `vars._meta.creation_digest`) it is returned UNCHANGED — not reseeded,
+        not reset — and a different identity raises `RunIdentityConflict`.
+        The store must support the primitive (preflight raises
+        NotImplementedError otherwise). The creation digest is the caller's
+        own `vars._meta.creation_digest` when given (hosts that digest their
+        request, excluding generated values), else the sha256 of this call's
+        arguments before runtime defaults are seeded.
+        """
+        run, _created = self._start_run(
+            workflow=workflow,
+            vars=vars,
+            actor_id=actor_id,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            run_id=run_id,
+        )
+        return run.run_id
+
+    def _start_run(
+        self,
+        *,
+        workflow: WorkflowSpec,
+        vars: Optional[Dict[str, Any]],
+        actor_id: Optional[str],
+        session_id: Optional[str],
+        parent_run_id: Optional[str],
+        run_id: Optional[str],
+    ) -> tuple[RunState, bool]:
+        """`start` returning `(run, created)`; `created` is False only when an
+        explicit `run_id` already existed with the same identity."""
+        explicit_id: Optional[str] = None
+        if run_id is not None:
+            explicit_id = str(run_id).strip()
+            if not explicit_id or not _SAFE_RUN_ID_PATTERN.match(explicit_id):
+                raise ValueError(f"invalid run_id {run_id!r}: expected [A-Za-z0-9_-]+")
+            require_create_if_absent(self._run_store)
+            caller_vars = dict(vars or {})
+            caller_meta = caller_vars.get("_meta")
+            meta = dict(caller_meta) if isinstance(caller_meta, dict) else {}
+            if not meta.get("creation_digest"):
+                meta["creation_digest"] = creation_digest(
+                    workflow_id=workflow.workflow_id,
+                    session_id=session_id,
+                    parent_run_id=parent_run_id,
+                    vars=caller_vars,
+                )
+            caller_vars["_meta"] = meta
+            vars = caller_vars
+
         # Seed `_limits` PER KEY, never all-or-nothing (adversarial budget
         # audit 2026-08-02, CONFIRMED defect).
         #
@@ -1501,9 +1558,12 @@ class Runtime:
             actor_id=actor_id,
             session_id=session_id,
             parent_run_id=parent_run_id,
+            run_id=explicit_id,
         )
-        self._run_store.save(run)
-        return run.run_id
+        if explicit_id is None:
+            self._run_store.save(run)
+            return run, True
+        return self._run_store.create_if_absent(run)
 
     def cancel_run(
         self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
@@ -4480,14 +4540,74 @@ class Runtime:
         else:
             session_id = getattr(run, "session_id", None)
 
+        # Automation attribution crosses the hop (automations contract B): a
+        # child of an occurrence (or of any descendant) is a DESCENDANT — never
+        # an occurrence itself, so it is never a session turn — and a child of
+        # a discussion carries the discussion provenance without the (large)
+        # seed. Set by the runtime, not inheritable-by-choice: a child cannot
+        # clear or rewrite it.
+        parent_meta = parent_ws_vars.get("_meta") if isinstance(parent_ws_vars.get("_meta"), dict) else {}
+        parent_occurrence = parent_meta.get("occurrence")
+        parent_discussion = parent_meta.get("discussion")
+        if isinstance(parent_occurrence, dict) or isinstance(parent_discussion, dict):
+            child_meta = dict(sub_vars["_meta"]) if isinstance(sub_vars.get("_meta"), dict) else {}
+            if isinstance(parent_occurrence, dict):
+                child_meta["occurrence"] = {**parent_occurrence, "role": "descendant"}
+            if isinstance(parent_discussion, dict):
+                child_meta["discussion"] = {
+                    k: v for k, v in parent_discussion.items() if k != "seed_messages"
+                }
+            sub_vars["_meta"] = child_meta
+
+        # Explicit child id (automations contract C1): the child is created
+        # through the store's create-if-absent. On a replay (the parent
+        # crashed after the child was created but before its wait was saved)
+        # the SAME child is found and loaded, never reseeded, and the wait is
+        # reconstructed below exactly as on the first dispatch.
+        explicit_child_id = effect.payload.get("run_id")
+        if explicit_child_id is not None and not (isinstance(explicit_child_id, str) and explicit_child_id.strip()):
+            return EffectOutcome.failed("start_subworkflow payload.run_id must be a non-empty string")
+
         # Start the subworkflow with parent tracking
-        sub_run_id = self.start(
+        sub_run, sub_created = self._start_run(
             workflow=sub_workflow,
             vars=sub_vars,
             actor_id=run.actor_id,  # Inherit actor from parent
             session_id=session_id,
             parent_run_id=run.run_id,  # Track parent for hierarchy
+            run_id=explicit_child_id.strip() if isinstance(explicit_child_id, str) else None,
         )
+        sub_run_id = sub_run.run_id
+
+        if (
+            is_async
+            and wait_for_completion
+            and not sub_created
+            and sub_run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
+            and resume_to == default_next_node
+        ):
+            # The child finished before the parent's wait was ever saved (the
+            # replay case): nobody will resume a wait for it, so deliver now
+            # the outcome the host's parent resume would have delivered.
+            child_out: Dict[str, Any] = (
+                dict(sub_run.output) if isinstance(sub_run.output, dict) else {"result": sub_run.output}
+            )
+            if sub_run.status != RunStatus.COMPLETED:
+                child_out.setdefault("success", False)
+                if sub_run.status == RunStatus.CANCELLED:
+                    child_out.setdefault("cancelled", True)
+                if isinstance(sub_run.error, str) and sub_run.error.strip():
+                    child_out.setdefault("error", sub_run.error.strip())
+            if wrap_as_tool_result:
+                ok = child_out.get("success") is not False
+                return EffectOutcome.completed(
+                    _tool_result(
+                        success=ok,
+                        output=_tool_output_for_subworkflow(sub_run_id=sub_run_id, output=child_out) if ok else None,
+                        error=None if ok else str(child_out.get("error") or "Subworkflow failed"),
+                    )
+                )
+            return EffectOutcome.completed({"sub_run_id": sub_run_id, "output": child_out})
 
         if is_async:
             # Async mode: start the child and return immediately.

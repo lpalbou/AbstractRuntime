@@ -17,11 +17,12 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
+from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
 logger = logging.getLogger(__name__)
@@ -539,6 +540,52 @@ class JsonFileRunStore(RunStore):
             token = (0, 0, 0)
         if token[0] > 0:
             self._cache_put(str(run.run_id), token, run)
+
+    def create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
+        """Create the run file only if absent: a fully written temp file in the
+        SAME directory is published with `os.link` (atomic; fails with
+        FileExistsError when the id is taken), then the temp name is unlinked.
+        Readers therefore never see a partial file and an existing run is
+        never overwritten — there is no replace() fallback. Filesystems
+        without hard links raise instead of degrading.
+
+        The in-memory children/event-wait indexes are updated afterwards; they
+        are rebuildable (a restart rebuilds them from disk) and are refreshed
+        from the existing run when the id was taken, which repairs them after
+        a crash between publication and index update. Process-crash recovery
+        only: no fsync, so power-loss durability is not claimed.
+        """
+        p = self._path(run.run_id)
+        tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+        created = False
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                f.write(dumps_compact(runstate_to_dict(run)))
+            try:
+                os.link(tmp, p)
+                created = True
+            except FileExistsError:
+                created = False
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
+        if created:
+            self._update_children_index_on_save(run)
+            self._update_event_wait_index_on_save(run)
+            try:
+                token = self._stat_token(p.stat())
+            except Exception:
+                token = (0, 0, 0)
+            if token[0] > 0:
+                self._cache_put(str(run.run_id), token, run)
+            return run, True
+        existing = self._load_from_path(p)
+        if existing is None:
+            raise ValueError(f"run file {p.name} exists but is unreadable; refusing to overwrite it")
+        self._update_children_index_on_save(existing)
+        self._update_event_wait_index_on_save(existing)
+        verify_run_identity(existing, run)
+        return existing, False
 
     def load(self, run_id: str) -> Optional[RunState]:
         p = self._path(run_id)

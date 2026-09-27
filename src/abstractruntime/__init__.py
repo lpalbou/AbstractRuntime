@@ -37,6 +37,7 @@ from .core.models import (
 )
 from .core.health import RuntimeHealth
 from .core.runtime import Runtime, StaleResumeError, run_mutation_lock
+from .core.run_identity import IdentityConflict, RunIdentityConflict, creation_digest
 from .core.spec import WorkflowSpec
 from .core.policy import (
     EffectPolicy,
@@ -155,6 +156,9 @@ __all__ = [
     "Runtime",
     "RuntimeHealth",
     "StaleResumeError",
+    "RunIdentityConflict",
+    "IdentityConflict",
+    "creation_digest",
     "run_mutation_lock",
     # Scheduler
     "WorkflowRegistry",

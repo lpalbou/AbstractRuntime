@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     context mode, oldest dropped first under the history budget), working in its own writable workspace with the
     automation's workspace mounted read-only alongside, and without the automation's tool grant. Discussion sessions
     are scoped to their automation.
+  - `get_automation` and `list_automations` summaries carry `next_fire_at` for every active scheduled automation,
+    also while an occurrence runs (the tick the controller will admit next, coalescing included), and
+    `current_occurrence` (`{index, run_id, attempt, status}` of the occurrence in flight), so clients never
+    compute schedules themselves.
   - `adopt_legacy_schedule_projection(run)` summarizes a legacy gateway `scheduled:*` root read-only.
   - Limits: `every` is at most `366d`, `count` at most 1,000,000.
 - **Trigger sources** (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or `24h` on a grid

@@ -467,20 +467,29 @@ Retries do not make external effects exactly-once: a target that sends an email 
 
 | Function | Returns |
 |---|---|
-| `get_automation(run_store, automation_id)` | `{automation_id, definition, active_revision, state, status, next_fire_at}` |
+| `get_automation(run_store, automation_id)` | `{automation_id, definition, active_revision, state, status, next_fire_at, current_occurrence}` |
 | `list_occurrences(runtime, automation_id, *, cursor=None, limit=50)` | `{items, next_cursor}`, newest first, built from the ledger. Items: `{index, run_id, run_ids, attempts, revision, event_id, fired_at, trigger: {source_id, source_version}, user_turn, status, finished_at, notify, attention}`; `status` is `admitted`, `running`, `backoff`, `completed`, `failed` or `cancelled`; cursors look like `occ1:<index>` |
 | `list_attention(...)`, `pending_waits(...)` | see above |
 | `automation_queries.list_automations(run_store, *, status=None, cursor=None, limit=50)` | a `Page(items, next_cursor)` of automation summaries, newest first, with a cursor that survives restarts; archived automations stay listed; `status` filters on a value, a comma-separated string or a list |
-| `automation_queries.automation_summary(controller_run)` | one summary: `{automation_id, title, status, revision, trigger, context_mode, target, session_id, workspace_root, next_fire_at, retry_at, occurrence_count, pending_occurrence, last_outcome, archived_at, created_at, updated_at}` |
+| `automation_queries.automation_summary(controller_run)` | one summary: `{automation_id, title, status, revision, trigger, context_mode, target, session_id, workspace_root, next_fire_at, retry_at, current_occurrence, occurrence_count, pending_occurrence, last_outcome, archived_at, created_at, updated_at}` |
 | `automation_queries.latest_occurrence(run_store, automation_id)` | the index row of the highest-numbered occurrence (its newest attempt), or `None` |
 | `adopt_legacy_schedule_projection(run)` | a read-only summary of a legacy `scheduled:*` gateway root, marked `legacy: true` with capabilities `pause`, `resume` and `cancel`; legacy roots are never migrated |
 
 Status is, in order of precedence: `archived` (the definition has `archived_at`, whatever state the controller
 ended in), `failed` (the controller run failed, or was cancelled without being archived: it can never run again),
 `completed` (the controller ended), `paused`, `active`. `get_automation` and `list_automations` share this one rule
-(`automations.models.automation_status`). `next_fire_at` is the deadline of the controller's
-wake wait: the next tick, or the next attempt while an occurrence is in backoff (the summary then also sets
-`retry_at`). It is `None` while an occurrence runs, while paused, for a manual trigger and when exhausted.
+(`automations.models.automation_status`).
+
+`next_fire_at` is when the next occurrence will be admitted, decided exactly as the controller will decide it, so
+a client never computes schedules itself. When the controller is parked it is the deadline of its wake wait: the
+next tick, or the next attempt while an occurrence is in backoff (the summary then also sets `retry_at`). While an
+occurrence runs it is the trigger adapter's answer on the persisted cursor: the next grid tick if it is still ahead,
+otherwise the tick a coalesced admission will fire as soon as the running occurrence ends. It is `None` for a
+manual trigger, when exhausted, and when the automation is not active (paused, archived, completed, failed).
+`current_occurrence` is the occurrence in flight, `{index, run_id, attempt, status: "admitted" | "running" |
+"backoff"}`, or `None`; clients read it instead of inferring "running" from the last outcome.
+`get_automation` and the list summaries share both projections (`automations.controller.next_fire_at`,
+`current_occurrence`).
 
 `list_automations(changed_since=...)` is refused with `ChangedSinceUnsupported` (`unsupported_feature`): clients
 poll complete pages.

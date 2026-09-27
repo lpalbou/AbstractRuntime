@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 # ONE status rule, shared with `get_automation`: a cancelled controller that was
 # not archived reads `failed`.
+from .automations.controller import current_occurrence as _current_occurrence
+from .automations.controller import next_fire_at as _next_fire_at
 from .automations.models import AUTOMATION_STATUSES, automation_status
 from .core.models import RunState, RunStatus, WaitReason
 
@@ -85,11 +87,14 @@ def _wake_until(controller: RunState) -> Optional[str]:
 def automation_summary(controller: RunState) -> Dict[str, Any]:
     """Summary fields for one controller run (what `list_automations` returns).
 
-    `next_fire_at` is the deadline of the controller's wake wait
-    (`WAITING(EVENT)` on `automation:<id>:wake`): the next scheduled tick, or
-    the next attempt while an occurrence is in retry backoff (then `retry_at`
-    carries the same instant). None while an occurrence runs, when paused or
-    idle (manual trigger), and when exhausted. `occurrence_count` counts
+    `next_fire_at` is when the next occurrence will be admitted, as the
+    controller decides it (`automations.controller.next_fire_at`): the wake
+    wait's deadline when parked (the next tick, or the next attempt during
+    retry backoff, then `retry_at` carries the same instant), and while an
+    occurrence runs the trigger adapter's answer on the persisted cursor.
+    None when paused, archived, finished, idle (manual trigger) or exhausted.
+    `current_occurrence` is the occurrence in flight (`{index, run_id,
+    attempt, status: admitted|running|backoff}`) or None. `occurrence_count` counts
     admitted occurrences (`_runtime.automation.next_index - 1`), manual ones
     included; a controller that has not ticked yet has the contract's initial
     state (no occurrence).
@@ -114,8 +119,10 @@ def automation_summary(controller: RunState) -> Dict[str, Any]:
         "target": definition.get("target"),
         "session_id": controller.session_id,
         "workspace_root": definition.get("workspace_root"),
-        "next_fire_at": until,
+        # One projection, shared with `get_automation` (automations.controller).
+        "next_fire_at": _next_fire_at(controller),
         "retry_at": until if (until and in_backoff) else None,
+        "current_occurrence": _current_occurrence(controller),
         "occurrence_count": max(0, int(next_index) - 1) if isinstance(next_index, int) else 0,
         "pending_occurrence": pending if isinstance(pending, dict) else None,
         "last_outcome": state.get("last_outcome"),

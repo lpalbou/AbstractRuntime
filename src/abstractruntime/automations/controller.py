@@ -530,8 +530,65 @@ def next_step(turn: Turn) -> None:
         temp.pop("automation_dispatch", None)
 
 
+# --- projection for readers ------------------------------------------------------------
+
+_PHASE_STATUS = {"admitted": "admitted", "dispatched": "running", "backoff": "backoff"}
+
+
+def current_occurrence(run: RunState) -> Optional[Dict[str, Any]]:
+    """`{index, run_id, attempt, status: admitted|running|backoff}` of the occurrence in flight, or None."""
+    pending = (((run.vars or {}).get("_runtime") or {}).get("automation") or {}).get("pending_occurrence")
+    if not isinstance(pending, dict):
+        return None
+    return {
+        "index": int(pending["index"]),
+        "run_id": pending.get("run_id"),
+        "attempt": int(pending.get("attempt") or 1),
+        "status": _PHASE_STATUS.get(str(pending.get("phase")), str(pending.get("phase"))),
+    }
+
+
+def next_fire_at(run: RunState, *, now: Optional[str] = None) -> Optional[str]:
+    """When the next occurrence will be admitted, as the controller will decide it.
+
+    - Parked on its wake wait: the wait's deadline (the next tick, or the retry
+      time during backoff).
+    - Otherwise (an occurrence running, or the controller between steps): the
+      trigger adapter's own answer on the persisted cursor — the next grid
+      tick if it is still ahead, else the tick a coalesced admission will
+      fire as soon as the running occurrence ends (`admit` at `now`). No
+      schedule arithmetic lives outside the adapter.
+    - None for a manual trigger, an exhausted schedule, or an automation that
+      is not active (paused, archived, completed, failed).
+    """
+    from .models import automation_status
+
+    if automation_status(run) != "active":
+        return None
+    waiting = run.waiting
+    if run.status == RunStatus.WAITING and waiting is not None and waiting.wait_key == wake_wait_key(run.run_id):
+        return waiting.until or None
+    definition, state = definition_of(run), state_of(run)
+    pending = state.get("pending_occurrence")
+    if isinstance(pending, dict) and pending.get("phase") == "backoff":
+        return pending.get("retry_at")
+    binding = definition["trigger"]
+    adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
+    at = now or _now_iso()
+    trigger_state = trigger_state_of(state)
+    wait = adapter.prepare(binding, state=trigger_state, now=at)
+    if wait["kind"] != "until":
+        return None
+    if not _due(at, wait["until"]):
+        return wait["until"]
+    admission = adapter.admit(binding, state=trigger_state, now=at)
+    return admission["fired_at"] if admission is not None else wait["until"]
+
+
 __all__ = [
     "ControllerSeamError",
+    "current_occurrence",
+    "next_fire_at",
     "DISPATCH_RESULT_KEY",
     "Turn",
     "admit",

@@ -49,7 +49,6 @@ from .models import (
     initial_state,
     request_digest,
     validate_workspace_root,
-    wake_wait_key,
 )
 
 OCCURRENCE_CURSOR_PREFIX = "occ1:"
@@ -136,25 +135,23 @@ def create_automation(
 
 
 def get_automation(run_store: Any, automation_id: str) -> Dict[str, Any]:
-    """`{automation_id, definition, active_revision, state, status, next_fire_at}`."""
+    """`{automation_id, definition, active_revision, state, status, next_fire_at, current_occurrence}`.
+
+    `next_fire_at` / `current_occurrence`: see `controller.next_fire_at` and
+    `controller.current_occurrence` (the same values as the list summary).
+    """
+    from .controller import current_occurrence, next_fire_at
+
     run = _load_automation(run_store, automation_id)
     definition, state = definition_of(run), state_of(run)
-    next_fire_at = None
-    waiting = run.waiting
-    if (
-        run.status == RunStatus.WAITING
-        and waiting is not None
-        and waiting.wait_key == wake_wait_key(run.run_id)
-        and state.get("pending_occurrence") is None
-    ):
-        next_fire_at = waiting.until
     return {
         "automation_id": run.run_id,
         "definition": copy.deepcopy(definition),
         "active_revision": int(state.get("active_revision") or definition["revision"]),
         "state": {k: copy.deepcopy(v) for k, v in state.items() if k != "intent"},
         "status": automation_status(run),
-        "next_fire_at": next_fire_at,
+        "next_fire_at": next_fire_at(run),
+        "current_occurrence": current_occurrence(run),
     }
 
 

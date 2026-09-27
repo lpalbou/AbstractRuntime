@@ -5,7 +5,10 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.6.0] - 2026-09-27
+
+Automations v1: run a workflow on a schedule or on request as a durable, crash-safe controller run. Hosts that
+fold root runs into sessions should read the **Changed** notes (occurrences appear as session turns).
 
 ### Added
 

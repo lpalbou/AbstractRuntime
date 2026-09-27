@@ -1024,6 +1024,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#contracts-pass-2026-09-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contracts pass (2026-09-27)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1049,7 +1060,7 @@
 <p>Created: 2026-09-26
 Status: Planned (after v1)
 Type: feature
-Priority: P2 (next phase; starts only after <a href="../0847_automations_v1_controller_contracts_occurrences_triggers/">0847</a> ships)
+Priority: P2 (next phase; starts only after <a href="../../completed/0847_automations_v1_controller_contracts_occurrences_triggers/">0847</a> ships)
 Labels: automations, triggers, event-inbox, durability, reconciliation
 Design: untracked/design/automations-PLAN.md (2026-09-26)</p>
 </blockquote>
@@ -1149,7 +1160,7 @@ lives only in the gateway runner
 </ul>
 <h2 id="dependencies-and-adr-status">Dependencies and ADR status<a class="headerlink" href="#dependencies-and-adr-status" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Depends on <a href="../0847_automations_v1_controller_contracts_occurrences_triggers/">0847</a>
+<li>Depends on <a href="../../completed/0847_automations_v1_controller_contracts_occurrences_triggers/">0847</a>
   (contracts, deterministic ids, registry, index cursors).</li>
 <li>Should share its store shape with
   <a href="../runtime_systemic_reliability/0051_runtime_owned_durable_event_mailbox/">0051</a>;
@@ -1160,6 +1171,13 @@ lives only in the gateway runner
 <h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
 <ul>
 <li>abstractframework backlog 0928 (Automations umbrella).</li>
+</ul>
+<h2 id="contracts-pass-2026-09-27">Contracts pass (2026-09-27)<a class="headerlink" href="#contracts-pass-2026-09-27" title="Permanent link">&para;</a></h2>
+<p>Final contracts: untracked/design/automations-CONTRACTS.md (root repo; rev 2 with Astra turn-6 amendments 1–11). They supersede the contract text copied above; earlier text is kept as history. Concrete changes for this item:</p>
+<ul>
+<li>Event sources implement the six-method <code>TriggerAdapter</code> of contract C (<code>normalize</code> for inbound payloads, <code>admit</code> returning <code>TriggerAdmission | None</code>); dedup key is <code>(automation_id, binding_id, event_id)</code> — a changed trigger config gets a new <code>binding_id</code>, which replaces <code>binding_revision</code> above.</li>
+<li>v1 ships no change cursor (<code>changed_since</code> returns <code>unsupported_feature</code>); reconciliation here needs its own terminal-since query or the aggregate change cursor designed in this item.</li>
+<li>Admission uses the v1 decision protocol (reconcile by <code>state_version</code>, exact idempotency lookup) and the one-writer-per-store rule.</li>
 </ul>
 
 

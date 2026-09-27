@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/0847_automations_v1_controller_contracts_occurrences_triggers/">
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/0847_automations_v1_controller_contracts_occurrences_triggers/">
       
       
       
@@ -1157,6 +1157,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#contracts-pass-2026-09-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contracts pass (2026-09-27)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#completion-report-2026-09-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completion report (2026-09-27)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1180,7 +1202,8 @@
 <h1 id="0847-abstractruntime-feature-automations-v1-controller-bundle-definitionstate-contracts-deterministic-occurrence-creation-trigger-source-registry-session-turn-selector-index-queries">0847-abstractruntime: [FEATURE] Automations v1: controller bundle, definition/state contracts, deterministic occurrence creation, trigger-source registry, session-turn selector, index queries<a class="headerlink" href="#0847-abstractruntime-feature-automations-v1-controller-bundle-definitionstate-contracts-deterministic-occurrence-creation-trigger-source-registry-session-turn-selector-index-queries" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>Created: 2026-09-26
-Status: Planned
+Status: Completed — UNRELEASED (local commits on <code>main</code>; ships in the next minor release after the operator's validation)
+Completed: 2026-09-27
 Type: feature
 Priority: P1 (leads the next minor wave; every other package's Automations work integrates against it)
 Labels: automations, triggers, durability, session-history, run-index
@@ -1276,7 +1299,7 @@ leaves an orphan child that recovery cannot re-link.</p>
 <ul>
 <li>External event admission (inbox, generic <code>event</code> source, <code>run.finished</code> /
   <code>run.failed</code> sources) — planned as
-  <a href="../0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a>.</li>
+  <a href="0848_automations_v2_external_event_inbox_and_run_triggers.md">0848</a>.</li>
 <li>Any tool restriction on Discuss: the <code>DISCUSSION_READERS_V1</code> allowlist from the
   design is dropped by operator ruling 4. The discussion's workspace model (own
   workspace with read access vs shared read-write) is an open operator question;
@@ -1629,17 +1652,17 @@ before its own work completes.</p>
 <p>Additional runtime-owned risks: the per-run lock is process-local, so two
 runners on one store can still race (v1 supports one active runner per store;
 the general fix is
-<a href="../runtime_systemic_reliability/0046_per_run_driver_exclusion/">0046</a>); a
+<a href="runtime_systemic_reliability/0046_per_run_driver_exclusion.md">0046</a>); a
 long-lived controller root accumulates vars and ledger records (keep controller
 state bounded; see
-<a href="../runtime_systemic_reliability/0053_bounded_run_vars_growth/">0053</a>).</p>
+<a href="runtime_systemic_reliability/0053_bounded_run_vars_growth.md">0053</a>).</p>
 <h2 id="dependencies-and-adr-status">Dependencies and ADR status<a class="headerlink" href="#dependencies-and-adr-status" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Upstream: none. Downstream: the gateway Automations work depends on this item
   and must integrate against it before completing.</li>
 <li>Related runtime items: 0045 (crash-ordering invariant — the dispatch ordering
   here is an instance of it), 0046, 0053, and
-  <a href="../0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a> (v2).</li>
+  <a href="0848_automations_v2_external_event_inbox_and_run_triggers.md">0848</a> (v2).</li>
 <li>ADR impact: likely one new ADR — "an automation is its controller root run;
   occurrences are deterministic child runs" — to be written with the
   implementation, not before.</li>
@@ -1649,6 +1672,105 @@ state bounded; see
 <ul>
 <li>abstractframework backlog 0928 (Automations umbrella).</li>
 </ul>
+<h2 id="contracts-pass-2026-09-27">Contracts pass (2026-09-27)<a class="headerlink" href="#contracts-pass-2026-09-27" title="Permanent link">&para;</a></h2>
+<p>Final contracts: untracked/design/automations-CONTRACTS.md (root repo; rev 2 with Astra turn-6 amendments 1–11). They supersede the contract text copied above; earlier text is kept as history. Concrete changes for this item:</p>
+<ul>
+<li>Workspace question closed by operator ruling 8: discussions run on the occurrence's workspace READ-ONLY. Implement <code>WorkspaceScope.read_only</code> (host key <code>workspace_read_only</code>): refuse every <code>write</code>/<code>exec</code>-classified tool (incl. <code>write_file</code>, <code>edit_file</code>, <code>execute_command</code>, <code>shell_exec</code>, <code>local_helper_start</code>, abstractagent <code>execute_python</code>) and any unclassified tool via one <code>TOOL_EFFECT_CLASSES</code> table; VisualFlow writer nodes (<code>visual/executor.py:810</code>) refuse; the ambient propagation (<code>compiler.py:2812</code>) carries the flag and overrides node inputs; <code>merge_builtin_workspace_protection</code> propagates it before its early return (<code>workspace_paths.py:239</code>); a missing root is never created under read-only.</li>
+<li>Discussion: root run, <code>start_discussion(...)</code>; the persisted discussion root is the session-policy anchor — <code>Runtime.start</code> resolves <code>session_attribution</code> for every root start with a <code>session_id</code> and enforces attribution + read-only workspace, failing closed.</li>
+<li><code>create_if_absent</code> on all four stores + capability preflight; JSON = same-directory temp + <code>os.link</code>; identity adds <code>session_id</code> and <code>_meta.creation_digest</code>; repair rebuildable indexes after recovery; claim process-crash recovery only (power-loss needs file+dir fsync).</li>
+<li><code>TriggerAdapter</code> has six typed methods (<code>validate</code>, <code>initial_state</code>, <code>prepare</code>, <code>admit</code>, <code>rearm</code>, <code>normalize</code>); <code>TriggerWait</code> adds <code>idle</code>; one-shot = single tick T0 then exhausted; a changed trigger config gets a new <code>binding_id</code>; built-in sources missing = error, third-party = <code>available:false</code>.</li>
+<li>Controller persists <code>abstractframework.automation-controller@1.0.0:controller</code>; directory bundle as package data; loaders <code>controller_bundle_path</code>/<code>controller_workflow_spec</code>.</li>
+<li>Decision protocol for every controller transition: reconcile by <code>_runtime.automation.state_version</code> → exact <code>LedgerStore.find_by_idempotency_key</code> (new; never the tail window) → decide (incl. <code>expected_revision</code>) → append decision with delta → apply + save. Crash tests before/after decision append, state save, command-cursor advance.</li>
+<li>Retry <code>policy.retry</code> (3 attempts, 30s×2 capped 10m); <code>prepared</code> inputs frozen at admission; one deterministic child per attempt (<code>…:a{n}</code>); output normalized by the target's output contract before reading <code>notify</code>; <code>notify:false</code> convention removed (quiet by default); one attention record per logical occurrence (<code>automation.completed</code>).</li>
+<li>Human attention = interactive USER (not paused) and EVENT waits with prompt/choices; controller and pause waits excluded.</li>
+<li>Strict history mode <code>session_chat_messages(..., strict=True)</code> for <code>prepare_context</code> and discussion seeding; selector <code>select_session_turns(..., until_ms, include_drafts)</code> returns <code>list[RunState]</code> and owns <code>_best_effort_session_turns</code>' selection block.</li>
+<li>Index columns <code>automation_id, role, occurrence_index, session_kind</code> (+ <code>legacy_schedule</code> role), SQLite guarded backfill, JSON memo v2; <code>_meta</code> identity never offloaded; offloaded seeds/outputs resolved. No change cursor in v1 (<code>changed_since</code> unsupported); new <code>list_attention</code> (oldest unseen first).</li>
+<li>One controller-writer process per store; lock held for the whole controller tick and command application; async dispatch; pause gates scheduled admission only; admission only from persisted due tick or <code>manual_pending</code> (stale wakes re-arm).</li>
+<li>New tests: <code>test_trigger_schedule.py</code>, <code>test_automation_retry.py</code>, <code>test_workspace_read_only.py</code>, <code>test_controller_bundle_packaged.py</code> (plus the six listed above).</li>
+</ul>
+<h2 id="completion-report-2026-09-27">Completion report (2026-09-27)<a class="headerlink" href="#completion-report-2026-09-27" title="Permanent link">&para;</a></h2>
+<p><strong>Status: completed — UNRELEASED.</strong> Local commits on <code>main</code>, no version bump (pyproject still <code>0.5.1</code>), not pushed. The
+release is the first step of the framework's wave (root backlog 0941). Umbrella record: abstractframework backlog 0928
+(completed).</p>
+<p><strong>Commits:</strong> <code>79d9bf6</code> … <code>d02578a</code> (26 commits). Missions R1 (storage, attribution, history, read-only, anchor) and R2
+(automations, triggers, controller, commands, attention, D1).
+- <strong>Seams and storage:</strong>
+  - <code>79d9bf6</code>: <code>run_mutation_lock</code> held for the whole tick.
+  - <code>e1ee1a7</code>: <code>create_if_absent</code> on every store; <code>Runtime.start(run_id=)</code>; <code>START_SUBWORKFLOW.payload.run_id</code>.
+  - <code>efb3e44</code>: index columns, turn-root listing, <code>list_automations</code> / <code>latest_occurrence</code>.
+  - <code>e8af087</code>: <code>latest_occurrence</code> is one index seek; stale temp files swept on open.
+- <strong>History:</strong>
+  - <code>93c540f</code>: <code>select_session_turns</code>.
+  - <code>cebf348</code>: strict <code>session_chat_messages</code>, discussion seed.
+- <strong>Read-only:</strong> <code>ab30729</code> <code>workspace_read_only</code> + <code>TOOL_EFFECT_CLASSES</code>.
+- <strong>Discussion anchor:</strong> <code>035cfdf</code> <code>session_attribution</code> + the <code>Runtime.start</code> restamp.
+- <strong>Automations:</strong>
+  - <code>58ade60</code>: trigger registry, <code>schedule@1</code>, <code>manual@1</code>.
+  - <code>3a91de9</code>: the automation node type.
+  - <code>478441b</code>: contracts, decision ledger, controller bundle, commands, attention, service.
+  - <code>53e00e8</code>, <code>866c13c</code>, <code>ab8b9a0</code>, <code>f43b708</code>, <code>3f58bf8</code>, <code>8df97a9</code>: tests, the crash matrix and the dispatch-from-frozen
+    fix.
+  - <code>a7138b0</code>: docs.
+- <strong>Decision D1:</strong>
+  - <code>3cc9900</code>: <code>policy.tool_approval</code> and typed <code>pending_waits</code>.
+  - <code>ba2b303</code>: typed wait details.
+- <strong>Review fixes:</strong>
+  - <code>e690b55</code>: H2, M1, D1-M1, M3 and <code>actor_id</code>.
+  - <code>af2de4a</code>: 44 F1/F2 and <strong>45 H1, the release blocker</strong>. The JSON start cost fell from a 269 ms median to 0.34 ms at 20k
+    runs.
+  - <code>b000036</code>: J51-1, the creation journal, <code>warm_session_index</code>.
+  - <code>aa0b1f1</code>: one <code>automation_status</code> rule.
+  - <code>d02578a</code>: J53-1 / J53-2.
+- <strong>Docs:</strong> <code>a7a1fae</code> (<code>docs/automations.md</code>: controller, triggers, context, discussions, tool approval, storage
+  guarantees).</p>
+<p><strong>Tests.</strong> The full suite is <strong>2957 passed / 26 skipped</strong> at <code>d02578a</code>. The acceptance criteria above map onto:
+<code>test_automation_{occurrence_recovery, controller_recovery, commands, session_turns, discussion_isolation, index,
+replay_read_only, retry, growing_context, definition, controller, status, tool_approval}.py</code>,
+<code>test_trigger_{registry, schedule_math}.py</code>, <code>test_workspace_read_only.py</code>, <code>test_controller_bundle_packaged.py</code>,
+<code>test_discussion_session_anchor.py</code> and <code>test_session_start_cost.py</code>. Every test runs on JSON and SQLite, with SIGKILL
+crash points around every controller decision (18/18 held, reviews 45 and 47).</p>
+<p><strong>Reviews</strong> (<code>untracked/missions-2026-09-25/REVIEW/</code> in the root repo):
+- 43 GO.
+- 44 GO for history and read-only, NO-GO for the discussion path (F1, F2) → fixed <code>af2de4a</code>.
+- 45 GO for the controller core, NO-GO for discussion (H2), and <strong>H1 release blocker</strong> → fixed <code>e690b55</code> / <code>af2de4a</code>.
+- 45 addendum (D1) GO.
+- Job 50 (<code>e690b55</code>) GO.
+- Job 51 (<code>af2de4a</code>) GO; history is byte-identical to 0.5.1 for ordinary sessions.
+- Job 53 (<code>b000036</code>) GO. J53-1/J53-2 were fixed afterwards in <code>d02578a</code> (not re-reviewed).</p>
+<p><strong>E2E.</strong> Root <code>untracked/missions-2026-09-27/E2E/REPORT.md</code> passed 9/9 with the operator's MLX model. It covered
+deterministic child ids (also after a target revise), coalescing, growing context, <code>kill -9</code> twice with one child per
+tick, and a replay with 0 provider/tool calls and 201 files byte-identical.</p>
+<p><strong>Acceptance criteria:</strong> all met as written, with these differences:
+- Discussions run with the target's tools on a read-only workspace (ruling 8).
+- The controller is driven by the gateway's ordinary runner. <code>drive_automation</code> exists for hosts without one; the gateway
+  does not use it.
+- One controller-writer process per store (documented).</p>
+<p><strong>Decisions recorded here</strong> (full list in root 0928):
+- Discussion sessions are <code>discussion-session:&lt;uuid5(automation_id, "discuss:"+request_id)&gt;</code>.
+- An independent occurrence's session is its first attempt's run id.
+- Tool classes use the spelling <code>exec</code>.
+- <code>pending_waits</code> is live, not stored.
+- Under <code>auto</code> the grant covers the target's <code>allowed_tools</code>, else every classified tool (65). MCP and unclassified tools
+  still ask.
+- Bounds: <code>every</code> ≤ 366 d, <code>count</code> ≤ 1,000,000.</p>
+<p><strong>ADR impact:</strong> the ADR this item anticipated ("an automation is its controller root run; occurrences are deterministic
+child runs") is <strong>not written yet</strong>. It stays open, recorded in root 0928's residuals.</p>
+<p><strong>Residuals and follow-ups:</strong>
+- The store-level exact-key lookup and read cost (review 45 M2) → root 0937, together with runtime 0047 / 0068.
+- Duck-typed stores and <code>Runtime.start</code> → root 0938.
+- JSON order by mtime (review 43 F5) → root 0939.
+- Structured failure reason codes on attempts (every failure is <code>occurrence_failed</code> at the gateway).
+- Review 45 lows:
+  - L1: silent cuts at 280 / 2,000 characters (<code>automations/controller.py:449</code>);
+  - L2: re-anchoring on a resend without <code>start_at</code>;
+  - L3: a possible second coalesced record;
+  - L5: a failed occurrence is absent from its discussion seed.
+- Review 44 F5/F6 notes.
+- J50-1: a release-notes line.
+- abstractagent 0034: the agent-side tool effect declaration is still open. The runtime's central table covers today's
+  tools.
+- <code>resolve_discussion_root</code> is O(turns) per discussion turn.</p>
+<p><strong>Next:</strong> <a href="../../planned/0848_automations_v2_external_event_inbox_and_run_triggers/">0848</a> (v2) is unchanged.</p>
 
 
 

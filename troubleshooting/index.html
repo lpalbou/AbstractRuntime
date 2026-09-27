@@ -507,6 +507,61 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-automation-does-not-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An automation does not fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-start-fails-with-identity_conflict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A start fails with identity_conflict
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-start-fails-with-sessionattributionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A start fails with SessionAttributionError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#growing-context-or-a-discussion-fails-with-history_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Growing context or a discussion fails with history_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-tool-is-refused-because-the-workspace-is-read-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A tool is refused because the workspace is read-only
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1158,6 +1213,61 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-automation-does-not-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An automation does not fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-start-fails-with-identity_conflict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A start fails with identity_conflict
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-start-fails-with-sessionattributionerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A start fails with SessionAttributionError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#growing-context-or-a-discussion-fails-with-history_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Growing context or a discussion fails with history_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-tool-is-refused-because-the-workspace-is-read-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A tool is refused because the workspace is read-only
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1308,6 +1418,92 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 - A <code>skipped</code> reason that names the claim registry means the installed AbstractCore predates it; upgrade AbstractCore.</p>
 <p>Docs:
 - <code>integrations/abstractcore.md#unloading-and-switching-models</code></p>
+<h2 id="an-automation-does-not-fire">An automation does not fire<a class="headerlink" href="#an-automation-does-not-fire" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- <code>get_automation(...)</code> shows the automation, but no new occurrence appears in <code>list_occurrences(...)</code>.</p>
+<p>Likely causes:
+- Nothing drives the controller. Without a host run loop, <code>drive_automation</code> returns when the controller parks; a
+  later tick needs the controller to be ticked again after its deadline.
+- The automation is <code>paused</code>, <code>archived</code>, <code>completed</code> (its schedule is exhausted: <code>count</code> reached, <code>until</code> passed, or
+  a one-shot schedule already fired) or <code>failed</code>.
+- An occurrence is still running or waiting on a person, or is in retry backoff. Occurrences run one at a time.
+- The trigger is <code>manual@1</code>, which only fires on <code>automation.run_now</code>.</p>
+<p>Checks:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.automations</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_automation</span><span class="p">,</span> <span class="n">list_occurrences</span><span class="p">,</span> <span class="n">pending_waits</span>
+
+<span class="n">info</span> <span class="o">=</span> <span class="n">get_automation</span><span class="p">(</span><span class="n">runtime</span><span class="o">.</span><span class="n">run_store</span><span class="p">,</span> <span class="n">automation_id</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">info</span><span class="p">[</span><span class="s2">"status"</span><span class="p">],</span> <span class="n">info</span><span class="p">[</span><span class="s2">"next_fire_at"</span><span class="p">],</span> <span class="n">info</span><span class="p">[</span><span class="s2">"state"</span><span class="p">][</span><span class="s2">"pending_occurrence"</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">pending_waits</span><span class="p">(</span><span class="n">runtime</span><span class="o">.</span><span class="n">run_store</span><span class="p">,</span> <span class="n">automation_id</span><span class="p">))</span>
+</code></pre></div>
+<p>Fix:
+- Standalone hosts: tick the controller after <code>next_fire_at</code>, then drive it:
+  <code>runtime.tick(workflow=controller_workflow_spec(), run_id=automation_id)</code> and <code>drive_automation(runtime, automation_id)</code>.
+- Answer a pending wait with <code>Runtime.resume(...)</code> and the payload of its <code>kind</code>, or send
+  <code>automation.stop_current</code>.
+- Send <code>automation.resume</code> for a paused automation. It re-arms at the next tick; <code>automation.run_now</code> fires once
+  immediately.</p>
+<p>Verify:
+- <code>list_occurrences(...)</code> shows a new item, and <code>next_fire_at</code> moves to the following tick.</p>
+<p>Docs:
+- <code>automations.md#the-controller</code>, <code>automations.md#commands</code></p>
+<h2 id="a-start-fails-with-identity_conflict">A start fails with <code>identity_conflict</code><a class="headerlink" href="#a-start-fails-with-identity_conflict" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- <code>Runtime.start(..., run_id=...)</code> raises <code>RunIdentityConflict</code>, or <code>create_automation</code>, <code>start_discussion</code> or
+  <code>apply_automation_command</code> report <code>identity_conflict</code>.</p>
+<p>Likely causes:
+- The id (or <code>request_id</code>, or <code>command_id</code>) was already used for a different request. Ids are idempotency keys: the
+  same request returns the existing run or result, a different one is refused.</p>
+<p>Fix:
+- Use a new <code>request_id</code> / <code>command_id</code> for a new request, or resend exactly the original request to get the
+  existing result.</p>
+<p>Docs:
+- <code>api.md#runtime-start--tick--resume</code>, <code>automations.md#creating-an-automation</code>, <code>automations.md#commands</code></p>
+<h2 id="a-start-fails-with-sessionattributionerror">A start fails with <code>SessionAttributionError</code><a class="headerlink" href="#a-start-fails-with-sessionattributionerror" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- <code>Runtime.start(..., session_id=...)</code> raises <code>SessionAttributionError</code> (<code>reason_code = "session_attribution_failed"</code>).</p>
+<p>Likely causes:
+- The run store has no run index (neither <code>session_kinds</code> nor <code>list_run_index</code>), so the runtime cannot tell whether
+  the session is a discussion.
+- The session is a discussion whose root cannot be validated: its runs name different roots, or the root is missing,
+  has a parent, lives in another session, carries no seed, or has no <code>workspace_root</code>.</p>
+<p>Fix:
+- Use one of the built-in run stores (SQLite, JSON files, in-memory, optionally wrapped by the offloading store), or
+  add <code>list_run_index</code> / <code>session_kinds</code> to your store.
+- For a damaged discussion session, start a new discussion with <code>start_discussion(...)</code> instead of adding turns to it.</p>
+<p>Docs:
+- <code>automations.md#discussions</code>, <code>automations.md#storage-guarantees</code></p>
+<h2 id="growing-context-or-a-discussion-fails-with-history_unavailable">Growing context or a discussion fails with <code>history_unavailable</code><a class="headerlink" href="#growing-context-or-a-discussion-fails-with-history_unavailable" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- An automation's admission fails, or <code>start_discussion</code> raises <code>SessionHistoryError</code> (<code>reason_code =
+  "history_unavailable"</code>).</p>
+<p>Likely causes:
+- The run store has no run index; strict history needs one.
+- A discussion's seed is missing, malformed or offloaded to an artifact the artifact store cannot load.
+- <code>through_occurrence</code> names an occurrence the session does not hold.</p>
+<p>Fix:
+- Use a store with a run index and pass the runtime's artifact store to history reads.
+- Check the occurrence number against <code>list_occurrences(...)</code>.</p>
+<p>Docs:
+- <code>automations.md#context-independent-or-growing</code>, <code>automations.md#runs-sessions-and-history</code></p>
+<h2 id="a-tool-is-refused-because-the-workspace-is-read-only">A tool is refused because the workspace is read-only<a class="headerlink" href="#a-tool-is-refused-because-the-workspace-is-read-only" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- A tool or VisualFlow node fails with "is inside a read-only mount" or "this workspace is read-only", or a run
+  fails because a read-only <code>workspace_root</code> does not exist.</p>
+<p>Likely causes:
+- "inside a read-only mount": the run is a discussion (or lists the folder in <code>_runtime.workspace_read_only_paths</code>)
+  and the tool tried to write into the automation's workspace. Reads and commands are allowed; file writes into the
+  mount are refused.
+- "this workspace is read-only": the run was started with <code>workspace_read_only: true</code>. Tools classified <code>write</code> or
+  <code>exec</code>, tools the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is
+  never created.</p>
+<p>Fix:
+- In a discussion, write into its own workspace (<code>workspace_root</code>) instead of the mount.
+- Otherwise continue the work in the automation itself or in an ordinary chat session, where the workspace is
+  writable.
+- Check a tool's class with <code>tool_effect_class(name)</code> from
+  <code>abstractruntime.integrations.abstractcore.tool_effects</code>.</p>
+<p>Docs:
+- <code>automations.md#read-only-mounts</code>, <code>automations.md#read-only-workspaces</code></p>
 <h2 id="mcp-worker-command-is-not-found">MCP worker command is not found<a class="headerlink" href="#mcp-worker-command-is-not-found" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>

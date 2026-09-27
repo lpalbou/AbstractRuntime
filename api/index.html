@@ -448,6 +448,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sessions-and-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sessions and history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-history-bundle-export-portable-replay-artifact" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1263,6 +1285,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sessions-and-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sessions and history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-history-bundle-export-portable-replay-artifact" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1397,8 +1441,10 @@
 <h2 id="runtime-start-tick-resume">Runtime (start / tick / resume)<a class="headerlink" href="#runtime-start-tick-resume" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/core/runtime.py</code>.</p>
 <ul>
-<li><code>Runtime.start(workflow, vars=..., actor_id=..., session_id=...) -&gt; run_id</code></li>
+<li><code>Runtime.start(workflow, vars=..., actor_id=..., session_id=..., parent_run_id=..., run_id=...) -&gt; run_id</code></li>
 <li>creates and persists a new <code>RunState</code></li>
+<li><code>run_id</code> starts the run under an id you choose (<code>[A-Za-z0-9_-]+</code>). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, <code>vars._meta.occurrence</code>, <code>vars._meta.creation_digest</code>) returns the existing run untouched, and a different identity raises <code>RunIdentityConflict</code> (a <code>ValueError</code>, <code>reason_code = "identity_conflict"</code>). The store must support <code>create_if_absent</code> (otherwise <code>NotImplementedError</code>). <code>START_SUBWORKFLOW</code> accepts the same explicit id as <code>payload.run_id</code></li>
+<li>a root run that names a session is checked against the session's attribution: in a discussion session it gets the discussion's workspace setup (its own writable workspace and the read-only mount) and provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises <code>SessionAttributionError</code> (see <a href="../automations/#discussions">automations.md</a>)</li>
 <li><code>Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -&gt; RunState</code></li>
 <li>executes node handlers and effects until the run becomes <code>WAITING</code>, <code>COMPLETED</code>, <code>FAILED</code>, or <code>CANCELLED</code></li>
 <li>optional <code>step_gate()</code> is consulted at every step boundary; when it returns <code>False</code> the tick returns the persisted state and the run stays <code>RUNNING</code> (a later tick continues where it stopped)</li>
@@ -1406,6 +1452,7 @@
 <li>validates the <code>wait_key</code>, writes <code>payload</code> to <code>WaitState.result_key</code> (if set), and continues from <code>WaitState.resume_to_node</code></li>
 <li>a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises <code>StaleResumeError</code> (a <code>ValueError</code>), for example when another caller resumed it first</li>
 <li>the check and the commit run under a per-run lock, and tools approved with <code>{"approved": true}</code> execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused</li>
+<li><code>run_mutation_lock(run_id)</code> (package root): the per-run, per-process, re-entrant lock that <code>tick</code> holds for the whole tick and <code>resume</code> for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change</li>
 <li><code>Runtime.get_state(run_id) -&gt; RunState</code> and <code>Runtime.get_ledger(run_id) -&gt; list[dict]</code></li>
 <li>host-facing read APIs for checkpoints and the append-only ledger</li>
 <li><code>Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -&gt; RunState</code></li>
@@ -1441,6 +1488,11 @@
 - <code>abstractruntime.storage</code> intentionally exports only the most common store types. SQLite types are available via:
   - <code>from abstractruntime import SqliteRunStore, SqliteLedgerStore</code>, or
   - <code>from abstractruntime.storage.sqlite import SqliteRunStore, SqliteLedgerStore</code></p>
+<p>Run index and creation (all built-in run stores, including the offloading wrapper):
+- <code>create_if_absent(run) -&gt; (run, created)</code>: creates a run only if its id is free and never overwrites an existing one; <code>store_supports_create_if_absent(store)</code> / <code>require_create_if_absent(store)</code> check a store first. Process-crash safe; power-loss durability is not claimed
+- <code>list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)</code>: lightweight rows carrying <code>automation_id</code>, <code>role</code>, <code>occurrence_index</code>, <code>session_kind</code> and <code>workspace_root</code> (the run's top-level <code>vars["workspace_root"]</code> as stored, stripped; <code>None</code> when absent); the three attribution filters take a value, a comma-separated string or a list; <code>root_only=True</code> returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
+- <code>session_kinds(session_id) -&gt; frozenset</code> and <code>latest_occurrence_row(automation_id)</code>: indexed lookups used by session attribution and automation listings
+- <code>JsonFileRunStore.warm_session_index()</code> builds the session and children indexes at host startup. Store objects and processes sharing one JSON run folder see each other's created and deleted runs through the creation journal <code>.runs_created.log</code>; v1 supports one writer process per store</p>
 <p>Common decorators:
 - <code>ObservableLedgerStore</code> for subscriptions (<code>src/abstractruntime/storage/observable.py</code>)
 - <code>HashChainedLedgerStore</code> + <code>verify_ledger_chain(...)</code> for tamper-evidence (<code>src/abstractruntime/storage/ledger_chain.py</code>)
@@ -1510,6 +1562,44 @@ Deep dive: <code>artifacts.md</code>.</p>
 - registry: <code>WorkflowBundleRegistry</code>
 - pack/unpack: <code>pack_workflow_bundle(...)</code>, <code>unpack_workflow_bundle(...)</code></p>
 <p>Docs: <code>workflow-bundles.md</code>.</p>
+<h2 id="automations">Automations<a class="headerlink" href="#automations" title="Permanent link">&para;</a></h2>
+<p>Implementation: <code>src/abstractruntime/automations/*</code>, <code>src/abstractruntime/triggers/*</code>, <code>src/abstractruntime/automation_queries.py</code>.
+Deep dive: <a href="../automations/">automations.md</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.automations</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">apply_automation_command</span><span class="p">,</span>   <span class="c1"># pause / resume / run_now / revise / stop_current / archive</span>
+    <span class="n">create_automation</span><span class="p">,</span>          <span class="c1"># -&gt; (automation_id, revision)</span>
+    <span class="n">drive_automation</span><span class="p">,</span>           <span class="c1"># standalone run loop</span>
+    <span class="n">get_automation</span><span class="p">,</span>
+    <span class="n">list_attention</span><span class="p">,</span>
+    <span class="n">list_occurrences</span><span class="p">,</span>
+    <span class="n">pending_waits</span><span class="p">,</span>
+    <span class="n">register_controller_bundle</span><span class="p">,</span>
+    <span class="n">start_discussion</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.automation_queries</span><span class="w"> </span><span class="kn">import</span> <span class="n">latest_occurrence</span><span class="p">,</span> <span class="n">list_automations</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.triggers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_trigger_adapter</span><span class="p">,</span> <span class="n">trigger_sources</span>
+</code></pre></div>
+<ul>
+<li><code>create_automation(runtime, request, *, now=None, actor_id=None)</code>: creates the controller root run (the automation) with a deterministic id; raises <code>AutomationError</code> (<code>invalid_definition</code>, <code>unsupported_feature</code>, <code>unknown_trigger_source</code>, <code>identity_conflict</code>)</li>
+<li><code>apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None, expected_revision=None)</code>: the only writer of automation state; returns <code>{status: "applied" | "rejected", error?, duplicate}</code>; idempotent per <code>command_id</code></li>
+<li><code>record_automation_command_result(...)</code>: records a host-side failure of a command as a rejected result</li>
+<li>reads: <code>get_automation(run_store, id)</code>, <code>list_occurrences(runtime, id, cursor=, limit=)</code>, <code>list_attention(ledger_store, id, after_seq=, cursor=, limit=)</code>, <code>pending_waits(run_store, id, limit=)</code> with typed waits (<code>ask_user</code>, <code>tool_approval</code>, <code>event</code>) and <code>ANSWER_PAYLOADS</code>; <code>list_automations(run_store, status=, cursor=, limit=)</code>, <code>automation_summary(run)</code>, <code>latest_occurrence(run_store, id)</code></li>
+<li><code>start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)</code>: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable <code>workspace_root</code> with the automation's workspace mounted read-only</li>
+<li>controller bundle: <code>register_controller_bundle(registry)</code>, <code>controller_workflow_spec()</code>, <code>controller_bundle_path()</code>; <code>CONTROLLER_WORKFLOW_ID</code> is <code>abstractframework.automation-controller@1.0.0:controller</code></li>
+<li>trigger sources: <code>trigger_sources()</code>, <code>get_trigger_adapter(id, version)</code>, built-ins <code>schedule@1</code> and <code>manual@1</code>, third-party sources through the <code>abstractruntime.trigger_sources</code> entry-point group</li>
+<li><code>adopt_legacy_schedule_projection(run)</code>: read-only summary of a legacy gateway <code>scheduled:*</code> root</li>
+<li>read-only mounts: <code>_runtime.workspace_read_only_paths</code> (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers <code>read_only_paths(vars)</code>, <code>path_is_read_only(vars, path)</code> and <code>READ_ONLY_PATHS_KEY</code> in <code>abstractruntime.utils.workspace_paths</code></li>
+<li>read-only workspaces: run vars <code>workspace_read_only: true</code> (or <code>_runtime.workspace_read_only: true</code>); <code>abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES</code> classifies every exposable tool as <code>read</code>, <code>write</code>, <code>exec</code>, <code>delegate</code>, <code>comms</code> or <code>memory-write</code></li>
+</ul>
+<h2 id="sessions-and-history">Sessions and history<a class="headerlink" href="#sessions-and-history" title="Permanent link">&para;</a></h2>
+<p>Implementation: <code>src/abstractruntime/session_turns.py</code>, <code>src/abstractruntime/session_history.py</code>, <code>src/abstractruntime/core/run_attribution.py</code>.</p>
+<ul>
+<li><code>select_session_turns(run_store, session_id, *, include_occurrences=True, until_ms=None, automation_id=None, through_occurrence=None, include_drafts=False, limit=50)</code> (package root): a session's turns, oldest first. Turns are parent-less runs except automation controllers, plus automation occurrences (a retried occurrence counts once, as its newest attempt); child runs, runtime-internal runs, legacy scheduled wrappers and draft-test runs are left out</li>
+<li><code>session_chat_messages(run_store=, ledger_store=, artifact_store=, session_id=, max_messages=40, max_total_chars=24000, ..., automation_id=None, through_occurrence=None, strict=False)</code> (package root): the session's completed turns as user/assistant message pairs, newest kept under the budget; in a discussion session the discussion's seed comes first. <code>strict=True</code> raises <code>SessionHistoryError</code> (<code>reason_code = "history_unavailable"</code>) instead of returning a partial history</li>
+<li><code>session_attribution(run_store, session_id)</code> (<code>abstractruntime.core.run_attribution</code>): <code>None</code> or <code>{"kind": "chat" | "automation" | "occurrence" | "discussion", ...}</code>; a discussion adds its validated root, automation, occurrence and workspace. Raises <code>SessionAttributionError</code> when the lookup cannot be completed</li>
+<li><code>is_draft_lifecycle(run_lifecycle)</code> (package root): whether a run's lifecycle value marks a draft test run</li>
+</ul>
+<p>History bundles (<code>export_run_history_bundle</code>) and session replay use the same turn selection, so automation occurrences appear as turns (kind <code>occurrence</code>, with <code>automation_id</code> and <code>occurrence_index</code>) in both.</p>
 <h2 id="run-history-bundle-export-portable-replay-artifact">Run history bundle export (portable replay artifact)<a class="headerlink" href="#run-history-bundle-export-portable-replay-artifact" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/history_bundle.py</code>.</p>
 <ul>

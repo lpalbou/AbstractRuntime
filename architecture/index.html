@@ -570,6 +570,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#observability-what-you-can-export" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1414,6 +1425,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#observability-what-you-can-export" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1468,8 +1490,8 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-09-26
-Version: 0.5.1
+<p>Updated: 2026-09-27
+Version: 0.6.0
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1744,6 +1766,67 @@ record exactly once), and no doubled side effects.</p>
 <p>The scheduler is an in-process driver loop that resumes due waits and can deliver external events:
 - <code>Scheduler</code> (<code>src/abstractruntime/scheduler/scheduler.py</code>) polls <code>QueryableRunStore.list_due_wait_until(...)</code>
 - <code>ScheduledRuntime</code> + <code>create_scheduled_runtime()</code> (<code>src/abstractruntime/scheduler/convenience.py</code>) is the "zero-config" wrapper used in <code>examples/</code></p>
+<h2 id="automations">Automations<a class="headerlink" href="#automations" title="Permanent link">&para;</a></h2>
+<p>An automation runs a target workflow on a trigger, and is itself a durable run. The controller is a packaged
+VisualFlow bundle (<code>abstractframework.automation-controller@1.0.0</code>) whose nodes are <code>automation</code> adapters; it waits on
+one <code>WAIT_EVENT</code> with a deadline, starts each occurrence as an asynchronous <code>START_SUBWORKFLOW</code> child with a
+deterministic id, and records every transition as an <code>automation.*</code> ledger record. No new effect type or driver is
+involved: a host drives a controller like any other run. See <a href="../automations/">automations.md</a>.</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  subgraph Host["Host (AbstractGateway run loop, or drive_automation)"]
+    Loop["tick due runs /&lt;br/&gt;resume finished subworkflow parents"]
+    API["commands + reads"]
+  end
+  subgraph Automations["automations/ + triggers/"]
+    Commands["apply_automation_command"]
+    Controller["controller run&lt;br/&gt;(automation-controller@1.0.0)"]
+    Triggers["trigger registry&lt;br/&gt;schedule@1, manual@1,&lt;br/&gt;entry-point sources"]
+    Queries["get_automation / list_occurrences /&lt;br/&gt;list_attention / pending_waits /&lt;br/&gt;list_automations"]
+  end
+  subgraph Runs["runs"]
+    Occ["occurrence run&lt;br/&gt;(session turn)"]
+    Desc["descendant runs"]
+    Disc["discussion run&lt;br/&gt;(own workspace + read-only mount)"]
+  end
+  subgraph Stores["storage/"]
+    RS["RunStore&lt;br/&gt;create_if_absent + run index"]
+    LS["LedgerStore&lt;br/&gt;automation.* records"]
+  end
+
+  API --&gt; Commands
+  API --&gt; Queries
+  Commands --&gt;|"run_mutation_lock,&lt;br/&gt;decision, wake"| Controller
+  Loop --&gt; Controller
+  Loop --&gt; Occ
+  Controller --&gt;|"prepare / admit / rearm"| Triggers
+  Controller --&gt;|"START_SUBWORKFLOW run_id"| Occ
+  Occ --&gt; Desc
+  Controller --&gt; RS
+  Controller --&gt; LS
+  Occ --&gt; RS
+  Disc --&gt; RS
+  Queries --&gt; RS
+  Queries --&gt; LS
+</code></pre></div>
+<p>Invariants the design rests on:</p>
+<ul>
+<li><strong>Create-if-absent.</strong> Controllers, occurrences and discussions are created under explicit ids through
+  <code>RunStore.create_if_absent</code>, so replaying a creation after a crash finds the same run and never starts a second
+  one (<code>Runtime.start(..., run_id=...)</code>, <code>START_SUBWORKFLOW</code> <code>payload.run_id</code>).</li>
+<li><strong>One decision protocol.</strong> Every controller step and command reconciles, looks its decision key up exactly, saves
+  an intent, appends the record and applies it, so a crash at any point yields exactly one record and one
+  application.</li>
+<li><strong>One lock per run.</strong> <code>run_mutation_lock(run_id)</code> serializes <code>tick</code>, <code>resume</code> commits and automation commands in a
+  process. v1 supports one writer process per store.</li>
+<li><strong>Turns are defined once.</strong> <code>select_session_turns</code> decides which runs are a session's turns (parent-less runs
+  except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
+  use it, and <code>list_run_index(root_only=True)</code> returns the same turn roots.</li>
+<li><strong>Attribution is indexed.</strong> Each run index row carries <code>automation_id</code>, <code>role</code>, <code>occurrence_index</code> and
+  <code>session_kind</code>, derived from inline <code>vars._meta</code> that the offloading store never moves. <code>Runtime.start</code> uses
+  <code>session_attribution</code> to anchor every root run in a discussion session to the discussion's validated root and its
+  workspace setup (its own writable workspace plus the automation's workspace as a read-only mount), and refuses the
+  start when the attribution cannot be read.</li>
+</ul>
 <h2 id="observability-what-you-can-export">Observability: what you can export<a class="headerlink" href="#observability-what-you-can-export" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Ledger (source of truth): <code>Runtime.get_ledger(run_id)</code> (<code>src/abstractruntime/core/runtime.py</code>)</li>
@@ -1771,6 +1854,7 @@ record exactly once), and no doubled side effects.</p>
 <li><code>../README.md</code> — install + quick start</li>
 <li><code>getting-started.md</code> — first steps</li>
 <li><code>api.md</code> — public API surface (imports + pointers)</li>
+<li><code>automations.md</code> — automations: controller, triggers, commands, context, discussions, storage guarantees</li>
 <li><code>limits.md</code> — <code>_limits</code> and RuntimeConfig</li>
 <li><code>snapshots.md</code> — snapshot/bookmark stores</li>
 <li><code>provenance.md</code> — hash chain and verification</li>

@@ -1,0 +1,161 @@
+{
+  "id": "controller",
+  "name": "Automation controller",
+  "description": "Controller flow of an automation (abstractruntime.automations).",
+  "interfaces": [],
+  "entryNode": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "on_flow_start",
+      "data": {
+        "nodeType": "on_flow_start",
+        "label": "Start"
+      }
+    },
+    {
+      "id": "read_definition",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Read definition"
+      }
+    },
+    {
+      "id": "wait",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Wait for trigger or command"
+      }
+    },
+    {
+      "id": "admit",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Admit occurrence"
+      }
+    },
+    {
+      "id": "prepare_context",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Prepare context"
+      }
+    },
+    {
+      "id": "dispatch",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Dispatch occurrence"
+      }
+    },
+    {
+      "id": "record_outcome",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Record outcome"
+      }
+    },
+    {
+      "id": "next",
+      "type": "automation",
+      "data": {
+        "nodeType": "automation",
+        "label": "Next"
+      }
+    },
+    {
+      "id": "end",
+      "type": "on_flow_end",
+      "data": {
+        "nodeType": "on_flow_end",
+        "label": "End"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "read_definition",
+      "sourceHandle": "exec-out",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "read_definition",
+      "target": "wait",
+      "sourceHandle": "case:continue",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "read_definition",
+      "target": "end",
+      "sourceHandle": "case:end",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "wait",
+      "target": "admit",
+      "sourceHandle": "case:go",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "wait",
+      "target": "end",
+      "sourceHandle": "case:end",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "admit",
+      "target": "prepare_context",
+      "sourceHandle": "case:prepare",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "admit",
+      "target": "dispatch",
+      "sourceHandle": "case:dispatch",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "admit",
+      "target": "read_definition",
+      "sourceHandle": "case:rearm",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "prepare_context",
+      "target": "dispatch",
+      "sourceHandle": "exec-out",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "dispatch",
+      "target": "record_outcome",
+      "sourceHandle": "exec-out",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "record_outcome",
+      "target": "next",
+      "sourceHandle": "case:next",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "record_outcome",
+      "target": "dispatch",
+      "sourceHandle": "case:dispatch",
+      "targetHandle": "exec-in"
+    },
+    {
+      "source": "next",
+      "target": "read_definition",
+      "sourceHandle": "exec-out",
+      "targetHandle": "exec-in"
+    }
+  ]
+}

@@ -47,7 +47,7 @@ class ScheduleTriggerAdapter:
             "additionalProperties": False,
             "properties": {
                 "start_at": {"type": "string", "format": "date-time"},
-                "every": {"type": "string", "pattern": "^[1-9][0-9]*[smhd]$"},
+                "every": {"type": "string", "format": "duration", "pattern": "^[1-9][0-9]*[smhd]$"},
                 "until": {"type": "string", "format": "date-time"},
                 "count": {"type": "integer", "minimum": 1},
                 "anchor": {"type": "string", "format": "date-time"},

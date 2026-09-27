@@ -1,0 +1,22 @@
+{
+  "bundle_format_version": "1",
+  "bundle_id": "abstractframework.automation-controller",
+  "bundle_version": "1.0.0",
+  "created_at": "2026-09-27T00:00:00Z",
+  "entrypoints": [
+    {
+      "flow_id": "controller",
+      "name": "Automation controller",
+      "description": "Drives one automation: waits for its trigger, admits occurrences, runs them as child runs, records outcomes.",
+      "interfaces": []
+    }
+  ],
+  "default_entrypoint": "controller",
+  "flows": {
+    "controller": "flows/controller.json"
+  },
+  "metadata": {
+    "internal": true,
+    "schema_version": 1
+  }
+}

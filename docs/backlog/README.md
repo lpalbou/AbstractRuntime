@@ -133,8 +133,8 @@ abstractframework backlog 0928.
 | 027* | `planned/027_quote_provenance_discipline.md` |
 | 028* | `planned/028_selective_artifact_rehydration.md` |
 | 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
-| 0847 | `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md` (P1, Automations v1) |
-| 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, planned after 0847) |
+| 0847 | `planned/0847_automations_v1_controller_contracts_occurrences_triggers.md` (P1, Automations v1; contracts pass 2026-09-27) |
+| 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, planned after 0847; contracts pass 2026-09-27) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

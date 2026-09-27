@@ -495,3 +495,20 @@ state bounded; see
 ## Related
 
 - abstractframework backlog 0928 (Automations umbrella).
+
+## Contracts pass (2026-09-27)
+
+Final contracts: untracked/design/automations-CONTRACTS.md (root repo; rev 2 with Astra turn-6 amendments 1–11). They supersede the contract text copied above; earlier text is kept as history. Concrete changes for this item:
+
+- Workspace question closed by operator ruling 8: discussions run on the occurrence's workspace READ-ONLY. Implement `WorkspaceScope.read_only` (host key `workspace_read_only`): refuse every `write`/`exec`-classified tool (incl. `write_file`, `edit_file`, `execute_command`, `shell_exec`, `local_helper_start`, abstractagent `execute_python`) and any unclassified tool via one `TOOL_EFFECT_CLASSES` table; VisualFlow writer nodes (`visual/executor.py:810`) refuse; the ambient propagation (`compiler.py:2812`) carries the flag and overrides node inputs; `merge_builtin_workspace_protection` propagates it before its early return (`workspace_paths.py:239`); a missing root is never created under read-only.
+- Discussion: root run, `start_discussion(...)`; the persisted discussion root is the session-policy anchor — `Runtime.start` resolves `session_attribution` for every root start with a `session_id` and enforces attribution + read-only workspace, failing closed.
+- `create_if_absent` on all four stores + capability preflight; JSON = same-directory temp + `os.link`; identity adds `session_id` and `_meta.creation_digest`; repair rebuildable indexes after recovery; claim process-crash recovery only (power-loss needs file+dir fsync).
+- `TriggerAdapter` has six typed methods (`validate`, `initial_state`, `prepare`, `admit`, `rearm`, `normalize`); `TriggerWait` adds `idle`; one-shot = single tick T0 then exhausted; a changed trigger config gets a new `binding_id`; built-in sources missing = error, third-party = `available:false`.
+- Controller persists `abstractframework.automation-controller@1.0.0:controller`; directory bundle as package data; loaders `controller_bundle_path`/`controller_workflow_spec`.
+- Decision protocol for every controller transition: reconcile by `_runtime.automation.state_version` → exact `LedgerStore.find_by_idempotency_key` (new; never the tail window) → decide (incl. `expected_revision`) → append decision with delta → apply + save. Crash tests before/after decision append, state save, command-cursor advance.
+- Retry `policy.retry` (3 attempts, 30s×2 capped 10m); `prepared` inputs frozen at admission; one deterministic child per attempt (`…:a{n}`); output normalized by the target's output contract before reading `notify`; `notify:false` convention removed (quiet by default); one attention record per logical occurrence (`automation.completed`).
+- Human attention = interactive USER (not paused) and EVENT waits with prompt/choices; controller and pause waits excluded.
+- Strict history mode `session_chat_messages(..., strict=True)` for `prepare_context` and discussion seeding; selector `select_session_turns(..., until_ms, include_drafts)` returns `list[RunState]` and owns `_best_effort_session_turns`' selection block.
+- Index columns `automation_id, role, occurrence_index, session_kind` (+ `legacy_schedule` role), SQLite guarded backfill, JSON memo v2; `_meta` identity never offloaded; offloaded seeds/outputs resolved. No change cursor in v1 (`changed_since` unsupported); new `list_attention` (oldest unseen first).
+- One controller-writer process per store; lock held for the whole controller tick and command application; async dispatch; pause gates scheduled admission only; admission only from persisted due tick or `manual_pending` (stale wakes re-arm).
+- New tests: `test_trigger_schedule.py`, `test_automation_retry.py`, `test_workspace_read_only.py`, `test_controller_bundle_packaged.py` (plus the six listed above).

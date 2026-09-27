@@ -121,3 +121,11 @@ Verified 2026-09-26 against `2100d1f`:
 ## Related
 
 - abstractframework backlog 0928 (Automations umbrella).
+
+## Contracts pass (2026-09-27)
+
+Final contracts: untracked/design/automations-CONTRACTS.md (root repo; rev 2 with Astra turn-6 amendments 1–11). They supersede the contract text copied above; earlier text is kept as history. Concrete changes for this item:
+
+- Event sources implement the six-method `TriggerAdapter` of contract C (`normalize` for inbound payloads, `admit` returning `TriggerAdmission | None`); dedup key is `(automation_id, binding_id, event_id)` — a changed trigger config gets a new `binding_id`, which replaces `binding_revision` above.
+- v1 ships no change cursor (`changed_since` returns `unsupported_feature`); reconciliation here needs its own terminal-since query or the aggregate change cursor designed in this item.
+- Admission uses the v1 decision protocol (reconcile by `state_version`, exact idempotency lookup) and the one-writer-per-store rule.

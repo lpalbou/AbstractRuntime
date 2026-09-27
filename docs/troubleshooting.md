@@ -260,20 +260,26 @@ Docs:
 ## A tool is refused because the workspace is read-only
 
 Symptom:
-- A tool or VisualFlow node fails with "this workspace is read-only", or a run fails because a read-only
-  `workspace_root` does not exist.
+- A tool or VisualFlow node fails with "is inside a read-only mount" or "this workspace is read-only", or a run
+  fails because a read-only `workspace_root` does not exist.
 
 Likely causes:
-- The run is a discussion, or was started with `workspace_read_only: true`. Tools classified `write` or `exec`, tools
-  the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is never created.
+- "inside a read-only mount": the run is a discussion (or lists the folder in `_runtime.workspace_read_only_paths`)
+  and the tool tried to write into the automation's workspace. Reads and commands are allowed; file writes into the
+  mount are refused.
+- "this workspace is read-only": the run was started with `workspace_read_only: true`. Tools classified `write` or
+  `exec`, tools the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is
+  never created.
 
 Fix:
-- Continue the work in the automation itself or in an ordinary chat session, where the workspace is writable.
+- In a discussion, write into its own workspace (`workspace_root`) instead of the mount.
+- Otherwise continue the work in the automation itself or in an ordinary chat session, where the workspace is
+  writable.
 - Check a tool's class with `tool_effect_class(name)` from
   `abstractruntime.integrations.abstractcore.tool_effects`.
 
 Docs:
-- `automations.md#read-only-workspaces`
+- `automations.md#read-only-mounts`, `automations.md#read-only-workspaces`
 
 ## MCP worker command is not found
 

@@ -156,7 +156,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, read-only discussions, tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
@@ -767,7 +767,7 @@ flowchart LR
   subgraph Runs["runs"]
     Occ["occurrence run<br/>(session turn)"]
     Desc["descendant runs"]
-    Disc["discussion run<br/>(read-only workspace)"]
+    Disc["discussion run<br/>(own workspace + read-only mount)"]
   end
   subgraph Stores["storage/"]
     RS["RunStore<br/>create_if_absent + run index"]
@@ -806,7 +806,8 @@ Invariants the design rests on:
 - **Attribution is indexed.** Each run index row carries `automation_id`, `role`, `occurrence_index` and
   `session_kind`, derived from inline `vars._meta` that the offloading store never moves. `Runtime.start` uses
   `session_attribution` to anchor every root run in a discussion session to the discussion's validated root and its
-  read-only workspace, and refuses the start when the attribution cannot be read.
+  workspace setup (its own writable workspace plus the automation's workspace as a read-only mount), and refuses the
+  start when the attribution cannot be read.
 
 ## Observability: what you can export
 
@@ -919,7 +920,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 - `Runtime.start(workflow, vars=..., actor_id=..., session_id=..., parent_run_id=..., run_id=...) -> run_id`
   - creates and persists a new `RunState`
   - `run_id` starts the run under an id you choose (`[A-Za-z0-9_-]+`). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, `vars._meta.occurrence`, `vars._meta.creation_digest`) returns the existing run untouched, and a different identity raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). The store must support `create_if_absent` (otherwise `NotImplementedError`). `START_SUBWORKFLOW` accepts the same explicit id as `payload.run_id`
-  - a root run that names a session is checked against the session's attribution: in a discussion session it becomes read-only on the discussion's workspace with the discussion's provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises `SessionAttributionError` (see [automations.md](automations.md#discussions))
+  - a root run that names a session is checked against the session's attribution: in a discussion session it gets the discussion's workspace setup (its own writable workspace and the read-only mount) and provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises `SessionAttributionError` (see [automations.md](automations.md#discussions))
 - `Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
@@ -1093,10 +1094,11 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None, expected_revision=None)`: the only writer of automation state; returns `{status: "applied" | "rejected", error?, duplicate}`; idempotent per `command_id`
 - `record_automation_command_result(...)`: records a host-side failure of a command as a rejected result
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
-- `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, actor_id=None)`: a separate, seeded conversation about one occurrence, on its workspace mounted read-only
+- `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
 - trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1` and `manual@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
+- read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
 - read-only workspaces: run vars `workspace_read_only: true` (or `_runtime.workspace_read_only: true`); `abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool as `read`, `write`, `exec`, `delegate`, `comms` or `memory-write`
 
 ## Sessions and history
@@ -1305,11 +1307,14 @@ Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 
 ## Can a discussion of an automation run change my files?
 
-No. A discussion runs on the occurrence's workspace mounted read-only: tools that write files or run commands or code
-are refused, and so is any tool the runtime has not classified. Every later turn in the discussion session is
-read-only too, whoever starts it, and nothing is written back into the automation.
+Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as
+a read-only mount (`_runtime.workspace_read_only_paths`): file tools and VisualFlow writers that target a path inside
+the mount are refused, reads work. Commands and code (`execute_command`, `execute_python`) are allowed, because the
+shell cannot be sandboxed; a command can therefore still change files if it chooses to, so keep tool approval on for
+commands where that matters. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+the discussion never writes back into the automation's session, state or ledger.
 
-Docs: `automations.md#discussions`, `automations.md#read-only-workspaces`.
+Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.
 
 ## Can several processes share one run store?
 
@@ -1862,20 +1867,26 @@ Docs:
 ## A tool is refused because the workspace is read-only
 
 Symptom:
-- A tool or VisualFlow node fails with "this workspace is read-only", or a run fails because a read-only
-  `workspace_root` does not exist.
+- A tool or VisualFlow node fails with "is inside a read-only mount" or "this workspace is read-only", or a run
+  fails because a read-only `workspace_root` does not exist.
 
 Likely causes:
-- The run is a discussion, or was started with `workspace_read_only: true`. Tools classified `write` or `exec`, tools
-  the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is never created.
+- "inside a read-only mount": the run is a discussion (or lists the folder in `_runtime.workspace_read_only_paths`)
+  and the tool tried to write into the automation's workspace. Reads and commands are allowed; file writes into the
+  mount are refused.
+- "this workspace is read-only": the run was started with `workspace_read_only: true`. Tools classified `write` or
+  `exec`, tools the runtime does not classify, and file-writing nodes are refused. A read-only workspace folder is
+  never created.
 
 Fix:
-- Continue the work in the automation itself or in an ordinary chat session, where the workspace is writable.
+- In a discussion, write into its own workspace (`workspace_root`) instead of the mount.
+- Otherwise continue the work in the automation itself or in an ordinary chat session, where the workspace is
+  writable.
 - Check a tool's class with `tool_effect_class(name)` from
   `abstractruntime.integrations.abstractcore.tool_effects`.
 
 Docs:
-- `automations.md#read-only-workspaces`
+- `automations.md#read-only-mounts`, `automations.md#read-only-workspaces`
 
 ## MCP worker command is not found
 
@@ -3758,28 +3769,42 @@ attempt.
 
 ## Discussions
 
-`start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, actor_id=None)` starts a separate
-conversation about one occurrence and returns `{session_id, run_id, session_kind: "discussion"}`.
+`start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root,
+actor_id=None)` starts a separate conversation about the automation as it stood at occurrence N, and returns
+`{session_id, run_id, session_kind: "discussion"}`. Forking at a different point in time means choosing another N.
 
 - It creates a new **root** run, `uuid5(automation_id, "discuss:<request_id>")`, in its own session
   `discussion-session:<run id>`. Request ids are therefore scoped to the automation. The same request returns the same
   discussion; a different request under the same `request_id` on that automation raises `identity_conflict`.
 - The run uses the occurrence's workflow and frozen inputs, with `prompt` as the new user turn. The workflow must be
   registered on the runtime.
-- It is seeded **once** with the conversation up to and including that occurrence: the automation's session through
-  occurrence N in growing mode, the occurrence's own session in independent mode. The seed is read strictly and
-  stored in `_meta.discussion.seed_messages` of the discussion's root run.
-- The occurrence's workspace is mounted **read-only**: reads work, and writes, edits and command execution are
-  refused (see [Read-only workspaces](#read-only-workspaces)). The workspace folder must already exist.
+- It is seeded **once** with the automation's whole conversation through occurrence N, whatever the context mode:
+  one user/assistant pair per finished occurrence 1..N (its last attempt), the occurrence's trigger/task turn and its
+  answer, oldest first (`automation_timeline_messages(...)`). A failed or stopped occurrence stays in the timeline,
+  its answer saying so. The pairs fit the history budget (40 messages, 24 000 characters, 8 000 per message); the
+  oldest are dropped first. The first user message starts with a summary line: `[Automation "<title>": <n>
+  occurrence(s) through occurrence N, showing the last K. The automation's files are mounted READ-ONLY at <path>;
+  your own workspace <path> is writable.]`. The seed is stored in `_meta.discussion.seed_messages` of the root run.
+- It works in its **own writable workspace**, `workspace_root`, which the host allocates (it must differ from the
+  automation's). The automation's workspace is **mounted read-only** alongside it: it is reachable
+  (`workspace_access_mode: "workspace_or_allowed"`, listed in `workspace_allowed_paths`) and protected by
+  `_runtime.workspace_read_only_paths`, so reads work and writes, edits and moves into it are refused. Commands and
+  tools run normally in the discussion's own workspace. `_meta.discussion.mounted_workspace` names the mount (see
+  [Read-only mounts](#read-only-mounts)).
+  When the occurrence's inputs carry the host's built-in protection (`workspace_builtin_deny_prefixes`, e.g. the
+  gateway's data dir), the discussion keeps those deny prefixes unchanged and sets `workspace_builtin_allow` to
+  exactly its own workspace and the mount, so both roots are usable and nothing else in the protected folders is.
 - The automation's tool grant is removed: tools in a discussion ask for approval as in any chat.
-- Nothing is ever written back into the automation's session, state or ledger.
+- Nothing is ever written back into the automation's session, state, ledger or workspace.
 
 Errors: `occurrence_not_found` (the automation has no occurrence N), `invalid_request` (empty `prompt` or
 `request_id`), `automation_not_found`, `identity_conflict`, and `SessionHistoryError` when the seed cannot be read.
 
 **Later turns stay anchored.** Every later root run started in a discussion session, by any caller, gets the
-discussion's provenance (`_meta.discussion` without the seed), its `workspace_root` and a read-only workspace,
-whatever the caller passed. The discussion's root is validated first: every discussion run of the session must name
+discussion's provenance (`_meta.discussion` without the seed) and the root's own workspace setup, whatever the caller
+passed: `workspace_root`, `workspace_access_mode`, `workspace_allowed_paths` and `_runtime.workspace_read_only_paths`
+(a caller may add mounts, never remove one). The whole-workspace `workspace_read_only` flag is applied only when the
+root carries it. The discussion's root is validated first: every discussion run of the session must name
 the same root, and that root must be a parent-less run of this session that carries the seed. If this check fails,
 `Runtime.start` raises `SessionAttributionError` and the run is not created. Children of discussion runs carry the
 discussion provenance too.
@@ -3787,10 +3812,30 @@ discussion provenance too.
 In a discussion session, `session_chat_messages` replays the seed first, as the oldest history, and drops it first
 under the budget.
 
+### Read-only mounts
+
+`_runtime.workspace_read_only_paths` lists absolute folders that a run may read but not change, while its own
+`workspace_root` stays writable. Discussions use it for the automation's workspace. Entries are resolved like
+`pwd -P` (symlinks followed); the same key at the top level of the run vars is honoured too and can only add mounts.
+
+- File tools classified `write` (`write_file`, `edit_file`, ...) are refused when their target path lies inside a
+  mount; the message comes from `read_only_refusal(name, path=...)`.
+- Reading inside a mount works (`read_file`, `list_files`, `search_files`, ...).
+- Commands and code (`execute_command`, `shell_exec`, `execute_python`, ...) are **allowed**: the shell cannot be
+  sandboxed, so a mount protects the file tools and VisualFlow writers, not what a command does.
+- VisualFlow nodes that write files (`write_file`, `write_pdf`, `write_docx`, `write_chart`, `export_artifact`) are
+  refused for a path inside a mount.
+- Child runs and VisualFlow nodes inherit the mounts; they can add more but never clear or shrink them.
+- A run with mounts and no `workspace_root` is refused.
+
+Helpers in `abstractruntime.utils.workspace_paths`: `read_only_paths(vars)` (the resolved mounts) and
+`path_is_read_only(vars, path)`; `READ_ONLY_PATHS_KEY` is the key name inside `_runtime`.
+
 ### Read-only workspaces
 
 A run is read-only when its vars carry `workspace_read_only: true` or the trusted runtime key
-`_runtime.workspace_read_only: true`. Discussions set both. Under a read-only workspace:
+`_runtime.workspace_read_only: true`. (Discussions use read-only MOUNTS instead: see above.) Under a read-only
+workspace:
 
 - tools classified `write` or `exec` in `TOOL_EFFECT_CLASSES` are refused (`write_file`, `edit_file`,
   `execute_command`, `shell_exec`, `local_helper_start`, `execute_python`, `self_improve`, ...), and so is every tool
@@ -3891,9 +3936,10 @@ Retries do not make external effects exactly-once: a target that sends an email 
 | `automation_queries.latest_occurrence(run_store, automation_id)` | the index row of the highest-numbered occurrence (its newest attempt), or `None` |
 | `adopt_legacy_schedule_projection(run)` | a read-only summary of a legacy `scheduled:*` gateway root, marked `legacy: true` with capabilities `pause`, `resume` and `cancel`; legacy roots are never migrated |
 
-Status is, in order of precedence: `archived` (the definition has `archived_at`), `failed` (the controller run
-failed), `completed` (the controller ended), `paused`, `active`. `get_automation` reports a cancelled controller as
-`failed`; `list_automations` summaries report it as `cancelled`. `next_fire_at` is the deadline of the controller's
+Status is, in order of precedence: `archived` (the definition has `archived_at`, whatever state the controller
+ended in), `failed` (the controller run failed, or was cancelled without being archived: it can never run again),
+`completed` (the controller ended), `paused`, `active`. `get_automation` and `list_automations` share this one rule
+(`automations.models.automation_status`). `next_fire_at` is the deadline of the controller's
 wake wait: the next tick, or the next attempt while an occurrence is in backoff (the summary then also sets
 `retry_at`). It is `None` while an occurrence runs, while paused, for a manual trigger and when exhausted.
 
@@ -3928,7 +3974,8 @@ when opened; the JSON store re-reads each run file once. Identity metadata (`var
 `session_attribution(run_store, session_id)` (`abstractruntime.core.run_attribution`) returns `None` for a session
 with no runs, or `{"kind": ...}` with the session's most specific kind (`discussion`, then `automation`, then
 `occurrence`, then `chat`). A discussion adds `discussion_root_run_id`, `automation_id`, `occurrence_index`,
-`revision`, `workspace_root` and `discussion` (the root's `_meta.discussion` without the seed). Every store exposes
+`revision`, `workspace_root`, `discussion` (the root's `_meta.discussion` without the seed) and `workspace_policy`
+(the root's workspace keys that later turns inherit). Every store exposes
 `session_kinds(session_id)`, which answers from an index without scanning runs.
 
 ### Turn roots
@@ -3943,7 +3990,8 @@ bundles and session replay. It returns turns oldest first and never includes chi
 runtime-internal runs, legacy scheduled wrappers or (unless asked) draft-test runs. A retried occurrence is one turn,
 its newest attempt. `automation_id` keeps only that automation's occurrences (other turns stay);
 `through_occurrence=N` returns the history as it stood when occurrence N ran, however old N is, and raises
-`OccurrenceNotInSession` when the session has no occurrence N.
+`OccurrenceNotInSession` when the session has no occurrence N, or `SessionHistoryError` when the store has no run
+index to look it up in.
 
 `session_chat_messages(..., automation_id=None, through_occurrence=None, strict=False)` replays those turns as
 user/assistant message pairs under a message and character budget. With `strict=True` it raises
@@ -5268,7 +5316,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Features (reference)
 
-- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, entry-point sources), commands, independent or growing context, discussions on a read-only workspace, tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
+- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

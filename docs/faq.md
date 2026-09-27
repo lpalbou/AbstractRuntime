@@ -86,11 +86,14 @@ Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 
 ## Can a discussion of an automation run change my files?
 
-No. A discussion runs on the occurrence's workspace mounted read-only: tools that write files or run commands or code
-are refused, and so is any tool the runtime has not classified. Every later turn in the discussion session is
-read-only too, whoever starts it, and nothing is written back into the automation.
+Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as
+a read-only mount (`_runtime.workspace_read_only_paths`): file tools and VisualFlow writers that target a path inside
+the mount are refused, reads work. Commands and code (`execute_command`, `execute_python`) are allowed, because the
+shell cannot be sandboxed; a command can therefore still change files if it chooses to, so keep tool approval on for
+commands where that matters. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+the discussion never writes back into the automation's session, state or ledger.
 
-Docs: `automations.md#discussions`, `automations.md#read-only-workspaces`.
+Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.
 
 ## Can several processes share one run store?
 

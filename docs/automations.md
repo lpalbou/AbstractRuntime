@@ -326,7 +326,8 @@ actor_id=None)` starts a separate conversation about the automation as it stood 
   automation's). The automation's workspace is **mounted read-only** alongside it: it is reachable
   (`workspace_access_mode: "workspace_or_allowed"`, listed in `workspace_allowed_paths`) and protected by
   `_runtime.workspace_read_only_paths`, so reads work and writes, edits and moves into it are refused. Commands and
-  tools run normally in the discussion's own workspace. `_meta.discussion.mounted_workspace` names the mount.
+  tools run normally in the discussion's own workspace. `_meta.discussion.mounted_workspace` names the mount (see
+  [Read-only mounts](#read-only-mounts)).
   When the occurrence's inputs carry the host's built-in protection (`workspace_builtin_deny_prefixes`, e.g. the
   gateway's data dir), the discussion keeps those deny prefixes unchanged and sets `workspace_builtin_allow` to
   exactly its own workspace and the mount, so both roots are usable and nothing else in the protected folders is.
@@ -337,14 +338,35 @@ Errors: `occurrence_not_found` (the automation has no occurrence N), `invalid_re
 `request_id`), `automation_not_found`, `identity_conflict`, and `SessionHistoryError` when the seed cannot be read.
 
 **Later turns stay anchored.** Every later root run started in a discussion session, by any caller, gets the
-discussion's provenance (`_meta.discussion` without the seed) and its workspace setup (its own `workspace_root`
-and the read-only mount), whatever the caller passed. The discussion's root is validated first: every discussion run of the session must name
+discussion's provenance (`_meta.discussion` without the seed) and the root's own workspace setup, whatever the caller
+passed: `workspace_root`, `workspace_access_mode`, `workspace_allowed_paths` and `_runtime.workspace_read_only_paths`
+(a caller may add mounts, never remove one). The whole-workspace `workspace_read_only` flag is applied only when the
+root carries it. The discussion's root is validated first: every discussion run of the session must name
 the same root, and that root must be a parent-less run of this session that carries the seed. If this check fails,
 `Runtime.start` raises `SessionAttributionError` and the run is not created. Children of discussion runs carry the
 discussion provenance too.
 
 In a discussion session, `session_chat_messages` replays the seed first, as the oldest history, and drops it first
 under the budget.
+
+### Read-only mounts
+
+`_runtime.workspace_read_only_paths` lists absolute folders that a run may read but not change, while its own
+`workspace_root` stays writable. Discussions use it for the automation's workspace. Entries are resolved like
+`pwd -P` (symlinks followed); the same key at the top level of the run vars is honoured too and can only add mounts.
+
+- File tools classified `write` (`write_file`, `edit_file`, ...) are refused when their target path lies inside a
+  mount; the message comes from `read_only_refusal(name, path=...)`.
+- Reading inside a mount works (`read_file`, `list_files`, `search_files`, ...).
+- Commands and code (`execute_command`, `shell_exec`, `execute_python`, ...) are **allowed**: the shell cannot be
+  sandboxed, so a mount protects the file tools and VisualFlow writers, not what a command does.
+- VisualFlow nodes that write files (`write_file`, `write_pdf`, `write_docx`, `write_chart`, `export_artifact`) are
+  refused for a path inside a mount.
+- Child runs and VisualFlow nodes inherit the mounts; they can add more but never clear or shrink them.
+- A run with mounts and no `workspace_root` is refused.
+
+Helpers in `abstractruntime.utils.workspace_paths`: `read_only_paths(vars)` (the resolved mounts) and
+`path_is_read_only(vars, path)`; `READ_ONLY_PATHS_KEY` is the key name inside `_runtime`.
 
 ### Read-only workspaces
 
@@ -489,7 +511,8 @@ when opened; the JSON store re-reads each run file once. Identity metadata (`var
 `session_attribution(run_store, session_id)` (`abstractruntime.core.run_attribution`) returns `None` for a session
 with no runs, or `{"kind": ...}` with the session's most specific kind (`discussion`, then `automation`, then
 `occurrence`, then `chat`). A discussion adds `discussion_root_run_id`, `automation_id`, `occurrence_index`,
-`revision`, `workspace_root` and `discussion` (the root's `_meta.discussion` without the seed). Every store exposes
+`revision`, `workspace_root`, `discussion` (the root's `_meta.discussion` without the seed) and `workspace_policy`
+(the root's workspace keys that later turns inherit). Every store exposes
 `session_kinds(session_id)`, which answers from an index without scanning runs.
 
 ### Turn roots

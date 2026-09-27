@@ -338,7 +338,7 @@ flowchart LR
   subgraph Runs["runs"]
     Occ["occurrence run<br/>(session turn)"]
     Desc["descendant runs"]
-    Disc["discussion run<br/>(read-only workspace)"]
+    Disc["discussion run<br/>(own workspace + read-only mount)"]
   end
   subgraph Stores["storage/"]
     RS["RunStore<br/>create_if_absent + run index"]
@@ -377,7 +377,8 @@ Invariants the design rests on:
 - **Attribution is indexed.** Each run index row carries `automation_id`, `role`, `occurrence_index` and
   `session_kind`, derived from inline `vars._meta` that the offloading store never moves. `Runtime.start` uses
   `session_attribution` to anchor every root run in a discussion session to the discussion's validated root and its
-  read-only workspace, and refuses the start when the attribution cannot be read.
+  workspace setup (its own writable workspace plus the automation's workspace as a read-only mount), and refuses the
+  start when the attribution cannot be read.
 
 ## Observability: what you can export
 

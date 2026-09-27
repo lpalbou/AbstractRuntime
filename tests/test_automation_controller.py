@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from automation_harness import (
-    T0,
     Clock,
     at,
     automation_state,

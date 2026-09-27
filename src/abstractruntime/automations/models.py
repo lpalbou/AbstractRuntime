@@ -18,7 +18,7 @@ import math
 import os
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, List, Mapping, Optional, TypedDict
+from typing import Any, Dict, Mapping, Optional, TypedDict
 
 from ..triggers.protocol import TriggerConfigError, parse_duration, parse_timestamp, format_timestamp
 

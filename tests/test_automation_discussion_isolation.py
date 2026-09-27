@@ -8,9 +8,6 @@ append only there; the automation's session, state and ledger never change.
 
 from __future__ import annotations
 
-import dataclasses
-import inspect
-
 import pytest
 
 import abstractruntime.core.run_attribution as run_attribution
@@ -22,19 +19,13 @@ from abstractruntime.integrations.abstractcore.workspace_scoped_tools import Wor
 from abstractruntime.session_history import session_chat_messages
 from abstractruntime.session_turns import select_session_turns
 
-_PARAMS = inspect.signature(session_chat_messages).parameters
-MISSING = [
-    name
-    for name, present in (
-        ("session_chat_messages(strict=, automation_id=, through_occurrence=)",
-         all(p in _PARAMS for p in ("strict", "automation_id", "through_occurrence"))),
-        ("session_attribution(run_store, session_id) + Runtime.start discussion anchor",
-         hasattr(run_attribution, "session_attribution")),
-        ("WorkspaceScope.read_only", "read_only" in {f.name for f in dataclasses.fields(WorkspaceScope)}),
-    )
-    if not present
-]
-needs_r1 = pytest.mark.skipif(bool(MISSING), reason=f"needs R1 seam(s): {'; '.join(MISSING)}")
+# Contract B amendment 4: `Runtime.start` resolves a root start in a discussion
+# session through `session_attribution(run_store, session_id)` and restamps the
+# discussion provenance and the read-only workspace over caller values.
+ANCHOR = hasattr(run_attribution, "session_attribution")
+needs_anchor = pytest.mark.skipif(
+    not ANCHOR, reason="needs R1 seam: session_attribution(run_store, session_id) + Runtime.start discussion anchor (contract B, amendment 4)"
+)
 
 
 @pytest.fixture
@@ -47,7 +38,6 @@ def _tick(runtime, run_id):
     return runtime.tick(workflow=runtime.workflow_registry.get(run.workflow_id), run_id=run_id)
 
 
-@needs_r1
 @pytest.mark.parametrize("env", ["json", "sqlite"], indirect=True)
 def test_discussion_is_a_seeded_read_only_fork(env):
     runtime, clock, tmp_path = env
@@ -75,20 +65,23 @@ def test_discussion_is_a_seeded_read_only_fork(env):
     assert [m["content"] for m in meta["seed_messages"]][1::2] == [o.output["response"] for o in occurrences[:2]]
     assert disc.vars["prompt"] == "Why did it rise?"
     assert disc.vars["workspace_root"] == str(workspace) and disc.vars["workspace_read_only"] is True
+    assert disc.vars["_runtime"]["workspace_read_only"] is True
     assert WorkspaceScope.from_input_data(disc.vars).read_only is True
 
     assert _tick(runtime, started["run_id"]).output["response"] == "echo:Why did it rise? | history=4"
 
-    # A later turn started raw in the discussion session is still a read-only discussion turn.
-    later_id = runtime.start(workflow=runtime.workflow_registry.get("echo"), vars={"prompt": "And then?"},
-                             session_id="discussion-session:d1")
-    later = runtime.get_state(later_id)
-    assert later.vars["workspace_read_only"] is True
-    assert later.vars["_meta"]["discussion"]["automation_id"] == aid
-    assert "seed_messages" not in later.vars["_meta"]["discussion"]
+    # A later turn in the discussion session sees the seed first, then the first discussion turn.
+    follow_up = runtime.start(
+        workflow=runtime.workflow_registry.get("echo"),
+        vars={"prompt": "And then?", "_meta": {"discussion": {k: v for k, v in meta.items() if k != "seed_messages"}},
+              "workspace_root": str(workspace), "workspace_read_only": True},
+        session_id="discussion-session:d1",
+    )
     history = session_chat_messages(run_store=runtime.run_store, ledger_store=runtime.ledger_store,
                                     session_id="discussion-session:d1", strict=True)
+    assert [m["content"] for m in history][:4] == [m["content"] for m in meta["seed_messages"]]
     assert len(history) == 6  # seed (4) + the first discussion turn (2)
+    assert _tick(runtime, follow_up).status == RunStatus.COMPLETED
 
     # Nothing was written back into the automation.
     assert [t.run_id for t in select_session_turns(runtime.run_store, automation_session)] == before_turns
@@ -105,3 +98,20 @@ def test_discussing_an_unknown_occurrence_is_refused(env):
     with pytest.raises(AutomationError) as exc:
         start_discussion(runtime, automation_id=aid, occurrence_index=9, request_id="d", prompt="?")
     assert exc.value.reason_code == "occurrence_not_found"
+
+
+@needs_anchor
+@pytest.mark.parametrize("env", ["json"], indirect=True)
+def test_a_raw_start_in_a_discussion_session_is_restamped_read_only(env):
+    runtime, clock, tmp_path = env
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    aid = create(runtime, clock, workspace_root=str(workspace))
+    drive(runtime, aid)
+    started = start_discussion(runtime, automation_id=aid, occurrence_index=1, request_id="d2", prompt="?")
+    later_id = runtime.start(workflow=runtime.workflow_registry.get("echo"), vars={"prompt": "And then?"},
+                             session_id=started["session_id"])
+    later = runtime.get_state(later_id)
+    assert later.vars["workspace_read_only"] is True and later.vars["workspace_root"] == str(workspace)
+    assert later.vars["_meta"]["discussion"]["discussion_root_run_id"] == started["run_id"]
+    assert "seed_messages" not in later.vars["_meta"]["discussion"]

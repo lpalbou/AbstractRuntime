@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, WaitReason
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
+from ..utils.workspace_paths import READ_ONLY_KEY
 from .attention import resolve_strict
 from .bundle import controller_workflow_spec
 from .ledger import (
@@ -45,7 +46,6 @@ from .models import (
     discussion_ids,
     initial_state,
     request_digest,
-    trigger_state_of,
     wake_wait_key,
 )
 
@@ -299,7 +299,11 @@ def start_discussion(
     )
     input_data["_meta"] = meta
     input_data["workspace_root"] = prepared["workspace_root"]
-    input_data["workspace_read_only"] = True
+    # Host key (contract C4) and the trusted runtime-policy key, which a client
+    # payload cannot carry: both mean "this workspace is mounted read-only".
+    input_data[READ_ONLY_KEY] = True
+    runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+    input_data["_runtime"] = {**runtime_ns, READ_ONLY_KEY: True}
     runtime.start(workflow=workflow, vars=input_data, session_id=ids["session_id"], run_id=ids["run_id"])
     return {"session_id": ids["session_id"], "run_id": ids["run_id"], "session_kind": "discussion"}
 

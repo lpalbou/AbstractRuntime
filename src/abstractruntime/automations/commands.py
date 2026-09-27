@@ -69,7 +69,7 @@ def _reject(reason_code: str, message: str, **extra: Any) -> Dict[str, Any]:
 
 
 def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, expected_revision: Optional[int]) -> Dict[str, Any]:
-    """`{"delta": ..., "observation": (name, discriminator, fields)|None}` or a rejection."""
+    """`{"delta": ...}` (the state change to apply) or a rejection."""
     definition, state = definition_of(run), state_of(run)
     archived = bool(definition.get("archived_at"))
     if expected_revision is not None and int(expected_revision) != int(definition["revision"]):
@@ -83,42 +83,35 @@ def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, e
     if command_type == "automation.pause":
         if archived or terminal:
             return _reject("invalid_state", "An archived or finished automation cannot be paused.")
-        return {"delta": {"state": {"paused": True}}, "observation": ("automation.paused", {})}
+        return {"delta": {"state": {"paused": True}}}
 
     if command_type == "automation.resume":
         if archived or terminal:
             return _reject("invalid_state", "An archived or finished automation cannot be resumed.")
         if not state.get("paused"):
-            return {"delta": {}, "observation": None}
+            return {"delta": {}}
         binding = definition["trigger"]
         adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
         rearmed = adapter.rearm(binding, state=trigger_state_of(state), now=now)
-        wait = adapter.prepare(binding, state=rearmed, now=now)
-        return {
-            "delta": {"state": {**rearmed, "paused": False}},
-            "observation": ("automation.resumed", {"next_fire_at": wait.get("until")}),
-        }
+        return {"delta": {"state": {**rearmed, "paused": False}}}
 
     if command_type == "automation.run_now":
         if archived or terminal or state.get("exhausted"):
             return _reject("invalid_state", "An archived, finished or exhausted automation cannot run.")
         if state.get("pending_occurrence") is not None or state.get("manual_pending") is not None:
             return _reject("automation_busy", "An occurrence is already running or waiting to run.")
-        return {"delta": {"state": {"manual_pending": {"command_id": payload["_command_id"]}}}, "observation": None}
+        return {"delta": {"state": {"manual_pending": {"command_id": payload["_command_id"]}}}}
 
     if command_type == "automation.stop_current":
         pending = state.get("pending_occurrence")
         if pending is None:
             return _reject("invalid_state", "No occurrence is running.")
-        return {"delta": {"state": {"pending_occurrence": {**pending, "stop_requested": True}}}, "observation": None}
+        return {"delta": {"state": {"pending_occurrence": {**pending, "stop_requested": True}}}}
 
     if command_type == "automation.archive":
         if archived:
-            return {"delta": {}, "observation": None}
-        new_def = {**copy.deepcopy(definition), "archived_at": now}
-        pending = state.get("pending_occurrence")
-        fields = {"active_occurrence_run_id": pending["run_id"]} if pending else {}
-        return {"delta": {"definition": new_def}, "observation": ("automation.archived", fields)}
+            return {"delta": {}}
+        return {"delta": {"definition": {**copy.deepcopy(definition), "archived_at": now}}}
 
     if command_type == "automation.revise":
         if archived or terminal:
@@ -133,11 +126,7 @@ def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, e
             adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
             fresh = adapter.initial_state(binding["config"])
             delta["state"] = dict(adapter.rearm(binding, state=fresh, now=now))
-        return {
-            "delta": delta,
-            "observation": ("automation.revised", {"previous_revision": int(definition["revision"]), "definition": new_def}),
-            "observation_discriminator": int(new_def["revision"]),
-        }
+        return {"delta": delta}
 
     return _reject("invalid_request", f"unknown automation command type {command_type!r}", field="type")
 
@@ -290,8 +279,6 @@ def apply_automation_command(
 
 def _observation_for(run: Any, command_type: str, *, command_id: str, now: str) -> Optional[tuple]:
     """The observation record of an APPLIED command, rebuilt from the recorded decision."""
-    from .ledger import find_by_idempotency_key as _find  # noqa: F401 - same module family
-
     definition, state = definition_of(run), state_of(run)
     if command_type == "automation.pause":
         return ("automation.paused", command_id, {})

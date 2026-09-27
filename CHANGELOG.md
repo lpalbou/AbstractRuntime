@@ -56,6 +56,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning a partial history: a store without a run index, or a discussion whose seed is missing
   or cannot be read back from the artifact store.
 
+- Automations (`abstractruntime.automations`, see `docs/automations.md`). An automation runs a workflow
+  on a trigger and is itself a durable run: the controller, from the packaged bundle
+  `abstractframework.automation-controller@1.0.0`. Each firing (an occurrence) is a child run with a
+  predictable id, so a crash never loses one or starts it twice. `create_automation`,
+  `get_automation`, `list_occurrences`, `start_discussion` (a separate conversation started from an
+  occurrence, with its workspace read-only) and `drive_automation` (a small run loop for hosts
+  without one).
+  - Independent occurrences (the default) start fresh; in growing mode each occurrence sees the
+    previous ones as conversation history.
+  - Failed occurrences are retried: 3 attempts by default, 30 s then 60 s apart (at most 10 minutes).
+    A later edit never changes an occurrence already under way.
+  - Automations are quiet unless the workflow's output carries `notify: true` or
+    `notify: {title, body}`, or an occurrence still fails after its last retry.
+    `list_attention` pages those items, oldest first; `pending_waits` lists occurrences waiting on a
+    person.
+  - `apply_automation_command` pauses, resumes, runs now, edits (`revise`), stops the current
+    occurrence or archives. Commands are safe to send twice (one `command_id`, one effect), are
+    checked against `expected_revision`, and never interleave with the controller. Pause stops
+    scheduled runs only ("run now" still works); resume never fires the missed runs.
+- Trigger sources (`abstractruntime.triggers`): `schedule@1` (fixed UTC intervals such as `5m` or
+  `24h` on a grid that does not drift; `start_at`, `until` (exclusive) and `count`; one-shot when
+  `every` is absent; missed ticks run once, marked `coalesced`) and `manual@1`. Other packages add
+  sources through the `abstractruntime.trigger_sources` entry-point group; a broken third-party
+  source is listed as unavailable, a missing built-in is an error.
+- VisualFlow node type `automation` (the controller's nodes, adapters `automation.<node_id>`).
+
 ### Changed
 
 - Session history bundles and session replay (`session_chat_messages`, used to seed follow-up turns)

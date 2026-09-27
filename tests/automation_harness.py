@@ -116,7 +116,7 @@ def request(
         "title": "Memory watch",
         "target": {
             "workflow_id": workflow_id,
-            "bundle_ref": f"fixtures@1.0.0",
+            "bundle_ref": "fixtures@1.0.0",
             "flow_id": workflow_id,
             "input_data": input_data if input_data is not None else {"prompt": "check memory"},
         },

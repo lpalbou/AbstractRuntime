@@ -152,7 +152,12 @@ def wait_kind(run: RunState) -> Optional[str]:
 
 
 def typed_wait(run: RunState) -> Optional[Dict[str, Any]]:
-    """`{run_id, wait_key, kind, reason, prompt?, choices?, details?}` for a run waiting on a person."""
+    """`{run_id, wait_key, kind, reason, prompt?, choices?, details?}` for a run waiting on a person.
+
+    `details`: for `tool_approval` the calls awaiting approval `[{name,
+    arguments, call_id?}]`; for `event` `{scope, name}` when the wait key is
+    the runtime's event key; absent for `ask_user`.
+    """
     kind = wait_kind(run)
     if kind is None:
         return None
@@ -168,17 +173,51 @@ def typed_wait(run: RunState) -> Optional[Dict[str, Any]]:
     if waiting.choices:
         item["choices"] = list(waiting.choices)
     if kind == "tool_approval":
-        details = waiting.details or {}
-        item["details"] = {"tool_calls": list(details.get("tool_calls") or [])}
+        item["details"] = _tool_calls_awaiting(waiting.details or {})
+    elif kind == "event":
+        event = _event_scope_name(run)
+        if event is not None:
+            item["details"] = event
     return item
+
+
+def _tool_calls_awaiting(details: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """`[{name, arguments, call_id?}]` from a tool-approval wait record."""
+    out: List[Dict[str, Any]] = []
+    for call in details.get("tool_calls") or []:
+        if not isinstance(call, Mapping):
+            continue
+        item: Dict[str, Any] = {
+            "name": str(call.get("name") or ""),
+            "arguments": dict(call.get("arguments")) if isinstance(call.get("arguments"), Mapping) else {},
+        }
+        call_id = call.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            item["call_id"] = call_id
+        out.append(item)
+    return out
+
+
+def _event_scope_name(run: RunState) -> Optional[Dict[str, str]]:
+    """`{scope, name}` when the wait key is the runtime's `evt:{scope}:{scope_id}:{name}` for THIS run."""
+    key = str(run.waiting.wait_key or "")
+    for scope, scope_id in (
+        ("session", run.session_id),
+        ("run", run.run_id),
+        ("workflow", run.workflow_id),
+        ("global", "global"),
+    ):
+        prefix = f"evt:{scope}:{scope_id}:"
+        if scope_id and key.startswith(prefix) and len(key) > len(prefix):
+            return {"scope": scope, "name": key[len(prefix):]}
+    return None
 
 
 def pending_waits(run_store: Any, automation_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
     """Waits on a person in the automation's occurrence trees, typed by `kind`.
 
     Item: `{run_id, wait_key, kind: "ask_user"|"tool_approval"|"event", reason,
-    index, prompt?, choices?, details?}`; `details.tool_calls` lists the calls
-    a `tool_approval` wait would run. Answer with the kind's payload
+    index, prompt?, choices?, details?}` (see `typed_wait`). Answer with the kind's payload
     (`ANSWER_PAYLOADS`).
     """
     out: List[Dict[str, Any]] = []

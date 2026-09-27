@@ -211,7 +211,9 @@ type, read from the wait record's structure and never from its text:
 | `tool_approval` | a tool batch waiting for approval (`details.mode == "approval_required"`) | `{approved: true}` or `{approved: false}` |
 | `event` | an `EVENT` wait carrying a prompt or choices | `{payload: ...}` |
 
-For `tool_approval`, `details.tool_calls` lists the calls that approving will run (name, arguments, call id).
+`details` depends on the kind: for `tool_approval` it is the list of calls that approving will run,
+`[{name, arguments, call_id?}]`; for `event` it is `{scope, name}` when the wait uses the runtime's event key; an
+`ask_user` wait has none (its `prompt` and `choices` say everything).
 Paused runs and the controller's own wake wait are never listed. `ANSWER_PAYLOADS` and `wait_kind(run)` expose the
 same mapping to hosts.
 

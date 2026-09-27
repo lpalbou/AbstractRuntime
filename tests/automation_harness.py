@@ -60,6 +60,15 @@ def _ask_event_node(run, ctx):
     )
 
 
+def _ask_named_event_node(run, ctx):
+    return StepPlan(
+        node_id="ask",
+        effect=Effect(type=EffectType.WAIT_EVENT, payload={"scope": "session", "name": "approval.requested", "prompt": "Go?"},
+                      result_key="answer"),
+        next_node="done",
+    )
+
+
 def _done_node(run, ctx):
     return StepPlan(node_id="done", complete_output={"response": "done", "success": True})
 
@@ -69,6 +78,8 @@ TARGETS = {
     "flaky": WorkflowSpec(workflow_id="flaky", entry_node="answer", nodes={"answer": _flaky_node}),
     "ask": WorkflowSpec(workflow_id="ask", entry_node="ask", nodes={"ask": _ask_node, "done": _done_node}),
     "ask_event": WorkflowSpec(workflow_id="ask_event", entry_node="ask", nodes={"ask": _ask_event_node, "done": _done_node}),
+    "ask_named_event": WorkflowSpec(workflow_id="ask_named_event", entry_node="ask",
+                                    nodes={"ask": _ask_named_event_node, "done": _done_node}),
 }
 
 

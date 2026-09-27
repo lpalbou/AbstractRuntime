@@ -107,8 +107,8 @@ def test_ask_parks_on_a_typed_tool_approval_wait(env):
     assert EXECUTED == []
     [wait] = pending_waits(runtime.run_store, aid)
     assert wait["kind"] == "tool_approval" and wait["reason"] == "user" and wait["index"] == 1
-    assert [c["name"] for c in wait["details"]["tool_calls"]] == ["execute_command"]
-    assert wait["details"]["tool_calls"][0]["arguments"]["command"] == "vm_stat"
+    [call] = wait["details"]
+    assert (call["name"], call["arguments"]["command"], call["call_id"]) == ("execute_command", "vm_stat", "c1")
     # The documented answer for this kind approves and runs the calls.
     runtime.resume(workflow=TOOL_TARGET, run_id=child.run_id, wait_key=wait["wait_key"], payload={"approved": True})
     assert runtime.get_state(child.run_id).status == RunStatus.COMPLETED and EXECUTED == ["vm_stat"]
@@ -169,5 +169,10 @@ def test_each_wait_kind_is_typed_by_structure(env):
     assert "details" not in w_ask
     [w_event] = pending_waits(runtime.run_store, event)
     assert (w_event["kind"], w_event["reason"], w_event["prompt"]) == ("event", "event", "Approve?")
+    assert "details" not in w_event  # a raw wait key: scope/name unknown
+    named = create(runtime, clock, workflow_id="ask_named_event", trigger=HOURLY)
+    drive(runtime, named)
+    [w_named] = pending_waits(runtime.run_store, named)
+    assert w_named["kind"] == "event" and w_named["details"] == {"scope": "session", "name": "approval.requested"}
     # ask_user under the default "auto" policy still waits for a person.
     assert runtime.get_state(w_ask["run_id"]).waiting.reason == WaitReason.USER

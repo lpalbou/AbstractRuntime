@@ -309,12 +309,19 @@ def automation_timeline_messages(
     kept.reverse()
     if not kept:
         return []
-    summary = (
-        f"[Automation \"{definition['title']}\": {len(pairs)} occurrence(s) through occurrence {through_occurrence}, "
-        f"showing the last {len(kept)}. The automation's files are mounted READ-ONLY at {mounted_workspace}; "
-        f"your own workspace {workspace_root} is writable.]"
-    )
-    kept[0][0] = {**kept[0][0], "content": f"{summary}\n{kept[0][0]['content']}"}
+
+    def _summary(shown: int) -> str:
+        return (
+            f"[Automation \"{definition['title']}\": {len(pairs)} occurrence(s) through occurrence {through_occurrence}, "
+            f"showing the last {shown}. The automation's files are mounted READ-ONLY at {mounted_workspace}; "
+            f"your own workspace {workspace_root} is writable.]\n"
+        )
+
+    # The summary line counts against the budget too: drop the oldest kept
+    # occurrence until everything fits (the newest one always stays).
+    while len(kept) > 1 and chars + len(_summary(len(kept))) > max_total_chars:
+        chars -= sum(len(m["content"]) for m in kept.pop(0))
+    kept[0][0] = {**kept[0][0], "content": f"{_summary(len(kept))}{kept[0][0]['content']}"}
     return [m for pair in kept for m in pair]
 
 

@@ -250,3 +250,23 @@ def test_host_protection_allows_both_discussion_roots_and_nothing_else(env):
         write(auto_ws / "state.json")  # the mount: read-only
     with pytest.raises(ValueError):
         write(secrets / "token")  # elsewhere in the data dir: denied
+
+
+@pytest.mark.parametrize("env", ["json"], indirect=True)
+def test_the_summary_line_counts_against_the_seed_budget(env):
+    runtime, clock, tmp_path = env
+    auto_ws, own_ws = _workspaces(tmp_path)
+    aid = create(runtime, clock, workspace_root=auto_ws, input_data={"prompt": "p" * 50})
+    kids = _four_occurrences(runtime, clock, aid)
+    last = len(kids[-1].vars["prompt"]) + len(kids[-1].output["response"])
+    full = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
+                                        mounted_workspace=auto_ws)
+    summary = len(full[0]["content"]) - len(kids[0].vars["prompt"])  # the summary line and its newline
+    # Two turns fit without the summary line; with it, only the newest does.
+    budget = last + summary + 10
+    assert 2 * last <= budget < 2 * last + summary
+    seed = automation_timeline_messages(runtime, aid, through_occurrence=4, workspace_root=own_ws,
+                                        mounted_workspace=auto_ws, max_total_chars=budget)
+    assert sum(len(m["content"]) for m in seed) <= budget
+    assert [p[0] for p in _pairs(seed)] == [4]
+    assert "showing the last 1." in seed[0]["content"]

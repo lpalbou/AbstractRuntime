@@ -236,3 +236,46 @@ def test_input_trim_says_what_it_dropped() -> None:
     assert len(notices) == 1
     assert "max_input_tokens=50" in notices[0]["content"]
     assert notices[0]["metadata"]["dropped_messages"] == 2
+
+
+def _tool_call_turn(call_id: str, result: str) -> list:
+    return [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": call_id, "type": "function",
+                                                              "function": {"name": "read", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": call_id, "content": result},
+    ]
+
+
+def test_input_trim_never_orphans_a_tool_result() -> None:
+    """A budget that fits the tool RESULT but not the call before it used to
+    drop the call and keep its result — an orphan `role="tool"` message that
+    OpenAI-style APIs reject. The pair is kept or dropped together."""
+    from abstractruntime.memory.token_budget import estimate_message_tokens
+
+    call_and_result = _tool_call_turn("c1", "small result")
+    now = {"role": "user", "content": "now"}
+    messages = [{"role": "user", "content": "go"}, *call_and_result, now]
+    # Room for the result and the newest message, not for the call as well.
+    budget = estimate_message_tokens(call_and_result[1]) + estimate_message_tokens(now)
+    assert estimate_message_tokens(call_and_result[0]) > 0
+    out = trim_messages_to_max_input_tokens(messages, max_input_tokens=budget)
+    assert [m for m in out if m.get("role") == "tool"] == []  # dropped with its call
+    assert out[-1] == now
+
+    # With room for the whole pair, both survive — and a batch of results
+    # stays with its one call.
+    batch = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "a"}, {"id": "b"}]},
+        {"role": "tool", "tool_call_id": "a", "content": "ra"},
+        {"role": "tool", "tool_call_id": "b", "content": "rb"},
+    ]
+    messages = [{"role": "user", "content": "old " * 500}, *batch, now]
+    budget = sum(estimate_message_tokens(m) for m in [*batch, now])
+    out = trim_messages_to_max_input_tokens(messages, max_input_tokens=budget)
+    assert [m.get("tool_call_id") for m in out if m.get("role") == "tool"] == ["a", "b"]
+    assert any(m.get("tool_calls") for m in out)
+
+    # The newest message being a tool result keeps its call, even over budget.
+    tail = _tool_call_turn("z", "final result")
+    out = trim_messages_to_max_input_tokens([{"role": "user", "content": "q"}, *tail], max_input_tokens=1)
+    assert [m.get("role") for m in out if m.get("role") != "system"] == ["assistant", "tool"]

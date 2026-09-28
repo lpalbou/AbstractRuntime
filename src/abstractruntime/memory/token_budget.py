@@ -58,6 +58,12 @@ def trim_messages_to_max_input_tokens(
     - Preserve all system messages.
     - Preserve the most recent non-system message (typically the user prompt).
     - Drop oldest non-system messages first.
+    - Tool results travel with the call that asked for them: every
+      `role="tool"` message is kept or dropped together with the message
+      before it (the assistant tool call, or the previous tool result of the
+      same call batch). An orphan tool result — its call dropped — is a
+      provider-hostile request (OpenAI-style APIs reject it), and a call
+      without its results leaves the model waiting on answers it never gets.
 
     LOUDNESS (adversarial budget audit 2026-08-02, ADR-0026 §1): the budget
     itself is legitimate — it only runs when a caller sets a POSITIVE
@@ -89,25 +95,38 @@ def trim_messages_to_max_input_tokens(
     sys_tokens = sum(estimate_message_tokens(m, model=model) for m in system_messages)
     non_tokens = [estimate_message_tokens(m, model=model) for m in non_system]
 
-    # Always keep the final non-system message.
-    kept: List[Dict[str, Any]] = [non_system[-1]]
-    total = sys_tokens + non_tokens[-1]
+    # Units kept or dropped whole: a message plus the tool results that follow it.
+    units: List[List[int]] = []
+    for i, m in enumerate(non_system):
+        if m.get("role") == "tool" and units:
+            units[-1].append(i)
+        else:
+            units.append([i])
 
-    # If we're already over budget, we still return system + last message.
-    for msg, tok in zip(reversed(non_system[:-1]), reversed(non_tokens[:-1])):
+    def _unit_tokens(unit: List[int]) -> int:
+        return sum(non_tokens[i] for i in unit)
+
+    # Always keep the final unit (it holds the final non-system message).
+    kept_units: List[List[int]] = [units[-1]]
+    total = sys_tokens + _unit_tokens(units[-1])
+
+    # If we're already over budget, we still return system + the last unit.
+    for unit in reversed(units[:-1]):
+        tok = _unit_tokens(unit)
         if total + tok > budget:
             break
-        kept.append(msg)
+        kept_units.append(unit)
         total += tok
 
-    kept.reverse()
+    first_kept = kept_units[-1][0]
+    kept = non_system[first_kept:]
 
-    dropped = len(non_system) - len(kept)
+    dropped = first_kept
     if dropped <= 0:
         return system_messages + kept
 
     #[WARNING:TRUNCATION] caller-declared input budget dropped whole messages — never silently
-    dropped_tokens = sum(non_tokens[: len(non_system) - len(kept)])
+    dropped_tokens = sum(non_tokens[:first_kept])
     logger.warning(
         "abstractruntime.memory.token_budget: dropped %d oldest message(s) "
         "(~%d estimated tokens) to fit max_input_tokens=%d",

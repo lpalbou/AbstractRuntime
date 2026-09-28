@@ -576,3 +576,20 @@ def test_session_chat_messages_excludes_named_runs_and_empty_session() -> None:
         )
         == []
     )
+
+
+def test_announce_dropped_is_public_and_the_private_name_is_an_alias() -> None:
+    """Hosts that fold history themselves (the gateway's client-sent history)
+    write the same notice through the public name; the pre-0.7.0 private name
+    stays importable."""
+    import abstractruntime
+    from abstractruntime.session_history import _announce_dropped, announce_dropped
+
+    assert abstractruntime.announce_dropped is announce_dropped and _announce_dropped is announce_dropped
+    pairs = [[{"role": "user", "content": "old " * 400}, {"role": "assistant", "content": "a"}],
+             [{"role": "user", "content": "new"}, {"role": "assistant", "content": "b"}]]
+    kept, report = fold_history_window(pairs, max_tokens=sum(estimate_message_tokens(m) for m in pairs[1]))
+    messages = [m for pair in kept for m in pair]
+    announce_dropped(messages, report)
+    assert messages[0]["content"].startswith("[#TRUNCATION: 2 earlier message(s)")
+    assert messages[0]["metadata"]["replay_truncated"] is True

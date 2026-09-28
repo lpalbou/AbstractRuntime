@@ -144,9 +144,11 @@ from .session_history import (
     SESSION_TURN_KIND,
     ReplayedHistory,
     SessionHistoryError,
+    announce_dropped,
     fold_history_window,
     discussion_seed_messages,
     session_chat_messages,
+    window_transcript,
 )
 
 __all__ = [
@@ -281,6 +283,8 @@ __all__ = [
     "ReplayedHistory",
     "SESSION_TURN_KIND",
     "fold_history_window",
+    "announce_dropped",
+    "window_transcript",
     "session_chat_messages",
     "SessionHistoryError",
     "discussion_seed_messages",

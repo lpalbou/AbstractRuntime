@@ -27,10 +27,27 @@ Library callers of `session_chat_messages` and `automation_timeline_messages` sh
   and to host session seeding. The window is the only limit on replayed history; the model can use the rest of its
   context window (operator ruling 2026-09-28, ADR-0026 §3: budgets are met by choosing whole turns, never by cutting
   content).
-- **Breaking (library API):** `session_chat_messages` no longer accepts `max_messages`, `max_chars_per_message` or
-  `max_total_chars`; pass `max_tokens` (a positive int) to use a different window. `automation_timeline_messages` takes
-  `max_tokens` instead of `max_messages` / `max_chars_per_message` / `max_total_chars`. `GROWING_MAX_MESSAGES` and
-  `GROWING_MAX_TOTAL_CHARS` are removed from `abstractruntime.automations.models`.
+- **Library API:** `session_chat_messages` still accepts `max_messages`, `max_chars_per_message` and
+  `max_total_chars` (keyword-only, default `None`) but IGNORES them: they no longer limit anything. Hosts built against
+  0.6 (AbstractGateway 0.6.0 passes `max_messages=40, max_total_chars=24000` and treats any error as "no history") keep
+  replaying their sessions under the window. Passing any of them logs one warning and names them in
+  `report["ignored_inputs"]`. Pass `max_tokens` (a positive int) to use a different window.
+- **Breaking (library API):** `automation_timeline_messages` takes `max_tokens` instead of `max_messages` /
+  `max_chars_per_message` / `max_total_chars`. `GROWING_MAX_MESSAGES` and `GROWING_MAX_TOTAL_CHARS` are removed from
+  `abstractruntime.automations.models`.
+- **The entity chat driver and the entity visit workflow use the same window.** They used to keep only the last 10
+  turns in the prompt, without saying so. Now every turn is kept, and each prompt carries the most recent 50,000 tokens
+  of whole turns, with the `[#TRUNCATION: ...]` line when older turns were dropped. The visit records the window's
+  report in `vars._runtime.session_history`; `ChatSession` puts it on `TurnReport.history_window` (and
+  `ChatSession.history_window`).
+- **Breaking (library API):** the `history_turns` parameter of `build_visit_workflow` and `ChatSession` is removed,
+  with `DEFAULT_HISTORY_TURNS` (no caller in the framework passed it). The entity visit no longer sets the
+  per-message character limits `_limits.max_tool_message_chars` (32,000) and `_limits.max_message_chars` (80,000) on
+  re-sent history, and `VISIT_HISTORY_TOOL_RESULT_CAP_CHARS` / `VISIT_HISTORY_MESSAGE_CAP_CHARS` are removed. A
+  single oversized tool result is still limited by AbstractAgent's own guard for oversized messages (200,000 characters).
+- `trim_messages_to_max_input_tokens` (used only when a caller sets a positive `max_input_tokens`) keeps each tool
+  result together with the assistant tool call before it. It used to drop the call and keep the result, which
+  OpenAI-style APIs reject.
 
 - **The context mode decides whether an automation's target reads history.** At admission the runtime sets
   `use_context` (and `include_context` when present) to `true` for growing occurrences and `false` for independent
@@ -54,9 +71,21 @@ Library callers of `session_chat_messages` and `automation_timeline_messages` sh
   occurrence records it in `vars._runtime.session_history`, so the `automation.admitted` record's frozen inputs carry
   it too. A discussion root records its seed window the same way. When older turns are dropped, the oldest replayed
   message starts with a `[#TRUNCATION: ...]` line that gives the number of dropped messages and tokens and the window.
-  New exports at the package root: `HISTORY_REPLAY_MAX_TOKENS`, `ReplayedHistory`, `fold_history_window`.
+  New exports at the package root: `HISTORY_REPLAY_MAX_TOKENS`, `ReplayedHistory`, `fold_history_window`,
+  `announce_dropped` (writes that `[#TRUNCATION: ...]` line after a host's own `fold_history_window` call, for example
+  on client-sent history; `session_history._announce_dropped` stays as an alias) and `window_transcript` (the window
+  over a transcript the caller already holds).
+- `local_list_tts_models` reports why a provider cannot be listed: when the listing is unavailable, `error` carries
+  AbstractVoice's `unavailable_reason` (for example "no OpenAI API key is configured ..." or an unknown provider id).
+  It used to return `available: false, error: null`.
 - Replay reads turns newest-first in batches that double in size, and stops once the window is full. A long session
   therefore costs about as much as its window holds.
+
+### Tests and CI
+
+- CI installs the extras that exist (`.[test]`) and runs the history-window, entity window, automation timeline,
+  input-trim and voice-key tests. The five tests that need the sibling `abstractflow/` checkout or the
+  `abstractagent` package skip when those are absent (a standalone checkout or an sdist).
 
 ## [0.6.0] - 2026-09-27
 

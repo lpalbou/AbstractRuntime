@@ -56,6 +56,7 @@ __all__ = [
     "ReplayedHistory",
     "SESSION_TURN_KIND",
     "SessionHistoryError",
+    "announce_dropped",
     "discussion_seed_messages",
     "fold_history_window",
     "session_chat_messages",
@@ -214,8 +215,13 @@ def fold_history_window(
     return kept, report
 
 
-def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, stamp_metadata: bool = True) -> None:
-    """Prefix the oldest surviving message with the labeled drop notice.
+def announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, stamp_metadata: bool = True) -> None:
+    """Prefix the oldest kept message with the window's labeled drop notice (in place).
+
+    `messages` are the kept messages, oldest first; `report` is the window's
+    receipt from `fold_history_window`. Nothing happens when the report
+    dropped nothing. Hosts that fold history themselves (e.g. client-sent
+    messages) call this so their notice is the same as session replay's.
 
     #[WARNING:TRUNCATION] whole turns dropped by the history window — stated, never silent
 
@@ -250,6 +256,10 @@ def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *,
     )
 
 
+# The pre-0.7.0 private name, kept for callers that imported it.
+_announce_dropped = announce_dropped
+
+
 def window_transcript(
     messages: Sequence[Dict[str, Any]], *, max_tokens: int = HISTORY_REPLAY_MAX_TOKENS
 ) -> ReplayedHistory:
@@ -274,7 +284,7 @@ def window_transcript(
         turns[-1].append(dict(message))
     kept, report = fold_history_window(turns, max_tokens=max_tokens)
     out = [m for turn in kept for m in turn]
-    _announce_dropped(out, report, stamp_metadata=False)
+    announce_dropped(out, report, stamp_metadata=False)
     return ReplayedHistory(out, report=report)
 
 
@@ -435,7 +445,7 @@ def _session_chat_messages(
         fetch *= 2
 
     messages: List[Dict[str, Any]] = [m for pair in kept for m in pair]
-    _announce_dropped(messages, report)
+    announce_dropped(messages, report)
     return ReplayedHistory(messages, report=report)
 
 

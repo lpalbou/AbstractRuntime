@@ -175,6 +175,8 @@ def test_a_react_middle_that_records_no_window_is_recorded_not_silent(tmp_path: 
         temp = run.vars.setdefault("_temp", {})
         temp["final_answer"] = "no window"
         temp["turn_captures"] = {"diary_entries": [], "act_only_warnings": []}
+        # The loop stores its reply after the request: not part of what was sent.
+        run.vars["context"]["messages"].append({"role": "assistant", "content": "no window"})
         return StepPlan(node_id="reason", next_node=HARVEST_NODE)
 
     with caplog.at_level("WARNING", logger="abstractruntime.identity.visit_workflow"):
@@ -237,3 +239,22 @@ def test_chat_window_drops_oldest_whole_turns_with_a_notice(tmp_path: Path) -> N
     assert len(last) == report.history_window["replayed_messages"] + 1
     assert last[0]["content"].startswith("[#TRUNCATION: ") and last[0]["content"].endswith(BIG)
     assert len(session.history) == 16
+
+
+def test_window_transcript_keeps_the_turn_in_progress_whole_from_its_start() -> None:
+    older = [{"role": "user", "content": "old"}, {"role": "assistant", "content": "a"}]
+    # ~30k + ~30k tokens: the turn alone is past the 50k window.
+    current = [{"role": "user", "content": "QUESTION " + BIG * 3}, {"role": "assistant", "content": "", "tool_calls": [{"id": "t"}]},
+               {"role": "tool", "content": BIG * 3}, {"role": "user", "content": "[User response]: section 2"}]
+    msgs = older + current
+    # Grouped at every user message, the ask answer alone is the newest turn.
+    split = window_transcript(msgs)
+    assert split[-1]["content"].endswith("section 2") and not any("QUESTION" in m["content"] for m in split)
+    # From the turn's start it is one turn: kept whole, reported oversize.
+    whole = window_transcript(msgs, current_turn_start=len(older))
+    assert [m["content"] for m in whole][-4:][1:] == [m["content"] for m in current][1:]
+    assert whole[-4]["content"].endswith("QUESTION " + BIG * 3)
+    assert whole.report["oversize_turn_kept"] is True and whole.report["dropped_messages"] == 2
+    for bad in (-1, len(msgs) + 1, True, "2"):
+        with pytest.raises(ValueError):
+            window_transcript(msgs, current_turn_start=bad)

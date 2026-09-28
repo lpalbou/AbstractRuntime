@@ -409,6 +409,10 @@ def build_visit_workflow(
         context = run.vars.setdefault("context", {})
         msgs = context.setdefault("messages", [])
         msgs.append({"role": "user", "content": str(turn.get("rendered_user") or turn.get("text") or "")})
+        # The turn in progress starts at the visitor's message: the window keeps
+        # it whole whatever user-role messages the loop adds inside it (an
+        # ask_user answer, operator guidance).
+        runtime_ns["history_window_turn_start"] = len(msgs) - 1
         return StepPlan(node_id="REASON", next_node=str(react_middle.entry))
 
     def harvest_node(run: RunState, ctx: Any) -> StepPlan:
@@ -424,7 +428,14 @@ def build_visit_workflow(
             # runtime cannot require its own dependent (an upgraded runtime
             # under an old agent must not fail every visit turn), so the gap
             # is stated instead of silent: one warning, and the run says so.
-            sent = list((run.vars.get("context") or {}).get("messages") or [])
+            # What the last request carried: the transcript up to its last
+            # non-assistant message (a request ends on a user or tool message;
+            # what follows is the model's reply to it).
+            stored = list((run.vars.get("context") or {}).get("messages") or [])
+            end = len(stored)
+            while end and isinstance(stored[end - 1], dict) and stored[end - 1].get("role") == "assistant":
+                end -= 1
+            sent = stored[:end]
             logger.warning(
                 "abstractagent < 0.3.17 does not apply the history window; upgrade abstractagent "
                 "(entity visit run %s sent its whole transcript: %d messages)",

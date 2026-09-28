@@ -45,10 +45,15 @@ Library callers of `session_chat_messages` and `automation_timeline_messages` sh
   ~10k tokens a request was ~117k tokens, and a poisoned tool result rode every later turn). BRIDGE now sets
   `_runtime.history_window_tokens` (50,000); the adapter sends `window_transcript(context.messages)` on every call —
   a tool result stays with its turn, so a 495k-character tool result drops out of the request once a newer turn
-  exists — and records the report in `vars._runtime.session_history`. The stored transcript stays whole. HARVEST
+  exists — and records the report in `vars._runtime.session_history`. The stored transcript stays whole. BRIDGE also
+  records `_runtime.history_window_turn_start` (the visitor's message), and the window keeps the turn in progress whole
+  from there (`window_transcript(..., current_turn_start=)`): an `ask_user` answer or operator guidance inside the turn
+  no longer splits off the turn's own question and tool results; a turn larger than the window is kept whole and
+  reported as `oversize_turn_kept`. HARVEST
   keeps a turn whose adapter recorded no window (AbstractAgent older than 0.3.17 sends the whole transcript) but
   logs a warning ("abstractagent < 0.3.17 does not apply the history window; upgrade abstractagent") and records
-  `{"window_applied": false, "reason": "agent_too_old", ...}` in `vars._runtime.session_history`; a windowed turn
+  `{"window_applied": false, "reason": "agent_too_old", ...}` in `vars._runtime.session_history` (counting the messages
+  the last request carried, not the reply stored after it); a windowed turn
   records `window_applied: true`. **The window on the react arm needs AbstractAgent 0.3.17 or newer.**
 - The `[#TRUNCATION: ...]` line is written after a stamped message's own `<runtime_metadata>` envelope, which stays at
   the head (written in front, it made the payload boundary stack a second envelope).

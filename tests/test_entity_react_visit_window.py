@@ -168,3 +168,99 @@ def test_react_visit_poisoned_turn_drops_out_once_a_newer_turn_exists(tmp_path: 
     finally:
         ert.close()
 
+
+
+# ------------------------------------------------ user-role messages mid-turn
+# The loop adds user-role messages INSIDE a turn: the `[User response]` after
+# an ask_user wait, and drained operator guidance. The window keeps the turn in
+# progress whole from `_runtime.history_window_turn_start` (the visitor's
+# message), so neither splits off the turn's own question and tool results
+# (runtime re-gate 3; the reviewer's gate-runtime3/attack/test_midturn.py).
+
+BIGTOOL = " ".join(f"line{i}" for i in range(30000))  # ~290k chars: the two results alone pass the window
+QUESTION = "QUESTION-SENTINEL please compare files a and b"
+_TWO_READS = {"content": "", "tool_calls": [
+    {"name": "read_file", "arguments": {"path": "a"}, "call_id": "r1"},
+    {"name": "read_file", "arguments": {"path": "b"}, "call_id": "r2"},
+]}
+
+
+def _midturn_lane(tmp_path: Path, replies: List[Dict[str, Any]], tools: Any):
+    from abstractagent.logic.builtins import ASK_USER_TOOL
+
+    ert = open_entity_runtime(
+        _make_home(tmp_path, "midturn"),
+        extra_handlers={EffectType.LLM_CALL: (llm := _ScriptedLLM(replies)), EffectType.TOOL_CALLS: tools},
+    )
+    react = create_react_workflow(
+        logic=ReActLogic(tools=[ToolDefinition(name="read_file", description="Read", parameters={}), ASK_USER_TOOL]),
+        workflow_id="entity-visit-react", provider="stub", model="stub",
+        allowed_tools=["read_file", "ask_user"], final_next_node=HARVEST_NODE,
+    )
+    wf = build_visit_workflow(
+        ert.home, participants=["person:albou"], idle_seconds=3600, model_info={"provider": "test", "model": "scripted"},
+        visit_id="visit-m1", react_middle=ReactMiddle(nodes=react.nodes, entry="reason", reset_turn=reset_react_turn),
+    )
+    rid = ert.runtime.start(workflow=wf, vars={}, session_id="visit-m")
+    assert ert.runtime.tick(workflow=wf, run_id=rid, max_steps=50).status == RunStatus.WAITING
+    return ert, wf, rid, llm
+
+
+def _big_reads(run: Any, effect: Effect, dnn: Any = None) -> EffectOutcome:
+    return EffectOutcome.completed({"mode": "executed", "results": [
+        {"call_id": tc.get("call_id"), "name": tc.get("name"), "success": True, "output": BIGTOOL, "error": None}
+        for tc in ((effect.payload or {}).get("tool_calls") or [])
+    ]})
+
+
+def _assert_whole_turn(wire: List[Dict[str, Any]], report: Dict[str, Any], marker: str) -> None:
+    assert report["window_applied"] is True
+    assert any(QUESTION in str(m.get("content")) for m in wire), "the visitor's question of THIS turn was dropped"
+    # Both tool results of the turn ride (each clamped by the agent's 200k-char guard).
+    assert sum(1 for m in wire if m.get("role") == "tool" and str(m.get("content")).startswith("[read_file]: line0 ")) == 2
+    assert any(marker in str(m.get("content")) for m in wire)
+    # The turn alone is past the window: kept whole, and said so; the older
+    # small turn is what was dropped.
+    assert report["oversize_turn_kept"] is True and report["dropped_messages"] == 2
+
+
+def test_midturn_ask_after_big_tool_reads_keeps_the_visitors_question(tmp_path: Path) -> None:
+    replies = [{"content": "hi", "tool_calls": []}, _TWO_READS,
+               {"content": "", "tool_calls": [{"name": "ask_user", "arguments": {"question": "Which section?"}, "call_id": "q1"}]},
+               {"content": "Section 2 says X.", "tool_calls": []}]
+    ert, wf, rid, llm = _midturn_lane(tmp_path, replies, _big_reads)
+    try:
+        assert _say(ert, wf, rid, "hello").status == RunStatus.WAITING
+        st = _say(ert, wf, rid, QUESTION)
+        assert st.status == RunStatus.WAITING and st.waiting.wait_key != VISITOR_WAIT_KEY  # parked on the ask
+        stored_before = json.dumps(ert.runtime.get_state(rid).vars["context"]["messages"])
+        st = ert.runtime.resume(workflow=wf, run_id=rid, wait_key=st.waiting.wait_key,
+                                payload={"response": "section 2"}, max_steps=200)
+        assert st.status == RunStatus.WAITING
+        state = ert.runtime.get_state(rid)
+        stored = state.vars["context"]["messages"]
+        assert stored_before[:-1] in json.dumps(stored), "the stored transcript was rewritten"
+        _assert_whole_turn(llm.calls[-1]["messages"], state.vars["_runtime"]["session_history"], "section 2")
+    finally:
+        ert.close()
+
+
+def test_midturn_operator_guidance_keeps_the_visitors_question(tmp_path: Path) -> None:
+    def reads_then_guidance(run: Any, effect: Effect, dnn: Any = None) -> EffectOutcome:
+        # Guidance delivered while the tools ran; the next reason drains it
+        # into the transcript as a user-role interjection.
+        run.vars.setdefault("_runtime", {}).setdefault("inbox", []).append(
+            {"role": "system", "content": "GUIDANCE-SENTINEL focus on section 2"})
+        return _big_reads(run, effect, dnn)
+
+    replies = [{"content": "hi", "tool_calls": []}, _TWO_READS, {"content": "Section 2 says X.", "tool_calls": []}]
+    ert, wf, rid, llm = _midturn_lane(tmp_path, replies, reads_then_guidance)
+    try:
+        assert _say(ert, wf, rid, "hello").status == RunStatus.WAITING
+        assert _say(ert, wf, rid, QUESTION).status == RunStatus.WAITING
+        state = ert.runtime.get_state(rid)
+        stored = state.vars["context"]["messages"]
+        assert any(m.get("role") == "user" and "GUIDANCE-SENTINEL" in str(m.get("content")) for m in stored)
+        _assert_whole_turn(llm.calls[-1]["messages"], state.vars["_runtime"]["session_history"], "GUIDANCE-SENTINEL")
+    finally:
+        ert.close()

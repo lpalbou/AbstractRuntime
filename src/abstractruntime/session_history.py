@@ -270,7 +270,10 @@ _announce_dropped = announce_dropped
 
 
 def window_transcript(
-    messages: Sequence[Dict[str, Any]], *, max_tokens: int = HISTORY_REPLAY_MAX_TOKENS
+    messages: Sequence[Dict[str, Any]],
+    *,
+    max_tokens: int = HISTORY_REPLAY_MAX_TOKENS,
+    current_turn_start: Optional[int] = None,
 ) -> ReplayedHistory:
     """THE history window over a transcript a host keeps in memory or in run vars.
 
@@ -283,14 +286,36 @@ def window_transcript(
     turns were dropped. Nothing is cut and no count is capped. The input is
     not mutated; kept messages are copies with the keys they came with. The
     window's receipt is `.report`, for the host to record in its run.
+
+    `current_turn_start` is the index (in `messages`) of the message that
+    opened the turn in progress. Everything from there on is ONE turn — the
+    newest, always kept whole (`oversize_turn_kept` when it alone exceeds the
+    window) — however many user-role messages a loop adds inside it (an
+    `ask_user` answer, operator guidance): splitting there would drop the
+    turn's own question and tool results. Only the messages before it are
+    grouped at user messages. Out of range raises ValueError.
     """
+    items = list(messages)
+    if current_turn_start is None:
+        older, current = items, []
+    else:
+        if isinstance(current_turn_start, bool) or not isinstance(current_turn_start, int) or not (
+            0 <= current_turn_start <= len(items)
+        ):
+            raise ValueError(
+                f"current_turn_start must be an index into the {len(items)} messages, got {current_turn_start!r}"
+            )
+        older, current = items[:current_turn_start], items[current_turn_start:]
     turns: List[List[Dict[str, Any]]] = []
-    for message in messages:
+    for message in older:
         if not isinstance(message, dict):
             continue
         if message.get("role") == "user" or not turns:
             turns.append([])
         turns[-1].append(dict(message))
+    current_turn = [dict(m) for m in current if isinstance(m, dict)]
+    if current_turn:
+        turns.append(current_turn)
     kept, report = fold_history_window(turns, max_tokens=max_tokens)
     out = [m for turn in kept for m in turn]
     announce_dropped(out, report, stamp_metadata=False)

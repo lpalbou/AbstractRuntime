@@ -140,6 +140,22 @@ def strip_turn_grounding(text: Any) -> str:
     return _strip(text)
 
 
+def split_head_grounding(text: Any) -> tuple:
+    """`(envelope, rest)` for a stamped turn's text, `("", text)` otherwise.
+
+    For writers that must add words to a stamped message without displacing
+    its own head envelope (the history window's drop notice): the envelope
+    has to stay at the head, or the payload boundary no longer sees the
+    message as stamped and stacks a second envelope in front.
+    """
+    from .integrations.abstractcore.llm_client import _head_runtime_grounding_envelope  # noqa: PLC0415
+
+    if not isinstance(text, str):
+        return "", text
+    head = _head_runtime_grounding_envelope(text)
+    return (head, text[len(head):]) if head else ("", text)
+
+
 def message_carries_grounding_envelope(message: Any) -> bool:
     """True when this message's content already begins with its own envelope."""
     (_carries, _mark, _metadata, _envelope, _strip) = _grounding_api()

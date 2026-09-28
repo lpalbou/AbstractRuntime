@@ -247,13 +247,22 @@ def announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, 
             "replay_truncated": True,
             "history_window": dict(report),
         }
-    head["content"] = (
+    notice = (
         f"[#TRUNCATION: {report['dropped_messages']} earlier message(s) of this session "
         f"(~{report['dropped_tokens']} tokens){more} were dropped from replay by the history window "
         f"(the most recent {report['max_tokens']} tokens, whole turns; abstractruntime.session_history); "
-        f"this history starts mid-conversation]\n"
-        f"{head.get('content') or ''}"
+        f"this history starts mid-conversation]"
     )
+    # A stamped turn keeps its `<runtime_metadata>` envelope at the head (the
+    # payload boundary would otherwise stack a second one in front).
+    from .turn_grounding import split_head_grounding  # lazy: the grounding helpers load AbstractCore
+
+    envelope, rest = split_head_grounding(head.get("content") or "")
+    if envelope:
+        sep = "" if envelope.endswith("\n") else "\n"
+        head["content"] = f"{envelope}{sep}{notice}\n{rest.lstrip(chr(10))}"
+    else:
+        head["content"] = f"{notice}\n{rest}"
 
 
 # The pre-0.7.0 private name, kept for callers that imported it.

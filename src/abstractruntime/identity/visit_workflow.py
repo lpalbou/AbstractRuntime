@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
-from ..session_history import window_transcript
+from ..session_history import HISTORY_REPLAY_MAX_TOKENS, window_transcript
 from .chat import (
     SUMMON_POSTURE_SELF_FRACTION,
     _sheet_line,
@@ -86,7 +86,11 @@ HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
 # history rides every prompt through THE runtime history window
 # (`session_history.window_transcript` over `fold_history_window`): the most
 # recent 50,000 tokens of whole turns, never a cut message, never a count cap,
-# the receipt recorded at `_runtime.session_history`. The earlier 10-turn
+# the receipt recorded at `_runtime.session_history`. On the react arm (the
+# gateway's only arm) the transcript is the durable `context.messages`, kept
+# whole; BRIDGE asks the adapter to send each request through the window
+# (`_runtime.history_window_tokens`) and HARVEST refuses a turn whose adapter
+# recorded no window (an adapter too old to honor the key). The earlier 10-turn
 # slice and the per-message re-send caps this lane seeded into `_limits`
 # (32,000 chars per tool result, 80,000 per message) are gone: the model uses
 # its full context. The 2026-08-01 poison class (a 494,932-char tool result
@@ -386,6 +390,12 @@ def build_visit_workflow(
             ],
         }
         limits.setdefault("max_iterations", int(react_middle.max_iterations))
+        # THE history window on every model request of this cycle: the adapter
+        # sends `window_transcript(context.messages)` and records the receipt
+        # at `_runtime.session_history` (cleared here so HARVEST sees this
+        # turn's receipt, never a stale one). The stored transcript stays whole.
+        runtime_ns["history_window_tokens"] = HISTORY_REPLAY_MAX_TOKENS
+        runtime_ns.pop("session_history", None)
         # Fresh per-turn adapter state; append the decorated turn message to
         # the durable transcript (the ONE source of truth under the merge).
         if callable(react_middle.reset_turn):
@@ -398,6 +408,15 @@ def build_visit_workflow(
     def harvest_node(run: RunState, ctx: Any) -> StepPlan:
         """The adapter cycle's exit -> ELECT: fold the turn's outcome into
         `_turn.llm` so every downstream node runs byte-unchanged."""
+        if not isinstance((run.vars.get("_runtime") or {}).get("session_history"), dict):
+            # The seam fails loudly: an adapter that ignores
+            # `_runtime.history_window_tokens` sent the WHOLE visit transcript
+            # (the 2026-08-01 poison class) and nothing would say so.
+            raise RuntimeError(
+                "entity visit: the react middle recorded no history window this turn "
+                "(_runtime.session_history); it does not honor _runtime.history_window_tokens "
+                "- upgrade abstractagent to >= 0.3.17"
+            )
         temp = run.vars.get("_temp") or {}
         turn = _ns(run, "_turn")
         captures = temp.get("turn_captures") or {}

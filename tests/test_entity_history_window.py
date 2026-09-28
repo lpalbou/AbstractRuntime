@@ -151,6 +151,10 @@ def test_bridge_seeds_no_per_message_char_caps(tmp_path: Path) -> None:
 
     def reason(run: Any, ctx: Any) -> StepPlan:
         seen.append(dict(run.vars.get("_limits") or {}))
+        # A contract-faithful middle sends the window and records it.
+        runtime_ns = run.vars["_runtime"]
+        assert runtime_ns["history_window_tokens"] == HISTORY_REPLAY_MAX_TOKENS
+        runtime_ns["session_history"] = dict(window_transcript(run.vars["context"]["messages"]).report)
         temp = run.vars.setdefault("_temp", {})
         temp["final_answer"] = "seen"
         temp["turn_captures"] = {"diary_entries": [], "act_only_warnings": []}
@@ -158,6 +162,22 @@ def test_bridge_seeds_no_per_message_char_caps(tmp_path: Path) -> None:
 
     _drive_visit(tmp_path, "uncapped", ["hello"], react_middle=ReactMiddle(nodes={"reason": reason}, entry="reason"))
     assert seen and "max_tool_message_chars" not in seen[0] and "max_message_chars" not in seen[0]
+
+
+
+def test_a_react_middle_that_records_no_window_fails_the_turn_loudly(tmp_path: Path) -> None:
+    """The react arm's transcript is sent by the adapter; one too old to honor
+    `_runtime.history_window_tokens` would send the whole visit silently (the
+    2026-08-01 poison class). HARVEST refuses the turn instead."""
+    def reason(run: Any, ctx: Any) -> StepPlan:
+        assert run.vars["_runtime"]["history_window_tokens"] == HISTORY_REPLAY_MAX_TOKENS
+        temp = run.vars.setdefault("_temp", {})
+        temp["final_answer"] = "no window"
+        temp["turn_captures"] = {"diary_entries": [], "act_only_warnings": []}
+        return StepPlan(node_id="reason", next_node=HARVEST_NODE)
+
+    with pytest.raises(RuntimeError, match="recorded no history window"):
+        _drive_visit(tmp_path, "oldadapter", ["hello"], react_middle=ReactMiddle(nodes={"reason": reason}, entry="reason"))
 
 
 # --------------------------------------------------------------- chat driver

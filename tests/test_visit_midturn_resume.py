@@ -96,13 +96,18 @@ def _act_only_middle(tool_ref_cell: Dict[str, Any]) -> ReactMiddle:
     first reply is the answer (turn 1 plants the entry via election)."""
 
     def reason(run: Any, ctx: Any) -> StepPlan:
+        from abstractruntime.session_history import window_transcript
+
         rn = run.vars.setdefault("_runtime", {})
         msgs = (run.vars.get("context") or {}).get("messages") or []
         extras = rn.get("llm_payload_extras") or {}
+        # The adapter contract: send the history window BRIDGE asks for, record it.
+        window = window_transcript(msgs, max_tokens=rn["history_window_tokens"])
+        rn["session_history"] = dict(window.report)
         return StepPlan(
             node_id="reason",
             effect=Effect(type=EffectType.LLM_CALL, payload={
-                "messages": list(msgs),
+                "messages": list(window),
                 "system_prompt": rn.get("system_prompt"),
                 "turn_id": rn.get("turn_id"),
                 **extras,

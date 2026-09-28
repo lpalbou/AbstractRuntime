@@ -593,3 +593,25 @@ def test_announce_dropped_is_public_and_the_private_name_is_an_alias() -> None:
     announce_dropped(messages, report)
     assert messages[0]["content"].startswith("[#TRUNCATION: 2 earlier message(s)")
     assert messages[0]["metadata"]["replay_truncated"] is True
+
+
+def test_the_drop_notice_stays_behind_a_stamped_turns_own_envelope() -> None:
+    """A stamped head message keeps its `<runtime_metadata>` envelope first;
+    a notice written in front of it made the payload boundary see an
+    unstamped turn and stack a second envelope (runtime re-gate, react arm)."""
+    from abstractruntime.session_history import announce_dropped
+    from abstractruntime.turn_grounding import (
+        message_carries_grounding_envelope,
+        stamp_user_turn_grounding,
+        strip_turn_grounding,
+    )
+
+    messages = [{"role": "user", "content": "hello"}]
+    assert stamp_user_turn_grounding(messages)
+    envelope = messages[0]["content"][: messages[0]["content"].index("hello")]
+    announce_dropped(messages, {**fold_history_window([], max_tokens=10)[1], "dropped_messages": 2, "dropped_tokens": 9})
+    content = messages[0]["content"]
+    assert content.startswith(envelope) and content.count("<runtime_metadata>") == 1
+    assert message_carries_grounding_envelope(messages[0])
+    assert strip_turn_grounding(content).startswith("[#TRUNCATION: 2 earlier message(s)")
+    assert content.endswith("\nhello")

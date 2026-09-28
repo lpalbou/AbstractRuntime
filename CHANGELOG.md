@@ -40,6 +40,15 @@ Library callers of `session_chat_messages` and `automation_timeline_messages` sh
   of whole turns, with the `[#TRUNCATION: ...]` line when older turns were dropped. The visit records the window's
   report in `vars._runtime.session_history`; `ChatSession` puts it on `TurnReport.history_window` (and
   `ChatSession.history_window`).
+- **The react visit arm (the one AbstractGateway uses) sends the window too.** Its transcript is the durable
+  `context.messages`, sent by the AbstractAgent react loop on every call; before, nothing bounded it (after 12 turns of
+  ~10k tokens a request was ~117k tokens, and a poisoned tool result rode every later turn). BRIDGE now sets
+  `_runtime.history_window_tokens` (50,000); the adapter sends `window_transcript(context.messages)` on every call —
+  a tool result stays with its turn, so a 495k-character tool result drops out of the request once a newer turn
+  exists — and records the report in `vars._runtime.session_history`. The stored transcript stays whole. HARVEST
+  refuses a turn whose adapter recorded no window: **the react arm needs AbstractAgent 0.3.17 or newer**.
+- The `[#TRUNCATION: ...]` line is written after a stamped message's own `<runtime_metadata>` envelope, which stays at
+  the head (written in front, it made the payload boundary stack a second envelope).
 - **Breaking (library API):** the `history_turns` parameter of `build_visit_workflow` and `ChatSession` is removed,
   with `DEFAULT_HISTORY_TURNS` (no caller in the framework passed it). The entity visit no longer sets the
   per-message character limits `_limits.max_tool_message_chars` (32,000) and `_limits.max_message_chars` (80,000) on

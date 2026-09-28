@@ -619,6 +619,7 @@ def _runtime_capability_owner_config(
     *,
     voice_base_url: Optional[str] = None,
     voice_api_key: Optional[str] = None,
+    voice_openai_api_key: Optional[str] = None,
     vision_base_url: Optional[str] = None,
     vision_api_key: Optional[str] = None,
     music_base_url: Optional[str] = None,
@@ -629,6 +630,10 @@ def _runtime_capability_owner_config(
         cfg["voice_remote_base_url"] = voice_base_url.strip()
     if isinstance(voice_api_key, str) and voice_api_key.strip():
         cfg["voice_remote_api_key"] = voice_api_key.strip()
+    if isinstance(voice_openai_api_key, str) and voice_openai_api_key.strip():
+        # Host-supplied OpenAI credential for AbstractVoice's `openai` engines
+        # (plugin setting `voice_openai_api_key`; the plugin reads no env var for it).
+        cfg["voice_openai_api_key"] = voice_openai_api_key.strip()
     if isinstance(vision_base_url, str) and vision_base_url.strip():
         cfg["vision_base_url"] = vision_base_url.strip()
         cfg.setdefault("vision_backend", "openai-compatible")
@@ -705,6 +710,7 @@ def _runtime_capability_registry(
     *,
     voice_base_url: Optional[str] = None,
     voice_api_key: Optional[str] = None,
+    voice_openai_api_key: Optional[str] = None,
     vision_base_url: Optional[str] = None,
     vision_api_key: Optional[str] = None,
     music_base_url: Optional[str] = None,
@@ -724,6 +730,7 @@ def _runtime_capability_registry(
             "config": _runtime_capability_owner_config(
                 voice_base_url=voice_base_url,
                 voice_api_key=voice_api_key,
+                voice_openai_api_key=voice_openai_api_key,
                 vision_base_url=vision_base_url,
                 vision_api_key=vision_api_key,
                 music_base_url=music_base_url,
@@ -1063,6 +1070,7 @@ def local_get_voice_catalog(
     *,
     base_url: Optional[str] = None,
     provider_api_key: Optional[str] = None,
+    voice_openai_api_key: Optional[str] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
     providers_only: bool = False,
@@ -1071,6 +1079,7 @@ def local_get_voice_catalog(
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
         ).voice
         catalog = (
             voice.voice_catalog(provider=provider, model=model, providers_only=providers_only)
@@ -1128,12 +1137,14 @@ def local_list_tts_models(
     *,
     base_url: Optional[str] = None,
     provider_api_key: Optional[str] = None,
+    voice_openai_api_key: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
         ).voice
         catalog = voice.voice_catalog(provider=provider) if hasattr(voice, "voice_catalog") else {}
         models = voice.list_tts_models(provider=provider)
@@ -1201,6 +1212,7 @@ def local_list_stt_models(
     *,
     base_url: Optional[str] = None,
     provider_api_key: Optional[str] = None,
+    voice_openai_api_key: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     provider_s = str(provider or "").strip()
@@ -1208,6 +1220,7 @@ def local_list_stt_models(
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
         ).voice
         if provider_s and hasattr(voice, "list_stt_models"):
             try:

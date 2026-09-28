@@ -35,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Voice discovery (`local_get_voice_catalog`, `local_list_tts_models`, `local_list_stt_models`) accepts a
   host-supplied `voice_openai_api_key` and passes it to AbstractVoice as the plugin setting of the same name (the
-  OpenAI credential for its `openai` engines; AbstractVoice reads no environment variable for it).
+  OpenAI credential for its `openai` engines; AbstractVoice reads no environment variable for it). The discovery
+  facade and the local clients accept and forward it (`AbstractCoreDiscoveryFacade.get_voice_catalog` /
+  `list_tts_models` / `list_stt_models(voice_openai_api_key=...)`); the remote client accepts it and never sends it.
+  In `llm_kwargs` it reaches the voice plugin through the provider's `config` and changes no text request; tests
+  prove this on real OpenAI, LM Studio, Ollama and MLX provider classes, with the network refused.
 - **The window is recorded.** `session_chat_messages` and `automation_timeline_messages` return a `ReplayedHistory`
   (a list of messages) with a `.report`: `policy`, `max_tokens`, `token_estimator`, `replayed_messages`,
   `replayed_tokens`, `dropped_messages`, `dropped_tokens`, `dropped_counts_complete`, `oversize_turn_kept`. A growing

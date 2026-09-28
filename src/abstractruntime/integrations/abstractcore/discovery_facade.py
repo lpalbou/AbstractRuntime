@@ -87,6 +87,7 @@ class AbstractCoreDiscoveryClient(Protocol):
         provider: Optional[str] = None,
         model: Optional[str] = None,
         providers_only: bool = False,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -97,6 +98,7 @@ class AbstractCoreDiscoveryClient(Protocol):
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -107,6 +109,7 @@ class AbstractCoreDiscoveryClient(Protocol):
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         ...
@@ -283,14 +286,18 @@ class AbstractCoreDiscoveryFacade:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         providers_only: bool = False,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        """Voice catalog. `voice_openai_api_key` is the host's OpenAI credential for
+        AbstractVoice's `openai` engines (plugin setting of the same name)."""
         return self._client.get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
             model=model,
             providers_only=providers_only,
+            voice_openai_api_key=voice_openai_api_key,
             **kwargs,
         )
 
@@ -300,12 +307,14 @@ class AbstractCoreDiscoveryFacade:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._client.list_tts_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
+            voice_openai_api_key=voice_openai_api_key,
             **kwargs,
         )
 
@@ -315,12 +324,14 @@ class AbstractCoreDiscoveryFacade:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self._client.list_stt_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
             provider=provider,
+            voice_openai_api_key=voice_openai_api_key,
             **kwargs,
         )
 

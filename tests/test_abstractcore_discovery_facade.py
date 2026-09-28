@@ -552,6 +552,7 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
                 "provider": "openai",
                 "model": "tts-1",
                 "providers_only": True,
+                "voice_openai_api_key": None,
             },
         ),
         (
@@ -561,6 +562,7 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
                 "base_url": "http://provider.test/v1",
                 "provider_api_key": None,
                 "provider": "openai",
+                "voice_openai_api_key": None,
             },
         ),
         (
@@ -570,6 +572,7 @@ def test_discovery_facade_delegates_snapshot_queries() -> None:
                 "base_url": None,
                 "provider_api_key": None,
                 "provider": "openai",
+                "voice_openai_api_key": None,
             },
         ),
         (
@@ -676,7 +679,7 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_get_voice_catalog",
-        lambda *, base_url=None, provider_api_key=None, provider=None, model=None, providers_only=False: {
+        lambda *, base_url=None, provider_api_key=None, voice_openai_api_key=None, provider=None, model=None, providers_only=False: {
             "provider": provider,
             "model": model,
             "providers_only": providers_only,
@@ -686,7 +689,7 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_tts_models",
-        lambda *, base_url=None, provider_api_key=None, provider=None: {
+        lambda *, base_url=None, provider_api_key=None, voice_openai_api_key=None, provider=None: {
             "provider": provider,
             "base_url": base_url,
             "provider_api_key": provider_api_key,
@@ -694,7 +697,7 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_list_stt_models",
-        lambda *, base_url=None, provider_api_key=None, provider=None: {
+        lambda *, base_url=None, provider_api_key=None, voice_openai_api_key=None, provider=None: {
             "provider": provider,
             "base_url": base_url,
             "provider_api_key": provider_api_key,

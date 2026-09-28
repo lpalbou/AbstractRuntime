@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any replay that keeps images. Content of any other type is left untouched and a warning is logged.
 - **An image no longer counts as tens of thousands of tokens in the window.** `estimate_message_tokens` turned a
   content-part list into a string, so a 150 KB inline image counted about 50,000 tokens and pushed every older turn out
-  of the history window. Text parts now count their text, and each image or other non-text part counts a flat 512
+  of the history window. Text parts now count their text, and each media part (image, audio, file) counts a flat 512
   tokens (`MEDIA_PART_TOKEN_ESTIMATE`, AbstractCore's per-image fallback). The input-budget trim
   (`trim_messages_to_max_input_tokens`) uses the same estimate.
 

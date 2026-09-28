@@ -10,6 +10,7 @@ budget (ADR-0008) even when the underlying model supports much larger contexts.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -40,6 +41,9 @@ def estimate_tokens(text: str, *, model: Optional[str] = None) -> int:
 # on the model and the image size; what matters here is that it is a bounded
 # per-part cost, not the length of the part's base64 payload.
 MEDIA_PART_TOKEN_ESTIMATE = 512
+# Content-part types that carry media (an image, audio or a file), counted at the flat estimate.
+# Every other part (tool_result, thinking, ...) is counted by its text, never flat.
+MEDIA_PART_TYPES = frozenset({"image_url", "image", "input_image", "input_audio", "audio", "file"})
 
 
 def estimate_message_tokens(message: Dict[str, Any], *, model: Optional[str] = None) -> int:
@@ -47,7 +51,8 @@ def estimate_message_tokens(message: Dict[str, Any], *, model: Optional[str] = N
 
     A content-part list (OpenAI-style `[{"type": "text", ...}, {"type":
     "image_url", ...}]`) counts the text of its text parts, plus
-    `MEDIA_PART_TOKEN_ESTIMATE` for each other part. Before 0.7.1 the list
+    `MEDIA_PART_TOKEN_ESTIMATE` for each media part (`MEDIA_PART_TYPES`); any
+    other part is counted by its serialized text. Before 0.7.1 the list
     was stringified, so an inline image counted as its base64 text (~50,000
     tokens for a 150 KB image) and pushed every older turn out of the window.
     """
@@ -63,8 +68,12 @@ def estimate_message_tokens(message: Dict[str, Any], *, model: Optional[str] = N
                 texts.append(part["text"])
             elif isinstance(part, str):
                 texts.append(part)
-            else:
+            elif isinstance(part, dict) and str(part.get("type") or "") in MEDIA_PART_TYPES:
                 media_parts += 1
+            elif isinstance(part, dict) and part.get("type") == "text":
+                continue  # an empty or non-string text part carries nothing
+            else:
+                texts.append(json.dumps(part, ensure_ascii=False, default=str))
         content = "\n".join(texts)
     else:
         content = "" if raw is None else str(raw)

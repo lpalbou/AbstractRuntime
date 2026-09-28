@@ -129,3 +129,14 @@ def test_token_estimate_counts_every_text_part() -> None:
     many = estimate_message_tokens({"role": "user", "content": parts})
     one = estimate_message_tokens({"role": "user", "content": "alpha " * 100})
     assert many > one
+
+
+def test_token_estimate_counts_a_non_media_part_by_its_text_not_flat() -> None:
+    # An Anthropic-style tool_result or thinking part is text, however it is typed:
+    # it must never be counted as a flat media part.
+    big = "x " * 50_000
+    tool_part = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": big}]}
+    as_text = estimate_message_tokens({"role": "user", "content": big})
+    assert estimate_message_tokens(tool_part) >= as_text
+    empty_text = {"role": "user", "content": [{"type": "text"}]}
+    assert estimate_message_tokens(empty_text) < MEDIA_PART_TOKEN_ESTIMATE

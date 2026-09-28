@@ -43,6 +43,7 @@ minted refs only, size-capped, answer extraction only).
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .history_bundle import _best_effort_session_turns
@@ -51,6 +52,7 @@ from .memory.token_budget import estimate_message_tokens
 __all__ = [
     "HISTORY_REPLAY_MAX_TOKENS",
     "HISTORY_WINDOW_POLICY",
+    "RETIRED_REPLAY_CAP_INPUTS",
     "ReplayedHistory",
     "SESSION_TURN_KIND",
     "SessionHistoryError",
@@ -58,6 +60,8 @@ __all__ = [
     "fold_history_window",
     "session_chat_messages",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class SessionHistoryError(RuntimeError):
@@ -82,6 +86,13 @@ SESSION_TURN_KIND = "session_turn"
 HISTORY_REPLAY_MAX_TOKENS = 50_000
 HISTORY_WINDOW_POLICY = "most_recent_whole_turns"
 _TOKEN_ESTIMATOR = "abstractruntime.memory.token_budget.estimate_message_tokens"
+
+# The replay caps retired by the history window (runtime <= 0.6). Hosts built
+# against 0.6 (AbstractGateway 0.6.0) still pass them; refusing them raised a
+# TypeError those hosts swallowed, so the session replayed NO history. They are
+# accepted, IGNORED (the window is the only bound — no count or char cap comes
+# back), logged, and named in `report["ignored_inputs"]`.
+RETIRED_REPLAY_CAP_INPUTS = ("max_messages", "max_total_chars", "max_chars_per_message")
 
 # First fetch of the newest turns; doubled while the window still has room
 # and older turns remain (a turn is 2 messages, so 32 turns is already more
@@ -245,6 +256,9 @@ def session_chat_messages(
     automation_id: Optional[str] = None,
     through_occurrence: Optional[int] = None,
     strict: bool = False,
+    max_messages: Optional[int] = None,
+    max_total_chars: Optional[int] = None,
+    max_chars_per_message: Optional[int] = None,
 ) -> ReplayedHistory:
     """Reconstruct a session's prior conversation as chat messages.
 
@@ -278,10 +292,63 @@ def session_chat_messages(
     record (runtime review A2); with `ledger_store=None` those turns are
     skipped.
 
+    `max_messages`, `max_total_chars` and `max_chars_per_message` are the
+    retired replay caps (`RETIRED_REPLAY_CAP_INPUTS`): accepted so a host built
+    against runtime 0.6 still gets its history, and IGNORED — the window above
+    is the only bound. Any that is passed is logged as a warning and named in
+    `report["ignored_inputs"]`.
+
     Pure read: nothing is written, nothing decays. Failures in individual
     turns are skipped (a corrupt run must not take the whole replay down);
     a broken store surfaces as the exception the caller must handle.
     """
+    ignored = _ignored_retired_inputs(
+        max_tokens,
+        max_messages=max_messages, max_total_chars=max_total_chars, max_chars_per_message=max_chars_per_message
+    )
+    history = _session_chat_messages(
+        run_store=run_store,
+        ledger_store=ledger_store,
+        artifact_store=artifact_store,
+        session_id=session_id,
+        max_tokens=max_tokens,
+        until_ms=until_ms,
+        exclude_run_ids=exclude_run_ids,
+        automation_id=automation_id,
+        through_occurrence=through_occurrence,
+        strict=strict,
+    )
+    if ignored:
+        history.report["ignored_inputs"] = ignored
+    return history
+
+
+def _ignored_retired_inputs(max_tokens: Any, **passed: Any) -> Dict[str, Any]:
+    """The retired cap inputs a caller passed (name -> value), logged once per call."""
+    ignored = {name: value for name, value in passed.items() if value is not None}
+    if ignored:
+        logger.warning(
+            "abstractruntime.session_history: ignoring retired replay cap input(s) %s — the history "
+            "window (the most recent %s tokens of whole turns) is the only bound; update the caller",
+            ", ".join(f"{name}={value!r}" for name, value in ignored.items()),
+            max_tokens,
+        )
+    return ignored
+
+
+def _session_chat_messages(
+    *,
+    run_store: Any,
+    ledger_store: Any,
+    artifact_store: Any,
+    session_id: str,
+    max_tokens: int,
+    until_ms: Optional[int],
+    exclude_run_ids: Optional[Any],
+    automation_id: Optional[str],
+    through_occurrence: Optional[int],
+    strict: bool,
+) -> ReplayedHistory:
     budget = _validated_max_tokens(max_tokens)
     sid = str(session_id or "").strip()
     if not sid:

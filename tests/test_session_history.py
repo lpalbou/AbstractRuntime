@@ -264,14 +264,65 @@ def _text_with_tokens(role: str, tokens: int) -> str:
     return out
 
 
+def test_gateway_060_call_shape_replays_the_whole_window_and_records_the_ignored_caps(caplog) -> None:
+    """AbstractGateway 0.6.0 seeds a session with EXACTLY this call (bundle_host
+    `_seed_session_history`, defaults max_messages=40, max_total_chars=24000)
+    and swallows any exception into `seeded=0`. Runtime 0.7.0 first refused
+    the retired kwargs with a TypeError, so a 0.6.0 gateway on 0.7.0 replayed
+    no history at all (tag gate B1, attack/gw060_probe.py). The retired caps
+    are accepted, IGNORED — no count or char cap returns — logged, and named
+    in the window's report."""
+    run_store = InMemoryRunStore()
+    # 30 turns = 60 messages (past the retired 40) with ~36,000 chars in total
+    # (past the retired 24,000) and one 9,000-char answer (past the retired
+    # 8,000 per message): all of it is inside 50k tokens, so all of it replays.
+    for i in range(30):
+        run_store.save(
+            _turn_run(
+                run_id=f"run-{i:02d}",
+                prompt=f"q{i}",
+                answer=("x" * 9000) if i == 3 else f"a{i} " + "y" * 900,
+                created_at=f"2026-01-01T00:{i:02d}:00+00:00",
+            )
+        )
+    limit, max_chars = 40, 24000
+    with caplog.at_level("WARNING", logger="abstractruntime.session_history"):
+        messages = session_chat_messages(
+            run_store=run_store,
+            ledger_store=InMemoryLedgerStore(),
+            session_id="sess-1",
+            max_messages=limit,
+            max_total_chars=max_chars,
+        )
+    assert len(messages) == 60
+    assert messages[7]["content"] == "x" * 9000
+    assert all("#TRUNCATION" not in m["content"] for m in messages)
+    assert messages.report["ignored_inputs"] == {"max_messages": 40, "max_total_chars": 24000}
+    assert messages.report["dropped_messages"] == 0 and messages.report["replayed_messages"] == 60
+    warned = [r for r in caplog.records if "retired replay cap" in r.getMessage()]
+    assert len(warned) == 1 and "max_messages=40" in warned[0].getMessage()
+
+    # The third retired cap never cuts a message either.
+    one = session_chat_messages(
+        run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1", max_chars_per_message=10
+    )
+    assert one[7]["content"] == "x" * 9000 and one.report["ignored_inputs"] == {"max_chars_per_message": 10}
+    # A current caller passes none of them: no key, no warning.
+    assert "ignored_inputs" not in session_chat_messages(
+        run_store=run_store, ledger_store=InMemoryLedgerStore(), session_id="sess-1"
+    ).report
+
+
 def test_history_window_default_is_50k_tokens_and_no_message_or_char_cap() -> None:
     """Operator ruling 2026-09-28: no message-count cap, no char cap, no per-
     message cut — one window of the most recent 50,000 tokens."""
     assert HISTORY_REPLAY_MAX_TOKENS == 50_000
     params = inspect.signature(session_chat_messages).parameters
     assert params["max_tokens"].default == 50_000
-    for gone in ("max_messages", "max_chars_per_message", "max_total_chars"):
-        assert gone not in params
+    # The retired caps are still ACCEPTED (hosts built against 0.6 pass them)
+    # but carry no default that could bound anything: see the 0.6.0 test below.
+    for retired in ("max_messages", "max_chars_per_message", "max_total_chars"):
+        assert params[retired].kind is inspect.Parameter.KEYWORD_ONLY and params[retired].default is None
 
     run_store = InMemoryRunStore()
     # 60 short turns (120 messages, far past the old 40-message cap) and one

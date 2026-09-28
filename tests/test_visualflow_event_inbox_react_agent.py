@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
+
 from abstractruntime.core.models import EffectType, RunStatus, WaitReason
 from abstractruntime.core.runtime import EffectOutcome, Runtime
 from abstractruntime.integrations.abstractcore.effect_handlers import make_tool_calls_handler
@@ -26,6 +28,12 @@ from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunSt
 from abstractruntime.visualflow_compiler import compile_visualflow
 
 FLOW_PATH = Path(__file__).resolve().parents[2] / "abstractflow" / "examples" / "flows" / "event-inbox-react-agent.json"
+
+# The flow document lives in the sibling abstractflow checkout (the framework
+# workspace layout); a standalone runtime checkout (CI, sdist) has none.
+pytestmark = pytest.mark.skipif(
+    not FLOW_PATH.is_file(), reason=f"needs the sibling abstractflow checkout ({FLOW_PATH} is absent)"
+)
 
 MAILBOX = "test-box"
 WAIT_KEY = f"evt:global:global:{MAILBOX}"

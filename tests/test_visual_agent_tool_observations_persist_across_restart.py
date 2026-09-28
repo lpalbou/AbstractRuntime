@@ -1,6 +1,8 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from abstractruntime import Runtime, RunStatus
 from abstractruntime.integrations.abstractcore.effect_handlers import build_effect_handlers
 from abstractruntime.integrations.abstractcore.tool_executor import MappingToolExecutor
@@ -33,6 +35,9 @@ def test_visual_agent_tool_observations_persist_across_restart():
     This proves that tool-evidence persisted into parent active context survives restart,
     which is required for RALPH-style outer loops to have durable progression evidence.
     """
+    # abstractagent is not a runtime dependency (it depends on the runtime):
+    # present in the framework workspace, absent from a standalone checkout.
+    pytest.importorskip("abstractagent")
     from abstractagent.adapters.react_runtime import create_react_workflow
     from abstractagent.logic.react import ReActLogic
     from abstractcore.tools.core import ToolDefinition

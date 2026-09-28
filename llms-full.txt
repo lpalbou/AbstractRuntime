@@ -3760,7 +3760,15 @@ controller is woken with `max_steps=0`; the host (or `drive_automation`) then ti
 |---|---|---|
 | Session | a new session per occurrence, named after its attempt-1 run id | the automation's session, `automation:<automation_id>` |
 | History given to the occurrence | none | the automation's previous turns as `input_data.context.messages`: the most recent 50,000 tokens of whole turns (the session history window) |
+| `use_context` given to the target | `false` | `true` |
 | `_meta.occurrence.session_kind` | `occurrence` | `automation` |
+
+The context mode alone decides whether the target reads history: at admission the runtime sets the target's
+`use_context` input (and `include_context` when the target has it) to `true` for growing and `false` for
+independent, whatever the definition's `target.input_data` says. A discussion always gets `use_context: true`.
+The run records the decision as `_runtime.automation_context = {mode, use_context, target_use_context}`, where
+`target_use_context` is the value the definition carried. Automations created before this rule, with
+`use_context: false` in their target, now replay their history without being revised.
 
 Growing history is read at admission and frozen with the occurrence's inputs, so every retry sees the same history.
 It is read strictly: when it cannot be read (a store without a run index, for example), the admission fails instead

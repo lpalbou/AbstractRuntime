@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_tokens` instead of `max_messages` / `max_chars_per_message` / `max_total_chars`. `GROWING_MAX_MESSAGES` and
   `GROWING_MAX_TOTAL_CHARS` are removed from `abstractruntime.automations.models`.
 
+- **The context mode decides whether an automation's target reads history.** At admission the runtime sets
+  `use_context` (and `include_context` when present) to `true` for growing occurrences and `false` for independent
+  ones, and to `true` for discussion forks. A `use_context: false` frozen in an older definition no longer makes a
+  growing automation or a discussion replay nothing (basic-agent's `use_context` pin defaults to `false`). The run
+  records `_runtime.automation_context = {mode, use_context, target_use_context}`. Occurrences that were already
+  admitted before the upgrade keep their frozen inputs.
+
 ### Added
 
 - **The window is recorded.** `session_chat_messages` and `automation_timeline_messages` return a `ReplayedHistory`

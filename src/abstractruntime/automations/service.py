@@ -31,7 +31,7 @@ from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
 from .attention import normalize_occurrence_output, resolve_strict
 from .bundle import controller_workflow_spec
-from .controller import AUTOMATION_GRANT_SOURCE
+from .controller import AUTOMATION_GRANT_SOURCE, apply_context_mode
 from .ledger import (
     append_observation,
     automation_records,
@@ -371,6 +371,9 @@ def start_discussion(
     rt_in = input_data.get("_runtime")
     if isinstance(rt_in, dict) and (rt_in.get("tool_policy") or {}).get("source") == AUTOMATION_GRANT_SOURCE:
         input_data["_runtime"] = {k: v for k, v in rt_in.items() if k != "tool_policy"}
+    # The fork reads its seed whatever the occurrence's inputs said (an
+    # independent occurrence's frozen inputs carry use_context=False).
+    apply_context_mode(input_data, mode="discussion")
     context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
     input_data["context"] = {**context, "messages": list(seed)}
     meta = input_data.get("_meta") if isinstance(input_data.get("_meta"), dict) else {}

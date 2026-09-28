@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-28
+
+### Fixed
+
+- **Images in replayed history stay images.** When the history window drops older turns, it writes a
+  `[#TRUNCATION: ...]` notice at the start of the oldest kept message. If that message held a list of content parts
+  (text plus an image, `[{"type": "text", ...}, {"type": "image_url", ...}]`), the notice turned the whole list into
+  one string, so the model received the image's base64 as text. The notice is now added as one text part and every
+  other part is left exactly as it was. A message that starts with its `<runtime_metadata>` envelope keeps it first.
+  This affects `announce_dropped` and `window_transcript`, and so the gateway's `/runs/start` client-context window and
+  any replay that keeps images. Content of any other type is left untouched and a warning is logged.
+- **An image no longer counts as tens of thousands of tokens in the window.** `estimate_message_tokens` turned a
+  content-part list into a string, so a 150 KB inline image counted about 50,000 tokens and pushed every older turn out
+  of the history window. Text parts now count their text, and each image or other non-text part counts a flat 512
+  tokens (`MEDIA_PART_TOKEN_ESTIMATE`, AbstractCore's per-image fallback). The input-budget trim
+  (`trim_messages_to_max_input_tokens`) uses the same estimate.
+
 ## [0.7.0] - 2026-09-28
 
 Replayed session history is one window: the most recent 50,000 tokens of whole turns, recorded in the run.

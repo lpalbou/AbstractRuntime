@@ -1201,11 +1201,19 @@ def local_list_tts_models(
         available=bool(cleaned or providers),
         error=None,
     )
-    return _filter_provider_model_catalog_response(
+    out = _filter_provider_model_catalog_response(
         payload,
         provider=provider,
         model_keys=("models_by_provider", "tts_models_by_provider"),
     )
+    if not out.get("available"):
+        # An unavailable listing says WHY: AbstractVoice (>= 0.13) explains it
+        # in the catalog's `unavailable_reason` (no OpenAI key, engine not
+        # installed, unknown provider); `available: false, error: null` hid it.
+        reason = catalog.get("unavailable_reason")
+        if isinstance(reason, str) and reason.strip():
+            out["error"] = reason.strip()
+    return out
 
 
 def local_list_stt_models(

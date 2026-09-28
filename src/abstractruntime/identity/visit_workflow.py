@@ -45,12 +45,14 @@ turn ids so a crash-replayed node never doubles history.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
-from ..session_history import HISTORY_REPLAY_MAX_TOKENS, window_transcript
+from ..memory.token_budget import estimate_message_tokens
+from ..session_history import HISTORY_REPLAY_MAX_TOKENS, window_report, window_transcript
 from .chat import (
     SUMMON_POSTURE_SELF_FRACTION,
     _sheet_line,
@@ -77,6 +79,8 @@ from .reflection import (
     resolve_feeling_targets,
 )
 
+logger = logging.getLogger(__name__)
+
 VISIT_WORKFLOW_ID = "entity-visit@1"
 VISITOR_WAIT_KEY = "visitor_input"
 DEFAULT_IDLE_SECONDS = 30 * 60  # a visit left silent this long closes with reflection
@@ -89,8 +93,10 @@ HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
 # the receipt recorded at `_runtime.session_history`. On the react arm (the
 # gateway's only arm) the transcript is the durable `context.messages`, kept
 # whole; BRIDGE asks the adapter to send each request through the window
-# (`_runtime.history_window_tokens`) and HARVEST refuses a turn whose adapter
-# recorded no window (an adapter too old to honor the key). The earlier 10-turn
+# (`_runtime.history_window_tokens`). An adapter too old to honor the key
+# (abstractagent < 0.3.17) sends the whole transcript: the runtime cannot
+# require its own dependent, so HARVEST keeps the turn, logs a warning and
+# records `window_applied: false, reason: "agent_too_old"` in the run. The earlier 10-turn
 # slice and the per-message re-send caps this lane seeded into `_limits`
 # (32,000 chars per tool result, 80,000 per message) are gone: the model uses
 # its full context. The 2026-08-01 poison class (a 494,932-char tool result
@@ -408,15 +414,31 @@ def build_visit_workflow(
     def harvest_node(run: RunState, ctx: Any) -> StepPlan:
         """The adapter cycle's exit -> ELECT: fold the turn's outcome into
         `_turn.llm` so every downstream node runs byte-unchanged."""
-        if not isinstance((run.vars.get("_runtime") or {}).get("session_history"), dict):
-            # The seam fails loudly: an adapter that ignores
-            # `_runtime.history_window_tokens` sent the WHOLE visit transcript
-            # (the 2026-08-01 poison class) and nothing would say so.
-            raise RuntimeError(
-                "entity visit: the react middle recorded no history window this turn "
-                "(_runtime.session_history); it does not honor _runtime.history_window_tokens "
-                "- upgrade abstractagent to >= 0.3.17"
+        runtime_ns = run.vars.setdefault("_runtime", {})
+        report = runtime_ns.get("session_history")
+        if isinstance(report, dict):
+            report["window_applied"] = True
+        else:
+            # An adapter that ignores `_runtime.history_window_tokens`
+            # (abstractagent < 0.3.17) sent the WHOLE visit transcript. The
+            # runtime cannot require its own dependent (an upgraded runtime
+            # under an old agent must not fail every visit turn), so the gap
+            # is stated instead of silent: one warning, and the run says so.
+            sent = list((run.vars.get("context") or {}).get("messages") or [])
+            logger.warning(
+                "abstractagent < 0.3.17 does not apply the history window; upgrade abstractagent "
+                "(entity visit run %s sent its whole transcript: %d messages)",
+                run.run_id, len(sent),
             )
+            runtime_ns["session_history"] = {
+                **window_report(
+                    max_tokens=int(runtime_ns.get("history_window_tokens") or HISTORY_REPLAY_MAX_TOKENS),
+                    replayed_messages=len(sent),
+                    replayed_tokens=sum(estimate_message_tokens(m) for m in sent),
+                ),
+                "window_applied": False,
+                "reason": "agent_too_old",
+            }
         temp = run.vars.get("_temp") or {}
         turn = _ns(run, "_turn")
         captures = temp.get("turn_captures") or {}

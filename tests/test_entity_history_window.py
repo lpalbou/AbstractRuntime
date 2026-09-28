@@ -165,10 +165,11 @@ def test_bridge_seeds_no_per_message_char_caps(tmp_path: Path) -> None:
 
 
 
-def test_a_react_middle_that_records_no_window_fails_the_turn_loudly(tmp_path: Path) -> None:
+def test_a_react_middle_that_records_no_window_is_recorded_not_silent(tmp_path: Path, caplog) -> None:
     """The react arm's transcript is sent by the adapter; one too old to honor
-    `_runtime.history_window_tokens` would send the whole visit silently (the
-    2026-08-01 poison class). HARVEST refuses the turn instead."""
+    `_runtime.history_window_tokens` (abstractagent < 0.3.17) sends the whole
+    visit. The runtime cannot require its own dependent, so the turn completes
+    — and the gap is stated: one warning, `window_applied: false` in the run."""
     def reason(run: Any, ctx: Any) -> StepPlan:
         assert run.vars["_runtime"]["history_window_tokens"] == HISTORY_REPLAY_MAX_TOKENS
         temp = run.vars.setdefault("_temp", {})
@@ -176,8 +177,16 @@ def test_a_react_middle_that_records_no_window_fails_the_turn_loudly(tmp_path: P
         temp["turn_captures"] = {"diary_entries": [], "act_only_warnings": []}
         return StepPlan(node_id="reason", next_node=HARVEST_NODE)
 
-    with pytest.raises(RuntimeError, match="recorded no history window"):
-        _drive_visit(tmp_path, "oldadapter", ["hello"], react_middle=ReactMiddle(nodes={"reason": reason}, entry="reason"))
+    with caplog.at_level("WARNING", logger="abstractruntime.identity.visit_workflow"):
+        _calls, run_vars = _drive_visit(
+            tmp_path, "oldadapter", ["hello"], react_middle=ReactMiddle(nodes={"reason": reason}, entry="reason")
+        )
+    report = run_vars["_runtime"]["session_history"]
+    assert report["window_applied"] is False and report["reason"] == "agent_too_old"
+    assert report["max_tokens"] == HISTORY_REPLAY_MAX_TOKENS and report["replayed_messages"] == 1
+    warned = [r for r in caplog.records if "does not apply the history window" in r.getMessage()]
+    assert len(warned) == 1 and "upgrade abstractagent" in warned[0].getMessage()
+    assert len(run_vars["_visit"]["history"]) == 2  # the turn completed
 
 
 # --------------------------------------------------------------- chat driver

@@ -9,7 +9,7 @@ to and the adapter's react loop sends on every call. BRIDGE sets
 `window_transcript(context.messages)` — the newest whole turns up to 50k
 tokens, a tool result kept with its turn — and records the receipt at
 `_runtime.session_history`. The stored transcript stays whole. (A middle that
-records no window fails the turn loudly at HARVEST: test_entity_history_window.py.)
+records no window is recorded as `window_applied: false`: test_entity_history_window.py.)
 
 Needs abstractagent (it depends on the runtime, not the other way round):
 present in the framework workspace, absent from a standalone checkout.
@@ -133,6 +133,7 @@ def test_react_visit_history_is_windowed_at_50k(tmp_path: Path) -> None:
         # labeled notice, the oldest turns dropped whole.
         assert _tok(wire) <= HISTORY_REPLAY_MAX_TOKENS + 200
         assert report["max_tokens"] == HISTORY_REPLAY_MAX_TOKENS and report["dropped_messages"] > 0
+        assert report["window_applied"] is True
         assert report["replayed_messages"] == len(wire)
         assert wire[0]["role"] == "user" and "#TRUNCATION" in wire[0]["content"]
         assert wire[-1]["role"] == "user" and "turn 11 " in wire[-1]["content"]

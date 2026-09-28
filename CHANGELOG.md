@@ -46,7 +46,10 @@ Library callers of `session_chat_messages` and `automation_timeline_messages` sh
   `_runtime.history_window_tokens` (50,000); the adapter sends `window_transcript(context.messages)` on every call —
   a tool result stays with its turn, so a 495k-character tool result drops out of the request once a newer turn
   exists — and records the report in `vars._runtime.session_history`. The stored transcript stays whole. HARVEST
-  refuses a turn whose adapter recorded no window: **the react arm needs AbstractAgent 0.3.17 or newer**.
+  keeps a turn whose adapter recorded no window (AbstractAgent older than 0.3.17 sends the whole transcript) but
+  logs a warning ("abstractagent < 0.3.17 does not apply the history window; upgrade abstractagent") and records
+  `{"window_applied": false, "reason": "agent_too_old", ...}` in `vars._runtime.session_history`; a windowed turn
+  records `window_applied: true`. **The window on the react arm needs AbstractAgent 0.3.17 or newer.**
 - The `[#TRUNCATION: ...]` line is written after a stamped message's own `<runtime_metadata>` envelope, which stays at
   the head (written in front, it made the payload boundary stack a second envelope).
 - **Breaking (library API):** the `history_turns` parameter of `build_visit_workflow` and `ChatSession` is removed,

@@ -315,3 +315,23 @@ def test_a_later_turn_under_host_protection_reads_the_mount_and_writes_its_own_r
     for path in (auto_ws / "state.json", secrets / "token"):
         with pytest.raises(ValueError):
             rewrite_tool_arguments(tool_name="write_file", args={"file_path": str(path), "content": "x"}, scope=scope)
+
+
+@pytest.mark.parametrize("env", ["json"], indirect=True)
+def test_the_timeline_has_no_occurrence_count_cap(env):
+    """The only bound on the timeline is the token window: 45 short
+    occurrences (past the retired 40-message / 20-turn caps) all replay. A
+    count slice re-introduced anywhere on the path (e.g. `pairs[-20:]` before
+    the fold) turns this red (tag gate follow-up)."""
+    runtime, clock, tmp_path = env
+    auto_ws, own_ws = _workspaces(tmp_path)
+    aid = create(runtime, clock, workspace_root=auto_ws)
+    drive(runtime, aid)
+    for minute in range(2, 90, 2):  # 44 more ticks, one occurrence each
+        at(runtime, clock, aid, f"2026-01-01T{minute // 60:02d}:{minute % 60:02d}:00+00:00")
+    assert len(children(runtime, aid)) == 45
+    seed = automation_timeline_messages(runtime, aid, through_occurrence=45, workspace_root=own_ws,
+                                        mounted_workspace=auto_ws)
+    assert [p[0] for p in _pairs(seed)] == list(range(1, 46))
+    assert seed.report["replayed_messages"] == 90 and seed.report["dropped_messages"] == 0
+    assert "45 occurrence(s) through occurrence 45, showing the last 45" in seed[0]["content"]

@@ -3,10 +3,10 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.6.0
+- Version: 0.7.0
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
-- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.16.0`
+- Current AbstractCore baseline: base `abstractruntime` installs `abstractcore[remote,tools,vision,voice,audio,music]>=2.18.0`
 - Install profiles: base `abstractruntime` is remote-light with MCP, generated media routing, and Runtime-owned permissive PDF read/write nodes; `abstractruntime[apple]` and `abstractruntime[gpu]` add local inferencer stacks.
 - Config boundary: Runtime does not read `ABSTRACTGATEWAY_*`; Gateway-owned config should be translated into explicit Runtime inputs or Runtime-owned env names. Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM client; Runtime treats it as an optional resolver hook, injects transient provider/base URL/key params for the call, and redacts secret-like params from persisted observability.
 
@@ -50,6 +50,7 @@
 - Host-local operator wrappers: the host facade and `abstractruntime.integrations.abstractcore.comms_facade` expose email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`), and `abstractruntime.integrations.abstractcore.telegram_facade` exposes Telegram bootstrap/global-client/send wrappers without requiring hosts to import AbstractCore directly.
 - Durable outbound comms: when an email or Telegram send belongs to a run, use `get_abstractcore_run_facade(...).send_email(...)` or `send_telegram_message(...)` so Runtime records the request and outcome in a child run; replay should show the recorded result, not resend the message. If the child run waits for approval or passthrough execution, resume it through `resume_tool_calls(...)`.
 - [Artifacts](docs/artifacts.md): Runtime artifact identity, JSON-safe refs, canonical descriptors, generated-media provenance, tool-output offload thresholds, catalog search/stats, access counters, and Gateway/Observer retrieval boundaries.
+- [Sessions and history](docs/api.md#sessions-and-history): `session_chat_messages(...)` replays a session's completed turns under one window, the most recent `HISTORY_REPLAY_MAX_TOKENS` (50,000) estimated tokens of whole messages, and returns a `ReplayedHistory` whose `.report` records replayed and dropped messages and tokens; `fold_history_window(...)` applies the same window to any turns.
 - [Artifacts API](docs/api.md#artifacts-store-by-reference): `ArtifactStore`, `ArtifactDescriptor`, `ArtifactAccessStats`, `search()`, `count()`, `facet_counts()`, and `stats()` for Runtime-owned catalog queries.
 - VisualFlow document/file nodes: `read_file`/`write_file` use workspace-scoped paths (`rel/path` or `mount_alias/rel/path` in Gateway-hosted runs), `read_pdf` extracts text/metadata with `pypdf`, `write_pdf` renders text or Markdown-style content to real PDF bytes with `reportlab`, `list_folder_files` enumerates workspace folders, `import_workspace_file` snapshots a server file into an artifact, `read_artifact` projects saved file content, and `export_artifact` writes a durable artifact back to a workspace path. Local Runtime-only runs without workspace scope still fall back to the process working directory for relative file-node paths.
 - Remote multimodal guardrail: remote/hybrid media generation uses AbstractCore Server endpoints, does not inherit the chat model for media endpoints, routes image edits through Core `/images/edits`, routes video generation through Core `/videos/*`, rejects unsupported input media and non-file STT inputs instead of ignoring them, and redacts data URLs from persisted provider-request metadata

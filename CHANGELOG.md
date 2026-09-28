@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-28
+
+Replayed session history is one window: the most recent 50,000 tokens of whole turns, recorded in the run.
+Library callers of `session_chat_messages` and `automation_timeline_messages` should read the **Breaking** note.
+
 ### Changed
+
+- The base install and the `apple` / `gpu` profiles require AbstractCore 2.18.0 or newer. Its voice extra brings
+  AbstractVoice 0.13.0, the first release that honours the `voice_openai_api_key` setting described below.
 
 - **Session history replay is one window: the most recent 50,000 tokens.** `session_chat_messages` keeps the newest
   turns that fit `HISTORY_REPLAY_MAX_TOKENS` (50,000) estimated tokens, as whole messages, newest first. The window has

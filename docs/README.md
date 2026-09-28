@@ -30,6 +30,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` self-recipient rule)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
+- `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
 - `api.md#run-history-bundle-export-portable-replay-artifact` — run history bundles, including `resolved_actions` summaries for cross-client capability replay
 
 ## Features (reference)

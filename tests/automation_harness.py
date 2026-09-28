@@ -4,6 +4,8 @@ Targets are plain WorkflowSpecs (no provider, no tools):
 
 - `echo`: answers `echo:<prompt> | history=<n>` where n = len(context.messages);
   copies `notify` from its input into its output.
+- `reader`: like basic-agent, sees `context.messages` only when `use_context`
+  is true; answers `read:<prompt> | seen=<n>`.
 - `flaky`: fails (structurally: `{success: False, error}`) while
   `_meta.occurrence.attempt < fail_until`, then echoes.
 - `ask`: parks on an ASK_USER wait (a human wait).
@@ -35,6 +37,13 @@ def _echo_node(run, ctx):
     if "notify" in run.vars:
         out["notify"] = run.vars["notify"]
     return StepPlan(node_id="answer", complete_output=out)
+
+
+def _reader_node(run, ctx):
+    """Like basic-agent: reads `context.messages` only when `use_context` is true."""
+    messages = ((run.vars.get("context") or {}).get("messages")) or []
+    seen = len(messages) if run.vars.get("use_context") is True else 0
+    return StepPlan(node_id="answer", complete_output={"response": f"read:{run.vars.get('prompt')} | seen={seen}", "success": True})
 
 
 def _flaky_node(run, ctx):
@@ -75,6 +84,7 @@ def _done_node(run, ctx):
 
 TARGETS = {
     "echo": WorkflowSpec(workflow_id="echo", entry_node="answer", nodes={"answer": _echo_node}),
+    "reader": WorkflowSpec(workflow_id="reader", entry_node="answer", nodes={"answer": _reader_node}),
     "flaky": WorkflowSpec(workflow_id="flaky", entry_node="answer", nodes={"answer": _flaky_node}),
     "ask": WorkflowSpec(workflow_id="ask", entry_node="ask", nodes={"ask": _ask_node, "done": _done_node}),
     "ask_event": WorkflowSpec(workflow_id="ask_event", entry_node="ask", nodes={"ask": _ask_event_node, "done": _done_node}),

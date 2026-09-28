@@ -5,6 +5,51 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Session history replay is one window: the most recent 50,000 tokens.** `session_chat_messages` keeps the newest
+  turns that fit `HISTORY_REPLAY_MAX_TOKENS` (50,000) estimated tokens, as whole messages, newest first. The window has
+  no gaps, and a total of exactly 50,000 tokens fits. The 40-message cap, the 24,000-character total budget and the
+  8,000-character cut per message are removed, so no replayed message is ever cut. When the newest turn alone is larger
+  than the window, it is kept whole and the report says so (`oversize_turn_kept`). Tokens are counted with the existing
+  estimator, `memory.token_budget.estimate_message_tokens`. This window applies to automation growing mode (it
+  replaces the 40-message / 24,000-character limit of contract D), to discussion seeds (`automation_timeline_messages`)
+  and to host session seeding. The window is the only limit on replayed history; the model can use the rest of its
+  context window (operator ruling 2026-09-28, ADR-0026 §3: budgets are met by choosing whole turns, never by cutting
+  content).
+- **Breaking (library API):** `session_chat_messages` no longer accepts `max_messages`, `max_chars_per_message` or
+  `max_total_chars`; pass `max_tokens` (a positive int) to use a different window. `automation_timeline_messages` takes
+  `max_tokens` instead of `max_messages` / `max_chars_per_message` / `max_total_chars`. `GROWING_MAX_MESSAGES` and
+  `GROWING_MAX_TOTAL_CHARS` are removed from `abstractruntime.automations.models`.
+
+- **The context mode decides whether an automation's target reads history.** At admission the runtime sets
+  `use_context` (and `include_context` when present) to `true` for growing occurrences and `false` for independent
+  ones, and to `true` for discussion forks. A `use_context: false` frozen in an older definition no longer makes a
+  growing automation or a discussion replay nothing (basic-agent's `use_context` pin defaults to `false`). The run
+  records `_runtime.automation_context = {mode, use_context, target_use_context}`. Occurrences that were already
+  admitted before the upgrade keep their frozen inputs.
+
+### Added
+
+- Voice discovery (`local_get_voice_catalog`, `local_list_tts_models`, `local_list_stt_models`) accepts a
+  host-supplied `voice_openai_api_key` and passes it to AbstractVoice as the plugin setting of the same name (the
+  OpenAI credential for its `openai` engines; AbstractVoice reads no environment variable for it). The discovery
+  facade and the local clients accept and forward it (`AbstractCoreDiscoveryFacade.get_voice_catalog` /
+  `list_tts_models` / `list_stt_models(voice_openai_api_key=...)`); the remote client accepts it and never sends it.
+  In `llm_kwargs` it reaches the voice plugin through the provider's `config` and changes no text request; tests
+  prove this on real OpenAI, LM Studio, Ollama and MLX provider classes, with the network refused.
+- **The window is recorded.** `session_chat_messages` and `automation_timeline_messages` return a `ReplayedHistory`
+  (a list of messages) with a `.report`: `policy`, `max_tokens`, `token_estimator`, `replayed_messages`,
+  `replayed_tokens`, `dropped_messages`, `dropped_tokens`, `dropped_counts_complete`, `oversize_turn_kept`. A growing
+  occurrence records it in `vars._runtime.session_history`, so the `automation.admitted` record's frozen inputs carry
+  it too. A discussion root records its seed window the same way. When older turns are dropped, the oldest replayed
+  message starts with a `[#TRUNCATION: ...]` line that gives the number of dropped messages and tokens and the window.
+  New exports at the package root: `HISTORY_REPLAY_MAX_TOKENS`, `ReplayedHistory`, `fold_history_window`.
+- Replay reads turns newest-first in batches that double in size, and stops once the window is full. A long session
+  therefore costs about as much as its window holds.
+
 ## [0.6.0] - 2026-09-27
 
 Automations v1: run a workflow on a schedule or on request as a durable, crash-safe controller run. Hosts that

@@ -43,8 +43,6 @@ from .ledger import (
     state_of,
 )
 from .models import (
-    GROWING_MAX_MESSAGES,
-    GROWING_MAX_TOTAL_CHARS,
     add_delay,
     backoff_delay,
     occurrence_run_id,
@@ -221,18 +219,54 @@ def grant_tool_approval(input_data: Dict[str, Any]) -> None:
     }
 
 
+# The flow input that makes an agent read `context.messages` (basic-agent's
+# `use_context` pin defaults to False; `include_context` is its alias, and
+# wins when present, so both are set).
+_CONTEXT_INPUT_KEYS = ("use_context", "include_context")
+
+
+def apply_context_mode(input_data: Dict[str, Any], *, mode: str) -> Dict[str, Any]:
+    """Make the automation's context mode the ONE history control (operator 2026-09-28).
+
+    History is injected by the automation (growing occurrences, discussion
+    seeds), so whether the target reads it is the automation's decision, not
+    a target input frozen at creation: an old definition carrying
+    `use_context: false` silently replayed NO history into a growing
+    automation or a discussion. Growing and discussion → on; independent →
+    off (it has no history to read). Returns the receipt recorded in the run
+    as `_runtime.automation_context`: `{mode, use_context,
+    target_use_context}` (the value the target input carried, or None).
+    """
+    if mode not in ("growing", "independent", "discussion"):
+        raise ValueError(f"unknown automation context mode {mode!r}")
+    use_context = mode != "independent"
+    target_value = next((input_data[k] for k in _CONTEXT_INPUT_KEYS if k in input_data), None)
+    input_data["use_context"] = use_context
+    if "include_context" in input_data:
+        input_data["include_context"] = use_context
+    receipt = {"mode": mode, "use_context": use_context, "target_use_context": target_value}
+    runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+    input_data["_runtime"] = {**runtime_ns, "automation_context": receipt}
+    return receipt
+
+
 def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_run_id: str) -> Dict[str, Any]:
     """Freeze the occurrence's inputs (contract D `prepare_context`).
 
     Independent: a fresh session (the attempt-1 run id), no history injected.
     Growing: the automation's session, with its prior turns as
     `context.messages` through the strict history path (a missing seed or an
-    unreadable history fails the admission instead of running without context).
+    unreadable history fails the admission instead of running without context),
+    windowed to the most recent `HISTORY_REPLAY_MAX_TOKENS` tokens of whole
+    turns; the window's report rides `_runtime.session_history`.
+    Both: the context mode decides whether the target reads history
+    (`apply_context_mode`), whatever the target's frozen `use_context` says.
     """
     definition = turn.definition
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
     if definition["policy"].get("tool_approval", "auto") == "auto":
         grant_tool_approval(input_data)
+    apply_context_mode(input_data, mode=definition["context"]["mode"])
     if definition["context"]["mode"] == "growing":
         from ..session_history import session_chat_messages
 
@@ -241,13 +275,16 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
             ledger_store=turn.ledger_store,
             artifact_store=turn.artifact_store,
             session_id=definition["session_id"],
-            max_messages=GROWING_MAX_MESSAGES,
-            max_total_chars=GROWING_MAX_TOTAL_CHARS,
             automation_id=turn.automation_id,
             strict=True,
         )
         context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
         input_data["context"] = {**context, "messages": list(messages)}
+        # The history window's receipt (ADR-0026: explicit and observable),
+        # frozen with the inputs, so the occurrence run and its
+        # `automation.admitted` record both say what was replayed and dropped.
+        runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+        input_data["_runtime"] = {**runtime_ns, "session_history": {**messages.report, "strict": True, "session_kind": "automation"}}
         session_id = definition["session_id"]
     else:
         session_id = first_run_id
@@ -587,6 +624,7 @@ def next_fire_at(run: RunState, *, now: Optional[str] = None) -> Optional[str]:
 
 __all__ = [
     "ControllerSeamError",
+    "apply_context_mode",
     "current_occurrence",
     "next_fire_at",
     "DISPATCH_RESULT_KEY",

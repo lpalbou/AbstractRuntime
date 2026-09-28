@@ -25,12 +25,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, WaitReason
+from ..session_history import HISTORY_REPLAY_MAX_TOKENS, ReplayedHistory, fold_history_window
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
 from .attention import normalize_occurrence_output, resolve_strict
 from .bundle import controller_workflow_spec
-from .controller import AUTOMATION_GRANT_SOURCE
+from .controller import AUTOMATION_GRANT_SOURCE, apply_context_mode
 from .ledger import (
     append_observation,
     automation_records,
@@ -235,12 +236,6 @@ def list_occurrences(
 # --- discussion --------------------------------------------------------------------------
 
 
-def _cut(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"\n[#TRUNCATION: {len(text) - limit} characters cut (discussion seed, {limit} per message)]"
-
-
 def automation_timeline_messages(
     runtime: Any,
     automation_id: str,
@@ -248,20 +243,20 @@ def automation_timeline_messages(
     through_occurrence: int,
     workspace_root: str,
     mounted_workspace: str,
-    max_messages: int = 40,
-    max_chars_per_message: int = 8000,
-    max_total_chars: int = 24_000,
-) -> List[Dict[str, Any]]:
+    max_tokens: int = HISTORY_REPLAY_MAX_TOKENS,
+) -> ReplayedHistory:
     """The automation's conversation through occurrence N, whatever its context mode.
 
     One user/assistant pair per finished occurrence 1..N, oldest first (its
     last attempt): the occurrence's trigger/task turn and its answer. A failed
     or stopped occurrence is kept, its answer stating so (the timeline stays
-    whole). The pairs fold newest-first under the history budget (oldest
-    dropped first); the first kept user message starts with a summary line
-    naming the automation, how many occurrences exist and how many are shown,
-    and where the automation's files are mounted (read-only) next to the
-    discussion's own writable workspace.
+    whole). The pairs fold under the one history window
+    (`session_history.fold_history_window`: the most recent `max_tokens` of
+    whole turns, never a cut message); the first kept user message starts with
+    a summary line naming the automation, how many occurrences exist and how
+    many are shown (the drop notice, ADR-0026 §1), and where the automation's
+    files are mounted (read-only) next to the discussion's own writable
+    workspace. The window's receipt is `.report`.
     """
     definition = definition_of(_load_automation(runtime.run_store, automation_id))
     admitted: Dict[int, Dict[str, Any]] = {}
@@ -292,20 +287,12 @@ def automation_timeline_messages(
             answer = "(This occurrence was stopped before it finished.)"
         meta = {"kind": "automation_occurrence", "run_id": done["run_id"], "occurrence_index": index}
         pairs.append([
-            {"role": "user", "content": _cut(user, max_chars_per_message), "metadata": dict(meta)},
-            {"role": "assistant", "content": _cut(answer, max_chars_per_message), "metadata": dict(meta)},
+            {"role": "user", "content": user, "metadata": dict(meta)},
+            {"role": "assistant", "content": answer, "metadata": dict(meta)},
         ])
-    kept: List[List[Dict[str, Any]]] = []
-    chars = 0
-    for pair in reversed(pairs):
-        size = sum(len(m["content"]) for m in pair)
-        if 2 * (len(kept) + 1) > max_messages or (kept and chars + size > max_total_chars):
-            break
-        kept.append(pair)
-        chars += size
-    kept.reverse()
+    kept, report = fold_history_window(pairs, max_tokens=max_tokens)
     if not kept:
-        return []
+        return ReplayedHistory(report=report)
 
     def _summary(shown: int) -> str:
         return (
@@ -314,12 +301,9 @@ def automation_timeline_messages(
             f"your own workspace {workspace_root} is writable.]\n"
         )
 
-    # The summary line counts against the budget too: drop the oldest kept
-    # occurrence until everything fits (the newest one always stays).
-    while len(kept) > 1 and chars + len(_summary(len(kept))) > max_total_chars:
-        chars -= sum(len(m["content"]) for m in kept.pop(0))
+    # The summary line is one line of framing, not counted against the window.
     kept[0][0] = {**kept[0][0], "content": f"{_summary(len(kept))}{kept[0][0]['content']}"}
-    return [m for pair in kept for m in pair]
+    return ReplayedHistory([m for pair in kept for m in pair], report=report)
 
 
 def start_discussion(
@@ -387,6 +371,9 @@ def start_discussion(
     rt_in = input_data.get("_runtime")
     if isinstance(rt_in, dict) and (rt_in.get("tool_policy") or {}).get("source") == AUTOMATION_GRANT_SOURCE:
         input_data["_runtime"] = {k: v for k, v in rt_in.items() if k != "tool_policy"}
+    # The fork reads its seed whatever the occurrence's inputs said (an
+    # independent occurrence's frozen inputs carry use_context=False).
+    apply_context_mode(input_data, mode="discussion")
     context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
     input_data["context"] = {**context, "messages": list(seed)}
     meta = input_data.get("_meta") if isinstance(input_data.get("_meta"), dict) else {}
@@ -423,7 +410,12 @@ def start_discussion(
     input_data.pop(READ_ONLY_KEY, None)
     runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
     runtime_ns = {k: v for k, v in runtime_ns.items() if k != READ_ONLY_KEY}
-    input_data["_runtime"] = {**runtime_ns, READ_ONLY_PATHS_KEY: [mounted]}
+    input_data["_runtime"] = {
+        **runtime_ns,
+        READ_ONLY_PATHS_KEY: [mounted],
+        # The history window's receipt for the seed (ADR-0026: observable).
+        "session_history": {**seed.report, "strict": True, "session_kind": "discussion"},
+    }
     from ..core.run_identity import RunIdentityConflict
 
     try:

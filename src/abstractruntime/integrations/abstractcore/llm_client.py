@@ -9139,6 +9139,7 @@ class LocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         providers_only: bool = False,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -9148,6 +9149,7 @@ class LocalAbstractCoreLLMClient:
         return local_get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
             model=model,
             providers_only=providers_only,
@@ -9159,6 +9161,7 @@ class LocalAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -9168,6 +9171,7 @@ class LocalAbstractCoreLLMClient:
         return local_list_tts_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
         )
 
@@ -9177,6 +9181,7 @@ class LocalAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -9186,6 +9191,7 @@ class LocalAbstractCoreLLMClient:
         return local_list_stt_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
         )
 
@@ -11475,6 +11481,7 @@ class MultiLocalAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         providers_only: bool = False,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -11484,6 +11491,7 @@ class MultiLocalAbstractCoreLLMClient:
         return local_get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
             model=model,
             providers_only=providers_only,
@@ -11495,6 +11503,7 @@ class MultiLocalAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -11504,6 +11513,7 @@ class MultiLocalAbstractCoreLLMClient:
         return local_list_tts_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
         )
 
@@ -11513,6 +11523,7 @@ class MultiLocalAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -11522,6 +11533,7 @@ class MultiLocalAbstractCoreLLMClient:
         return local_list_stt_models(
             base_url=base_url,
             provider_api_key=provider_api_key,
+            voice_openai_api_key=voice_openai_api_key,
             provider=provider,
         )
 
@@ -13400,10 +13412,15 @@ class RemoteAbstractCoreLLMClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         providers_only: bool = False,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         from .discovery_queries import _filter_voice_catalog_response
 
+        # `voice_openai_api_key` is a LOCAL plugin setting: a remote AbstractCore
+        # server discovers voices with its own voice configuration, so the host's
+        # credential is never sent over the wire (accepted so facade calls match).
+        del voice_openai_api_key
         call_kwargs = dict(kwargs)
         provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
         payload = self._discovery_get(
@@ -13426,10 +13443,15 @@ class RemoteAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         from .discovery_queries import _filter_provider_model_catalog_response
 
+        # `voice_openai_api_key` is a LOCAL plugin setting: a remote AbstractCore
+        # server discovers voices with its own voice configuration, so the host's
+        # credential is never sent over the wire (accepted so facade calls match).
+        del voice_openai_api_key
         call_kwargs = dict(kwargs)
         provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
         payload = self._discovery_get(
@@ -13451,10 +13473,15 @@ class RemoteAbstractCoreLLMClient:
         base_url: Optional[str] = None,
         provider_api_key: Optional[str] = None,
         provider: Optional[str] = None,
+        voice_openai_api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         from .discovery_queries import _filter_provider_model_catalog_response
 
+        # `voice_openai_api_key` is a LOCAL plugin setting: a remote AbstractCore
+        # server discovers voices with its own voice configuration, so the host's
+        # credential is never sent over the wire (accepted so facade calls match).
+        del voice_openai_api_key
         call_kwargs = dict(kwargs)
         provider_api_key = provider_api_key or _pop_provider_api_key(call_kwargs)
         payload = self._discovery_get(

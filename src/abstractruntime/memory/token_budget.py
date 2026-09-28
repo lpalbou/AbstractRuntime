@@ -35,15 +35,42 @@ def estimate_tokens(text: str, *, model: Optional[str] = None) -> int:
         return max(1, int(len(s) / 4))
 
 
+# Flat estimate for one non-text content part (an image, a file) — AbstractCore's
+# own fallback per image (`VLMTokenCalculator` base_tokens). The real cost depends
+# on the model and the image size; what matters here is that it is a bounded
+# per-part cost, not the length of the part's base64 payload.
+MEDIA_PART_TOKEN_ESTIMATE = 512
+
+
 def estimate_message_tokens(message: Dict[str, Any], *, model: Optional[str] = None) -> int:
-    """Estimate tokens for a chat message dict (role+content)."""
+    """Estimate tokens for a chat message dict (role+content).
+
+    A content-part list (OpenAI-style `[{"type": "text", ...}, {"type":
+    "image_url", ...}]`) counts the text of its text parts, plus
+    `MEDIA_PART_TOKEN_ESTIMATE` for each other part. Before 0.7.1 the list
+    was stringified, so an inline image counted as its base64 text (~50,000
+    tokens for a 150 KB image) and pushed every older turn out of the window.
+    """
     if not isinstance(message, dict):
         return 0
     role = str(message.get("role") or "").strip()
-    content = "" if message.get("content") is None else str(message.get("content"))
+    raw = message.get("content")
+    media_parts = 0
+    if isinstance(raw, list):
+        texts: List[str] = []
+        for part in raw:
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and "text" in str(part.get("type") or "text"):
+                texts.append(part["text"])
+            elif isinstance(part, str):
+                texts.append(part)
+            else:
+                media_parts += 1
+        content = "\n".join(texts)
+    else:
+        content = "" if raw is None else str(raw)
     # Include a small role prefix so token estimation reflects chat formatting overhead.
     text = f"{role}: {content}" if role else content
-    return estimate_tokens(text, model=model)
+    return estimate_tokens(text, model=model) + media_parts * MEDIA_PART_TOKEN_ESTIMATE
 
 
 def trim_messages_to_max_input_tokens(

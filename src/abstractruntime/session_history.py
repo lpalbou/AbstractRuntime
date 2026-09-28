@@ -236,6 +236,23 @@ def announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, 
     `stamp_metadata=False` leaves the message's keys as they were (plain
     role/content transcripts that go straight to a model client); the notice
     in the content is the same.
+
+    Content shapes (0.7.1):
+    - a string (or empty/None): the notice is a prefix line, after the
+      message's own `<runtime_metadata>` envelope when it has one;
+    - a content-part list (OpenAI-style `[{"type": "text", ...},
+      {"type": "image_url", ...}]`, the shape AbstractCore accepts): the
+      notice is inserted as ONE `{"type": "text"}` part and every other part
+      is kept as is (images byte-identical). Prefixing it to the list used to
+      turn the whole content into a string, so the model read the image's
+      base64 as text. Without an envelope the notice part goes first. With
+      one (it heads the first text part, where the payload boundary looks
+      for it), that part is split: the envelope stays alone in it, the
+      notice part follows, then the part's remaining text as its own text
+      part — joined with newlines, the text reads exactly as the string path;
+    - anything else: the content is left untouched (rewriting an unknown
+      shape could corrupt it) and a warning is logged; with
+      `stamp_metadata=True` the metadata still records the drop.
     """
     if not messages or int(report.get("dropped_messages") or 0) <= 0:
         return
@@ -257,12 +274,43 @@ def announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, 
     # payload boundary would otherwise stack a second one in front).
     from .turn_grounding import split_head_grounding  # lazy: the grounding helpers load AbstractCore
 
-    envelope, rest = split_head_grounding(head.get("content") or "")
+    content = head.get("content")
+    if isinstance(content, list):
+        head["content"] = _notice_into_parts(content, notice, split_head_grounding)
+        return
+    if content is not None and not isinstance(content, str):
+        logger.warning(
+            "history window: the oldest kept message has %s content; the #TRUNCATION notice "
+            "was not written into it (%s message(s) dropped)",
+            type(content).__name__,
+            report["dropped_messages"],
+        )
+        return
+    envelope, rest = split_head_grounding(content or "")
     if envelope:
         sep = "" if envelope.endswith("\n") else "\n"
         head["content"] = f"{envelope}{sep}{notice}\n{rest.lstrip(chr(10))}"
     else:
         head["content"] = f"{notice}\n{rest}"
+
+
+def _is_text_part(part: Any) -> bool:
+    return isinstance(part, dict) and str(part.get("type") or "").strip().lower() == "text"
+
+
+def _notice_into_parts(parts: List[Any], notice: str, split_head_grounding: Any) -> List[Any]:
+    """A new part list with the notice as one text part (see `announce_dropped`)."""
+    out = list(parts)
+    notice_part = {"type": "text", "text": notice}
+    first = next((i for i, part in enumerate(out) if _is_text_part(part)), None)
+    if first is not None:
+        envelope, rest = split_head_grounding(out[first].get("text"))
+        if envelope:
+            head_part = {**out[first], "text": envelope.rstrip("\n")}
+            tail = rest.lstrip("\n")
+            replacement = [head_part, notice_part] + ([{**out[first], "text": tail}] if tail else [])
+            return out[:first] + replacement + out[first + 1 :]
+    return [notice_part] + out
 
 
 # The pre-0.7.0 private name, kept for callers that imported it.

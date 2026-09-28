@@ -59,6 +59,7 @@ __all__ = [
     "discussion_seed_messages",
     "fold_history_window",
     "session_chat_messages",
+    "window_transcript",
 ]
 
 logger = logging.getLogger(__name__)
@@ -213,7 +214,7 @@ def fold_history_window(
     return kept, report
 
 
-def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any]) -> None:
+def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any], *, stamp_metadata: bool = True) -> None:
     """Prefix the oldest surviving message with the labeled drop notice.
 
     #[WARNING:TRUNCATION] whole turns dropped by the history window — stated, never silent
@@ -225,16 +226,21 @@ def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any]) ->
     Carried as a PREFIX on the oldest surviving user message rather than as an
     extra message: the contract is strict user/assistant PAIRS. The notice is
     not counted against the window (it is one line).
+
+    `stamp_metadata=False` leaves the message's keys as they were (plain
+    role/content transcripts that go straight to a model client); the notice
+    in the content is the same.
     """
     if not messages or int(report.get("dropped_messages") or 0) <= 0:
         return
     more = "" if report.get("dropped_counts_complete") else " (and older turns not counted)"
     head = messages[0]
-    head["metadata"] = {
-        **(head.get("metadata") if isinstance(head.get("metadata"), dict) else {}),
-        "replay_truncated": True,
-        "history_window": dict(report),
-    }
+    if stamp_metadata:
+        head["metadata"] = {
+            **(head.get("metadata") if isinstance(head.get("metadata"), dict) else {}),
+            "replay_truncated": True,
+            "history_window": dict(report),
+        }
     head["content"] = (
         f"[#TRUNCATION: {report['dropped_messages']} earlier message(s) of this session "
         f"(~{report['dropped_tokens']} tokens){more} were dropped from replay by the history window "
@@ -242,6 +248,34 @@ def _announce_dropped(messages: List[Dict[str, Any]], report: Dict[str, Any]) ->
         f"this history starts mid-conversation]\n"
         f"{head.get('content') or ''}"
     )
+
+
+def window_transcript(
+    messages: Sequence[Dict[str, Any]], *, max_tokens: int = HISTORY_REPLAY_MAX_TOKENS
+) -> ReplayedHistory:
+    """THE history window over a transcript a host keeps in memory or in run vars.
+
+    For conversations that are not replayed from the run store — the entity
+    chat driver's and the entity visit's own user/assistant history — so they
+    select history by the same rule as session replay: `fold_history_window`
+    over whole turns (a turn is a user message and every message that follows
+    it up to the next user message), newest first, up to `max_tokens`, with
+    the labeled `#TRUNCATION` notice on the oldest kept message when older
+    turns were dropped. Nothing is cut and no count is capped. The input is
+    not mutated; kept messages are copies with the keys they came with. The
+    window's receipt is `.report`, for the host to record in its run.
+    """
+    turns: List[List[Dict[str, Any]]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user" or not turns:
+            turns.append([])
+        turns[-1].append(dict(message))
+    kept, report = fold_history_window(turns, max_tokens=max_tokens)
+    out = [m for turn in kept for m in turn]
+    _announce_dropped(out, report, stamp_metadata=False)
+    return ReplayedHistory(out, report=report)
 
 
 def session_chat_messages(

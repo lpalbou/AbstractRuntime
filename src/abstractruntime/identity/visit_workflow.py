@@ -50,6 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
+from ..session_history import window_transcript
 from .chat import (
     SUMMON_POSTURE_SELF_FRACTION,
     _sheet_line,
@@ -79,53 +80,18 @@ from .reflection import (
 VISIT_WORKFLOW_ID = "entity-visit@1"
 VISITOR_WAIT_KEY = "visitor_input"
 DEFAULT_IDLE_SECONDS = 30 * 60  # a visit left silent this long closes with reflection
-DEFAULT_HISTORY_TURNS = 10
 HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
 
-# HISTORY REPLAY DISCIPLINE (operator incident 2026-08-01, this very lane:
-# entity ephemeral ran read_file on a 5MB attached screenshot; the tool
-# result entered the durable react transcript as a 494,932-char role="tool"
-# message and rode EVERY subsequent LLM call — final request 48 messages /
-# 722,453 chars, refused upstream over the model's context window; the
-# session was permanently wedged because context.messages is durable and
-# was replayed whole, unbounded). These caps bound what a single HISTORY
-# message may contribute when RE-SENT: the react adapter's payload hook
-# (abstractagent adapters/react_runtime._sanitize_llm_messages) reads them
-# from `_limits` and elides overages to a labeled stub — durable history is
-# never mutated (ADR-0026 marked, payload boundary only), which is exactly
-# why an already-poisoned STORED session recovers on its next packing pass
-# with no manual surgery.
-#
-# Derivation, from the seam arithmetic (abstractmemory/seam.py; chars<->
-# tokens at the repo's own 4-chars/token heuristic, memory/token_budget.py).
-# SIZED AGAINST THE 40k-ERA RECOMMENDATION and deliberately KEPT at those
-# values when the same day's re-ruling moved the target to 50k
-# (ENTITY_CONTEXT_RECOMMENDED = 50_000 ~= 200_000 chars; operator: "it is
-# acceptable to go to 200k context, but ideally, let's have a (soft)
-# recommended target of 50k tokens") — these are poison guards from the
-# ephemeral incident, not attention sizing; loosening them was no part of
-# the re-ruling, and both still satisfy their governing bounds at 50k:
-# - TOOL RESULTS (the aimed-at class — the poison was a tool message):
-#   32_000 chars = 8k tokens (20% of the 40k target it was derived
-#   against; 16% at 50k). Chosen as the smallest round bound that still
-#   admits every honestly-capped walled tool result WHOLE with framing to
-#   spare (the largest are execute_command output and a read_file text
-#   slice, both 24_000 chars — identity/tools.py), so the clamp never
-#   touches honest work; it exists for the monster class (pre-fix
-#   poisoned transcripts, defective tools). That admit-honest-work-whole
-#   basis is window-independent — the cap stands.
-# - ENTITY PROSE / VISITOR WORDS are never sliced except at the EXTREME
-#   bound, by the seam's own starvation arithmetic (RecallBudget validates
-#   token_fraction <= 0.5: "a recall payload beyond half the context
-#   starves generation — an ARITHMETIC bound, not a fear one"): 80_000
-#   chars was half of the 40k-era 160_000-char working context, and at
-#   the 50k target sits BELOW the 100_000-char half — still on the safe
-#   side of the starvation bound. The largest honest message in the
-#   poisoned session was 28,925 chars (a MEMORIES-decorated visitor
-#   turn) — 2.8x headroom; a message past half the recommended context
-#   is starvation by one voice, whoever speaks it.
-VISIT_HISTORY_TOOL_RESULT_CAP_CHARS = 32_000
-VISIT_HISTORY_MESSAGE_CAP_CHARS = 80_000
+# HISTORY WINDOW (operator ruling 2026-09-28, ADR-0026): the visit's
+# history rides every prompt through THE runtime history window
+# (`session_history.window_transcript` over `fold_history_window`): the most
+# recent 50,000 tokens of whole turns, never a cut message, never a count cap,
+# the receipt recorded at `_runtime.session_history`. The earlier 10-turn
+# slice and the per-message re-send caps this lane seeded into `_limits`
+# (32,000 chars per tool result, 80,000 per message) are gone: the model uses
+# its full context. The 2026-08-01 poison class (a 494,932-char tool result
+# replayed whole every turn) stays bounded by the adapter's own always-on
+# guard (abstractagent adapters/transcripts.py OVERSIZED_MESSAGE_CLAMP_CHARS).
 
 
 @dataclasses.dataclass
@@ -173,6 +139,16 @@ def _ns(run: RunState, key: str) -> Dict[str, Any]:
     return ns
 
 
+def _windowed_history(run: RunState, visit: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The visit's history as the prompt carries it: THE history window
+    (`session_history.window_transcript` — the most recent 50k tokens of
+    whole turns, a labeled notice when older turns were dropped), its receipt
+    recorded in the run at `_runtime.session_history` like session replay."""
+    window = window_transcript(list(visit.get("history") or []))
+    run.vars.setdefault("_runtime", {})["session_history"] = dict(window.report)
+    return list(window)
+
+
 def _deadline_iso(idle_seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=float(idle_seconds))).isoformat()
 
@@ -184,7 +160,6 @@ def build_visit_workflow(
     budget_profile: Optional[Dict[str, Any]] = None,
     prelude_budget: int = 1600,
     idle_seconds: float = DEFAULT_IDLE_SECONDS,
-    history_turns: int = DEFAULT_HISTORY_TURNS,
     model_info: Optional[Dict[str, str]] = None,
     visit_id: Optional[str] = None,
     react_middle: Optional[ReactMiddle] = None,
@@ -411,20 +386,6 @@ def build_visit_workflow(
             ],
         }
         limits.setdefault("max_iterations", int(react_middle.max_iterations))
-        # r-rt-4 (ephemeral 2026-08-01): the entity lane DECLARES its replay
-        # caps here — BRIDGE is the one place that knows this cycle is an
-        # entity visit (the suppress_loop_tail precedent, c2447/c2453). The
-        # adapter's payload hook honors the same `_limits` knobs CodeAct
-        # documents; seeding is soft (a door/operator-configured int wins,
-        # including an explicit <= 0 "unbounded by choice" — the adapter's
-        # shared monster guard still floors every lane at 200k).
-        for _key, _cap in (
-            ("max_tool_message_chars", VISIT_HISTORY_TOOL_RESULT_CAP_CHARS),
-            ("max_message_chars", VISIT_HISTORY_MESSAGE_CAP_CHARS),
-        ):
-            _existing = limits.get(_key)
-            if not isinstance(_existing, int) or isinstance(_existing, bool):
-                limits[_key] = int(_cap)
         # Fresh per-turn adapter state; append the decorated turn message to
         # the durable transcript (the ONE source of truth under the merge).
         if callable(react_middle.reset_turn):
@@ -463,7 +424,7 @@ def build_visit_workflow(
         visit = _ns(run, "_visit")
         turn = _ns(run, "_turn")
         displayed = list(turn.get("displayed") or [])
-        messages = list(visit.get("history") or []) + [
+        messages = _windowed_history(run, visit) + [
             {"role": "user", "content": turn["rendered_user"]}
         ]
         # turn_id + word-free anchors ride the payload: the act-only wrapper
@@ -713,7 +674,9 @@ def build_visit_workflow(
             # across turns); the raw words live in the formed verbatim.
             history.append({"role": "user", "content": turn.get("rendered_user") or turn["text"]})
             history.append({"role": "assistant", "content": turn["marked_reply"]})
-            visit["history"] = history[-2 * int(history_turns):]
+            # The WHOLE visit stays here; the prompt reads it through the
+            # history window (`_windowed_history`), never a count slice.
+            visit["history"] = history
             sheet = list(visit.get("sheet") or [])
             formed_ids = list((turn.get("formed") or {}).get("record_ids") or [])
             for rid in formed_ids:
@@ -771,7 +734,7 @@ def build_visit_workflow(
             effect=Effect(
                 type=EffectType.LLM_CALL,
                 payload={
-                    "messages": list(visit.get("history") or []) + [{"role": "user", "content": prompt}],
+                    "messages": _windowed_history(run, visit) + [{"role": "user", "content": prompt}],
                     "system_prompt": visit["system_base"],
                     # The look-back's diary elections are captured at the
                     # result boundary too (same wrapper, same G1 rule).

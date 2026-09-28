@@ -24,8 +24,11 @@ Unbounded or weakly-bounded growth surfaces:
   unbounded in bytes.
 - `evidence_warnings` unbounded (1948-1953).
 - `_runtime.inbox` unbounded if the workflow never drains.
-- `context.messages` / visit sheets have no stated ceiling (visit history
-  is trimmed to 2×history_turns — verified OK; the sheet is not).
+- `context.messages` / visit sheets have no stated ceiling. Visit history
+  (`_visit.history`) is no longer trimmed to 2×history_turns: since 0.7.0
+  (ADR-0026, operator ruling 2026-09-28) the whole visit is kept and each
+  prompt reads it through the 50k-token history window, so it grows with the
+  visit like `context.messages` (bounded by the idle close, not by a count).
 - events_inbox is capped at 500 envelopes (gateway-side today) but envelope
   SIZE is unbounded... bridge clamps bodies at 32KB (gateway F7) — runtime
   gets the cap with 0051.

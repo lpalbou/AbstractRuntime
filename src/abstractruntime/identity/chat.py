@@ -51,6 +51,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType
 from ..core.runtime import utc_now_iso
+from ..session_history import window_transcript
 from .diary import DiaryStore, build_diary_effect_handlers
 from .digest import mechanical_digest_v2
 from .prelude import render_summon_prelude
@@ -82,7 +83,6 @@ from .memory_reader import HomeMemoryReader, memory_tag  # noqa: F401 - memory_t
 # posture constant beside SELF_FRACTION_FLOOR).
 SUMMON_POSTURE_SELF_FRACTION = 0.5
 
-DEFAULT_HISTORY_TURNS = 10  # declared tunable, not a fear cap (width-over-fear)
 MAX_DIARY_BLOCKS_PER_TURN = 3
 
 # The authored world-model card bound. A card is orientation (the prompt asks
@@ -1032,6 +1032,9 @@ class TurnReport:
     # maintainer 2026-07-09: the turn probe shows the prompt verbatim;
     # operator transparency ruling applies (never gated, never truncated).
     system_prompt: str = ""
+    # THE history window's receipt for this turn's prompt (session_history
+    # report: replayed/dropped messages and tokens, the 50k budget).
+    history_window: Dict[str, Any] = field(default_factory=dict)
 
 
 class ChatSession:
@@ -1047,7 +1050,6 @@ class ChatSession:
         context_window: Optional[int] = None,
         shelf_size: Optional[int] = None,
         prelude_budget: int = 1600,
-        history_turns: int = DEFAULT_HISTORY_TURNS,
         enable_tools: bool = True,
         enable_workspace: bool = False,
         phase: str = "visit",
@@ -1071,7 +1073,6 @@ class ChatSession:
         self.session_id = session_id or f"chat-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:6]}"
         self.run = _Run(run_id=f"chat-{self.session_id}", session_id=self.session_id)
         self.out = out
-        self.history_turns = int(history_turns)
         self.enable_tools = bool(enable_tools)
         self.web_search_fn = web_search_fn
         # Which mind-substrate formed each memory (capability ≠ identity, but
@@ -1108,7 +1109,11 @@ class ChatSession:
         self.allowed_tools = grant.tools
         self.turn_n = 0
         self.reports: List[TurnReport] = []
+        # The WHOLE session's raw turns. Prompts read them through THE
+        # runtime history window (`_prompt_history`), never a count slice.
         self.history: List[Dict[str, str]] = []
+        # The latest window receipt (also on each turn's TurnReport).
+        self.history_window: Dict[str, Any] = {}
         # The session sheet: (record_id, one-line description) per remembered
         # act, in order — the reflection pass shows it back for appraisal.
         self.session_sheet: List[Tuple[Optional[str], str]] = []
@@ -1747,6 +1752,15 @@ class ChatSession:
     _HARMONY_HEADER_400 = "unexpected tokens remaining in message header"
     _HARMONY_RETRIES = 2
 
+    def _prompt_history(self) -> List[Dict[str, str]]:
+        """The session's history as a prompt carries it: THE runtime history
+        window (`session_history.window_transcript` — the most recent 50k
+        tokens of whole turns, a labeled notice when older turns were
+        dropped). Its receipt is kept in `self.history_window`."""
+        window = window_transcript(self.history)
+        self.history_window = dict(window.report)
+        return list(window)
+
     def _generate(self, *, messages: List[Dict[str, str]], system_prompt: str,
                   notices: Optional[List[str]] = None, declare_tools: bool = False) -> Any:
         # THE DECLARE HALF (arm-N): granted tools ride the payload on the
@@ -1907,8 +1921,10 @@ class ChatSession:
         # 3. LLM - a failed call aborts the turn: no commit, no formation, no
         # diary (the moment did not complete; a retry re-runs the same turn_id
         # and every write dedups).
+        history = self._prompt_history()
+        report.history_window = dict(self.history_window)
         resp = self._generate(
-            messages=self.history + [{"role": "user", "content": user_text}],
+            messages=history + [{"role": "user", "content": user_text}],
             system_prompt=system_prompt,
             notices=report.notices,
             declare_tools=True,
@@ -1936,7 +1952,7 @@ class ChatSession:
         if self.enable_tools:
             from .tools import MAX_TOOL_BLOCKS_PER_TURN, MAX_TOOL_ROUNDS_PER_TURN, native_tool_elections
 
-            convo = self.history + [{"role": "user", "content": user_text}]
+            convo = history + [{"role": "user", "content": user_text}]
             rounds = 0
             corrected_imitation = False
             nudged_malformed = False
@@ -2237,7 +2253,7 @@ class ChatSession:
                 "invented content as fetched evidence is the one dishonesty your memory cannot "
                 "repair later. Rewrite your reply now."
             )
-            convo_fix = self.history + [
+            convo_fix = history + [
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": raw_reply},
                 {"role": "user", "content": correction},
@@ -2584,12 +2600,11 @@ class ChatSession:
         # SIGKILL), the next open finds the sheet and runs the look-back.
         self._write_pending_marker()
 
-        # 7. HISTORY - last N raw turns in the prompt; older turns live on as
-        # memories (dropped from the prompt only, never from anything else).
+        # 7. HISTORY - every raw turn is kept; the prompt carries the most
+        # recent 50k tokens of them (`_prompt_history`), older turns live on
+        # as memories (dropped from the prompt only, never from anything else).
         self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": marked_reply})
-        if len(self.history) > 2 * self.history_turns:
-            self.history = self.history[-2 * self.history_turns:]
 
         self.reports.append(report)
         return marked_reply, report
@@ -2911,7 +2926,7 @@ class ChatSession:
                     "write nothing else after it."
                 )
             resp = self._generate(
-                messages=self.history + [{"role": "user", "content": prompt}],
+                messages=self._prompt_history() + [{"role": "user", "content": prompt}],
                 system_prompt=self.system_base,
                 notices=[],
             )
@@ -3020,7 +3035,7 @@ class ChatSession:
         )
 
         resp = self._generate(
-            messages=self.history + [{"role": "user", "content": prompt}],
+            messages=self._prompt_history() + [{"role": "user", "content": prompt}],
             system_prompt=self.system_base,
         )
         raw_reply = clean_model_reply(getattr(resp, "content", None) or "")

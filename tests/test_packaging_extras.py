@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 def _extract_optional_dependency_block(text: str, *, key: str) -> str:
     lines = text.splitlines()
@@ -92,10 +94,35 @@ def test_runtime_exposes_only_apple_and_gpu_user_install_profiles() -> None:
     assert "pymupdf" not in apple_block.lower()
     assert "pymupdf" not in gpu_block.lower()
 
+
+def test_sibling_abstractcore_profiles_keep_pypdf_and_exclude_pymupdf() -> None:
+    """Workspace-only check: the AbstractCore profiles Runtime's apple/gpu extras select
+    install the permissive pypdf reader and never PyMuPDF. Skipped outside the monorepo."""
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     core_pyproject = pyproject.resolve().parents[1] / "abstractcore" / "pyproject.toml"
-    if core_pyproject.exists():
-        core_text = core_pyproject.read_text(encoding="utf-8")
-        for core_profile in ("all-apple", "all-gpu"):
-            core_block = _extract_optional_dependency_block(core_text, key=core_profile)
-            assert '"pypdf>=6.0.0,<7.0.0"' in core_block
-            assert "pymupdf" not in core_block.lower()
+    if not core_pyproject.exists():
+        pytest.skip("no sibling abstractcore checkout")
+    tomllib = pytest.importorskip("tomllib")
+    core = tomllib.loads(core_pyproject.read_text(encoding="utf-8"))["project"]
+    extras = core["optional-dependencies"]
+
+    def resolve(profile: str, seen: tuple[str, ...] = ()) -> list[str]:
+        # Follow self-referencing aliases such as all-apple = ["abstractcore[apple]"].
+        requirements: list[str] = []
+        for req in extras[profile]:
+            match = re.fullmatch(r"abstractcore\[([^\]]+)\]", req.strip())
+            if match:
+                for inner in match.group(1).split(","):
+                    inner = inner.strip()
+                    assert inner not in seen, f"alias cycle through {inner}"
+                    requirements += resolve(inner, seen + (profile,))
+            else:
+                requirements.append(req)
+        return requirements
+
+    base = core["dependencies"]
+    for core_profile in ("all-apple", "all-gpu"):
+        installed = base + resolve(core_profile)
+        assert any(req.replace(" ", "").startswith("pypdf>=6.0.0") for req in installed), core_profile
+        assert not any("pymupdf" in req.lower() for req in installed), core_profile

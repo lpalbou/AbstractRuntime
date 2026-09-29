@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-29
+
+### Changed
+
+- **The MCP worker's startup tip names the right install.** When `abstractruntime-mcp-worker` fails to start, its tip
+  now says that the web tools come with AbstractCore's light install and suggests `pip install -U abstractcore` to
+  repair it, instead of pointing to the deprecated `abstractcore[tools]` extra.
+- Dependencies are unchanged: AbstractCore 2.18.0 or newer.
+
 ## [0.7.1] - 2026-09-28
 
 ### Fixed

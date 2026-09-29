@@ -26,7 +26,8 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 - **Automations are quiet.** An occurrence asks for attention only when its output says `notify`, when it still
   fails after its last retry, or while it waits on a person.
 - **Creating an automation is consent for its tools.** With the default `tool_approval: "auto"` an occurrence's tools
-  run without asking; set `"ask"` to approve them one batch at a time.
+  run without asking, except messages to anyone but the registered user (those wait for approval); set `"ask"` to
+  approve every batch.
 - **Everything is recorded.** Every admission, dispatch, retry, completion and command is an `automation.*` record in
   the controller's ledger. A crash at any point never loses an occurrence and never starts one twice.
 
@@ -413,6 +414,15 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
   - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
+  - **Tools that message model-chosen recipients are never granted** (framework backlog 0992 WP0): every tool
+    whose inventory row carries `comms_send` (`send_email`, `send_whatsapp_message`, `send_telegram_message`,
+    `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
+    `withheld_tools` and go through the normal approval point: a `send_email` whose every recipient is the
+    registered user's address (`_runtime.operator_email`, set by the host; the gateway freezes it into the
+    target's inputs) runs; any other recipient parks the occurrence on a `tool_approval` wait, as under `"ask"`,
+    until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
+    page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
+    `comms` tool is withheld.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next

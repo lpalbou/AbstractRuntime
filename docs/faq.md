@@ -79,8 +79,12 @@ Docs: `automations.md#runs-sessions-and-history`, `api.md#sessions-and-history`.
 
 Not by default. With `policy.tool_approval: "auto"`, creating the automation is the consent: each occurrence gets a
 frozen grant for the target's tools (its `allowed_tools`, or every tool the runtime classifies). Tools the runtime
-does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person. Use
-`"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval` waits.
+does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person.
+Tools that send messages to recipients the model chooses (`send_email`, `send_whatsapp_message`,
+`send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address runs, any other
+recipient waits for approval, so text an occurrence reads (an inbound email, a web page) cannot make it mail data
+elsewhere. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
+waits.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 

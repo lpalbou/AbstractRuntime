@@ -193,6 +193,24 @@ def _render_prompt(input_data: Dict[str, Any], *, envelope: Dict[str, Any], inde
 AUTOMATION_GRANT_SOURCE = "automation-policy"
 
 
+def _grant_excludes(name: str) -> bool:
+    """True for a tool the automation grant never pre-approves: one that sends a message people
+    receive to recipients the MODEL chooses (the served row's `comms_send` fact: `send_email`,
+    `send_whatsapp_message`, `send_telegram_*`). Framework backlog 0992 WP0: an unattended
+    occurrence reading untrusted input (an inbound email, a fetched page) must not be able to mail
+    data to an address that input names. Decided on the row's typed facts, never on the name; an
+    unreadable inventory withholds every `comms` tool (fail closed)."""
+    try:
+        from ..integrations.abstractcore.effect_handlers import _risk_row_for_tool
+
+        row = _risk_row_for_tool(name)
+    except Exception:  # noqa: BLE001 - no facts: withhold the whole comms class
+        from ..integrations.abstractcore.tool_effects import COMMS, TOOL_EFFECT_CLASSES
+
+        return TOOL_EFFECT_CLASSES.get(name) == COMMS
+    return bool(row is not None and row.get("comms_send"))
+
+
 def grant_tool_approval(input_data: Dict[str, Any]) -> None:
     """`policy.tool_approval == "auto"`: pre-approve the target's tools for this occurrence.
 
@@ -204,6 +222,13 @@ def grant_tool_approval(input_data: Dict[str, Any]) -> None:
     outside the run's tool ceiling grants nothing. A tool_policy the target
     already carries is the target author's word and is left untouched.
     `ask_user` questions are not tool approvals and still wait for a person.
+
+    Never granted (listed in `withheld_tools`): tools that send messages to
+    model-chosen recipients (`_grant_excludes`). Their calls go through the
+    normal approval point: the per-call refiner still auto-approves a
+    `send_email` whose every recipient is the registered user's own address
+    (`_runtime.operator_email`, set by the host); any other recipient parks the
+    occurrence on a `tool_approval` wait, exactly as under `"ask"`.
     """
     from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
 
@@ -212,10 +237,12 @@ def grant_tool_approval(input_data: Dict[str, Any]) -> None:
         return
     allowed = runtime_ns.get("allowed_tools")
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
-    tools = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
+    candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
+    withheld = [n for n in candidates if _grant_excludes(n)]
+    tools = [n for n in candidates if n not in withheld]
     input_data["_runtime"] = {
         **runtime_ns,
-        "tool_policy": {"auto_approve_tools": tools, "source": AUTOMATION_GRANT_SOURCE},
+        "tool_policy": {"auto_approve_tools": tools, "withheld_tools": withheld, "source": AUTOMATION_GRANT_SOURCE},
     }
 
 

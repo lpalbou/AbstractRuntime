@@ -80,7 +80,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.19.0 or newer (its light install:
+The base install includes AbstractCore 2.19.2 or newer (its light install:
 remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -1132,7 +1132,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.19.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.19.2 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1307,8 +1307,12 @@ Docs: `automations.md#runs-sessions-and-history`, `api.md#sessions-and-history`.
 
 Not by default. With `policy.tool_approval: "auto"`, creating the automation is the consent: each occurrence gets a
 frozen grant for the target's tools (its `allowed_tools`, or every tool the runtime classifies). Tools the runtime
-does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person. Use
-`"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval` waits.
+does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person.
+Tools that send messages to recipients the model chooses (`send_email`, `send_whatsapp_message`,
+`send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address runs, any other
+recipient waits for approval, so text an occurrence reads (an inbound email, a web page) cannot make it mail data
+elsewhere. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
+waits.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 
@@ -1634,7 +1638,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.19.0`.
+- The current AbstractCore integration expects `abstractcore>=2.19.2`.
 
 Verify:
 
@@ -3498,7 +3502,8 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 - **Automations are quiet.** An occurrence asks for attention only when its output says `notify`, when it still
   fails after its last retry, or while it waits on a person.
 - **Creating an automation is consent for its tools.** With the default `tool_approval: "auto"` an occurrence's tools
-  run without asking; set `"ask"` to approve them one batch at a time.
+  run without asking, except messages to anyone but the registered user (those wait for approval); set `"ask"` to
+  approve every batch.
 - **Everything is recorded.** Every admission, dispatch, retry, completion and command is an `automation.*` record in
   the controller's ledger. A crash at any point never loses an occurrence and never starts one twice.
 
@@ -3885,6 +3890,15 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
   - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
+  - **Tools that message model-chosen recipients are never granted** (framework backlog 0992 WP0): every tool
+    whose inventory row carries `comms_send` (`send_email`, `send_whatsapp_message`, `send_telegram_message`,
+    `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
+    `withheld_tools` and go through the normal approval point: a `send_email` whose every recipient is the
+    registered user's address (`_runtime.operator_email`, set by the host; the gateway freezes it into the
+    target's inputs) runs; any other recipient parks the occurrence on a `tool_approval` wait, as under `"ask"`,
+    until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
+    page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
+    `comms` tool is withheld.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
@@ -5269,7 +5283,7 @@ The canonical dependency list lives in `pyproject.toml`.
 - **AbstractMemory** (`>=0.3.0`) — TripleStore models and store contract used by Runtime's `MEMORY_KG_*` effects. Durable/vector backend dependencies such as LanceDB remain selected by hosts.
 
 ## Runtime integrations
-- **abstractcore** (`abstractcore>=2.19.0`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (AbstractCore's light install); the `apple` and `gpu` extras select `abstractcore[apple]` / `abstractcore[gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
+- **abstractcore** (`abstractcore>=2.19.2`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (AbstractCore's light install); the `apple` and `gpu` extras select `abstractcore[apple]` / `abstractcore[gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
   - The AbstractCore integration uses **httpx** for remote mode (`src/abstractruntime/integrations/abstractcore/llm_client.py`) and **pydantic** for structured validation (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). These are provided by AbstractCore’s dependency set.
   - The `tools` extra of AbstractCore backs the base Runtime toolset and the `abstractruntime-mcp-worker` entry point.
 - **RestrictedPython** (`>=7.0`, core install) — sandbox for VisualFlow “Code” nodes and pin expressions (`src/abstractruntime/visualflow_compiler/visual/code_executor.py`).

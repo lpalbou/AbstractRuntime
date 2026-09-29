@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.3] - 2026-09-29
 
+### Security
+
+- **An automation's tool grant no longer pre-approves sending messages** (framework backlog 0992
+  WP0). With the default `policy.tool_approval: "auto"`, the grant listed every tool the runtime
+  classifies, `send_email` included, and an explicit name in the grant overrides the
+  `model_controlled_destination` belt: an occurrence that read an inbound email or a web page could
+  mail data to any address that text named. The grant now withholds every tool whose inventory row
+  carries `comms_send` (`send_email`, `send_whatsapp_message`, `send_telegram_message`,
+  `send_telegram_artifact`), even when the target's `allowed_tools` names it, and lists them in
+  `tool_policy.withheld_tools`. Their calls take the normal approval point: a `send_email` whose
+  every recipient is the registered user's address (`_runtime.operator_email`) still runs
+  unattended; any other recipient parks the occurrence on a `tool_approval` wait until a person
+  approves or refuses it (the behaviour of `"ask"`). Recipients named in an automation's definition
+  are not auto-approved yet; that allowlist is part of backlog 0992.
+
 ### Fixed
 
 - **A resident image/video model serves generation.** After `load_model_residency(task="image_generation")`

@@ -324,7 +324,8 @@ Multimodal support:
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
-- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and generated image/video tasks also report `execution_mode="local_one_shot_subprocess"`
+- local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
+- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; local media warmup that no capability plugin can serve (`image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, `music_generation`) reports `requires_long_lived_server=true`, and image/video tasks also report `execution_mode="local_one_shot_subprocess"`
 - Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected local-inference profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:

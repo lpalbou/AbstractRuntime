@@ -2178,6 +2178,117 @@ def _is_subprocess_safe_video_specs(specs: List[Dict[str, Any]], media: Optional
     return bool(path and not path.lower().startswith("data:") and not path.startswith(("http://", "https://")))
 
 
+# RESIDENT MEDIA MODELS SERVE GENERATION (framework backlog 0991, 2026-09-29).
+#
+# `load_model_residency(task="image_generation", ...)` -- the Gateway's
+# `/models/load`, the console "Load" button, a flow's model_residency node --
+# loads the weights into this client's capability residency core. Generation
+# never looked there: an image/video request ran in a one-shot subprocess
+# (crash isolation, see `media_subprocess`) that loaded the model AGAIN, so a
+# "resident" model made every request slower (a full reload, measured 54-59 s
+# per FLUX.2 klein image on CUDA vs 15-16 s warm) and held a SECOND copy of
+# the weights on the GPU while it ran. An explicit resident load is the
+# operator opting into in-process execution for that model: when every
+# requested media spec names a model resident in that core, the request runs
+# there, on the loaded pipeline. Anything not explicitly loaded keeps the
+# isolated subprocess path.
+_RESIDENT_MEDIA_FACADES = {"image": "vision", "video": "vision"}
+
+
+def _resident_capability_core_for(client: Any) -> Any:
+    """The capability residency core explicit loads went into, WITHOUT creating
+    one: the client's own, else its pool owner's (a pooled
+    `LocalAbstractCoreLLMClient` serves generation while
+    `MultiLocalAbstractCoreLLMClient` owns the residency core)."""
+    core = getattr(client, "_capability_residency_core", None)
+    if core is not None:
+        return core
+    parent_ref = getattr(client, "_capability_residency_parent", None)
+    parent = parent_ref() if callable(parent_ref) else None
+    if parent is None:
+        return None
+    return getattr(parent, "_capability_residency_core", None)
+
+
+def _resident_media_rows_for_specs(core: Any, specs: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """One resident row per spec when EVERY spec names a model explicitly loaded
+    (resident) in `core`; None otherwise. The capability plugin matches the
+    provider/model (its own alias rules, e.g. huggingface == diffusers)."""
+    if core is None or not specs:
+        return None
+    rows: List[Dict[str, Any]] = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            return None
+        facade_name = _RESIDENT_MEDIA_FACADES.get(str(spec.get("modality") or "").strip().lower())
+        model = str(spec.get("model") or "").strip()
+        if facade_name is None or not model:
+            return None
+        try:
+            facade = getattr(core, facade_name, None)
+            lister = getattr(facade, "list_loaded_models", None)
+            if not callable(lister):
+                return None
+            filters: Dict[str, Any] = {"model": model, "resident": True}
+            provider = str(spec.get("provider") or "").strip()
+            if provider:
+                filters["provider"] = provider
+            matches = [
+                dict(row)
+                for row in list(lister(filters) or [])
+                if isinstance(row, dict) and row.get("resident") is True and row.get("loaded") is not False
+            ]
+        except Exception:  # noqa: BLE001 - no verifiable resident model: keep the isolated path
+            return None
+        if not matches:
+            return None
+        rows.append(matches[0])
+    return rows
+
+
+def _run_resident_media_specs(
+    *,
+    core: Any,
+    resident_rows: List[Dict[str, Any]],
+    specs: List[Dict[str, Any]],
+    prompt: str,
+    media: Optional[List[Any]],
+    artifact_store: Any,
+    progress_callback: Optional[Any],
+    runtime_provider: str,
+    runtime_model: str,
+) -> Any:
+    from abstractcore.core.multimodal_generation import MultimodalGenerateResponse  # type: ignore
+
+    result_obj = MultimodalGenerateResponse(
+        metadata={
+            "media_only": True,
+            "runtime_provider": runtime_provider,
+            "runtime_model": runtime_model,
+            "execution_mode": "resident_in_process",
+            "resident_load_ids": [
+                str(row.get("load_id") or row.get("runtime_id") or row.get("model") or "") for row in resident_rows
+            ],
+        }
+    )
+    # The same process-wide serialization as the subprocess path: a resident
+    # generation and a one-shot load must never compete for the GPU at once.
+    if _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS_SERIALIZE", default=True):
+        lock: Any = _LOCAL_IMAGE_SUBPROCESS_LOCK
+    else:
+        lock = threading.Lock()
+    with lock:
+        for spec in specs:
+            core._run_multimodal_spec(
+                result=result_obj,
+                spec=_with_output_progress_callback(dict(spec), progress_callback),
+                prompt=str(prompt or ""),
+                media=media,
+                artifact_store=artifact_store,
+            )
+    return result_obj
+
+
 def _run_local_image_subprocess(
     *,
     provider: str,
@@ -8770,7 +8881,34 @@ class LocalAbstractCoreLLMClient:
                 )
                 run_spec = getattr(self._llm, "_run_multimodal_spec", None)
                 if media_only and callable(run_spec):
-                    if _is_subprocess_safe_image_specs(specs, media):
+                    resident_core = _resident_capability_core_for(self)
+                    resident_rows = _resident_media_rows_for_specs(resident_core, specs)
+                    if resident_rows is not None:
+                        # An explicitly loaded (resident) model serves the
+                        # request in-process on its loaded pipeline -- see
+                        # `_RESIDENT_MEDIA_FACADES` for why.
+                        result_obj = _run_resident_media_specs(
+                            core=resident_core,
+                            resident_rows=resident_rows,
+                            specs=[dict(spec) for spec in specs],
+                            prompt=str(prompt or ""),
+                            media=media,
+                            artifact_store=self._artifact_store,
+                            progress_callback=params.get("on_progress"),
+                            runtime_provider=self._provider,
+                            runtime_model=self._model,
+                        )
+                        meta = result_obj.metadata if isinstance(getattr(result_obj, "metadata", None), dict) else None
+                        if meta is not None:
+                            meta["_resolved_generate_route"] = resolved_generate_route_summary
+                        result = _normalize_local_response(
+                            result_obj,
+                            artifact_store=self._artifact_store,
+                            run_id=run_id,
+                            default_tags=default_artifact_tags,
+                            generation_context=generation_context,
+                        )
+                    elif _is_subprocess_safe_image_specs(specs, media):
                         result_obj = _run_local_image_subprocess(
                             provider=self._provider,
                             model=self._model,
@@ -10435,6 +10573,9 @@ class MultiLocalAbstractCoreLLMClient:
             if last_exc is not None:
                 raise last_exc
             raise TypeError("Failed to construct LocalAbstractCoreLLMClient")
+        # Media generation on the pooled client finds the models explicitly
+        # loaded into THIS pool's residency core (`_resident_capability_core_for`).
+        client._capability_residency_parent = weakref.ref(self)
         if self._core_config_file or getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)):
             _attach_core_execution_context_to_client(
                 client,

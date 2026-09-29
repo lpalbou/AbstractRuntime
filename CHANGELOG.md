@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A resident image/video model now serves generation.** `load_model_residency(task="image_generation")`
+  (the Gateway's `POST /models/load`, the console Load button, a flow's model residency node) loaded the
+  weights into the client's capability residency core, but every local image request still ran in a
+  one-shot subprocess that loaded the model again: a full reload per request (54-59 s per FLUX.2 klein
+  image on CUDA against 15-16 s warm) and a second copy of the weights on the GPU while it ran. A request
+  whose every media output names a resident model now runs in-process on the loaded pipeline
+  (`execution_mode="resident_in_process"`, `resident_load_ids`); pooled clients of
+  `create_local_runtime(...)` use their pool's residency core. Models that were not explicitly loaded keep
+  the isolated subprocess (crash isolation for native Metal/CUDA failures), so the explicit load is the
+  opt-in. Docs no longer describe local media residency as unsupported (framework backlog 0991).
+
 ## [0.7.2] - 2026-09-29
 
 ### Changed

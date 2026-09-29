@@ -301,7 +301,9 @@ Media-only normalized results distinguish orchestration identity from the actual
 - `runtime_provider` / `runtime_model`: the runtime-side orchestration identity, when relevant
 - `media_provider` / `media_model`: the actual image/video/voice/music backend identity surfaced from the generated output
 
-For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
+Local image and video generation runs in a one-shot subprocess by default: a native backend failure (a Metal abort, a CUDA crash) ends the worker, not the Gateway/Runtime process, and the worker's memory is returned when it exits. The price is a full model load per request. Runtime metadata records `execution_mode="local_one_shot_subprocess"`.
+
+A model you load explicitly (`load_model_residency(task="image_generation", provider=..., model=...)`, the Gateway's `POST /models/load`, the console Load button, a flow's model residency node) is the exception: when every media output of a request names a model resident in the client's capability residency core, the request runs in-process on that loaded pipeline, with no subprocess and no second copy of the weights. The metadata then records `execution_mode="resident_in_process"` and `resident_load_ids`. A pooled client of `create_local_runtime(...)` uses its pool's residency core. Unloading the model (`unload_model_residency`, `POST /models/unload`) returns generation to the subprocess. Requests for a model that is not resident keep the subprocess, so an explicit load is how you opt into in-process execution for that model.
 
 Long-running generated media may expose provider progress callbacks. Runtime offers a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
 
@@ -335,13 +337,13 @@ Remote runtimes support chat media by sending OpenAI-compatible data URL content
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
-Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` return:
+Local media residency goes through the installed AbstractCore capability plugins (AbstractVision for image/upscale/video, AbstractVoice for TTS/STT, AbstractMusic for music): `load_model_residency` preloads the model in-process and `list_model_residency` lists it. When no plugin can serve the task, the result is explicit rather than a pretend success:
 
 - `code="model_residency_unsupported"`
 - `requires_long_lived_server=true`
 - `config_hint` pointing to `ABSTRACTCORE_SERVER_BASE_URL`
 
-Image/video-generation residency responses also include `execution_mode="local_one_shot_subprocess"` because local generated media can be isolated into one-shot workers unless a long-lived Core server owns the media backend.
+Image/video-generation unsupported responses also include `execution_mode="local_one_shot_subprocess"`, the path those requests then take.
 
 When the workflow marks residency as optional (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true` so hosts can render the no-op honestly.
 

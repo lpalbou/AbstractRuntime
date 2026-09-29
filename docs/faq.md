@@ -282,9 +282,9 @@ Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/ab
 
 ## Why can local media residency return `ok:false` without failing the run?
 
-Because local media warmup is not always a meaningful reusable state. In particular, local image generation may execute through a one-shot subprocess isolation boundary, so a prior warmup cannot be reused by the next request. Runtime therefore reports unsupported local media residency explicitly instead of pretending success.
+Because a local media load can fail or have nothing to load into: no capability plugin serves the task, or the plugin refused the model. Runtime reports that explicitly instead of pretending success. A load that succeeds is used: local image and video requests normally run in a one-shot subprocess (crash isolation, one model load per request), but a request whose model is resident runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`).
 
-For optional residency (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true`. Unsupported local media responses also report `requires_long_lived_server=true` and a `config_hint` that points at `ABSTRACTCORE_SERVER_BASE_URL`; image generation additionally reports `execution_mode="local_one_shot_subprocess"`.
+For optional residency (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true`. Unsupported local media responses also report `requires_long_lived_server=true` and a `config_hint` that points at `ABSTRACTCORE_SERVER_BASE_URL`; image generation additionally reports `execution_mode="local_one_shot_subprocess"`, the path those requests then take.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/effect_handlers.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
 ## What are “local / remote / hybrid” execution modes?

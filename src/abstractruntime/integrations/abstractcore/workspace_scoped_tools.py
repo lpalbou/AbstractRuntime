@@ -822,7 +822,7 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
 def _written_paths(args: Dict[str, Any]) -> List[str]:
     """Path arguments a write-class tool may write (after the rewrite)."""
     out: List[str] = []
-    for field in ("file_path", "path", "destination", "target"):
+    for field in ("file_path", "path", "destination", "target", "output_dir"):
         value = args.get(field)
         if isinstance(value, str) and value.strip():
             out.append(value)
@@ -974,6 +974,17 @@ def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Work
                     str(recovered),
                 )
                 out["file_path"] = str(recovered)
+        return out
+
+    # Email (framework backlog 0992): attachments are LOCAL FILES read and
+    # mailed out, and get_email_attachment writes into a local folder - both
+    # ride the wall like read_file / write_file (an email must not carry
+    # ~/.ssh out of the workspace).
+    if tool_name in ("send_email", "reply_email"):
+        _rewrite_path_list_field("attachments")
+        return out
+    if tool_name == "get_email_attachment":
+        _rewrite_path_field("output_dir", default_to_root=True)
         return out
 
     if tool_name == "browser_probe":

@@ -1050,6 +1050,12 @@ class Runtime:
         self._live_delta_sink: Optional[LiveDeltaSink] = None
         self._artifact_store = artifact_store
         self._tool_executor_for_resume: Any = None
+        # Email (framework backlog 0992 WP2): the host's per-runtime account
+        # resolver (memory only, never persisted), the account this runtime's
+        # automations are bound to, and the durable event inbox.
+        self._email_context_resolver: Optional[Callable[[Any], Any]] = None
+        self._email_binding: Optional[Any] = None
+        self._event_inbox: Optional[Any] = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
@@ -1256,6 +1262,51 @@ class Runtime:
         The runtime uses this executor to execute the pending tool calls after approval.
         """
         self._tool_executor_for_resume = tool_executor
+
+    # --- email (framework backlog 0992 WP2) -------------------------------------------
+
+    def set_email_context_resolver(self, resolver: Optional[Callable[[Any], Any]]) -> None:
+        """Install the host's account resolver for THIS runtime (None removes it).
+
+        `resolver(binding: EmailBinding) -> EmailContext | None` is called when a tool (or
+        the runtime's send-email action) of a run bound to an account needs it. It lives in
+        memory only. Installing one also points AbstractCore's email tools at the executing
+        run process-wide (`abstractruntime.email.install_core_resolver`).
+        """
+        if resolver is not None and not callable(resolver):
+            raise TypeError("set_email_context_resolver expects a callable or None")
+        self._email_context_resolver = resolver
+        if resolver is not None:
+            from ..email.binding import install_core_resolver
+
+            install_core_resolver()
+
+    @property
+    def email_context_resolver(self) -> Optional[Callable[[Any], Any]]:
+        return self._email_context_resolver
+
+    def set_email_binding(self, binding: Optional[Any]) -> None:
+        """The account this runtime's automation occurrences are bound to (None: no account)."""
+        from ..email.binding import EmailBinding
+
+        if binding is not None:
+            parsed = EmailBinding.from_value(binding)
+            if parsed is None:
+                raise TypeError("set_email_binding expects an EmailBinding, a {account_ref, address} dict, or None")
+            binding = parsed
+        self._email_binding = binding
+
+    @property
+    def email_binding(self) -> Optional[Any]:
+        return self._email_binding
+
+    def set_event_inbox(self, inbox: Optional[Any]) -> None:
+        """The runtime's durable external-event inbox (`abstractruntime.email.inbox`)."""
+        self._event_inbox = inbox
+
+    @property
+    def event_inbox(self) -> Optional[Any]:
+        return self._event_inbox
 
     @property
     def effect_policy(self) -> EffectPolicy:
@@ -2560,6 +2611,12 @@ class Runtime:
                 setattr(run, "_runtime_ledger_store", self._ledger_store)
                 setattr(run, "_runtime_run_id", run.run_id)
                 setattr(run, "_runtime_session_id", run.session_id)
+                # Email (0992 WP2): the tool handler resolves the executing
+                # run's account through this runtime's resolver; the
+                # automation controller reads the inbox and the binding.
+                setattr(run, "_runtime_email_resolver", self._email_context_resolver)
+                setattr(run, "_runtime_email_binding", self._email_binding)
+                setattr(run, "_runtime_event_inbox", self._event_inbox)
             except Exception:
                 pass
             plan = handler(run, self._ctx)
@@ -3093,11 +3150,16 @@ class Runtime:
                                             if ceiling is None or str(tc.get("name") or "").strip() in ceiling
                                         ]
                                         exec_approved = getattr(tools, "execute_approved", None)
-                                        out = (
-                                            exec_approved(tool_calls=allowed_calls)
-                                            if callable(exec_approved)
-                                            else tools.execute(tool_calls=allowed_calls)
-                                        ) if allowed_calls else {"mode": "executed", "results": []}
+                                        # The approved batch runs as THIS run: its email
+                                        # binding and this runtime's resolver (0992 WP2).
+                                        from ..email.binding import email_run_scope
+
+                                        with email_run_scope(run, resolver=self._email_context_resolver):
+                                            out = (
+                                                exec_approved(tool_calls=allowed_calls)
+                                                if callable(exec_approved)
+                                                else tools.execute(tool_calls=allowed_calls)
+                                            ) if allowed_calls else {"mode": "executed", "results": []}
                                         if not isinstance(out, dict):
                                             raise TypeError("ToolExecutor returned non-dict")
                                         out_mode = str(out.get("mode") or "").strip().lower()
@@ -4474,6 +4536,25 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("operator_email", operator_email)
+            # Email binding + pre-authorised recipients cross the hop (framework
+            # backlog 0992 WP2): bundle agents run send_email in CHILD runs.
+            # Unlike the riders above, the PARENT's value WINS: these keys decide
+            # which account a run acts for and whom it may mail without asking,
+            # so a child's own vars (flow- or model-shaped) never override them.
+            # A parent without the key leaves the child's value as it is (the
+            # automation controller's occurrence vars carry the frozen binding).
+            if isinstance(parent_rt, dict):
+                from ..email.binding import EMAIL_ACCOUNT_KEY, EMAIL_ALLOWED_RECIPIENTS_KEY
+
+                for _email_key in (EMAIL_ACCOUNT_KEY, EMAIL_ALLOWED_RECIPIENTS_KEY):
+                    _email_val = parent_rt.get(_email_key)
+                    if _email_val is None:
+                        continue
+                    sub_rt = sub_vars.get("_runtime")
+                    if not isinstance(sub_rt, dict):
+                        sub_rt = {}
+                        sub_vars["_runtime"] = sub_rt
+                    sub_rt[_email_key] = copy.deepcopy(_email_val)
             # prompt_cache posture crosses the hop too (BENCH-B 2026-08-03, the
             # FIFTH rider of the skills_block P1-2 class): `--no-prompt-cache`
             # serialized `_runtime.prompt_cache=false` on the ROOT run, but

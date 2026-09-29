@@ -98,6 +98,14 @@ def create_automation(
     definition = build_definition(request, automation_id=automation_id, now=at)
     binding = definition["trigger"]
     adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
+    caps = (getattr(adapter, "descriptor", None) or {}).get("capabilities") or {}
+    if caps.get("kind") == "event" and getattr(runtime, "event_inbox", None) is None:
+        raise AutomationError(
+            f"trigger {binding['source_id']}@{binding['source_version']} needs the runtime's event inbox, "
+            "and this runtime has none (the host must call Runtime.set_event_inbox)",
+            reason_code="unsupported_feature",
+            field="trigger.source_id",
+        )
     state = initial_state(definition, trigger_state=adapter.initial_state(binding["config"]))
     controller = controller_workflow_spec()
     try:

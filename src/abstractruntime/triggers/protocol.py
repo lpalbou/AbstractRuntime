@@ -12,6 +12,12 @@ three questions from persisted state and the current time only:
 Adapters never perform I/O and never read the wall clock themselves: `now`
 is always passed in, so the controller, the command applier and the tests see
 the same answers for the same inputs.
+
+Event sources (`capabilities.kind == "event"`, e.g. `email.received@1`) also
+take `events=` in `prepare` / `admit`: the durable-inbox records after the
+automation's cursor, read by the controller (the adapter still does no I/O).
+Called without `events` (a reader with no inbox at hand) they answer as if
+nothing were pending.
 """
 
 from __future__ import annotations
@@ -52,13 +58,21 @@ class TriggerEnvelope(TypedDict):
     binding_id: str
 
 
-class TriggerState(TypedDict):
-    """The trigger-owned slice of `_runtime.automation`."""
-
+class _TriggerStateBase(TypedDict):
     anchor: Optional[str]
     tick: int
     scheduled_count: int
     exhausted: bool
+
+
+class TriggerState(_TriggerStateBase, total=False):
+    """The trigger-owned slice of `_runtime.automation`.
+
+    `source_state` is an adapter-owned JSON object for sources that need more than the
+    schedule cursor (`email.received@1`: its inbox cursor, MailCursor guard and batch clock).
+    """
+
+    source_state: Optional[Dict[str, Any]]
 
 
 class _TriggerWaitBase(TypedDict):
@@ -67,7 +81,8 @@ class _TriggerWaitBase(TypedDict):
 
 class TriggerWait(_TriggerWaitBase, total=False):
     """What the controller waits for: `until` (a deadline), `idle` (commands
-    only), `exhausted` (no further admission can happen) or `event` (v2)."""
+    only, or a watcher's wake for event sources), `exhausted` (no further
+    admission can happen) or `event` (reserved)."""
 
     until: str
     scope: str
@@ -83,9 +98,12 @@ class _TriggerAdmissionBase(TypedDict):
 
 class TriggerAdmission(_TriggerAdmissionBase, total=False):
     coalesced: Dict[str, int]  # {first_tick, last_tick, missed_count}
+    # Event sources: the data the occurrence's inputs need beyond the envelope
+    # (`email.received@1`: the whole messages). Never recorded in the envelope.
+    inputs: Dict[str, Any]
 
 
-TRIGGER_STATE_KEYS = ("anchor", "tick", "scheduled_count", "exhausted")
+TRIGGER_STATE_KEYS = ("anchor", "tick", "scheduled_count", "exhausted", "source_state")
 
 
 class TriggerConfigError(ValueError):

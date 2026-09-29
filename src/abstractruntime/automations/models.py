@@ -22,7 +22,11 @@ from typing import Any, Dict, Mapping, Optional, TypedDict
 
 from ..triggers.protocol import TriggerConfigError, parse_duration, parse_timestamp, format_timestamp
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # the `automation.*` ledger record schema
+# The definition schema (`_meta.automation.schema_version`). v2 (framework backlog 0992 B5):
+# `policy.email_allowed_recipients` and the top-level `notify`. A v1 definition reads with
+# their defaults and becomes v2 at its next revision.
+DEFINITION_SCHEMA_VERSION = 2
 
 CONTROLLER_BUNDLE_ID = "abstractframework.automation-controller"
 CONTROLLER_BUNDLE_VERSION = "1.0.0"
@@ -43,9 +47,18 @@ NOTIFY_DEFAULT_BODY_MAX = 280
 
 DEFAULT_RETRY = {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}}
 TOOL_APPROVAL_MODES = ("auto", "ask")
+# Recipients an occurrence may email WITHOUT an approval wait (framework backlog 0992 B3/B5):
+# "self" (the registered address of the runtime's user, `_runtime.operator_email`) and exact
+# addresses the user named. Separate from the account's recipient policy (allowlist / denylist),
+# which AbstractCore enforces on every send whatever this says.
+DEFAULT_EMAIL_ALLOWED_RECIPIENTS = ["self"]
+MAX_EMAIL_ALLOWED_RECIPIENTS = 50
 DEFAULT_POLICY = {
     "serial": True, "misfire": "coalesce", "failure": "continue", "retry": DEFAULT_RETRY, "tool_approval": "auto",
+    "email_allowed_recipients": DEFAULT_EMAIL_ALLOWED_RECIPIENTS,
 }
+NOTIFY_CHANNELS = ("console", "email")
+DEFAULT_NOTIFY = {"channels": ["console"]}
 
 CONTEXT_MODES = ("independent", "growing")
 # Growing-mode history: the one session history window
@@ -62,7 +75,8 @@ class AutomationDefinition(TypedDict):
     target: Dict[str, Any]  # {workflow_id, bundle_ref, flow_id, input_data}
     trigger: Dict[str, Any]  # TriggerBinding
     context: Dict[str, Any]  # {mode, growing}
-    policy: Dict[str, Any]  # {serial, misfire, failure, retry}
+    policy: Dict[str, Any]  # {serial, misfire, failure, retry, tool_approval, email_allowed_recipients}
+    notify: Dict[str, Any]  # {channels: ["console"] | ["console", "email"]} (schema v2)
     session_id: str
     workspace_root: str
     created_at: str
@@ -251,9 +265,57 @@ def _duration(value: Any, field: str) -> str:
     return value
 
 
+def validate_email_allowed_recipients(value: Any) -> list:
+    """`["self" | "name@example.test", ...]`, lower-cased and de-duplicated (order kept).
+
+    Exact addresses only: no display names, groups, domains or patterns (a pre-authorisation
+    must name the person). Empty list = nobody, not even self, runs unattended.
+    """
+    field = "policy.email_allowed_recipients"
+    if not isinstance(value, list):
+        raise _invalid(f"{field} must be a list of 'self' or email addresses", field)
+    if len(value) > MAX_EMAIL_ALLOWED_RECIPIENTS:
+        raise _invalid(f"{field} holds at most {MAX_EMAIL_ALLOWED_RECIPIENTS} entries", field)
+    out: list = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise _invalid(f"{field}[{i}] must be 'self' or an email address", f"{field}[{i}]")
+        item = entry.strip().lower()
+        if item != "self":
+            local, at, domain = item.partition("@")
+            if (
+                not at or not local or not domain or "@" in domain or "." not in domain
+                or any(c.isspace() or c in "<>,;:\"()[]*" for c in item)
+            ):
+                raise _invalid(f"{field}[{i}] must be 'self' or a plain address like name@example.test", f"{field}[{i}]")
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def validate_notify(value: Any) -> Dict[str, Any]:
+    """`{channels: [...]}`: where the automation's attention items are delivered (schema v2).
+
+    `console` (the attention list every client reads) and/or `email` (the host's notification
+    dispatcher mails the owner's registered address).
+    """
+    notify = _require_mapping(value if value is not None else {}, "notify")
+    _reject_unknown(notify, ("channels",), "notify")
+    channels = notify.get("channels", DEFAULT_NOTIFY["channels"])
+    if not isinstance(channels, list) or not channels:
+        raise _invalid(f"notify.channels must be a non-empty list of {list(NOTIFY_CHANNELS)}", "notify.channels")
+    out = []
+    for i, ch in enumerate(channels):
+        if ch not in NOTIFY_CHANNELS:
+            raise _invalid(f"notify.channels[{i}] must be one of {list(NOTIFY_CHANNELS)}", f"notify.channels[{i}]")
+        if ch not in out:
+            out.append(ch)
+    return {"channels": [c for c in NOTIFY_CHANNELS if c in out]}
+
+
 def validate_policy(value: Any) -> Dict[str, Any]:
     policy = _require_mapping(value if value is not None else {}, "policy")
-    _reject_unknown(policy, ("serial", "misfire", "failure", "retry", "tool_approval"), "policy")
+    _reject_unknown(policy, ("serial", "misfire", "failure", "retry", "tool_approval", "email_allowed_recipients"), "policy")
     tool_approval = policy.get("tool_approval", "auto")
     if tool_approval not in TOOL_APPROVAL_MODES:
         raise _invalid(f"policy.tool_approval must be one of {list(TOOL_APPROVAL_MODES)}", "policy.tool_approval")
@@ -283,6 +345,9 @@ def validate_policy(value: Any) -> Dict[str, Any]:
             },
         },
         "tool_approval": tool_approval,
+        "email_allowed_recipients": validate_email_allowed_recipients(
+            policy.get("email_allowed_recipients", list(DEFAULT_EMAIL_ALLOWED_RECIPIENTS))
+        ),
     }
 
 
@@ -315,7 +380,7 @@ def validate_trigger_request(value: Any, *, now: str, binding_id: str) -> Dict[s
 
 
 CREATE_REQUEST_FIELDS = (
-    "request_id", "tenant", "user", "title", "target", "trigger", "context", "policy", "workspace_root",
+    "request_id", "tenant", "user", "title", "target", "trigger", "context", "policy", "notify", "workspace_root",
 )
 
 
@@ -325,7 +390,7 @@ def build_definition(request: Mapping[str, Any], *, automation_id: str, now: str
     _reject_unknown(req, CREATE_REQUEST_FIELDS, "")
     _nonempty_str(req.get("request_id"), "request_id")
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": DEFINITION_SCHEMA_VERSION,
         "revision": 1,
         "title": validate_title(req.get("title")),
         "controller": {"bundle_ref": CONTROLLER_BUNDLE_REF, "flow_id": CONTROLLER_FLOW_ID},
@@ -333,6 +398,7 @@ def build_definition(request: Mapping[str, Any], *, automation_id: str, now: str
         "trigger": validate_trigger_request(req.get("trigger"), now=now, binding_id=binding_id_for(automation_id, 1)),
         "context": validate_context(req.get("context")),
         "policy": validate_policy(req.get("policy")),
+        "notify": validate_notify(req.get("notify")),
         "session_id": automation_session_id(automation_id),
         "workspace_root": validate_workspace_root(req.get("workspace_root")),
         "created_at": now,
@@ -340,7 +406,7 @@ def build_definition(request: Mapping[str, Any], *, automation_id: str, now: str
     }
 
 
-REVISABLE_FIELDS = ("title", "target", "trigger", "context", "policy")
+REVISABLE_FIELDS = ("title", "target", "trigger", "context", "policy", "notify")
 
 
 def revise_definition(
@@ -358,6 +424,8 @@ def revise_definition(
     new = copy.deepcopy(dict(definition))
     revision = int(definition["revision"]) + 1
     new["revision"] = revision
+    new["schema_version"] = DEFINITION_SCHEMA_VERSION
+    new["notify"] = validate_notify(definition.get("notify"))  # a v1 definition gets the default
     if "title" in ch:
         new["title"] = validate_title(ch["title"])
     if "target" in ch:
@@ -368,6 +436,8 @@ def revise_definition(
         # Merge: a field the client did not send keeps its current value (a
         # retry-only change must never reset tool_approval to its default).
         new["policy"] = validate_policy({**dict(definition["policy"]), **dict(_require_mapping(ch["policy"], "changes.policy"))})
+    if "notify" in ch:
+        new["notify"] = validate_notify(ch["notify"])
     if "trigger" in ch:
         old = definition["trigger"]
         candidate = validate_trigger_request(ch["trigger"], now=now, binding_id=old["binding_id"])
@@ -391,7 +461,7 @@ def trigger_changed(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
 
 def initial_state(definition: Mapping[str, Any], *, trigger_state: Mapping[str, Any]) -> Dict[str, Any]:
     """`_runtime.automation` at creation (contract A defaults)."""
-    return {
+    state = {
         "state_version": 0,
         "active_revision": int(definition["revision"]),
         "pending_occurrence": None,
@@ -408,15 +478,33 @@ def initial_state(definition: Mapping[str, Any], *, trigger_state: Mapping[str, 
         # about to be appended, so reconciliation is an exact key lookup.
         "intent": None,
     }
+    if trigger_state.get("source_state") is not None:
+        state["source_state"] = copy.deepcopy(dict(trigger_state["source_state"]))
+    return state
 
 
 def trigger_state_of(state: Mapping[str, Any]) -> Dict[str, Any]:
-    return {
+    out: Dict[str, Any] = {
         "anchor": state.get("anchor"),
         "tick": int(state.get("tick") or 0),
         "scheduled_count": int(state.get("scheduled_count") or 0),
         "exhausted": bool(state.get("exhausted")),
     }
+    if isinstance(state.get("source_state"), Mapping):
+        out["source_state"] = copy.deepcopy(dict(state["source_state"]))
+    return out
+
+
+def definition_notify(definition: Mapping[str, Any]) -> Dict[str, Any]:
+    """The definition's `notify` (a v1 definition: the default)."""
+    raw = definition.get("notify")
+    return validate_notify(raw) if raw is not None else copy.deepcopy(DEFAULT_NOTIFY)
+
+
+def definition_email_allowed_recipients(definition: Mapping[str, Any]) -> list:
+    """The definition's pre-authorised recipients (a v1 definition: `["self"]`)."""
+    raw = (definition.get("policy") or {}).get("email_allowed_recipients")
+    return validate_email_allowed_recipients(raw) if raw is not None else list(DEFAULT_EMAIL_ALLOWED_RECIPIENTS)
 
 
 def backoff_delay(policy: Mapping[str, Any], attempt: int) -> timedelta:
@@ -469,7 +557,11 @@ __all__ = [
     "CONTROLLER_BUNDLE_VERSION",
     "CONTROLLER_FLOW_ID",
     "CONTROLLER_WORKFLOW_ID",
+    "DEFAULT_EMAIL_ALLOWED_RECIPIENTS",
+    "DEFAULT_NOTIFY",
     "DEFAULT_POLICY",
+    "DEFINITION_SCHEMA_VERSION",
+    "NOTIFY_CHANNELS",
     "SCHEMA_VERSION",
     "add_delay",
     "automation_id_for",
@@ -479,6 +571,8 @@ __all__ = [
     "binding_id_for",
     "build_definition",
     "canonical_json",
+    "definition_email_allowed_recipients",
+    "definition_notify",
     "discussion_ids",
     "initial_state",
     "occurrence_run_id",
@@ -487,6 +581,8 @@ __all__ = [
     "trigger_changed",
     "trigger_state_of",
     "validate_context",
+    "validate_email_allowed_recipients",
+    "validate_notify",
     "validate_policy",
     "validate_target",
     "wake_wait_key",

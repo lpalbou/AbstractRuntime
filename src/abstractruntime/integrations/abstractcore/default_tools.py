@@ -24,9 +24,15 @@ ToolCallable = Callable[..., Any]
 # exactly this structure, so membership changes cannot drift between the
 # composed toolset and the exported map. Order = composition order.
 _COMMS_KIND_TOOLS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    # Email (framework backlog 0992): the account is the executing run's own
+    # (resolved by the host at call time); reply/search/attachment joined in
+    # AbstractCore 2.20.
     "email": (
         "abstractcore.tools.comms_tools",
-        ("list_email_accounts", "send_email", "list_emails", "read_email"),
+        (
+            "list_email_accounts", "send_email", "reply_email", "list_emails", "search_emails", "read_email",
+            "get_email_attachment",
+        ),
     ),
     "whatsapp": (
         "abstractcore.tools.comms_tools",
@@ -68,7 +74,15 @@ def comms_tools_enabled() -> bool:
 
 
 def email_tools_enabled() -> bool:
+    """Legacy switch: the process-global email account behind the env flags.
+
+    Hosts that bind each run to its user's account (framework backlog 0992) pass
+    `email_enabled=` to the toolset functions instead (True for a user with a connected,
+    enabled account)."""
     return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_EMAIL_TOOLS")
+
+
+EMAIL_ACCOUNT_GATE = "Connect an email account in Settings -> Email"
 
 
 def whatsapp_tools_enabled() -> bool:
@@ -381,7 +395,7 @@ def _normalize_tool_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     return spec
 
 
-def list_tool_catalog(include_disabled: bool = True) -> List[Dict[str, Any]]:
+def list_tool_catalog(include_disabled: bool = True, *, email_enabled: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The FULL toolset catalog (tool-tiers item H, laurent dm#221): every
     toolset runtime knows how to compose - enabled AND disabled - each row
     carrying {id, label, enabled, gate, tools}. Disabled rows still import
@@ -395,7 +409,7 @@ def list_tool_catalog(include_disabled: bool = True) -> List[Dict[str, Any]]:
     pointer either way). Import failures on disabled rows degrade to
     tool_names-only rows with a #FALLBACK note, never a raised catalog."""
     catalog: List[Dict[str, Any]] = []
-    enabled_sets = get_default_toolsets()
+    enabled_sets = get_default_toolsets(email_enabled=email_enabled)
     for ts_id, ts in enabled_sets.items():
         catalog.append({
             "id": ts_id, "label": ts.get("label") or ts_id,
@@ -427,11 +441,8 @@ def list_tool_catalog(include_disabled: bool = True) -> List[Dict[str, Any]]:
         catalog.append(row)
 
     def _load_email() -> List[Any]:
-        from abstractcore.tools.comms_tools import (
-            list_email_accounts, list_emails, read_email, send_email,
-        )
-
-        return [list_email_accounts, send_email, list_emails, read_email]
+        mod = importlib.import_module(_COMMS_KIND_TOOLS["email"][0])
+        return [getattr(mod, n) for n in _COMMS_KIND_TOOLS["email"][1]]
 
     def _load_whatsapp() -> List[Any]:
         from abstractcore.tools.comms_tools import (
@@ -464,9 +475,10 @@ def list_tool_catalog(include_disabled: bool = True) -> List[Dict[str, Any]]:
     # enabled comms row). Each channel that is OFF gets its own disabled
     # row with ITS gate; enabled channels ride the enabled comms row as
     # before (get_default_toolsets composition unchanged - the pin holds).
-    if not email_tools_enabled():
+    if not (email_tools_enabled() if email_enabled is None else email_enabled):
         _disabled("comms.email", "Comms - Email",
-                  "ABSTRACT_ENABLE_COMMS_TOOLS or ABSTRACT_ENABLE_EMAIL_TOOLS", _load_email)
+                  "ABSTRACT_ENABLE_COMMS_TOOLS or ABSTRACT_ENABLE_EMAIL_TOOLS" if email_enabled is None else EMAIL_ACCOUNT_GATE,
+                  _load_email)
     if not whatsapp_tools_enabled():
         _disabled("comms.whatsapp", "Comms - WhatsApp",
                   "ABSTRACT_ENABLE_COMMS_TOOLS or ABSTRACT_ENABLE_WHATSAPP_TOOLS", _load_whatsapp)
@@ -496,7 +508,7 @@ _CATALOG_GATES: Dict[str, str] = {
 
 
 def get_default_toolsets(
-    *, disabled_toolsets: Optional[Iterable[str]] = None
+    *, disabled_toolsets: Optional[Iterable[str]] = None, email_enabled: Optional[bool] = None
 ) -> Dict[str, Dict[str, Any]]:
     """Return default toolsets {id -> {label, tools:[callables]}}.
 
@@ -509,7 +521,12 @@ def get_default_toolsets(
     dm#177 forbids new behavior envs — a host passing its own console-held
     configuration IS the app deciding. Availability predicates above stay
     untouched (installed = registered remains the DEFAULT; this is the
-    host's explicit subtraction on top)."""
+    host's explicit subtraction on top).
+
+    `email_enabled` (framework backlog 0992 B2): the host's decision for the
+    email tools — True for a user whose account is connected and enabled (each
+    run then resolves ITS user's account at call time), False to leave them
+    out. None keeps the legacy env-flag behaviour (`email_tools_enabled`)."""
     from abstractcore.tools.common_tools import (
         list_files,
         skim_folders,
@@ -564,13 +581,14 @@ def get_default_toolsets(
         "tools": [execute_command, *LOCAL_HELPER_TOOLS],
     }
 
-    if comms_tools_enabled():
+    email_on = email_tools_enabled() if email_enabled is None else bool(email_enabled)
+    if comms_tools_enabled() or email_on:
         comms: list[ToolCallable] = []
         # Composition consumes the exported kind map (one source, c4899):
         # per-channel gates decide WHICH kinds load; the map decides WHAT
         # each kind is.
         _kind_gates: Dict[str, Callable[[], bool]] = {
-            "email": email_tools_enabled,
+            "email": lambda: email_on,
             "whatsapp": whatsapp_tools_enabled,
             "telegram": telegram_tools_enabled,
         }
@@ -637,10 +655,10 @@ def get_default_toolsets(
 
 
 def get_default_tools(
-    *, disabled_toolsets: Optional[Iterable[str]] = None
+    *, disabled_toolsets: Optional[Iterable[str]] = None, email_enabled: Optional[bool] = None
 ) -> List[ToolCallable]:
     """Return the flattened list of all default tool callables."""
-    toolsets = get_default_toolsets(disabled_toolsets=disabled_toolsets)
+    toolsets = get_default_toolsets(disabled_toolsets=disabled_toolsets, email_enabled=email_enabled)
     out: list[ToolCallable] = []
     seen: set[str] = set()
     for spec in toolsets.values():
@@ -656,10 +674,10 @@ def get_default_tools(
 
 
 def list_default_tool_specs(
-    *, disabled_toolsets: Optional[Iterable[str]] = None
+    *, disabled_toolsets: Optional[Iterable[str]] = None, email_enabled: Optional[bool] = None
 ) -> List[Dict[str, Any]]:
     """Return ToolSpecs for UI and LLM payloads (JSON-safe)."""
-    toolsets = get_default_toolsets(disabled_toolsets=disabled_toolsets)
+    toolsets = get_default_toolsets(disabled_toolsets=disabled_toolsets, email_enabled=email_enabled)
     toolset_by_name: Dict[str, str] = {}
     toolset_order: Dict[str, int] = {tid: idx for idx, tid in enumerate(toolsets.keys())}
     tool_order_by_name: Dict[str, int] = {}
@@ -676,7 +694,7 @@ def list_default_tool_specs(
         toolset_sizes[tid] = order
 
     out: list[Dict[str, Any]] = []
-    for tool in get_default_tools(disabled_toolsets=disabled_toolsets):
+    for tool in get_default_tools(disabled_toolsets=disabled_toolsets, email_enabled=email_enabled):
         spec = _normalize_tool_spec(_tool_spec(tool))
         name = str(spec.get("name") or "").strip()
         if not name:
@@ -737,10 +755,10 @@ def list_default_tool_specs(
     return out
 
 
-def build_default_tool_map() -> Dict[str, ToolCallable]:
+def build_default_tool_map(*, email_enabled: Optional[bool] = None) -> Dict[str, ToolCallable]:
     """Return {tool_name -> callable} for MappingToolExecutor."""
     tool_map: Dict[str, ToolCallable] = {}
-    for tool in get_default_tools():
+    for tool in get_default_tools(email_enabled=email_enabled):
         name = _tool_name(tool)
         if not name:
             continue

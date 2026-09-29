@@ -2,7 +2,7 @@
 
 Sources come from two places:
 
-- the built-ins `schedule@1` and `manual@1`, shipped in this package. They are
+- the built-ins `schedule@1`, `manual@1` and `email.received@1`, shipped in this package. They are
   a REQUIRED seam: if one cannot be loaded, or no longer describes itself as
   expected, discovery raises `TriggerRegistryError` — automations must not
   start on a runtime that silently lost its scheduler;
@@ -30,6 +30,8 @@ ENTRY_POINT_GROUP = "abstractruntime.trigger_sources"
 BUILTIN_TRIGGER_SOURCES: Dict[str, str] = {
     "schedule": "abstractruntime.triggers.schedule:ScheduleTriggerAdapter",
     "manual": "abstractruntime.triggers.manual:ManualTriggerAdapter",
+    # framework backlog 0992 B4: new mail in the runtime's durable inbox.
+    "email.received": "abstractruntime.triggers.email_received:EmailReceivedTriggerAdapter",
 }
 
 _ADAPTER_METHODS = ("validate", "initial_state", "prepare", "admit", "rearm", "normalize")

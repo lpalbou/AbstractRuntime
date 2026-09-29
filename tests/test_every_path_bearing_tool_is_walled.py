@@ -38,6 +38,7 @@ WALLED: set[tuple[str, str]] = {
     ("browser_probe", "target"),
     ("edit_file", "file_path"),
     ("execute_command", "working_directory"),
+    ("get_email_attachment", "output_dir"),
     ("list_files", "directory_path"),
     ("read_file", "file_path"),
     ("search_files", "path"),

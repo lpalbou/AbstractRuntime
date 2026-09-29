@@ -1,5 +1,7 @@
-"""Trigger sources for automations (contract C): protocol, registry, built-ins."""
+"""Trigger sources for automations (contract C): protocol, registry, built-ins
+(`schedule@1`, `manual@1`, `email.received@1`)."""
 
+from .email_received import EmailReceivedTriggerAdapter
 from .manual import ManualTriggerAdapter, manual_event_id
 from .protocol import (
     TRIGGER_STATE_KEYS,
@@ -29,6 +31,7 @@ from .schedule import ScheduleTriggerAdapter
 __all__ = [
     "BUILTIN_TRIGGER_SOURCES",
     "ENTRY_POINT_GROUP",
+    "EmailReceivedTriggerAdapter",
     "ManualTriggerAdapter",
     "ScheduleTriggerAdapter",
     "TRIGGER_STATE_KEYS",

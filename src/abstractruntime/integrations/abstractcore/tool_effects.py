@@ -63,8 +63,12 @@ TOOL_EFFECT_CLASSES: Dict[str, str] = {
     # comms toolset
     "list_email_accounts": COMMS,
     "send_email": COMMS,
+    "reply_email": COMMS,
     "list_emails": COMMS,
+    "search_emails": COMMS,
     "read_email": COMMS,
+    # Saves an attachment into a (workspace-walled) local folder: a local write.
+    "get_email_attachment": WRITE,
     "send_whatsapp_message": COMMS,
     "list_whatsapp_messages": COMMS,
     "read_whatsapp_message": COMMS,

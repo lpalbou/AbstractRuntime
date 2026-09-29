@@ -72,7 +72,7 @@ def test_third_party_entry_point_is_discovered_without_code_change(monkeypatch):
         ("webhook", f"{mod}:WebhookAdapter"),
     ])
     ids = [r["descriptor"]["id"] for r in trigger_sources() if r["available"]]
-    assert ids == ["schedule", "manual", "webhook"]
+    assert ids == ["schedule", "manual", "email.received", "webhook"]
     assert isinstance(get_trigger_adapter("webhook", 1), WebhookAdapter)
 
 
@@ -118,5 +118,5 @@ def test_pyproject_declares_the_builtin_entry_points():
     for line in section.splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             name, target = line.split("=", 1)
-            declared[name.strip()] = target.strip().strip('"')
+            declared[name.strip().strip('"')] = target.strip().strip('"')
     assert declared == reg.BUILTIN_TRIGGER_SOURCES

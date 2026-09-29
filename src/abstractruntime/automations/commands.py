@@ -68,7 +68,15 @@ def _reject(reason_code: str, message: str, **extra: Any) -> Dict[str, Any]:
     return {"status": "rejected", "error": {"reason_code": reason_code, "message": message, **extra}}
 
 
-def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, expected_revision: Optional[int]) -> Dict[str, Any]:
+def _decide(
+    run: Any,
+    command_type: str,
+    payload: Dict[str, Any],
+    *,
+    now: str,
+    expected_revision: Optional[int],
+    has_event_inbox: bool = True,
+) -> Dict[str, Any]:
     """`{"delta": ...}` (the state change to apply) or a rejection."""
     definition, state = definition_of(run), state_of(run)
     archived = bool(definition.get("archived_at"))
@@ -124,6 +132,14 @@ def _decide(run: Any, command_type: str, payload: Dict[str, Any], *, now: str, e
         if trigger_changed(definition, new_def):
             binding = new_def["trigger"]
             adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
+            kind = ((getattr(adapter, "descriptor", None) or {}).get("capabilities") or {}).get("kind")
+            if kind == "event" and not has_event_inbox:
+                return _reject(
+                    "unsupported_feature",
+                    f"trigger {binding['source_id']}@{binding['source_version']} needs the runtime's event inbox, "
+                    "and this runtime has none (the host must call Runtime.set_event_inbox)",
+                    field="changes.trigger.source_id",
+                )
             fresh = adapter.initial_state(binding["config"])
             delta["state"] = dict(adapter.rearm(binding, state=fresh, now=now))
         return {"delta": delta}
@@ -255,7 +271,14 @@ def apply_automation_command(
             if recorded.get("error"):
                 result["error"] = recorded["error"]
         else:
-            decision = _decide(run, type, {**(payload or {}), "_command_id": command_id}, now=at, expected_revision=expected_revision)
+            decision = _decide(
+                run,
+                type,
+                {**(payload or {}), "_command_id": command_id},
+                now=at,
+                expected_revision=expected_revision,
+                has_event_inbox=getattr(runtime, "event_inbox", None) is not None,
+            )
             fields: Dict[str, Any] = {"command_id": command_id, "type": type, "actor": actor, "command_digest": digest}
             if decision.get("status") == "rejected":
                 fields.update(status="rejected", error=decision["error"])

@@ -101,6 +101,7 @@ abstractruntime-mcp-worker = "abstractruntime.integrations.abstractcore.mcp_work
 [project.entry-points."abstractruntime.trigger_sources"]
 schedule = "abstractruntime.triggers.schedule:ScheduleTriggerAdapter"
 manual = "abstractruntime.triggers.manual:ManualTriggerAdapter"
+"email.received" = "abstractruntime.triggers.email_received:EmailReceivedTriggerAdapter"
 
 [project.urls]
 "AbstractCore (website)" = "https://www.abstractcore.ai/"

@@ -2845,8 +2845,100 @@ def _git_read_only_refiner(call: Dict[str, Any], run: "RunState") -> str:
         return "ask"
 
 
+# Argument keys `send_email` accepts (abstractcore comms_tools). A call carrying
+# any other key is not proven (the executor might read recipients from it).
+_SEND_EMAIL_ARG_KEYS = frozenset({
+    "to", "subject", "account", "body_text", "body_html", "cc", "bcc", "attachments", "timeout_s", "headers",
+})
+_MAX_ALLOWED_RECIPIENTS = 50
+
+
+def _refiner_allowed_recipients(run: "RunState", self_addr: Optional[str]) -> set:
+    """The run's pre-authorised recipients (`_runtime.email_allowed_recipients`),
+    normalized; `"self"` expands to the registered address when there is one.
+
+    The key is MODEL-UNWRITABLE: the automation controller freezes it from the
+    definition the user wrote (B5), hosts pop client values at their door, and
+    a child run inherits the parent's value (the parent wins). Entries that are
+    not a plain address (display names, groups, spaces, brackets) are ignored:
+    they can never match a recipient, so they can only fail toward asking."""
+    out: set = set()
+    if not isinstance(getattr(run, "vars", None), dict):
+        return out
+    rt = run.vars.get("_runtime")
+    raw = rt.get("email_allowed_recipients") if isinstance(rt, dict) else None
+    if not isinstance(raw, list):
+        return out
+    for entry in raw[:_MAX_ALLOWED_RECIPIENTS]:
+        if not isinstance(entry, str):
+            continue
+        value = entry.strip()
+        if value.lower() == "self":
+            if self_addr:
+                out.add(self_addr)
+            continue
+        norm = _norm_email(value)
+        if norm.count("@") != 1 or any(c.isspace() or c in "<>,;:\"()[]" for c in norm):
+            continue
+        local, _, domain = norm.partition("@")
+        if not local or not domain:
+            continue
+        out.add(norm)
+    return out
+
+
+def _send_email_recipient_refiner_v2(call: Dict[str, Any], run: "RunState") -> str:
+    """send_email_recipient@v2 (framework backlog 0992 B3): auto when EVERY
+    recipient (to, cc, bcc) is the run's registered address (`_runtime.
+    operator_email`, "self", operator decision D4) or one of the recipients the
+    user pre-authorised in the automation definition (`_runtime.
+    email_allowed_recipients`); anything else asks.
+
+    Same deny-safe discipline as v1: empty recipients -> ask (never a vacuous
+    all()); a wrapper-nested args shape -> ask; unknown argument keys -> ask
+    (the executor might read recipients this proof did not see); tokens
+    compared VERBATIM after strip+NFC+lowercase (a display-name form never
+    matches); `reply_email` -> ask (its recipients come from the original
+    message, not the arguments, so nothing here can prove them); any exception
+    -> ask. Approval is separate from the user's recipient policy, which
+    AbstractCore's guarded_send enforces on every send afterwards."""
+    try:
+        name = str((call or {}).get("name") or "").strip()
+        if name != "send_email":
+            return "ask"  # reply_email and any future row: recipients not provable here
+        self_addr = _refiner_operator_email(run)
+        permitted = _refiner_allowed_recipients(run, self_addr)
+        if self_addr:
+            permitted.add(self_addr)
+        if not permitted:
+            return "ask"
+        args = (call or {}).get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                return "ask"
+        if not isinstance(args, dict):
+            return "ask"
+        if "arguments" in args:
+            return "ask"
+        if set(str(k) for k in args.keys()) - _SEND_EMAIL_ARG_KEYS:
+            return "ask"
+        from abstractcore.tools.comms_tools import _coerce_str_list
+
+        recipients: List[str] = []
+        for field in ("to", "cc", "bcc"):
+            recipients.extend(_coerce_str_list(args.get(field)))
+        if not recipients:
+            return "ask"
+        return "auto" if all(_norm_email(r) in permitted for r in recipients) else "ask"
+    except Exception:  # noqa: BLE001 - any refiner failure holds the ceiling
+        return "ask"
+
+
 _TOOL_REFINERS: Dict[str, Any] = {
     "send_email_recipient@v1": _send_email_recipient_refiner,
+    "send_email_recipient@v2": _send_email_recipient_refiner_v2,
     # Registered ahead of core's row declaration (dm#244 architecture: core
     # hosts the refiner-id on the tool row, runtime implements at the
     # approval point) — INERT until execute_command's inventory row carries
@@ -2894,6 +2986,19 @@ def _effect_idempotency_key_from_tool_calls(tool_calls: Any) -> Optional[str]:
 
 
 def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
+    """Run `_execute_with_run_policy_unscoped` as `run` (framework backlog 0992 WP2).
+
+    Every tool of the batch resolves the EXECUTING run's email account (its
+    `_runtime.email_account` binding, through its Runtime's resolver), never a
+    process-wide one; credentials exist only in memory during the call.
+    """
+    from ...email.binding import email_run_scope
+
+    with email_run_scope(run):
+        return _execute_with_run_policy_unscoped(tools, calls, run)
+
+
+def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
     """Per-run tool-policy consumer (restores the 2026-02-21 feature that
     regressed; two independent confirmations it was consumer-less — the
     2026-07-06 audit and flow's live gateway check 2026-07-20).
@@ -2914,6 +3019,7 @@ def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunS
     if (
         isinstance(pol, dict)
         and (pol.get("auto_approve_tools") or pol.get("require_approval_tools")
+             or pol.get("withheld_tools")
              or pol.get("auto_approve_max_risk_rank") is not None)
         and callable(getattr(tools, "execute_approved", None))
     ):

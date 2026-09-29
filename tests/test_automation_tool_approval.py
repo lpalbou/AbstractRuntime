@@ -34,7 +34,7 @@ from abstractruntime.scheduler.registry import WorkflowRegistry
 HOURLY = {"source_id": "schedule", "source_version": 1, "config": {"start_at": "2026-01-01T00:00:00Z", "every": "1h"}}
 EXECUTED = []
 SENT = []
-MESSAGE_SENDING_TOOLS = {"send_email", "send_whatsapp_message", "send_telegram_message", "send_telegram_artifact"}
+MESSAGE_SENDING_TOOLS = {"send_email", "reply_email", "send_whatsapp_message", "send_telegram_message", "send_telegram_artifact"}
 OWNER = "owner@example.invalid"
 
 

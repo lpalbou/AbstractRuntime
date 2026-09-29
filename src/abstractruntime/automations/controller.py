@@ -45,6 +45,8 @@ from .ledger import (
 from .models import (
     add_delay,
     backoff_delay,
+    definition_email_allowed_recipients,
+    definition_notify,
     occurrence_run_id,
     trigger_state_of,
     wake_wait_key,
@@ -74,6 +76,10 @@ class Turn:
     ledger_store: Any
     artifact_store: Any
     now: str
+    # Email (framework backlog 0992 WP2): the runtime's durable event inbox and
+    # the account its occurrences are bound to (both host-set on the Runtime).
+    event_inbox: Any = None
+    email_binding: Any = None
 
     @classmethod
     def from_run(cls, run: RunState, *, now: Optional[str] = None) -> "Turn":
@@ -90,6 +96,8 @@ class Turn:
             ledger_store=ledger_store,
             artifact_store=getattr(run, "_runtime_artifact_store", None),
             now=now or _now_iso(),
+            event_inbox=getattr(run, "_runtime_event_inbox", None),
+            email_binding=getattr(run, "_runtime_email_binding", None),
         )
 
     @property
@@ -125,6 +133,59 @@ def _due(now: str, at: Optional[str]) -> bool:
     return at is not None and parse_timestamp(at, field="time") <= parse_timestamp(now, field="now")
 
 
+def adapter_kind(adapter: Any) -> str:
+    caps = (getattr(adapter, "descriptor", None) or {}).get("capabilities") or {}
+    return str(caps.get("kind") or "")
+
+
+def adapter_delivers_untrusted(adapter: Any) -> bool:
+    """A source whose events carry text written by other people (`email.received@1`)."""
+    caps = (getattr(adapter, "descriptor", None) or {}).get("capabilities") or {}
+    return caps.get("content_trust") == "untrusted"
+
+
+def source_events(turn: Turn, adapter: Any, state: Dict[str, Any]) -> Optional[list]:
+    """The inbox records after the automation's cursor, for an event source (None otherwise).
+
+    Records of another account's stream are passed with an empty payload: never admitted,
+    but the cursor may move past them. An event source on a runtime without an inbox is a
+    host wiring error and fails the tick loudly (creation already refuses it).
+    """
+    if adapter_kind(adapter) != "event":
+        return None
+    inbox = turn.event_inbox
+    if inbox is None:
+        raise ControllerSeamError(
+            "this automation's trigger reads the runtime's event inbox, but the runtime has none "
+            "(the host must call Runtime.set_event_inbox before ticking email-triggered automations)"
+        )
+    src = state.get("source_state") if isinstance(state.get("source_state"), dict) else {}
+    records = inbox.read(after_seq=int(src.get("cursor_seq") or 0))
+    binding = turn.email_binding
+    if binding is None:
+        return records
+    prefix = f"email:{binding.account_ref}:"
+    return [
+        r if str(r.get("stream") or "").startswith(prefix) else {**{k: r.get(k) for k in ("seq", "event_id", "stream", "appended_at")}, "payload": {}}
+        for r in records
+    ]
+
+
+def _skip_ahead(adapter: Any, binding: Dict[str, Any], state: Dict[str, Any], events: list) -> None:
+    """Move the source cursor past records the automation will never admit.
+
+    Derived from the binding's config and the append-only inbox, so it is replay-safe and
+    needs no decision record (like `active_revision` in `read_definition`)."""
+    skip = getattr(adapter, "skip_ahead", None)
+    if not callable(skip):
+        return
+    src = dict(state.get("source_state") or {})
+    target = int(skip(binding, state=trigger_state_of(state), events=events))
+    if target > int(src.get("cursor_seq") or 0):
+        src["cursor_seq"] = target
+        state["source_state"] = src
+
+
 # --- read_definition ------------------------------------------------------------------
 
 
@@ -158,7 +219,12 @@ def wait_decision(turn: Turn) -> Dict[str, Any]:
         return {"until": None}
     binding = definition["trigger"]
     adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
-    wait = adapter.prepare(binding, state=trigger_state_of(state), now=turn.now)
+    events = source_events(turn, adapter, state)
+    if events is not None:
+        _skip_ahead(adapter, binding, state, events)
+        wait = adapter.prepare(binding, state=trigger_state_of(state), now=turn.now, events=events)
+    else:
+        wait = adapter.prepare(binding, state=trigger_state_of(state), now=turn.now)
     if wait["kind"] == "exhausted":
         return {"end": True}
     if wait["kind"] == "idle":
@@ -211,7 +277,20 @@ def _grant_excludes(name: str) -> bool:
     return bool(row is not None and row.get("comms_send"))
 
 
-def grant_tool_approval(input_data: Dict[str, Any]) -> None:
+def _withholds_destination(name: str) -> bool:
+    """True for a tool whose served row carries `model_controlled_destination` (`fetch_url`,
+    `browser_probe`, and every message-sending tool): the model chooses where data goes.
+    An unreadable inventory withholds the tool (fail closed)."""
+    try:
+        from ..integrations.abstractcore.effect_handlers import _risk_row_for_tool
+
+        row = _risk_row_for_tool(name)
+    except Exception:  # noqa: BLE001
+        return True
+    return bool(row is None or row.get("model_controlled_destination"))
+
+
+def grant_tool_approval(input_data: Dict[str, Any], *, untrusted_input: bool = False) -> None:
     """`policy.tool_approval == "auto"`: pre-approve the target's tools for this occurrence.
 
     Creating the automation is the consent (an unattended run cannot ask a
@@ -225,10 +304,19 @@ def grant_tool_approval(input_data: Dict[str, Any]) -> None:
 
     Never granted (listed in `withheld_tools`): tools that send messages to
     model-chosen recipients (`_grant_excludes`). Their calls go through the
-    normal approval point: the per-call refiner still auto-approves a
-    `send_email` whose every recipient is the registered user's own address
-    (`_runtime.operator_email`, set by the host); any other recipient parks the
-    occurrence on a `tool_approval` wait, exactly as under `"ask"`.
+    normal approval point: the per-call refiner (`send_email_recipient@v2`)
+    auto-approves a `send_email` whose every recipient is the registered user's
+    own address (`_runtime.operator_email`, set by the host) or one the user
+    pre-authorised in the definition (`_runtime.email_allowed_recipients`); any
+    other recipient parks the occurrence on a `tool_approval` wait, exactly as
+    under `"ask"`.
+
+    `untrusted_input=True` (the trigger delivers text written by other people:
+    `email.received@1`): tools whose row carries `model_controlled_destination`
+    (`fetch_url`, `browser_probe`) are withheld too, so an inbound email cannot
+    steer an unattended occurrence into sending data to a URL it names
+    (framework backlog 0992, the WP0 follow-up). Schedule and manual
+    automations keep them in the grant (decision recorded in 0992).
     """
     from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
 
@@ -238,7 +326,7 @@ def grant_tool_approval(input_data: Dict[str, Any]) -> None:
     allowed = runtime_ns.get("allowed_tools")
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
     candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
-    withheld = [n for n in candidates if _grant_excludes(n)]
+    withheld = [n for n in candidates if _grant_excludes(n) or (untrusted_input and _withholds_destination(n))]
     tools = [n for n in candidates if n not in withheld]
     input_data["_runtime"] = {
         **runtime_ns,
@@ -277,7 +365,14 @@ def apply_context_mode(input_data: Dict[str, Any], *, mode: str) -> Dict[str, An
     return receipt
 
 
-def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_run_id: str) -> Dict[str, Any]:
+def build_prepared(
+    turn: Turn,
+    *,
+    index: int,
+    envelope: Dict[str, Any],
+    first_run_id: str,
+    inputs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Freeze the occurrence's inputs (contract D `prepare_context`).
 
     Independent: a fresh session (the attempt-1 run id), no history injected.
@@ -288,11 +383,33 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
     turns; the window's report rides `_runtime.session_history`.
     Both: the context mode decides whether the target reads history
     (`apply_context_mode`), whatever the target's frozen `use_context` says.
+
+    Email (framework backlog 0992 WP2): an `email.received@1` admission's
+    messages become `input_data.trigger` (marked untrusted) and, for a target
+    with a string `prompt`, a fixed untrusted frame appended to it
+    (`abstractruntime.email.frame`). Every occurrence gets the definition's
+    pre-authorised recipients as `_runtime.email_allowed_recipients` and, when
+    the runtime has one, its account binding as `_runtime.email_account` (both
+    SET over whatever the target inputs carried).
     """
+    from ..email.binding import EMAIL_ACCOUNT_KEY, EMAIL_ALLOWED_RECIPIENTS_KEY
+
     definition = turn.definition
+    trigger_binding = definition["trigger"]
+    try:
+        untrusted = adapter_delivers_untrusted(get_trigger_adapter(trigger_binding["source_id"], trigger_binding["source_version"]))
+    except Exception:  # noqa: BLE001 - an unknown source: treat its input as untrusted
+        untrusted = True
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
+    emails = (inputs or {}).get("emails")
+    if isinstance(emails, list):
+        from ..email.frame import email_frame, email_trigger_input
+
+        input_data["trigger"] = email_trigger_input(emails)
+        if isinstance(input_data.get("prompt"), str):
+            input_data["prompt"] = f"{input_data['prompt']}\n\n{email_frame(emails)}"
     if definition["policy"].get("tool_approval", "auto") == "auto":
-        grant_tool_approval(input_data)
+        grant_tool_approval(input_data, untrusted_input=untrusted)
     apply_context_mode(input_data, mode=definition["context"]["mode"])
     if definition["context"]["mode"] == "growing":
         from ..session_history import session_chat_messages
@@ -315,6 +432,15 @@ def build_prepared(turn: Turn, *, index: int, envelope: Dict[str, Any], first_ru
         session_id = definition["session_id"]
     else:
         session_id = first_run_id
+    runtime_ns = dict(input_data.get("_runtime")) if isinstance(input_data.get("_runtime"), dict) else {}
+    runtime_ns[EMAIL_ALLOWED_RECIPIENTS_KEY] = definition_email_allowed_recipients(definition)
+    if turn.email_binding is not None:
+        runtime_ns[EMAIL_ACCOUNT_KEY] = turn.email_binding.to_dict()
+    input_data["_runtime"] = runtime_ns
+    # The automation's title for templates (the send-email action's {automation_title}).
+    meta_ns = dict(input_data.get("_meta")) if isinstance(input_data.get("_meta"), dict) else {}
+    meta_ns["automation_title"] = definition["title"]
+    input_data["_meta"] = meta_ns
     return {
         "workflow_id": definition["target"]["workflow_id"],
         "session_id": session_id,
@@ -346,6 +472,7 @@ def admit(turn: Turn) -> str:
     manual = state.get("manual_pending")
     coalesced = None
     trigger_update: Dict[str, Any] = {}
+    inputs: Optional[Dict[str, Any]] = None
     if manual:
         command_id = str(manual["command_id"])
         manual_adapter = get_trigger_adapter("manual", 1)
@@ -357,9 +484,14 @@ def admit(turn: Turn) -> str:
         if state.get("paused") or definition.get("archived_at"):
             return "rearm"
         adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
-        admission = adapter.admit(binding, state=trigger_state_of(state), now=turn.now)
+        events = source_events(turn, adapter, state)
+        if events is not None:
+            admission = adapter.admit(binding, state=trigger_state_of(state), now=turn.now, events=events)
+        else:
+            admission = adapter.admit(binding, state=trigger_state_of(state), now=turn.now)
         if admission is None:
             return "rearm"
+        inputs = admission.get("inputs")
         command_id = None
         envelope = adapter.normalize(
             binding, event_id=admission["event_id"], fired_at=admission["fired_at"], payload=admission["payload"]
@@ -368,7 +500,7 @@ def admit(turn: Turn) -> str:
         coalesced = admission.get("coalesced")
         first_run_id = occurrence_run_id(turn.automation_id, revision=revision, index=index)
 
-    prepared = build_prepared(turn, index=index, envelope=envelope, first_run_id=first_run_id)
+    prepared = build_prepared(turn, index=index, envelope=envelope, first_run_id=first_run_id, inputs=inputs)
     new_pending = {
         "run_id": first_run_id,
         "index": index,
@@ -512,6 +644,10 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
         seq += 1
         body = str((outcome or {}).get("error") or "The occurrence failed.")[:2000]
         attention = {"kind": "failure", "seq": seq, "title": f"{definition['title']} failed", "body": body}
+    if attention is not None:
+        # Where the item is delivered (schema v2 `notify.channels`): "email" asks the host's
+        # notification dispatcher to mail the owner (framework backlog 0992 B5/C5).
+        attention["channels"] = list(definition_notify(definition)["channels"])
     last_outcome = {
         "run_id": pending["run_id"],
         "index": int(pending["index"]),
@@ -638,6 +774,8 @@ def next_fire_at(run: RunState, *, now: Optional[str] = None) -> Optional[str]:
         return pending.get("retry_at")
     binding = definition["trigger"]
     adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
+    if adapter_kind(adapter) == "event":
+        return None  # runs when mail arrives (after its batch interval), not at a clock time
     at = now or _now_iso()
     trigger_state = trigger_state_of(state)
     wait = adapter.prepare(binding, state=trigger_state, now=at)
@@ -651,6 +789,9 @@ def next_fire_at(run: RunState, *, now: Optional[str] = None) -> Optional[str]:
 
 __all__ = [
     "ControllerSeamError",
+    "adapter_delivers_untrusted",
+    "adapter_kind",
+    "source_events",
     "apply_context_mode",
     "current_occurrence",
     "next_fire_at",

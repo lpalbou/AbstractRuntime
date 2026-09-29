@@ -64,16 +64,34 @@ A run carries an optional policy under the model-unwritable
 the approval prompt is the exfiltration defense. Only an explicit
 `auto_approve_tools` name — the operator's conscious act — overrides that.
 
-## Per-call refiners (`send_email_recipient@v1`)
+## Per-call refiners
 
 Some tools carry a `risk_refiner` id on their row. A refiner may **only lower**
 a single call below its band, at approval time, when it can *prove* the call
 is safe; it can never raise the band, and any call it cannot prove holds the
 ceiling (deny-safe).
 
-`send_email` (band `outreach`) declares `send_email_recipient@v1` (operator
-ruling dm#244): a send to **the registered operator's own address**
-auto-approves; a send to any other recipient asks.
+`send_email` and `reply_email` (band `outreach`) declare
+`send_email_recipient@v2`: a `send_email` whose every recipient is **the
+registered user's own address** or **a recipient pre-authorised for the run**
+auto-approves; anything else asks.
+
+- Self is `_runtime.operator_email` (below). Pre-authorised recipients are
+  `_runtime.email_allowed_recipients`: exact addresses (and `"self"`) that an
+  automation takes from its definition (`policy.email_allowed_recipients`,
+  default `["self"]`, see [automations.md](automations.md#tool-approval)).
+  The key is model-unwritable: the controller sets it at admission, hosts pop
+  client-supplied values (`strip_client_email_keys`), and a child run takes
+  its parent's value.
+- `reply_email` always asks: its recipients come from the original message,
+  not from the arguments.
+- A call with an argument key `send_email` does not accept asks.
+- Approval is separate from the account's recipient policy (allowlist or
+  denylist), which AbstractCore enforces on every send afterwards. See
+  [email.md](email.md#sending-without-asking).
+
+`send_email_recipient@v1` (self only) stays registered for older tool rows.
+The rules below apply to both versions.
 
 - The operator address arrives as `_runtime.operator_email` — a
   **model-unwritable** key the gateway injects from the account record at run

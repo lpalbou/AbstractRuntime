@@ -25,6 +25,7 @@ See llms.txt for the linked index.
 - docs/automations.md
 - docs/tool-approval.md
 - docs/tools-comms.md
+- docs/email.md
 - docs/entity-runtime.md
 - docs/mcp-worker.md
 - docs/evidence.md
@@ -80,7 +81,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.19.2 or newer (its light install:
+The base install includes AbstractCore 2.20.0 or newer (its light install:
 remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -156,7 +157,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
@@ -237,6 +238,7 @@ sr = create_scheduled_runtime(
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
 | [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
 | [Automations](docs/automations.md) | Scheduled and on-request workflows: controller, triggers, commands, context, discussions, storage guarantees |
+| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger, the send-email action |
 | [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
 | [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
 | [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |
@@ -761,7 +763,8 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, manual@1,<br/>entry-point sources"]
+    Triggers["trigger registry<br/>schedule@1, manual@1, email.received@1,<br/>entry-point sources"]
+    Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end
   subgraph Runs["runs"]
@@ -780,6 +783,7 @@ flowchart LR
   Loop --> Controller
   Loop --> Occ
   Controller -->|"prepare / admit / rearm"| Triggers
+  Controller -->|"events after its cursor"| Inbox
   Controller -->|"START_SUBWORKFLOW run_id"| Occ
   Occ --> Desc
   Controller --> RS
@@ -789,6 +793,11 @@ flowchart LR
   Queries --> RS
   Queries --> LS
 ```
+
+Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
+(`abstractruntime.email.feeder`) and wakes the controller, and the `email.received@1` adapter batches the messages
+after the automation's cursor. Tool calls resolve the executing run's email account through the host's per-runtime
+resolver at call time. See [email.md](email.md).
 
 Invariants the design rests on:
 
@@ -838,6 +847,7 @@ AbstractRuntime includes a compiler and a portable bundle format:
 - `getting-started.md` — first steps
 - `api.md` — public API surface (imports + pointers)
 - `automations.md` — automations: controller, triggers, commands, context, discussions, storage guarantees
+- `email.md` — email accounts per run, the event inbox, the `email.received@1` trigger, the send-email action
 - `limits.md` — `_limits` and RuntimeConfig
 - `snapshots.md` — snapshot/bookmark stores
 - `provenance.md` — hash chain and verification
@@ -1096,7 +1106,29 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
-- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1` and `manual@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- definition v2: `policy.email_allowed_recipients` (default `["self"]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
+
+## Email
+
+Implementation: `src/abstractruntime/email/*`, `src/abstractruntime/triggers/email_received.py`. Deep dive: [email.md](email.md).
+
+```python
+from abstractruntime.email import (
+    EmailBinding, bind_email_account, strip_client_email_keys, binding_of,   # run-scoped binding
+    JsonFileEventInbox, InMemoryEventInbox,                                  # durable event inbox
+    EmailInboxFeeder, PollReport, email_event_id,                            # mailbox -> inbox
+    email_trigger_consumers, wake_email_automations,                         # watcher helpers
+    email_action_target, register_email_action_workflow, validate_email_action, render_email_template,
+)
+```
+
+- `Runtime.set_email_context_resolver(fn)`: `fn(binding) -> EmailContext | None`, per runtime, memory only
+- `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
+- `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
+- `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`)
+- approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
 - read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
 - read-only workspaces: run vars `workspace_read_only: true` (or `_runtime.workspace_read_only: true`); `abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool as `read`, `write`, `exec`, `delegate`, `comms` or `memory-write`
@@ -1132,7 +1164,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.19.2 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.20.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1308,10 +1340,11 @@ Docs: `automations.md#runs-sessions-and-history`, `api.md#sessions-and-history`.
 Not by default. With `policy.tool_approval: "auto"`, creating the automation is the consent: each occurrence gets a
 frozen grant for the target's tools (its `allowed_tools`, or every tool the runtime classifies). Tools the runtime
 does not classify, such as third-party MCP tools, still ask, and `ask_user` questions still wait for a person.
-Tools that send messages to recipients the model chooses (`send_email`, `send_whatsapp_message`,
-`send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address runs, any other
-recipient waits for approval, so text an occurrence reads (an inbound email, a web page) cannot make it mail data
-elsewhere. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
+Tools that send messages to recipients the model chooses (`send_email`, `reply_email`, `send_whatsapp_message`,
+`send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address, or to an address
+listed in the definition's `policy.email_allowed_recipients`, runs; any other recipient waits for approval, so text
+an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
+`email.received@1` also withhold `fetch_url` and `browser_probe`. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
 waits.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
@@ -1638,7 +1671,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.19.2`.
+- The current AbstractCore integration expects `abstractcore>=2.20.0`.
 
 Verify:
 
@@ -3573,14 +3606,15 @@ unknown fields are rejected at every level.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | `1` |
+| `schema_version` | `2` (a stored `1` reads with the defaults of the v2 fields and becomes `2` at its next revision) |
 | `revision` | starts at 1; each applied `automation.revise` adds 1 |
 | `title` | non-empty, at most 120 characters |
 | `controller` | `{bundle_ref: "abstractframework.automation-controller@1.0.0", flow_id: "controller"}` |
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |
 | `context` | `{mode: "independent" \| "growing", growing: {}}` |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients}` |
+| `notify` | `{channels: ["console"] \| ["console", "email"]}`: where attention items are delivered (default `["console"]`) |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
 | `created_at`, `archived_at` | UTC timestamps; `archived_at` is `null` until the automation is archived |
@@ -3589,14 +3623,16 @@ unknown fields are rejected at every level.
 `{max_attempts: 3, backoff: {initial: "30s", factor: 2, max: "10m"}}`. `max_attempts` is 1 to 10, `factor` is 1 to 10,
 and `initial` and `max` are durations (see [`schedule@1`](#schedule1)). `serial`, `misfire` and `failure` accept only
 the values shown; anything else is refused with `unsupported_feature`. `policy.tool_approval` is `"auto"` (default) or
-`"ask"`, see [Tool approval](#tool-approval).
+`"ask"`, see [Tool approval](#tool-approval). `policy.email_allowed_recipients` lists who occurrences may email
+without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
+`["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
 
 ### Creating an automation
 
 `create_automation(runtime, request, *, now=None, actor_id=None) -> (automation_id, revision)`.
 
 The request is `{request_id, title, target, trigger: {source_id, source_version, config}, context?, policy?,
-workspace_root, tenant?, user?}`.
+notify?, workspace_root, tenant?, user?}`.
 
 - The automation id is `uuid5(AUTOMATION_NAMESPACE, "<tenant>:<user>:<request_id>")`; `tenant` and `user` default to
   `local`. Sending the same request again returns the same automation, unchanged. Reusing a `request_id` for a
@@ -3645,6 +3681,15 @@ Config: `{start_at?, every?, until?, count?, anchor?}`.
 Config: `{}`. The automation runs only when asked with `automation.run_now`. A manual run of any automation, whatever
 its trigger, carries a `manual` envelope with event id `manual:<command_id>`.
 
+### `email.received@1`
+
+Runs the automation when mail arrives in the user's mailbox, in batches no more often than `config.every` (default
+`1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
+durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
+`unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
+string `prompt`, inside a fixed untrusted frame; their unattended grant withholds tools with a model-chosen
+destination. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
+
 ### Adding a source
 
 Declare the adapter in the entry-point group `abstractruntime.trigger_sources`:
@@ -3660,8 +3705,12 @@ my_source = "my_package.triggers:MySourceAdapter"
   `available: false` and a reason. It cannot be selected, and the other sources keep working.
 - The built-in sources are required: if one is missing or broken, discovery raises `TriggerRegistryError`.
 - `reset_trigger_registry()` forgets cached discovery (after installing a source package, or in tests).
-- The v1 controller waits on deadlines (`prepare` returning `until`), on commands only (`idle`), or ends
-  (`exhausted`). A source whose `prepare` returns an `event` wait fails the controller step.
+- The controller waits on deadlines (`prepare` returning `until`), without a deadline (`idle`: commands, or a
+  watcher's wake for event sources), or ends (`exhausted`). A source whose `prepare` returns an `event` wait fails
+  the controller step.
+- A source whose `capabilities.kind` is `event` receives `events=` (the inbox records after its cursor, read by the
+  controller) in `prepare` and `admit`, may keep its own state in `source_state`, and may return `inputs` with an
+  admission (data for the occurrence's inputs that stays out of the recorded envelope).
 
 ## The controller
 
@@ -3890,8 +3939,8 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
   - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
-  - **Tools that message model-chosen recipients are never granted** (framework backlog 0992 WP0): every tool
-    whose inventory row carries `comms_send` (`send_email`, `send_whatsapp_message`, `send_telegram_message`,
+  - **Tools that message model-chosen recipients are never granted**: every tool
+    whose inventory row carries `comms_send` (`send_email`, `reply_email`, `send_whatsapp_message`, `send_telegram_message`,
     `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
     `withheld_tools` and go through the normal approval point: a `send_email` whose every recipient is the
     registered user's address (`_runtime.operator_email`, set by the host; the gateway freezes it into the
@@ -3899,6 +3948,12 @@ returns the refusal message for a tool, or `None` when it is allowed.
     until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
     page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
     `comms` tool is withheld.
+  - **Pre-authorised recipients.** Every occurrence carries the definition's `policy.email_allowed_recipients` as
+    `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
+    recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
+  - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
+    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`). Schedule and
+    manual automations keep `fetch_url` and `browser_probe` in the grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
@@ -3941,7 +3996,8 @@ The output is read by structure. An agent-style target ends with `response` / `s
 with its end-node values or `{success, result}`. An output with `success: false` counts as a failure. A workflow that
 must flag a result adds `notify` next to its answer.
 
-Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the
+Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's `channels` repeats the definition's `notify.channels`; a host that delivers notifications by email
+mails the owner when `email` is listed.
 occurrence's `automation.completed` record with a per-automation sequence number.
 
 `list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)` returns
@@ -4099,8 +4155,8 @@ receives its result directly.
 
 - Schedules are fixed UTC intervals (`s`, `m`, `h`, `d`, at most `366d`). There are no cron expressions, calendar
   months, time zones or daylight-saving rules, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1` and `manual@1`. There are no external or event triggers; the v1
-  controller does not wait on `event` sources.
+- The shipped trigger sources are `schedule@1`, `manual@1` and `email.received@1`. There is no generic external
+  event source yet.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
 - Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
@@ -4116,6 +4172,7 @@ receives its result directly.
 - [api.md](api.md#automations): the import surface
 - [architecture.md](architecture.md#automations): where automations sit in the runtime
 - [tool-approval.md](tool-approval.md): tool risk tiers and the run policy
+- [email.md](email.md): email accounts, the `email.received@1` trigger and the send-email action
 - [faq.md](faq.md): common questions
 - [troubleshooting.md](troubleshooting.md#an-automation-does-not-fire): symptom-oriented fixes
 
@@ -4190,16 +4247,34 @@ A run carries an optional policy under the model-unwritable
 the approval prompt is the exfiltration defense. Only an explicit
 `auto_approve_tools` name — the operator's conscious act — overrides that.
 
-## Per-call refiners (`send_email_recipient@v1`)
+## Per-call refiners
 
 Some tools carry a `risk_refiner` id on their row. A refiner may **only lower**
 a single call below its band, at approval time, when it can *prove* the call
 is safe; it can never raise the band, and any call it cannot prove holds the
 ceiling (deny-safe).
 
-`send_email` (band `outreach`) declares `send_email_recipient@v1` (operator
-ruling dm#244): a send to **the registered operator's own address**
-auto-approves; a send to any other recipient asks.
+`send_email` and `reply_email` (band `outreach`) declare
+`send_email_recipient@v2`: a `send_email` whose every recipient is **the
+registered user's own address** or **a recipient pre-authorised for the run**
+auto-approves; anything else asks.
+
+- Self is `_runtime.operator_email` (below). Pre-authorised recipients are
+  `_runtime.email_allowed_recipients`: exact addresses (and `"self"`) that an
+  automation takes from its definition (`policy.email_allowed_recipients`,
+  default `["self"]`, see [automations.md](automations.md#tool-approval)).
+  The key is model-unwritable: the controller sets it at admission, hosts pop
+  client-supplied values (`strip_client_email_keys`), and a child run takes
+  its parent's value.
+- `reply_email` always asks: its recipients come from the original message,
+  not from the arguments.
+- A call with an argument key `send_email` does not accept asks.
+- Approval is separate from the account's recipient policy (allowlist or
+  denylist), which AbstractCore enforces on every send afterwards. See
+  [email.md](email.md#sending-without-asking).
+
+`send_email_recipient@v1` (self only) stays registered for older tool rows.
+The rules below apply to both versions.
 
 - The operator address arrives as `_runtime.operator_email` — a
   **model-unwritable** key the gateway injects from the account record at run
@@ -4233,9 +4308,18 @@ Implementation pointers (this repo):
 - toolset gating: `src/abstractruntime/integrations/abstractcore/default_tools.py`
 - tool execution: `src/abstractruntime/integrations/abstractcore/tool_executor.py`
 
-## Enable (opt-in)
+## Email for each user
 
-The `comms` toolset is disabled by default. Enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
+A host that serves users with their own mailboxes binds each run to its user's account and passes
+`email_enabled=True` to the toolset functions for users with a connected account; see [email.md](email.md). The
+email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
+`get_email_attachment`; `send_email` runs unattended only to the user's own address or to recipients pre-authorised
+for the run ([tool-approval.md](tool-approval.md#per-call-refiners)), and file arguments (`attachments`,
+`output_dir`) stay inside the run's workspace.
+
+## Enable (opt-in, process-wide)
+
+The `comms` toolset is disabled by default. For a single process-wide setup, enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
 
 - `ABSTRACT_ENABLE_COMMS_TOOLS=1` (enable email + WhatsApp + Telegram)
 - `ABSTRACT_ENABLE_EMAIL_TOOLS=1` (email only)
@@ -4289,10 +4373,10 @@ The actual comms tools live in AbstractCore:
 AbstractRuntime does **not** store secrets in run state. Secrets should be supplied as environment variables in the **process that executes the tool calls**.
 
 Practical starting points (provided by AbstractCore; see `pyproject.toml` for the minimum supported version):
-- Email:
-  - `ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml` (YAML/JSON config), or `ABSTRACT_EMAIL_{IMAP,SMTP}_*` env vars
-  - Passwords are resolved indirectly via `*_PASSWORD_ENV_VAR` (default: `EMAIL_PASSWORD`)
-  - Repo template (this repo): `emails.config.example.yaml` (static examples: OVH + Gmail)
+- Email: the account is configured in AbstractCore's email settings (`abstractcore email connect ...`, or the Email
+  page of the AbstractCore consoles), with credentials encrypted at rest; a multi-user host supplies each run's
+  account through `Runtime.set_email_context_resolver` ([email.md](email.md)). AbstractCore imports a pre-2.20
+  configuration once and then ignores it (see AbstractCore's email documentation).
 - WhatsApp (Twilio):
   - defaults use `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
 - Telegram:
@@ -4309,6 +4393,207 @@ Practical starting points (provided by AbstractCore; see `pyproject.toml` for th
 
 - `integrations/abstractcore.md` — AbstractCore wiring (`LLM_CALL`, `TOOL_CALLS`)
 - `provenance.md` — tamper-evident ledger
+
+
+==============================================================================
+# FILE: docs/email.md
+==============================================================================
+
+# Email: one user, one runtime, one mailbox
+
+AbstractRuntime lets each run act for its user's own email account, run automations when mail arrives, and send
+mail from automations, while the credentials stay with the host. This page covers the runtime side; the mail library,
+the account store and the recipient policy live in AbstractCore (`abstractcore.comms.email`), and the per-user
+settings, the mail watcher and the notification dispatcher live in AbstractGateway.
+
+Related pages: [tools-comms.md](tools-comms.md) (the email tools), [automations.md](automations.md) (triggers,
+definitions, tool approval), [tool-approval.md](tool-approval.md) (the `send_email_recipient@v2` refiner),
+[api.md](api.md#email) (imports).
+
+```mermaid
+flowchart LR
+  subgraph Host["Host (gateway), per user"]
+    Store["Account store\n(encrypted secret)"]
+    Watcher["Mail watcher\n(calls poll)"]
+  end
+  subgraph Runtime["Runtime (one per user)"]
+    Resolver["set_email_context_resolver(fn)"]
+    Inbox["Durable event inbox"]
+    Controller["Automation controller\nemail.received@1"]
+    Tools["Tool batch\n(email_run_scope)"]
+  end
+  Mailbox[("IMAP / SMTP")]
+  Watcher -- "EmailInboxFeeder.poll(ctx)" --> Mailbox
+  Watcher -- "append (durable)" --> Inbox
+  Watcher -- "wake_email_automations" --> Controller
+  Inbox --> Controller
+  Controller -- "occurrence (untrusted input)" --> Tools
+  Tools -- "binding" --> Resolver
+  Resolver -- "EmailContext (memory only)" --> Store
+  Tools -- "guarded_send / read" --> Mailbox
+```
+
+## Binding a run to an account
+
+A run carries a non-secret binding in its vars, `_runtime.email_account = {"account_ref": ..., "address": ...}`. When
+one of its email tools runs, the runtime calls the host's resolver with that binding and hands the returned
+`EmailContext` to the tool for the duration of the call. The context holds the password or OAuth token in memory only:
+it never enters run vars, the ledger, tool arguments, tool results or events.
+
+```python
+from abstractruntime.email import EmailBinding, bind_email_account, strip_client_email_keys
+
+runtime.set_email_context_resolver(lambda binding: my_store_for_this_user().context())
+runtime.set_email_binding(EmailBinding(account_ref="tenant:alice:mailbox", address="alice@example.test"))
+
+vars = strip_client_email_keys(client_vars)          # a client never chooses the account
+bind_email_account(vars, binding=runtime.email_binding)
+run_id = runtime.start(workflow=flow, vars=vars)
+```
+
+- The resolver belongs to one `Runtime` instance and is never persisted. Return an `EmailContext` for the binding, or
+  `None` when the account is not connected or email is turned off; the tools then answer `email_not_configured` with
+  the fix "Connect an email account in Settings -> Email". Check that `binding.account_ref` is this user's account.
+- Once a runtime in the process has a resolver, AbstractCore's email tools always resolve through the executing run,
+  and never fall back to the local AbstractCore settings of the process.
+- A run without a binding gets `email_not_configured`.
+- Child runs inherit `_runtime.email_account` and `_runtime.email_allowed_recipients`; the parent's value replaces any
+  value the child's own vars carry.
+- Automation occurrences are bound at admission from `runtime.email_binding`, so an automation created before the
+  account was connected uses it once it is connected.
+
+Tool availability follows the host's decision: pass `email_enabled=True` to `get_default_toolsets`,
+`list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user with a connected account. The
+email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
+`get_email_attachment`. Their file arguments follow the run's workspace: `attachments` must be files inside the
+workspace, and `get_email_attachment` saves into it.
+
+## Sending without asking
+
+`send_email` runs without an approval wait only when every recipient (To, Cc and Bcc) is:
+
+- **self**: the user's registered address, `_runtime.operator_email` (set by the host), or
+- **pre-authorised**: an exact address in `_runtime.email_allowed_recipients`, which an automation takes from its
+  definition (`policy.email_allowed_recipients`, default `["self"]`).
+
+Any other recipient, a `reply_email` call (its recipients come from the original message), or a call the refiner
+cannot read waits for a person on a `tool_approval` wait. Approval is separate from the account's recipient policy
+(allowlist or denylist): AbstractCore's `guarded_send` applies the policy and the send limits to every send, including
+an approved or pre-authorised one. See [tool-approval.md](tool-approval.md#per-call-refiners).
+
+## Running an automation when mail arrives
+
+### The inbox and the watcher
+
+The runtime keeps a durable event inbox (`JsonFileEventInbox(base_dir)` or `InMemoryEventInbox()`), attached with
+`runtime.set_event_inbox(inbox)`. The host's watcher fills it with `EmailInboxFeeder.poll(ctx)`:
+
+```python
+from abstractruntime.email import EmailInboxFeeder, JsonFileEventInbox, email_trigger_consumers, wake_email_automations
+
+inbox = JsonFileEventInbox(plane_dir / "event_inbox")
+runtime.set_event_inbox(inbox)
+feeder = EmailInboxFeeder(inbox, account_ref="tenant:alice:mailbox")
+
+if email_trigger_consumers(runtime):          # at least one email automation
+    report = feeder.poll(ctx)                 # every 60 s
+    if report.appended:
+        wake_email_automations(runtime)
+```
+
+- The mailbox is opened read-only; nothing is marked read, moved or deleted.
+- The first poll is a baseline: mail already in the folder never becomes an event.
+- Each new message is fetched whole and appended as one event,
+  `email_event_id(account_ref, folder, uidvalidity, uid)`. The folder cursor (UIDVALIDITY and last UID) advances
+  message by message, after each append is durable. Appending an id twice is a no-op.
+- When the server rebuilds the folder (a new UIDVALIDITY), the feeder resynchronises by date and skips messages that
+  are already in the inbox (same Message-ID) or older than the newest message seen before, so nothing is lost or
+  delivered twice.
+- A message that cannot be fetched on three polls in a row is recorded in `feeder.status()["unprocessable"]` with its
+  code, cause and fix, and the feeder moves past it.
+- A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,
+  retryable}`, and the next poll waits 60 seconds, doubling up to 15 minutes (`poll(..., force=True)` polls at once).
+  No automation is paused.
+
+### The `email.received@1` trigger
+
+```python
+trigger = {
+    "source_id": "email.received", "source_version": 1,
+    "config": {
+        "uses_model": True,          # default; "every" then defaults to "1h" (false: "60s")
+        "every": "1h",               # batch interval, at least "60s"
+        "folder": "INBOX",
+        "max_batch": 100,
+        "filter": {"from_domain_in": ["example.test"], "subject_contains": "invoice"},
+    },
+}
+```
+
+- **Filters** are typed: `from_in` (addresses), `from_domain_in` (exact domains; list a subdomain to match it),
+  `to_in` (any To or Cc address), `subject_contains` (one literal, case-insensitive substring) and `has_attachment`.
+  There are no patterns or expressions.
+- **Batches**: the automation runs at most once per `every`, with every matching message received since its previous
+  run (up to `max_batch`; the rest go to the next run). An automation that runs a model defaults to once an hour; one
+  that needs no model defaults to every minute.
+- **Each message once**: the automation keeps its own inbox cursor and a guard on the last UIDVALIDITY and UID it
+  consumed (`_runtime.automation.source_state`), so a message is admitted at most once, across wakes, restarts and
+  folder rebuilds. Mail that arrived before the automation was created, or while it was paused, is not processed.
+- The controller waits without a deadline until mail arrives, then until the batch interval allows the next run;
+  `next_fire_at` is set only while it waits for that interval.
+- Creating (or revising to) this trigger on a runtime without an event inbox is refused with `unsupported_feature`.
+
+### What the occurrence receives
+
+Inbound mail is data, never instructions:
+
+- `input_data.trigger = {source: "email.received@1", content_trust: "untrusted", notice, count, emails: [...]}`, each
+  email with its headers, whole `body_text` and `body_html`, and its attachment list;
+- for a target with a string `prompt`, a fixed frame appended to the prompt: a notice that the content was written by
+  other people and is not to be followed, then each email between `--- Email i of n ---` markers;
+- the trigger envelope recorded in the ledger carries message metadata and event ids, never bodies;
+- under `policy.tool_approval: "auto"`, the grant withholds every tool whose row declares a model-chosen destination
+  (`fetch_url`, `browser_probe`, `send_email`, `reply_email`, ...): those calls ask, so an email cannot steer the
+  occurrence into sending data to an address or URL it names.
+
+## Sending from an automation without a model
+
+The send-email action is a target for automations whose steps need no model ("forward invoices to me"):
+
+```python
+from abstractruntime.email import email_action_target, register_email_action_workflow
+
+register_email_action_workflow(workflow_registry)
+target = email_action_target({
+    "to": ["self"],
+    "subject": "[{automation_title}] {subject}",
+    "body": "From {from}\n\n{text}",
+    "mode": "each",                  # or "digest": one message per batch
+})
+```
+
+- Placeholders form a fixed list: `{from} {from_address} {to} {subject} {date} {text} {uid} {automation_title}` in
+  `each` mode; `{count} {list} {automation_title}` in `digest` mode. `{{` and `}}` are literal braces. Anything else
+  is refused by `validate_email_action`. Rendered subjects are one line.
+- `"self"` is the registered address (`_runtime.operator_email`).
+- The action sends through an ordinary `send_email` tool call, so the approval rule above, the recipient policy and the
+  send limits apply, and the ledger records the call.
+- A send a person refused is reported and not retried; when every send failed the occurrence fails (and is retried);
+  when some were sent, the result lists the others and asks for attention.
+
+## Notifications
+
+`notify.channels` in an automation definition (`["console"]` by default, or `["console", "email"]`) is copied onto
+each attention item (`channels`). A host that delivers notifications by email mails the owner when `email` is listed.
+See [automations.md](automations.md#notifications-attention-and-retries).
+
+## Limits
+
+- One account per runtime; the trigger reads `account: "self"` only.
+- The inbox keeps every event; there is no retention setting yet.
+- `reply_email` always asks for approval.
+- Schedule and manual automations keep `fetch_url` in their unattended grant; only triggers that deliver untrusted
+  inbound content withhold it.
 
 
 ==============================================================================
@@ -5361,14 +5646,15 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
-- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` self-recipient rule)
+- `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger, and the send-email action
+- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
 - `api.md#run-history-bundle-export-portable-replay-artifact` — run history bundles, including `resolved_actions` summaries for cross-client capability replay
 
 ## Features (reference)
 
-- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
+- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, `email.received@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

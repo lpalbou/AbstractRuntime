@@ -97,14 +97,15 @@ unknown fields are rejected at every level.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | `1` |
+| `schema_version` | `2` (a stored `1` reads with the defaults of the v2 fields and becomes `2` at its next revision) |
 | `revision` | starts at 1; each applied `automation.revise` adds 1 |
 | `title` | non-empty, at most 120 characters |
 | `controller` | `{bundle_ref: "abstractframework.automation-controller@1.0.0", flow_id: "controller"}` |
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |
 | `context` | `{mode: "independent" \| "growing", growing: {}}` |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients}` |
+| `notify` | `{channels: ["console"] \| ["console", "email"]}`: where attention items are delivered (default `["console"]`) |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
 | `created_at`, `archived_at` | UTC timestamps; `archived_at` is `null` until the automation is archived |
@@ -113,14 +114,16 @@ unknown fields are rejected at every level.
 `{max_attempts: 3, backoff: {initial: "30s", factor: 2, max: "10m"}}`. `max_attempts` is 1 to 10, `factor` is 1 to 10,
 and `initial` and `max` are durations (see [`schedule@1`](#schedule1)). `serial`, `misfire` and `failure` accept only
 the values shown; anything else is refused with `unsupported_feature`. `policy.tool_approval` is `"auto"` (default) or
-`"ask"`, see [Tool approval](#tool-approval).
+`"ask"`, see [Tool approval](#tool-approval). `policy.email_allowed_recipients` lists who occurrences may email
+without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
+`["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
 
 ### Creating an automation
 
 `create_automation(runtime, request, *, now=None, actor_id=None) -> (automation_id, revision)`.
 
 The request is `{request_id, title, target, trigger: {source_id, source_version, config}, context?, policy?,
-workspace_root, tenant?, user?}`.
+notify?, workspace_root, tenant?, user?}`.
 
 - The automation id is `uuid5(AUTOMATION_NAMESPACE, "<tenant>:<user>:<request_id>")`; `tenant` and `user` default to
   `local`. Sending the same request again returns the same automation, unchanged. Reusing a `request_id` for a
@@ -169,6 +172,15 @@ Config: `{start_at?, every?, until?, count?, anchor?}`.
 Config: `{}`. The automation runs only when asked with `automation.run_now`. A manual run of any automation, whatever
 its trigger, carries a `manual` envelope with event id `manual:<command_id>`.
 
+### `email.received@1`
+
+Runs the automation when mail arrives in the user's mailbox, in batches no more often than `config.every` (default
+`1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
+durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
+`unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
+string `prompt`, inside a fixed untrusted frame; their unattended grant withholds tools with a model-chosen
+destination. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
+
 ### Adding a source
 
 Declare the adapter in the entry-point group `abstractruntime.trigger_sources`:
@@ -184,8 +196,12 @@ my_source = "my_package.triggers:MySourceAdapter"
   `available: false` and a reason. It cannot be selected, and the other sources keep working.
 - The built-in sources are required: if one is missing or broken, discovery raises `TriggerRegistryError`.
 - `reset_trigger_registry()` forgets cached discovery (after installing a source package, or in tests).
-- The v1 controller waits on deadlines (`prepare` returning `until`), on commands only (`idle`), or ends
-  (`exhausted`). A source whose `prepare` returns an `event` wait fails the controller step.
+- The controller waits on deadlines (`prepare` returning `until`), without a deadline (`idle`: commands, or a
+  watcher's wake for event sources), or ends (`exhausted`). A source whose `prepare` returns an `event` wait fails
+  the controller step.
+- A source whose `capabilities.kind` is `event` receives `events=` (the inbox records after its cursor, read by the
+  controller) in `prepare` and `admit`, may keep its own state in `source_state`, and may return `inputs` with an
+  admission (data for the occurrence's inputs that stays out of the recorded envelope).
 
 ## The controller
 
@@ -414,8 +430,8 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
   - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
-  - **Tools that message model-chosen recipients are never granted** (framework backlog 0992 WP0): every tool
-    whose inventory row carries `comms_send` (`send_email`, `send_whatsapp_message`, `send_telegram_message`,
+  - **Tools that message model-chosen recipients are never granted**: every tool
+    whose inventory row carries `comms_send` (`send_email`, `reply_email`, `send_whatsapp_message`, `send_telegram_message`,
     `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
     `withheld_tools` and go through the normal approval point: a `send_email` whose every recipient is the
     registered user's address (`_runtime.operator_email`, set by the host; the gateway freezes it into the
@@ -423,6 +439,12 @@ returns the refusal message for a tool, or `None` when it is allowed.
     until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
     page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
     `comms` tool is withheld.
+  - **Pre-authorised recipients.** Every occurrence carries the definition's `policy.email_allowed_recipients` as
+    `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
+    recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
+  - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
+    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`). Schedule and
+    manual automations keep `fetch_url` and `browser_probe` in the grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
@@ -465,7 +487,8 @@ The output is read by structure. An agent-style target ends with `response` / `s
 with its end-node values or `{success, result}`. An output with `success: false` counts as a failure. A workflow that
 must flag a result adds `notify` next to its answer.
 
-Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the
+Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's `channels` repeats the definition's `notify.channels`; a host that delivers notifications by email
+mails the owner when `email` is listed.
 occurrence's `automation.completed` record with a per-automation sequence number.
 
 `list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)` returns
@@ -623,8 +646,8 @@ receives its result directly.
 
 - Schedules are fixed UTC intervals (`s`, `m`, `h`, `d`, at most `366d`). There are no cron expressions, calendar
   months, time zones or daylight-saving rules, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1` and `manual@1`. There are no external or event triggers; the v1
-  controller does not wait on `event` sources.
+- The shipped trigger sources are `schedule@1`, `manual@1` and `email.received@1`. There is no generic external
+  event source yet.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
 - Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
@@ -640,5 +663,6 @@ receives its result directly.
 - [api.md](api.md#automations): the import surface
 - [architecture.md](architecture.md#automations): where automations sit in the runtime
 - [tool-approval.md](tool-approval.md): tool risk tiers and the run policy
+- [email.md](email.md): email accounts, the `email.received@1` trigger and the send-email action
 - [faq.md](faq.md): common questions
 - [troubleshooting.md](troubleshooting.md#an-automation-does-not-fire): symptom-oriented fixes

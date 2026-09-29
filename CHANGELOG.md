@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Email for each user** (see `docs/email.md`). A run acts for one account: its non-secret binding
+  `_runtime.email_account = {account_ref, address}` is resolved at the moment a tool needs it through the host's
+  per-runtime resolver (`Runtime.set_email_context_resolver(fn)`), so credentials never enter run vars, the ledger,
+  tool arguments or results. `Runtime.set_email_binding(...)` binds automation occurrences; hosts set root runs with
+  `bind_email_account(...)` after `strip_client_email_keys(...)`. Child runs inherit the binding and the
+  pre-authorised recipients (the parent's value wins). Once a runtime has a resolver, AbstractCore's email tools in
+  that process never fall back to the local AbstractCore settings.
+- **`send_email_recipient@v2` approval refiner.** A `send_email` runs without an approval wait only when every
+  recipient is the registered address (`_runtime.operator_email`) or is listed in `_runtime.email_allowed_recipients`;
+  `reply_email`, unknown argument keys and anything unproven ask. The account's recipient policy and send limits
+  (AbstractCore `guarded_send`) still apply to every send.
+- **Durable event inbox and mail feeder** (`abstractruntime.email`): `JsonFileEventInbox` / `InMemoryEventInbox`
+  (append-only, unique event ids, per-stream dedupe keys and state, crash-repaired index), attached with
+  `Runtime.set_event_inbox(...)`; `EmailInboxFeeder.poll(ctx)` appends each new message whole, advances its
+  UIDVALIDITY + UID cursor only after a durable append, resynchronises after a folder rebuild without loss or
+  duplicates, passes a message that fails three polls, and reports connection failures as typed
+  `{code, cause, fix, retryable}` with a capped backoff (60 s to 15 min). `email_trigger_consumers(...)` and
+  `wake_email_automations(...)` serve the host's watcher.
+- **`email.received@1` trigger source.** Typed filters (`from_in`, `from_domain_in`, `to_in`, `subject_contains`,
+  `has_attachment`), batches no more often than `every` (default `1h` for automations that run a model, `60s`
+  otherwise; at least `60s`), up to `max_batch` messages, each message at most once per automation across restarts
+  and folder rebuilds. Occurrences receive the messages as `input_data.trigger` marked `content_trust: "untrusted"`
+  and, for a string `prompt`, inside a fixed untrusted frame; the recorded envelope carries metadata only.
+- **Send-email action** (`abstractframework.email-actions@1.0.0:send_email`, `register_email_action_workflow`,
+  `email_action_target`): automations without a model send templated mail (fixed placeholders, `each` or `digest`
+  mode) through an ordinary `send_email` tool call, under the same approval rule, policy and limits.
+- **Automation definition schema v2**: `policy.email_allowed_recipients` (`"self"` and exact addresses, default
+  `["self"]`, frozen into each occurrence) and `notify.channels` (`["console"]` or `["console", "email"]`), which
+  attention items carry as `channels`. Stored v1 definitions read with the defaults.
+- **Email tools follow the host's decision**: `email_enabled=` on `get_default_toolsets`, `get_default_tools`,
+  `list_default_tool_specs`, `build_default_tool_map` and `list_tool_catalog`; the email kind adds `reply_email`,
+  `search_emails` and `get_email_attachment`.
+
+### Changed
+
+- **Requires AbstractCore 2.20.0 or newer** (`abstractcore.comms.email`, the email tools on a per-run resolver).
+- An automation triggered by `email.received@1` also withholds tools whose row declares a model-chosen destination
+  (`fetch_url`, `browser_probe`) from its unattended grant; `reply_email` is withheld like `send_email`.
+- `send_email` / `reply_email` `attachments` and `get_email_attachment`'s `output_dir` follow the run's workspace
+  scope; `get_email_attachment` is a `write` tool.
+- A run policy that only withholds tools (`tool_policy.withheld_tools`) is applied like any other run policy, so the
+  per-call refiners run for it.
+
 ## [0.7.3] - 2026-09-29
 
 ### Security

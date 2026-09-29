@@ -332,7 +332,8 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, manual@1,<br/>entry-point sources"]
+    Triggers["trigger registry<br/>schedule@1, manual@1, email.received@1,<br/>entry-point sources"]
+    Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end
   subgraph Runs["runs"]
@@ -351,6 +352,7 @@ flowchart LR
   Loop --> Controller
   Loop --> Occ
   Controller -->|"prepare / admit / rearm"| Triggers
+  Controller -->|"events after its cursor"| Inbox
   Controller -->|"START_SUBWORKFLOW run_id"| Occ
   Occ --> Desc
   Controller --> RS
@@ -360,6 +362,11 @@ flowchart LR
   Queries --> RS
   Queries --> LS
 ```
+
+Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
+(`abstractruntime.email.feeder`) and wakes the controller, and the `email.received@1` adapter batches the messages
+after the automation's cursor. Tool calls resolve the executing run's email account through the host's per-runtime
+resolver at call time. See [email.md](email.md).
 
 Invariants the design rests on:
 
@@ -409,6 +416,7 @@ AbstractRuntime includes a compiler and a portable bundle format:
 - `getting-started.md` — first steps
 - `api.md` — public API surface (imports + pointers)
 - `automations.md` — automations: controller, triggers, commands, context, discussions, storage guarantees
+- `email.md` — email accounts per run, the event inbox, the `email.received@1` trigger, the send-email action
 - `limits.md` — `_limits` and RuntimeConfig
 - `snapshots.md` — snapshot/bookmark stores
 - `provenance.md` — hash chain and verification

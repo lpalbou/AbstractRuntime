@@ -241,7 +241,29 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
-- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1` and `manual@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- definition v2: `policy.email_allowed_recipients` (default `["self"]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
+
+## Email
+
+Implementation: `src/abstractruntime/email/*`, `src/abstractruntime/triggers/email_received.py`. Deep dive: [email.md](email.md).
+
+```python
+from abstractruntime.email import (
+    EmailBinding, bind_email_account, strip_client_email_keys, binding_of,   # run-scoped binding
+    JsonFileEventInbox, InMemoryEventInbox,                                  # durable event inbox
+    EmailInboxFeeder, PollReport, email_event_id,                            # mailbox -> inbox
+    email_trigger_consumers, wake_email_automations,                         # watcher helpers
+    email_action_target, register_email_action_workflow, validate_email_action, render_email_template,
+)
+```
+
+- `Runtime.set_email_context_resolver(fn)`: `fn(binding) -> EmailContext | None`, per runtime, memory only
+- `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
+- `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
+- `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`)
+- approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
 - read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
 - read-only workspaces: run vars `workspace_read_only: true` (or `_runtime.workspace_read_only: true`); `abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool as `read`, `write`, `exec`, `delegate`, `comms` or `memory-write`
@@ -277,7 +299,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.19.2 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.20.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 

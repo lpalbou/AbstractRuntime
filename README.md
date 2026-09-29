@@ -32,7 +32,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.19.2 or newer (its light install:
+The base install includes AbstractCore 2.20.0 or newer (its light install:
 remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -108,7 +108,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
@@ -189,6 +189,7 @@ sr = create_scheduled_runtime(
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
 | [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
 | [Automations](docs/automations.md) | Scheduled and on-request workflows: controller, triggers, commands, context, discussions, storage guarantees |
+| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger, the send-email action |
 | [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
 | [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
 | [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |

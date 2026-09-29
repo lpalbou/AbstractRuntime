@@ -36,6 +36,7 @@ DOCUMENTS = [
     "docs/automations.md",
     "docs/tool-approval.md",
     "docs/tools-comms.md",
+    "docs/email.md",
     "docs/entity-runtime.md",
     "docs/mcp-worker.md",
     "docs/evidence.md",

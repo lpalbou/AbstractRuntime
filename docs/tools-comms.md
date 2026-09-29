@@ -10,9 +10,18 @@ Implementation pointers (this repo):
 - toolset gating: `src/abstractruntime/integrations/abstractcore/default_tools.py`
 - tool execution: `src/abstractruntime/integrations/abstractcore/tool_executor.py`
 
-## Enable (opt-in)
+## Email for each user
 
-The `comms` toolset is disabled by default. Enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
+A host that serves users with their own mailboxes binds each run to its user's account and passes
+`email_enabled=True` to the toolset functions for users with a connected account; see [email.md](email.md). The
+email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
+`get_email_attachment`; `send_email` runs unattended only to the user's own address or to recipients pre-authorised
+for the run ([tool-approval.md](tool-approval.md#per-call-refiners)), and file arguments (`attachments`,
+`output_dir`) stay inside the run's workspace.
+
+## Enable (opt-in, process-wide)
+
+The `comms` toolset is disabled by default. For a single process-wide setup, enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
 
 - `ABSTRACT_ENABLE_COMMS_TOOLS=1` (enable email + WhatsApp + Telegram)
 - `ABSTRACT_ENABLE_EMAIL_TOOLS=1` (email only)
@@ -66,10 +75,10 @@ The actual comms tools live in AbstractCore:
 AbstractRuntime does **not** store secrets in run state. Secrets should be supplied as environment variables in the **process that executes the tool calls**.
 
 Practical starting points (provided by AbstractCore; see `pyproject.toml` for the minimum supported version):
-- Email:
-  - `ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml` (YAML/JSON config), or `ABSTRACT_EMAIL_{IMAP,SMTP}_*` env vars
-  - Passwords are resolved indirectly via `*_PASSWORD_ENV_VAR` (default: `EMAIL_PASSWORD`)
-  - Repo template (this repo): `emails.config.example.yaml` (static examples: OVH + Gmail)
+- Email: the account is configured in AbstractCore's email settings (`abstractcore email connect ...`, or the Email
+  page of the AbstractCore consoles), with credentials encrypted at rest; a multi-user host supplies each run's
+  account through `Runtime.set_email_context_resolver` ([email.md](email.md)). AbstractCore imports a pre-2.20
+  configuration once and then ignores it (see AbstractCore's email documentation).
 - WhatsApp (Twilio):
   - defaults use `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
 - Telegram:

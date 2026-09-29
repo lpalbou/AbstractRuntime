@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The local STT model catalog no longer files every engine's models under the active provider.** When
+  AbstractVoice's catalog carried no per-provider STT map (its light catalog, e.g. with no OpenAI key),
+  `local_list_stt_models()` attributed the flat, cross-engine model list to the active provider, so
+  `GET /api/gateway/audio/transcriptions/models` listed `gpt-4o-transcribe` as a faster-whisper model and
+  reported it as `active_model` with `active_provider` `faster-whisper`. It now asks each STT provider for its own
+  list (an engine-free call) and takes `active_model` from the active provider's list (framework backlog 0989).
+
 ### Changed
 
 - **`openai` may be 2.x (`openai<3.0.0,>=1.109.1`).** The `<2.0.0` cap, together with AbstractCore's, held vLLM

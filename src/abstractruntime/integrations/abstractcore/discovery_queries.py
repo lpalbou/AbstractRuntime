@@ -1295,16 +1295,35 @@ def local_list_stt_models(
     )
     active_provider = str(catalog.get("active_stt_provider") or "").strip()
     if cleaned and not models_by_provider and (active_provider or providers):
-        models_by_provider[active_provider or providers[0]] = cleaned
+        # The catalog carried no per-provider STT map (AbstractVoice's light
+        # catalog, e.g. when the default OpenAI engine has no key). The flat
+        # list spans every engine, so attributing it to the active provider
+        # advertised OpenAI's gpt-4o-transcribe as a faster-whisper model and
+        # as the active model (framework backlog 0989). Ask each provider for
+        # its own list instead; that call is engine-free.
+        for provider_id in _dedupe_strings(([active_provider] if active_provider else []) + providers):
+            try:
+                provider_models = voice.list_stt_models(provider=provider_id)
+            except Exception:
+                continue
+            provider_cleaned = _dedupe_strings([str(item) for item in list(provider_models or [])])
+            if provider_cleaned:
+                models_by_provider[provider_id] = provider_cleaned
+    active_provider_value = active_provider or (providers[0] if providers else None)
+    if active_provider_value and models_by_provider:
+        active_provider_models = models_by_provider.get(active_provider_value) or []
+        active_model = active_provider_models[0] if active_provider_models else None
+    else:
+        active_model = cleaned[0] if cleaned else None
     payload = _with_status(
         {
             "models": cleaned,
-            "active_model": cleaned[0] if cleaned else None,
+            "active_model": active_model,
             "providers": providers,
             "available_providers": list(catalog.get("available_stt_providers") or providers)
             if isinstance(catalog.get("available_stt_providers"), list)
             else providers,
-            "active_provider": active_provider or (providers[0] if providers else None),
+            "active_provider": active_provider_value,
             "models_by_provider": models_by_provider,
             "stt_models_by_provider": models_by_provider,
             "provider_models": _provider_models_from_mapping(models_by_provider),

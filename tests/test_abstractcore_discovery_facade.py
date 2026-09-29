@@ -1478,3 +1478,45 @@ def test_remote_discovery_marks_transport_failures_as_route_unavailable() -> Non
     assert payload["available"] is False
     assert payload["route_available"] is False
     assert payload["error"] == "connection refused"
+
+
+def test_local_stt_catalog_without_provider_map_asks_each_provider(monkeypatch) -> None:
+    """Framework backlog 0989: AbstractVoice's light catalog carries no per-provider STT
+    map; the flat model list spans every engine and was attributed wholesale to the
+    active provider, advertising OpenAI's gpt-4o-transcribe as faster-whisper's model
+    and as the active model."""
+
+    from abstractruntime.integrations.abstractcore import discovery_queries
+
+    per_provider = {
+        None: ["gpt-4o-transcribe", "whisper-1", "tiny", "base", "Qwen/Qwen3-ASR-1.7B"],
+        "faster-whisper": ["tiny", "base"],
+        "transformers-asr": ["Qwen/Qwen3-ASR-1.7B"],
+    }
+
+    class _FakeVoice:
+        def voice_catalog(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+            _ = args, kwargs
+            return {
+                "active_stt_provider": "faster-whisper",
+                "stt_providers": ["faster-whisper", "transformers-asr"],
+                "stt_models_by_provider": {},
+            }
+
+        def list_stt_models(self, provider: str | None = None) -> List[str]:
+            return list(per_provider.get(provider, []))
+
+    class _FakeRegistry:
+        voice = _FakeVoice()
+
+    monkeypatch.setattr(discovery_queries, "_runtime_capability_registry", lambda **_kwargs: _FakeRegistry())
+
+    payload = discovery_queries.local_list_stt_models()
+
+    assert payload["active_provider"] == "faster-whisper"
+    assert payload["active_model"] == "tiny"
+    assert payload["stt_models_by_provider"] == {
+        "faster-whisper": ["tiny", "base"],
+        "transformers-asr": ["Qwen/Qwen3-ASR-1.7B"],
+    }
+    assert "gpt-4o-transcribe" not in payload["stt_models_by_provider"]["faster-whisper"]

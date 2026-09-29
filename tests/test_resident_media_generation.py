@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 import abstractruntime.integrations.abstractcore.llm_client as llm_mod
+
+pytestmark = pytest.mark.basic
 from abstractruntime.integrations.abstractcore.llm_client import (
     LocalAbstractCoreLLMClient,
     MultiLocalAbstractCoreLLMClient,
@@ -251,6 +253,8 @@ def test_real_abstractvision_plugin_resident_load_is_the_pipeline_generation_use
     )
     assert loaded.get("ok") is True, loaded
     assert len(backends) == 1 and backends[0].preloads == 1
+    # AbstractVision 0.3.33 reports the fresh load (`loaded_new`), so it reads as "loaded".
+    assert loaded.get("loaded_new") is True, loaded
 
     out = client.generate(prompt="A red mug.", params=_image_params())
     client.generate(prompt="A blue mug.", params=_image_params())
@@ -268,3 +272,39 @@ def test_real_abstractvision_plugin_resident_load_is_the_pipeline_generation_use
     assert backends[0].unloaded is True
     client.generate(prompt="A green mug.", params=_image_params())
     assert len(subprocess_calls) == 1
+
+
+def test_resident_generation_holds_the_same_process_wide_lock_as_the_subprocess_path() -> None:
+    """A resident generation and a one-shot subprocess load must never use the GPU at once: the
+    resident path holds THE process-wide `_LOCAL_IMAGE_SUBPROCESS_LOCK` (the object the image and
+    video subprocess paths take), not a lock of its own."""
+    held: List[bool] = []
+
+    class _Core:
+        def _run_multimodal_spec(self, **_kwargs):
+            # Another thread cannot take the shared lock while the resident generation runs.
+            got = llm_mod._LOCAL_IMAGE_SUBPROCESS_LOCK.acquire(blocking=False)
+            if got:
+                llm_mod._LOCAL_IMAGE_SUBPROCESS_LOCK.release()
+            held.append(not got)
+
+    llm_mod._run_resident_media_specs(
+        core=_Core(),
+        resident_rows=[dict(_RESIDENT_ROW)],
+        specs=[{"modality": "image", "provider": "huggingface", "model": _KLEIN}],
+        prompt="A red mug.",
+        media=None,
+        artifact_store=None,
+        progress_callback=None,
+        runtime_provider="lmstudio",
+        runtime_model="qwen3.5-9b",
+    )
+    assert held == [True], "the resident path must hold the shared subprocess lock"
+    assert llm_mod._LOCAL_IMAGE_SUBPROCESS_LOCK.acquire(blocking=False), "and release it afterwards"
+    llm_mod._LOCAL_IMAGE_SUBPROCESS_LOCK.release()
+
+    # The image subprocess path takes the same object.
+    import inspect
+
+    source = inspect.getsource(llm_mod._run_local_image_subprocess)
+    assert "lock = _LOCAL_IMAGE_SUBPROCESS_LOCK" in source

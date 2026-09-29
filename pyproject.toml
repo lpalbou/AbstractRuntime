@@ -50,8 +50,10 @@ dependencies = [
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing come with AbstractCore's light
   # install (remote providers, built-in tools, media inputs, voice/vision/music
-  # plugins) without selecting local inference engines.
-  "abstractcore>=2.19.0",
+  # plugins) without selecting local inference engines. 2.19.2 floors
+  # abstractvision>=0.3.33, whose resident loads report `loaded_new` and whose
+  # unload frees the pipeline (the resident media path relies on both).
+  "abstractcore>=2.19.2",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -68,12 +70,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.19.0",
+  "abstractcore[apple]>=2.19.2",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.19.0",
+  "abstractcore[gpu]>=2.19.2",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]

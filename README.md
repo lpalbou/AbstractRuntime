@@ -32,7 +32,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.19.0 or newer (its light install:
+The base install includes AbstractCore 2.19.2 or newer (its light install:
 remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and

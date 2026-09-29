@@ -52,7 +52,7 @@ def test_runtime_base_is_remote_light_with_multimodal_and_mcp_support() -> None:
     assert "abstractcore = [" not in text
     assert "multimodal = [" not in text
     assert "mcp-worker = [" not in text
-    assert '"abstractcore>=2.19.0"' in text
+    assert '"abstractcore>=2.19.2"' in text
     # Only AbstractCore's three install settings: light (no extra), apple, gpu.
     assert re.findall(r'"abstractcore\[([^\]]*)\]', text) == ["apple", "gpu"]
     assert '"openai<3.0.0,>=1.109.1"' in text
@@ -89,8 +89,8 @@ def test_runtime_exposes_only_apple_and_gpu_user_install_profiles() -> None:
     apple_block = _extract_optional_dependency_block(text, key="apple")
     gpu_block = _extract_optional_dependency_block(text, key="gpu")
 
-    assert '"abstractcore[apple]>=2.19.0"' in apple_block
-    assert '"abstractcore[gpu]>=2.19.0"' in gpu_block
+    assert '"abstractcore[apple]>=2.19.2"' in apple_block
+    assert '"abstractcore[gpu]>=2.19.2"' in gpu_block
     assert '"setuptools<82.0.0,>=80.10.2"' in apple_block
     assert '"setuptools<82.0.0,>=77.0.3"' in gpu_block
     assert "pymupdf" not in apple_block.lower()

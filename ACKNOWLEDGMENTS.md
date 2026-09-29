@@ -11,7 +11,7 @@ The canonical dependency list lives in `pyproject.toml`.
 - **AbstractMemory** (`>=0.3.0`) — TripleStore models and store contract used by Runtime's `MEMORY_KG_*` effects. Durable/vector backend dependencies such as LanceDB remain selected by hosts.
 
 ## Runtime integrations
-- **abstractcore** (`abstractcore>=2.19.0`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (AbstractCore's light install); the `apple` and `gpu` extras select `abstractcore[apple]` / `abstractcore[gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
+- **abstractcore** (`abstractcore>=2.19.2`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (AbstractCore's light install); the `apple` and `gpu` extras select `abstractcore[apple]` / `abstractcore[gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
   - The AbstractCore integration uses **httpx** for remote mode (`src/abstractruntime/integrations/abstractcore/llm_client.py`) and **pydantic** for structured validation (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). These are provided by AbstractCore’s dependency set.
   - The `tools` extra of AbstractCore backs the base Runtime toolset and the `abstractruntime-mcp-worker` entry point.
 - **RestrictedPython** (`>=7.0`, core install) — sandbox for VisualFlow “Code” nodes and pin expressions (`src/abstractruntime/visualflow_compiler/visual/code_executor.py`).

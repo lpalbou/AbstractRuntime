@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were not explicitly loaded keep the isolated subprocess (crash isolation for native Metal/CUDA
   failures), so the explicit load is the opt-in.
 
+### Changed
+
+- **Requires AbstractCore 2.19.2 or newer** (`abstractcore`, `abstractcore[apple]`, `abstractcore[gpu]`).
+  It brings AbstractVision 0.3.33, whose loads report `loaded_new` (a fresh image-model load reads as
+  `loaded`, not `already_loaded`) and whose unload frees the model's memory, which the resident path
+  above relies on.
+
 ## [0.7.2] - 2026-09-29
 
 ### Changed

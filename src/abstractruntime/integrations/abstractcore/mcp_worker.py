@@ -536,7 +536,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "Failed to start MCP worker.\n\n"
             f"Error: {e}\n\n"
             "Tips:\n"
-            "- Ensure AbstractCore is installed (and, for web tools, `abstractcore[tools]`).\n"
+            "- Ensure AbstractCore is installed; the web tools are part of its light install "
+            "(repair with `pip install -U abstractcore`).\n"
             "- Choose toolsets explicitly (e.g. `--toolsets files` or `--toolsets files,system`).\n"
         )
         return 1

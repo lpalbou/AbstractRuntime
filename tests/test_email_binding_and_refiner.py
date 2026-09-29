@@ -102,6 +102,8 @@ def test_v2_is_registered_for_the_core_row():
         (_call(to=SELF), _rt(allowed=["self"], operator=None), "ask"),  # "self" without a registered address
         (_call(to=SELF), _rt(allowed=[]), "auto"),  # the registered address is always self
         (_call(to=BOSS), _rt(allowed=[f"Boss <{BOSS}>", "*@example.test", "example.test"]), "ask"),  # not plain addresses
+        (_call(to=f"Boss <{BOSS}>"), _rt(allowed=[f"Boss <{BOSS}>"]), "ask"),  # a non-address entry never matches verbatim
+        (_call(to="undisclosed-recipients:;"), _rt(allowed=["undisclosed-recipients:;"]), "ask"),  # group syntax
         (_call(to=SELF, name="reply_email"), _rt(), "ask"),  # recipients come from the original
         ({"name": "reply_email", "arguments": {"uid": "3", "body_text": "x"}}, _rt(), "ask"),
         (_call(to=SELF, recipients=STRANGER), _rt(), "ask"),  # unknown argument key

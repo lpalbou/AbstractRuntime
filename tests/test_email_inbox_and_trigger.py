@@ -639,3 +639,23 @@ def test_the_feeder_cursor_never_passes_a_message_whose_append_failed(tmp_path, 
     assert [e["payload"]["subject"] for e in inbox.read()] == ["first"]
     assert feeder.poll(ctx).ok
     assert [e["payload"]["subject"] for e in inbox.read()] == ["first", "second", "third"]
+
+
+def test_adapter_never_admits_at_or_before_its_cursor():
+    adapter = EmailReceivedTriggerAdapter()
+    cfg = _validate({"uses_model": False})
+    binding = {"binding_id": "b", "source_id": "email.received", "source_version": 1, "config": cfg}
+    rec = lambda seq, uv, uid: {"seq": seq, "event_id": f"e{seq}", "stream": f"email:{REF}:INBOX",  # noqa: E731
+                                "appended_at": "2026-01-01T00:00:01+00:00",
+                                "payload": {"kind": "email", "folder": "INBOX", "uidvalidity": uv, "uid": uid,
+                                            "from_address": "a@example.test", "attachments": []}}
+    state = {"anchor": T0, "tick": 1, "scheduled_count": 1, "exhausted": False,
+             "source_state": {"cursor_seq": 2, "since": T0, "mail_cursor": {"uidvalidity": 9, "last_uid": 1, "folder": "INBOX"},
+                              "last_admitted_at": None}}
+    events = [rec(1, 7, 1), rec(2, 7, 2), rec(3, 9, 2)]  # seq 1-2: an older epoch, consumed; seq 3: new
+    assert [r["seq"] for r in adapter.candidates(binding, state=state, events=events)] == [3]
+    admission = adapter.admit(binding, state=state, now="2026-01-01T00:00:05+00:00", events=events)
+    assert admission["payload"]["event_ids"] == ["e3"]
+    assert admission["state"]["source_state"]["cursor_seq"] == 3
+    assert admission["state"]["source_state"]["mail_cursor"] == {"uidvalidity": 9, "last_uid": 2, "folder": "INBOX"}
+    assert adapter.prepare(binding, state=state, now=T0) == {"kind": "idle"}  # no events at hand: nothing pending

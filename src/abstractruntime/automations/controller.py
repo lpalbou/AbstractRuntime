@@ -278,16 +278,23 @@ def _grant_excludes(name: str) -> bool:
 
 
 def _withholds_destination(name: str) -> bool:
-    """True for a tool whose served row carries `model_controlled_destination` (`fetch_url`,
-    `browser_probe`, and every message-sending tool): the model chooses where data goes.
-    An unreadable inventory withholds the tool (fail closed)."""
+    """True for a tool whose served row (or core's own row) carries
+    `model_controlled_destination` (`fetch_url`, `browser_probe`, and every message-sending
+    tool): the model chooses where data goes. An unreadable inventory withholds the tool
+    (fail closed)."""
     try:
         from ..integrations.abstractcore.effect_handlers import _risk_row_for_tool
+        from ..integrations.abstractcore.tool_inventory_facade import core_registry_tool_rows
 
         row = _risk_row_for_tool(name)
-    except Exception:  # noqa: BLE001
+        # The served row can be the entity's walled twin (`fetch_url`), which does not carry
+        # core's approval facts: consult core's own row too, and withhold when EITHER says so.
+        core_row = next((r for r in core_registry_tool_rows() if str(r.get("name") or "") == name), None)
+    except Exception:  # noqa: BLE001 - no facts at all: withhold (fail closed)
         return True
-    return bool(row is None or row.get("model_controlled_destination"))
+    # A name no inventory describes (runtime-owned tools such as `remember`) carries no
+    # destination fact; the WP0 rule for comms tools is the same.
+    return any(bool(r and r.get("model_controlled_destination")) for r in (row, core_row))
 
 
 def grant_tool_approval(input_data: Dict[str, Any], *, untrusted_input: bool = False) -> None:

@@ -287,6 +287,8 @@ def list_attention(
         }
         if att.get("body"):
             item["body"] = att["body"]
+        # Delivery channels (definition schema v2 `notify.channels`; absent on older records).
+        item["channels"] = list(att.get("channels") or ["console"])
         items.append(item)
     items.sort(key=lambda it: it["seq"])
     page = items[:limit]

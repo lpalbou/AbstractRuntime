@@ -251,6 +251,7 @@ def _done_node(run: Any, ctx: Any) -> StepPlan:
     results = (result or {}).get("results") if isinstance(result, dict) else None
     sent: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
+    refused: List[str] = []
     for r in results or []:
         out = r.get("output") if isinstance(r, dict) else None
         if isinstance(r, dict) and r.get("success") and isinstance(out, dict) and out.get("success"):
@@ -259,7 +260,19 @@ def _done_node(run: Any, ctx: Any) -> StepPlan:
         if isinstance(out, dict):
             failed.append({k: out.get(k) for k in ("error_code", "cause", "fix", "error")})
         else:
-            failed.append({"error_code": "email_action_send_failed", "error": str((r or {}).get("error") or "The send did not run.")})
+            # The send never ran: a person refused the approval, or the run's tool ceiling
+            # blocked it. A decision, not a failure: retrying would only ask again.
+            refused.append(str((r or {}).get("error") or "The send was not approved."))
+    if refused and not failed:
+        return StepPlan(
+            node_id="done",
+            complete_output={
+                "success": True,
+                "response": f"Sent {len(sent)} email(s); {len(refused)} not sent: {refused[0]}",
+                "sent": sent,
+                "not_sent": refused,
+            },
+        )
     if not failed:
         return StepPlan(node_id="done", complete_output={"success": True, "response": f"Sent {len(sent)} email(s).", "sent": sent})
     first = failed[0]

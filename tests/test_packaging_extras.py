@@ -53,7 +53,7 @@ def test_runtime_base_is_remote_light_with_multimodal_and_mcp_support() -> None:
     assert "multimodal = [" not in text
     assert "mcp-worker = [" not in text
     assert '"abstractcore[remote,tools,vision,voice,audio,music]>=2.18.0"' in text
-    assert '"openai<2.0.0,>=1.109.1"' in text
+    assert '"openai<3.0.0,>=1.109.1"' in text
     assert '"httpx<1.0.0,>=0.28.1"' in text
     assert '"anyio<5.0.0,>=4.12.1"' in text
     assert '"Pillow<13.0.0,>=10.0.0"' in text

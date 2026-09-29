@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`openai` may be 2.x (`openai<3.0.0,>=1.109.1`).** The `<2.0.0` cap, together with AbstractCore's, held vLLM
+  at 0.11.0 in the `gpu` profile (every newer vLLM needs `openai>=2`), and vLLM 0.11.0 does not start with
+  Transformers 5 (`Qwen2Tokenizer has no attribute all_special_tokens_extended`); it also pinned torch to 2.8.0.
+  AbstractRuntime does not import the SDK itself (framework backlog 0989).
+
 ## [0.7.2] - 2026-09-29
 
 ### Changed

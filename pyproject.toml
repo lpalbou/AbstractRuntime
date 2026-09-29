@@ -51,7 +51,7 @@ dependencies = [
   # MCP worker support, and multimodal routing are available without selecting
   # local inference engines.
   "abstractcore[remote,tools,vision,voice,audio,music]>=2.18.0",
-  "openai<2.0.0,>=1.109.1",
+  "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
   "Pillow<13.0.0,>=10.0.0",

@@ -1927,8 +1927,12 @@ session. Filter the run index with <code>session_kind="chat,discussion"</code> t
 <h2 id="do-an-automations-tools-ask-for-approval">Do an automation's tools ask for approval?<a class="headerlink" href="#do-an-automations-tools-ask-for-approval" title="Permanent link">&para;</a></h2>
 <p>Not by default. With <code>policy.tool_approval: "auto"</code>, creating the automation is the consent: each occurrence gets a
 frozen grant for the target's tools (its <code>allowed_tools</code>, or every tool the runtime classifies). Tools the runtime
-does not classify, such as third-party MCP tools, still ask, and <code>ask_user</code> questions still wait for a person. Use
-<code>"ask"</code> to approve each tool batch; pending approvals appear in <code>pending_waits</code> as <code>tool_approval</code> waits.</p>
+does not classify, such as third-party MCP tools, still ask, and <code>ask_user</code> questions still wait for a person.
+Tools that send messages to recipients the model chooses (<code>send_email</code>, <code>send_whatsapp_message</code>,
+<code>send_telegram_*</code>) are never in the grant: a <code>send_email</code> to the registered user's own address runs, any other
+recipient waits for approval, so text an occurrence reads (an inbound email, a web page) cannot make it mail data
+elsewhere. Use <code>"ask"</code> to approve each tool batch; pending approvals appear in <code>pending_waits</code> as <code>tool_approval</code>
+waits.</p>
 <p>Docs: <code>automations.md#tool-approval</code>, <code>automations.md#waits-on-a-person</code>.</p>
 <h2 id="can-a-discussion-of-an-automation-run-change-my-files">Can a discussion of an automation run change my files?<a class="headerlink" href="#can-a-discussion-of-an-automation-run-change-my-files" title="Permanent link">&para;</a></h2>
 <p>Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as
@@ -2071,8 +2075,8 @@ the recorded result rather than resending the external message.</p>
 <p>That keeps the ledger, artifacts, and replay surface Runtime-authored instead of synthesizing history after host-side work already happened.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/run_facade.py</code>.</p>
 <h2 id="why-can-local-media-residency-return-okfalse-without-failing-the-run">Why can local media residency return <code>ok:false</code> without failing the run?<a class="headerlink" href="#why-can-local-media-residency-return-okfalse-without-failing-the-run" title="Permanent link">&para;</a></h2>
-<p>Because local media warmup is not always a meaningful reusable state. In particular, local image generation may execute through a one-shot subprocess isolation boundary, so a prior warmup cannot be reused by the next request. Runtime therefore reports unsupported local media residency explicitly instead of pretending success.</p>
-<p>For optional residency (<code>required=false</code>), the effect still completes durably but includes <code>status_hint="warning"</code> and <code>degraded=true</code>. Unsupported local media responses also report <code>requires_long_lived_server=true</code> and a <code>config_hint</code> that points at <code>ABSTRACTCORE_SERVER_BASE_URL</code>; image generation additionally reports <code>execution_mode="local_one_shot_subprocess"</code>.
+<p>Because a local media load can fail or have nothing to load into: no capability plugin serves the task, or the plugin refused the model. Runtime reports that explicitly instead of pretending success. A load that succeeds is used: local image and video requests normally run in a one-shot subprocess (crash isolation, one model load per request), but a request whose model is resident runs in-process on the loaded pipeline (<code>execution_mode="resident_in_process"</code>).</p>
+<p>For optional residency (<code>required=false</code>), the effect still completes durably but includes <code>status_hint="warning"</code> and <code>degraded=true</code>. Unsupported local media responses also report <code>requires_long_lived_server=true</code> and a <code>config_hint</code> that points at <code>ABSTRACTCORE_SERVER_BASE_URL</code>; image generation additionally reports <code>execution_mode="local_one_shot_subprocess"</code>, the path those requests then take.
 Docs: <code>integrations/abstractcore.md</code>. Code: <code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>, <code>src/abstractruntime/integrations/abstractcore/llm_client.py</code>.</p>
 <h2 id="what-are-local-remote-hybrid-execution-modes">What are “local / remote / hybrid” execution modes?<a class="headerlink" href="#what-are-local-remote-hybrid-execution-modes" title="Permanent link">&para;</a></h2>
 <p>They refer to where LLM and tools execute:

@@ -1313,7 +1313,8 @@ sources), <code>abstractruntime.automation_queries</code> (listing), <code>abstr
 <li><strong>Automations are quiet.</strong> An occurrence asks for attention only when its output says <code>notify</code>, when it still
   fails after its last retry, or while it waits on a person.</li>
 <li><strong>Creating an automation is consent for its tools.</strong> With the default <code>tool_approval: "auto"</code> an occurrence's tools
-  run without asking; set <code>"ask"</code> to approve them one batch at a time.</li>
+  run without asking, except messages to anyone but the registered user (those wait for approval); set <code>"ask"</code> to
+  approve every batch.</li>
 <li><strong>Everything is recorded.</strong> Every admission, dispatch, retry, completion and command is an <code>automation.*</code> record in
   the controller's ledger. A crash at any point never loses an occurrence and never starts one twice.</li>
 </ul>
@@ -1762,6 +1763,15 @@ returns the refusal message for a tool, or <code>None</code> when it is allowed.
 <li>A name outside the run's tool ceiling (<code>allowed_tools</code>) grants nothing: approval never widens the ceiling.</li>
 <li>A tool outside <code>TOOL_EFFECT_CLASSES</code> (a third-party MCP tool, for example) is not in the grant and still asks.</li>
 <li>A <code>tool_policy</code> that the target's own <code>input_data._runtime</code> already carries is left as it is.</li>
+<li><strong>Tools that message model-chosen recipients are never granted</strong> (framework backlog 0992 WP0): every tool
+    whose inventory row carries <code>comms_send</code> (<code>send_email</code>, <code>send_whatsapp_message</code>, <code>send_telegram_message</code>,
+    <code>send_telegram_artifact</code>), even when <code>allowed_tools</code> names it. They are listed in the grant's
+    <code>withheld_tools</code> and go through the normal approval point: a <code>send_email</code> whose every recipient is the
+    registered user's address (<code>_runtime.operator_email</code>, set by the host; the gateway freezes it into the
+    target's inputs) runs; any other recipient parks the occurrence on a <code>tool_approval</code> wait, as under <code>"ask"</code>,
+    until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
+    page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
+    <code>comms</code> tool is withheld.</li>
 <li><strong><code>"ask"</code>.</strong> No grant. A tool call that needs approval waits on a <code>tool_approval</code> wait, as in a chat.</li>
 </ul>
 <p>The grant is frozen with the rest of the occurrence's inputs: a revision of <code>tool_approval</code> applies from the next

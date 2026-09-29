@@ -14,7 +14,7 @@ import pytest
 
 from abstractruntime.integrations.abstractcore import discovery_queries as dq
 
-# AbstractVoice is a declared dependency (abstractcore[voice] in the base install):
+# AbstractVoice is a declared dependency (through AbstractCore's light install):
 # the first two tests run the real catalog, engine-free, with no key configured.
 
 

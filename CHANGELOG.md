@@ -7,30 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **The local STT model catalog no longer files every engine's models under the active provider.** When
-  AbstractVoice's catalog carried no per-provider STT map (its light catalog, e.g. with no OpenAI key),
-  `local_list_stt_models()` attributed the flat, cross-engine model list to the active provider, so
-  `GET /api/gateway/audio/transcriptions/models` listed `gpt-4o-transcribe` as a faster-whisper model and
-  reported it as `active_model` with `active_provider` `faster-whisper`. It now asks each STT provider for its own
-  list (an engine-free call) and takes `active_model` from the active provider's list (framework backlog 0989).
-
-### Changed
-
-- **`openai` may be 2.x (`openai<3.0.0,>=1.109.1`).** The `<2.0.0` cap, together with AbstractCore's, held vLLM
-  at 0.11.0 in the `gpu` profile (every newer vLLM needs `openai>=2`), and vLLM 0.11.0 does not start with
-  Transformers 5 (`Qwen2Tokenizer has no attribute all_special_tokens_extended`); it also pinned torch to 2.8.0.
-  AbstractRuntime does not import the SDK itself (framework backlog 0989).
-
 ## [0.7.2] - 2026-09-29
 
 ### Changed
 
-- **The MCP worker's startup tip names the right install.** When `abstractruntime-mcp-worker` fails to start, its tip
-  now says that the web tools come with AbstractCore's light install and suggests `pip install -U abstractcore` to
-  repair it, instead of pointing to the deprecated `abstractcore[tools]` extra.
-- Dependencies are unchanged: AbstractCore 2.18.0 or newer.
+- **Dependencies follow AbstractCore's three install settings.** The base install requires
+  `abstractcore>=2.19.0` (its light install: remote providers, built-in tools and the MCP worker's
+  web tools, media inputs, and the voice/vision/music plugins), `abstractruntime[apple]` requires
+  `abstractcore[apple]>=2.19.0` and `abstractruntime[gpu]` requires `abstractcore[gpu]>=2.19.0`.
+  What gets installed is unchanged; the deprecated AbstractCore extras (`remote`, `tools`, `voice`,
+  `all-apple`, `all-gpu`, ...) are no longer named.
+- **`openai` may be 2.x (`openai<3.0.0,>=1.109.1`).** The `<2.0.0` cap held vLLM at an old release
+  in the `gpu` setting (newer vLLM needs `openai>=2`), and that release does not start with
+  Transformers 5.
+- **The MCP worker's startup tip names the right install.** When `abstractruntime-mcp-worker` fails
+  to start, its tip says that the web tools come with AbstractCore's light install and suggests
+  `pip install -U abstractcore` to repair it, instead of pointing to the deprecated
+  `abstractcore[tools]` extra.
+
+### Fixed
+
+- **The local STT model catalog lists each engine's own models.** When AbstractVoice's catalog
+  carried no per-provider STT map (for example with no OpenAI key),
+  `GET /api/gateway/audio/transcriptions/models` listed OpenAI's `gpt-4o-transcribe` as a
+  faster-whisper model and reported it as `active_model`. `local_list_stt_models()` now asks each
+  STT provider for its own list (without loading an engine) and takes `active_model` from the active
+  provider's list.
 
 ## [0.7.1] - 2026-09-28
 

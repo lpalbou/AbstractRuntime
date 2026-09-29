@@ -80,8 +80,8 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.18.0 or newer with remote provider,
-tool, vision, voice, audio, and music integration, plus the
+The base install includes AbstractCore 2.19.0 or newer (its light install:
+remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
@@ -1132,7 +1132,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.18.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.19.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1633,7 +1633,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.18.0`.
+- The current AbstractCore integration expects `abstractcore>=2.19.0`.
 
 Verify:
 
@@ -5266,7 +5266,7 @@ The canonical dependency list lives in `pyproject.toml`.
 - **AbstractMemory** (`>=0.3.0`) — TripleStore models and store contract used by Runtime's `MEMORY_KG_*` effects. Durable/vector backend dependencies such as LanceDB remain selected by hosts.
 
 ## Runtime integrations
-- **abstractcore** (`abstractcore[remote,tools,vision,voice,audio,music]>=2.15.1`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install; the `apple` and `gpu` extras select `abstractcore[all-apple]` / `abstractcore[all-gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
+- **abstractcore** (`abstractcore>=2.19.0`) — LLM, tools, media, and capability integration used by the base `abstractruntime` install (AbstractCore's light install); the `apple` and `gpu` extras select `abstractcore[apple]` / `abstractcore[gpu]` at the same floor (declared in `pyproject.toml`, implementation under `src/abstractruntime/integrations/abstractcore/*`, docs: `docs/integrations/abstractcore.md`).
   - The AbstractCore integration uses **httpx** for remote mode (`src/abstractruntime/integrations/abstractcore/llm_client.py`) and **pydantic** for structured validation (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). These are provided by AbstractCore’s dependency set.
   - The `tools` extra of AbstractCore backs the base Runtime toolset and the `abstractruntime-mcp-worker` entry point.
 - **RestrictedPython** (`>=7.0`, core install) — sandbox for VisualFlow “Code” nodes and pin expressions (`src/abstractruntime/visualflow_compiler/visual/code_executor.py`).

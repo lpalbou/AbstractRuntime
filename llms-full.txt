@@ -52,7 +52,7 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.7.2 • **Python:** 3.10+
+**Version:** 0.7.3 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -144,7 +144,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.7.2)
+## What’s included (v0.7.3)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -430,7 +430,7 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 # AbstractRuntime — Architecture
 
 > Updated: 2026-09-29
-> Version: 0.7.2
+> Version: 0.7.3
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1179,7 +1179,8 @@ Multimodal support:
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
-- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; unsupported local media warmup for `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` reports `requires_long_lived_server=true`, and generated image/video tasks also report `execution_mode="local_one_shot_subprocess"`
+- local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
+- optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; local media warmup that no capability plugin can serve (`image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, `music_generation`) reports `requires_long_lived_server=true`, and image/video tasks also report `execution_mode="local_one_shot_subprocess"`
 - Gateway/hosts remain responsible for explicit Core server URLs, Core server auth headers, provider/model defaults, selected local-inference profiles, and translation of Gateway-owned env/config into explicit Runtime inputs; Runtime persists only JSON-safe routing metadata and artifact refs
 
 Prompt cache / cached sessions:
@@ -1509,9 +1510,9 @@ Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/ab
 
 ## Why can local media residency return `ok:false` without failing the run?
 
-Because local media warmup is not always a meaningful reusable state. In particular, local image generation may execute through a one-shot subprocess isolation boundary, so a prior warmup cannot be reused by the next request. Runtime therefore reports unsupported local media residency explicitly instead of pretending success.
+Because a local media load can fail or have nothing to load into: no capability plugin serves the task, or the plugin refused the model. Runtime reports that explicitly instead of pretending success. A load that succeeds is used: local image and video requests normally run in a one-shot subprocess (crash isolation, one model load per request), but a request whose model is resident runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`).
 
-For optional residency (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true`. Unsupported local media responses also report `requires_long_lived_server=true` and a `config_hint` that points at `ABSTRACTCORE_SERVER_BASE_URL`; image generation additionally reports `execution_mode="local_one_shot_subprocess"`.
+For optional residency (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true`. Unsupported local media responses also report `requires_long_lived_server=true` and a `config_hint` that points at `ABSTRACTCORE_SERVER_BASE_URL`; image generation additionally reports `execution_mode="local_one_shot_subprocess"`, the path those requests then take.
 Docs: `integrations/abstractcore.md`. Code: `src/abstractruntime/integrations/abstractcore/effect_handlers.py`, `src/abstractruntime/integrations/abstractcore/llm_client.py`.
 
 ## What are “local / remote / hybrid” execution modes?
@@ -2217,7 +2218,9 @@ Media-only normalized results distinguish orchestration identity from the actual
 - `runtime_provider` / `runtime_model`: the runtime-side orchestration identity, when relevant
 - `media_provider` / `media_model`: the actual image/video/voice/music backend identity surfaced from the generated output
 
-For local one-shot subprocess image generation, runtime metadata also records `execution_mode="local_one_shot_subprocess"`.
+Local image and video generation runs in a one-shot subprocess by default: a native backend failure (a Metal abort, a CUDA crash) ends the worker, not the Gateway/Runtime process, and the worker's memory is returned when it exits. The price is a full model load per request. Runtime metadata records `execution_mode="local_one_shot_subprocess"`.
+
+A model you load explicitly (`load_model_residency(task="image_generation", provider=..., model=...)`, the Gateway's `POST /models/load`, the console Load button, a flow's model residency node) is the exception: when every media output of a request names a model resident in the client's capability residency core, the request runs in-process on that loaded pipeline, with no subprocess and no second copy of the weights. The metadata then records `execution_mode="resident_in_process"` and `resident_load_ids`. A pooled client of `create_local_runtime(...)` uses its pool's residency core. Unloading the model (`unload_model_residency`, `POST /models/unload`) returns generation to the subprocess. Requests for a model that is not resident keep the subprocess, so an explicit load is how you opt into in-process execution for that model.
 
 Long-running generated media may expose provider progress callbacks. Runtime offers a transient `on_progress` callback during `LLM_CALL` execution and persists each callback as an `EMIT_EVENT` ledger record named `abstract.progress`. The callback itself is never stored in the effect payload or run vars.
 
@@ -2251,13 +2254,13 @@ Remote runtimes support chat media by sending OpenAI-compatible data URL content
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
-Local media residency is intentionally explicit when unsupported. `MODEL_RESIDENCY` results for local `image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, and `music_generation` return:
+Local media residency goes through the installed AbstractCore capability plugins (AbstractVision for image/upscale/video, AbstractVoice for TTS/STT, AbstractMusic for music): `load_model_residency` preloads the model in-process and `list_model_residency` lists it. When no plugin can serve the task, the result is explicit rather than a pretend success:
 
 - `code="model_residency_unsupported"`
 - `requires_long_lived_server=true`
 - `config_hint` pointing to `ABSTRACTCORE_SERVER_BASE_URL`
 
-Image/video-generation residency responses also include `execution_mode="local_one_shot_subprocess"` because local generated media can be isolated into one-shot workers unless a long-lived Core server owns the media backend.
+Image/video-generation unsupported responses also include `execution_mode="local_one_shot_subprocess"`, the path those requests then take.
 
 When the workflow marks residency as optional (`required=false`), the effect still completes durably but includes `status_hint="warning"` and `degraded=true` so hosts can render the no-op honestly.
 

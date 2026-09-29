@@ -3,7 +3,7 @@
 > Durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 - Python: 3.10+ (see `pyproject.toml`)
-- Version: 0.7.2
+- Version: 0.7.3
 - Ecosystem: [AbstractFramework](https://github.com/lpalbou/AbstractFramework) umbrella, integrates with [AbstractCore](https://github.com/lpalbou/abstractcore)
 - Hard invariant: `RunState.vars` must be JSON-serializable (`src/abstractruntime/core/models.py`)
 - Current AbstractCore baseline: base `abstractruntime` requires AbstractCore 2.19.0 or newer with its light install (remote providers, tools and the MCP worker, media routing); `abstractruntime[apple]` and `abstractruntime[gpu]` require AbstractCore's `apple` and `gpu` settings (`pyproject.toml`)

@@ -13,8 +13,11 @@ record, controller wake, child cancellation), so a crash after the decision
 never loses them. Domain rejections are returned, never raised.
 
 Semantics:
-- pause: gates SCHEDULED admission only (never the runtime pause gate); the
-  current occurrence, including its retries, finishes; run_now stays allowed.
+- pause: gates SCHEDULED admission (never the runtime pause gate); an attempt
+  already running finishes, but no retry follows while paused: an occurrence
+  waiting in retry backoff is cancelled (quiet), and a scheduled attempt that
+  fails while paused completes `failed` without a retry. run_now stays allowed
+  (a manual occurrence started while paused keeps its retries).
 - resume: re-arms the trigger at the first tick after now; never fires.
 - run_now: records `manual_pending` (admitted at the controller's next
   boundary); rejected `automation_busy` while an occurrence or a manual run is
@@ -91,7 +94,13 @@ def _decide(
     if command_type == "automation.pause":
         if archived or terminal:
             return _reject("invalid_state", "An archived or finished automation cannot be paused.")
-        return {"delta": {"state": {"paused": True}}}
+        pause_state: Dict[str, Any] = {"paused": True}
+        pending = state.get("pending_occurrence")
+        if not state.get("paused") and isinstance(pending, dict) and pending.get("phase") == "backoff":
+            # A retry only waiting for its backoff never starts after a pause (N3): the
+            # occurrence is cancelled at the controller's next boundary, like stop_current.
+            pause_state["pending_occurrence"] = {**pending, "stop_requested": True}
+        return {"delta": {"state": pause_state}}
 
     if command_type == "automation.resume":
         if archived or terminal:

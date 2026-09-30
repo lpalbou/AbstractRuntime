@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `automation.pause` also stops retries: an occurrence waiting in retry backoff is cancelled
+  (quietly, like `stop_current`), and a scheduled attempt that fails while the automation is paused
+  completes `failed` without a retry. An attempt already running still finishes, and a manual run
+  (`run_now`, allowed while paused) keeps its retries. Previously the pending retry still started
+  after its backoff.
+
 ## [0.8.1] - 2026-09-30
 
 Email automations never trigger themselves, speech and images work without a buildable text model,

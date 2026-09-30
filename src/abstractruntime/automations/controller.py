@@ -856,7 +856,10 @@ def record_outcome(turn: Turn) -> str:
         return "next"
     retry = pending.get("retry") or {"max_attempts": 1}
     attempt = int(pending["attempt"])
-    if attempt < int(retry["max_attempts"]):
+    # Paused: a SCHEDULED occurrence gets no further attempt (N3); a manual one (run_now,
+    # allowed while paused, `command_id` set) keeps its retries.
+    retry_blocked = bool(state.get("paused")) and pending.get("command_id") is None
+    if attempt < int(retry["max_attempts"]) and not retry_blocked:
         retry_at = add_delay(turn.now, backoff_delay({"retry": retry}, attempt))
         turn.decide(
             "automation.retry_scheduled",

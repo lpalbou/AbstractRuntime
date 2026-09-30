@@ -235,6 +235,72 @@ def test_stop_current_during_backoff_cancels_the_retry(env):
 
 
 @pytest.mark.parametrize("env", STORES, indirect=True)
+def test_pause_during_backoff_cancels_the_retry(env):
+    """N3: a pause lands while the occurrence only waits for its retry: no attempt 2."""
+    runtime, clock = env
+    aid = create(runtime, clock, workflow_id="flaky", input_data={"prompt": "p", "fail_until": 99}, trigger=HOURLY)
+    drive(runtime, aid)
+    assert automation_state(runtime, aid)["pending_occurrence"]["phase"] == "backoff"
+    clock.set("2026-01-01T00:00:05+00:00")
+    assert cmd(runtime, aid, "p", "pause", "2026-01-01T00:00:05+00:00")["status"] == "applied"
+    drive(runtime, aid)
+    at(runtime, clock, aid, "2026-01-01T00:00:31+00:00")  # past the retry time
+    assert len(children(runtime, aid)) == 1  # attempt 2 never started
+    done = [r["payload"] for r in automation_records(runtime.ledger_store, aid, "automation.completed")]
+    assert [(d["status"], d["attention"]) for d in done] == [("cancelled", None)]
+    st = automation_state(runtime, aid)
+    assert st["paused"] is True and st["pending_occurrence"] is None
+    assert get_automation(runtime.run_store, aid)["status"] == "paused"
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_an_attempt_failing_while_paused_is_not_retried(env):
+    """N3: the attempt running when the pause lands finishes; its failure schedules no retry."""
+    from abstractruntime.automations.bundle import controller_workflow_spec
+
+    runtime, clock = env
+    aid = create(runtime, clock, workflow_id="ask", trigger=HOURLY)
+    drive(runtime, aid)
+    child = children(runtime, aid)[0]
+    assert child.status == RunStatus.WAITING
+    assert cmd(runtime, aid, "p", "pause", "2026-01-01T00:01:00+00:00")["status"] == "applied"
+    assert runtime.get_state(child.run_id).status == RunStatus.WAITING  # a running attempt is not stopped
+    failed = runtime.run_store.load(child.run_id)
+    failed.status = RunStatus.FAILED
+    failed.error = "boom while paused"
+    failed.waiting = None
+    runtime.run_store.save(failed)
+    ctl = runtime.get_state(aid)
+    runtime.resume(workflow=controller_workflow_spec(), run_id=aid, wait_key=ctl.waiting.wait_key,
+                   payload={"sub_run_id": child.run_id, "output": {"success": False, "error": "boom while paused"}}, max_steps=0)
+    drive(runtime, aid)
+    at(runtime, clock, aid, "2026-01-01T00:10:00+00:00")  # well past a 30 s backoff
+    assert len(children(runtime, aid)) == 1
+    assert list(automation_records(runtime.ledger_store, aid, "automation.retry_scheduled")) == []
+    done = [r["payload"] for r in automation_records(runtime.ledger_store, aid, "automation.completed")]
+    assert [(d["status"], d["attempts"]) for d in done] == [("failed", 1)]
+    assert automation_state(runtime, aid)["paused"] is True
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_a_manual_run_while_paused_keeps_its_retries(env):
+    runtime, clock = env
+    aid = create(runtime, clock, workflow_id="flaky", input_data={"prompt": "p", "fail_until": 2}, trigger=HOURLY)
+    drive(runtime, aid)  # the 00:00 occurrence: attempt 1 fails, backoff
+    at(runtime, clock, aid, "2026-01-01T00:00:30+00:00")  # attempt 2 succeeds
+    cmd(runtime, aid, "p", "pause", "2026-01-01T00:05:00+00:00")
+    drive(runtime, aid)
+    clock.set("2026-01-01T00:06:00+00:00")
+    assert cmd(runtime, aid, "run-1", "run_now", "2026-01-01T00:06:00+00:00")["status"] == "applied"
+    drive(runtime, aid)
+    pending = automation_state(runtime, aid)["pending_occurrence"]
+    assert pending["phase"] == "backoff" and pending["attempt"] == 2 and pending["command_id"] == "run-1"
+    at(runtime, clock, aid, "2026-01-01T00:06:30+00:00")
+    done = [r["payload"] for r in automation_records(runtime.ledger_store, aid, "automation.completed")]
+    assert [(d["status"], d["attempts"]) for d in done] == [("completed", 2), ("completed", 2)]
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
 def test_archive_lets_the_current_occurrence_finish_then_ends(env):
     runtime, clock = env
     aid = create(runtime, clock, workflow_id="ask", trigger=HOURLY)

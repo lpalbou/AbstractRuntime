@@ -4386,6 +4386,8 @@ class Runtime:
         Payload:
             workflow_id: str - ID of the subworkflow to start (required)
             vars: dict - Initial variables for the subworkflow (optional)
+            resolve_vars: list[str] - top-level vars whose artifact refs are resolved for the
+                child only (strict; optional)
             async: bool - If True, don't wait for completion (optional, default False)
 
         Sync mode (async=False):
@@ -4487,6 +4489,23 @@ class Runtime:
         sub_vars: Dict[str, Any] = dict(sub_vars_raw) if isinstance(sub_vars_raw, dict) else {}
         if isinstance(sub_vars.get("_runtime"), dict):
             sub_vars["_runtime"] = dict(sub_vars["_runtime"])
+        # `resolve_vars`: top-level vars whose artifact refs the CHILD receives resolved, so the
+        # parent's effect record (ledger, node traces) carries refs only (the automation
+        # controller's email occurrences: inbound bodies never enter the controller's records).
+        # Strict: a missing artifact fails the start instead of running without its input.
+        resolve_keys = effect.payload.get("resolve_vars")
+        if isinstance(resolve_keys, list) and resolve_keys:
+            from ..automations.attention import resolve_strict
+
+            try:
+                for _key in resolve_keys:
+                    if isinstance(_key, str) and _key in sub_vars:
+                        sub_vars[_key] = resolve_strict(sub_vars[_key], artifact_store=self._artifact_store)
+            except Exception as exc:  # noqa: BLE001 - UnresolvableReference or a store failure
+                msg = f"start_subworkflow could not resolve vars {sorted(k for k in resolve_keys if isinstance(k, str))}: {exc}"
+                if wrap_as_tool_result:
+                    return EffectOutcome.completed(_tool_result(success=False, output=None, error=msg))
+                return EffectOutcome.failed(msg)
 
         # Inherit workspace policy into child runs by default.
         #

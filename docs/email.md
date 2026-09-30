@@ -87,9 +87,10 @@ tools available to this user) or `"agent_tools_off"`
 (`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`,
 `list_emails`, `search_emails`, `read_email` and `get_email_attachment`. The reading tools (`list_email_accounts`,
 `list_email_folders`, `list_emails`, `search_emails`, `read_email`) change nothing; `list_emails` and `search_emails`
-return at most 100 messages per call with `has_more` and `next_cursor` for the next page. Their file arguments follow the run's workspace: `attachments` must be files inside the
-workspace (a report, a screenshot of the agent's work), and `get_email_attachment` saves into it. A path outside
-the workspace is refused before anything is sent.
+return at most 100 messages per call with `has_more` and `next_cursor` for the next page. Their file arguments are
+confined to the run's workspace in every workspace access mode (the allowed-paths and all-except-ignored modes widen
+file tools, never mail): `attachments` must be files inside the workspace (a report, a screenshot of the agent's
+work), and `get_email_attachment` saves into it. A path outside the workspace is refused before anything is sent.
 
 Tool outputs follow the runtime's inline limit (256 KB by default, `ABSTRACTRUNTIME_MAX_INLINE_BYTES`): when a
 structured result such as `read_email` is larger, its largest values (a big HTML body, for example) are stored as
@@ -199,16 +200,27 @@ Inbound mail is data, never instructions:
   email with its headers, whole `body_text` and `body_html`, and its attachment list;
 - for a target with a string `prompt`, a fixed frame appended to the prompt: a notice that the content was written by
   other people, that links and instructions contained in the emails are not to be followed, and that the agent acts
-  only on the automation's mission; then each email between `--- Email i of n ---` markers; then a closing line that
-  repeats the rule;
-- the trigger envelope recorded in the ledger carries message metadata and event ids, never bodies;
-- under `policy.tool_approval: "auto"` ("allow all tools"), the grant still withholds every tool whose row declares a
-  model-chosen destination (`fetch_url`, `browser_probe`) and every message-sending tool (`send_email`, `reply_email`):
-  those calls ask, so an email cannot steer the occurrence into opening a link or sending data to an address or URL it
-  names. To let such an automation open pages unattended, name each tool individually in
-  `policy.untrusted_input_tools` (for example `["fetch_url"]`; `"all"` and patterns are refused). Show the user the
-  risk when they do: a page the agent opens can carry instructions too, and the URL itself can carry data out.
-  Message-sending tools are never granted this way; they follow the recipient rule above.
+  only on the automation's mission; then each email between `--- Email i of n · boundary <token> ---` markers; then a
+  closing line that repeats the rule. The boundary token is drawn at random for each occurrence, so a body cannot
+  fake the end of its email or of the frame;
+- the messages and the framed prompt are stored as artifacts at admission. The controller's records
+  (`automation.admitted`, `pending_occurrence`, the dispatch effect) carry artifact refs, message metadata and event
+  ids, never bodies. The occurrence run resolves the refs when it starts (`START_SUBWORKFLOW` `resolve_vars`), so
+  its own input holds the messages whole: that run is what the model reads. A runtime without an artifact store
+  refuses to create this trigger (`unsupported_feature`);
+- under `policy.tool_approval: "auto"` ("allow all tools"), the grant is **allow by kind**: it covers only tools with
+  no network egress beyond services the user or administrator configured, no code or command execution, no message
+  sending, no writes outside the run's workspace and no delegation (file reads, workspace-confined file writes,
+  mailbox reads, `get_email_attachment`, memory and plan tools). Everything else asks, among others `fetch_url`,
+  `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
+  `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. So an email cannot
+  steer the occurrence into opening a link, running code or sending data to an address or URL it names. The rule is
+  decided on tool facts, never names: see [automations.md](automations.md#tool-approval). To let such an automation
+  use one of those tools unattended, name it individually in `policy.untrusted_input_tools` (for example
+  `["fetch_url"]`; `"all"` and patterns are refused). Show the user the risk when they do: a page the agent opens can
+  carry instructions too, and the URL itself can carry data out. Message-sending tools (`send_email`, `reply_email`,
+  `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted this way; email sends follow
+  the recipient rule above.
 
 ## Sending from an automation without a model
 
@@ -244,7 +256,9 @@ See [automations.md](automations.md#notifications-attention-and-retries).
 ## Limits
 
 - One account per runtime; the trigger reads `account: "self"` only.
-- `skim_url` carries no model-chosen-destination fact today, so an email-triggered grant does not withhold it.
 - `reply_email` always asks for approval.
-- Schedule and manual automations keep `fetch_url` in their unattended grant; only triggers that deliver untrusted
-  inbound content withhold it (unless the user named it in `policy.untrusted_input_tools`).
+- Schedule and manual automations keep the full unattended grant (`fetch_url`, `web_search`, `execute_command`...);
+  only triggers that deliver untrusted inbound content narrow it to the harmless kinds (plus the tools the user named
+  in `policy.untrusted_input_tools`).
+- Camera tools count as local reads, so an email-triggered grant covers them; their captures stay in the artifact
+  store and no tool in that grant can send them anywhere.

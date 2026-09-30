@@ -278,24 +278,49 @@ def _grant_excludes(name: str) -> bool:
     return bool(row is not None and row.get("comms_send"))
 
 
-def _withholds_destination(name: str) -> bool:
-    """True for a tool whose served row (or core's own row) carries
-    `model_controlled_destination` (`fetch_url`, `browser_probe`, and every message-sending
-    tool): the model chooses where data goes. An unreadable inventory withholds the tool
-    (fail closed)."""
+# AbstractCore row facts that bar a tool from an untrusted-input grant, on top of the runtime's
+# own facts (`tool_effects.untrusted_input_grantable`).
+_UNTRUSTED_REFUSED_ROW_FACTS = ("model_controlled_destination", "comms_send", "remote_write_capable", "destructive_capable")
+
+
+def _row_facts_refuse_untrusted(name: str) -> bool:
+    """True when the tool's served row or AbstractCore's own row carries a fact in
+    `_UNTRUSTED_REFUSED_ROW_FACTS` (`fetch_url`, `browser_probe`, every message-sending tool,
+    `execute_command`). An unreadable inventory refuses (fail closed)."""
     try:
         from ..integrations.abstractcore.effect_handlers import _risk_row_for_tool
         from ..integrations.abstractcore.tool_inventory_facade import core_registry_tool_rows
 
         row = _risk_row_for_tool(name)
         # The served row can be the entity's walled twin (`fetch_url`), which does not carry
-        # core's approval facts: consult core's own row too, and withhold when EITHER says so.
+        # core's approval facts: consult core's own row too, and refuse when EITHER says so.
         core_row = next((r for r in core_registry_tool_rows() if str(r.get("name") or "") == name), None)
-    except Exception:  # noqa: BLE001 - no facts at all: withhold (fail closed)
+    except Exception:  # noqa: BLE001 - no facts at all: refuse (fail closed)
         return True
-    # A name no inventory describes (runtime-owned tools such as `remember`) carries no
-    # destination fact; the WP0 rule for comms tools is the same.
-    return any(bool(r and r.get("model_controlled_destination")) for r in (row, core_row))
+    return any(bool(r and r.get(fact)) for r in (row, core_row) for fact in _UNTRUSTED_REFUSED_ROW_FACTS)
+
+
+def untrusted_input_allow_all(name: str, *, workspace_access_mode: Any = None) -> bool:
+    """True when "allow all tools" pre-approves `name` for an occurrence whose trigger delivers
+    text written by other people (`email.received@1`).
+
+    Allow by kind, never by name (operator decision 2026-09-30, framework backlog 0992): only a
+    tool with no network egress beyond services the user or administrator configured, no code or
+    command execution, no messaging, no writes outside the run's workspace and no delegation.
+    Both the runtime's facts (`tool_effects.untrusted_input_grantable`: effect class, network
+    reach, write scope) and AbstractCore's row facts must agree.
+    """
+    from ..integrations.abstractcore.tool_effects import untrusted_input_grantable
+
+    return untrusted_input_grantable(name, workspace_access_mode=workspace_access_mode) and not _row_facts_refuse_untrusted(name)
+
+
+def _never_granted(name: str) -> bool:
+    """A message-sending tool: core's `comms_send` row fact (`_grant_excludes`) or the runtime's
+    `send` network reach (`agora_post_message`, `agora_send_dm`, which have no core row)."""
+    from ..integrations.abstractcore.tool_effects import sends_messages
+
+    return _grant_excludes(name) or sends_messages(name)
 
 
 def grant_tool_approval(
@@ -322,16 +347,20 @@ def grant_tool_approval(
     under `"ask"`.
 
     `untrusted_input=True` (the trigger delivers text written by other people:
-    `email.received@1`): tools whose row carries `model_controlled_destination`
-    (`fetch_url`, `browser_probe`) are withheld too, so an inbound email cannot
-    steer an unattended occurrence into following a link or sending data to a
-    URL it names (framework backlog 0992). "Allow all tools" does NOT grant
-    them (operator decision 2026-09-30): only a tool the user NAMED
-    individually in the definition (`policy.untrusted_input_tools`, passed as
-    `named_tools`) is granted, and only within the target's tool ceiling;
-    message-sending tools are never granted, named or not. A withheld call
-    asks a person. Schedule and manual automations keep `fetch_url` in the
-    grant (decision recorded in 0992).
+    `email.received@1`): the grant is ALLOW BY KIND (operator decision
+    2026-09-30, framework backlog 0992; the agent acts only within the user's
+    mission and never follows links from an email). "Allow all tools" covers
+    only tools `untrusted_input_allow_all` proves harmless (no network egress
+    beyond configured services, no code or command execution, no messaging, no
+    writes outside the run's workspace, no delegation). Every other tool
+    (`fetch_url`, `skim_url`, `web_search`, `execute_command`, `shell_exec`,
+    `execute_python`, `delegate_agent`, `channel_fs_write`, MCP tools...) is
+    granted only when the user NAMED it individually in the definition
+    (`policy.untrusted_input_tools`, passed as `named_tools`), and only within
+    the target's tool ceiling. Message-sending tools (`send_email`,
+    `reply_email`, `agora_post_message`, `agora_send_dm`, ...) are never
+    granted, named or not. A withheld call asks a person. Schedule and manual
+    automations keep the full grant (decision recorded in 0992).
     """
     from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
 
@@ -342,10 +371,14 @@ def grant_tool_approval(
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
     candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
     named = {n.strip() for n in named_tools if isinstance(n, str) and n.strip()}
-    withheld = [
-        n for n in candidates
-        if _grant_excludes(n) or (untrusted_input and n not in named and _withholds_destination(n))
-    ]
+    mode = input_data.get("workspace_access_mode") or input_data.get("workspaceAccessMode")
+    if untrusted_input:
+        withheld = [
+            n for n in candidates
+            if _never_granted(n) or (n not in named and not untrusted_input_allow_all(n, workspace_access_mode=mode))
+        ]
+    else:
+        withheld = [n for n in candidates if _grant_excludes(n)]
     tools = [n for n in candidates if n not in withheld]
     input_data["_runtime"] = {
         **runtime_ns,
@@ -406,7 +439,8 @@ def build_prepared(
     Email (framework backlog 0992 WP2): an `email.received@1` admission's
     messages become `input_data.trigger` (marked untrusted) and, for a target
     with a string `prompt`, a fixed untrusted frame appended to it
-    (`abstractruntime.email.frame`). Every occurrence gets the definition's
+    (`abstractruntime.email.frame`); both are stored as artifacts and kept
+    inline as refs (`_freeze_email_inputs`). Every occurrence gets the definition's
     pre-authorised recipients as `_runtime.email_allowed_recipients` and, when
     the runtime has one, its account binding as `_runtime.email_account` (both
     SET over whatever the target inputs carried).
@@ -421,12 +455,9 @@ def build_prepared(
         untrusted = True
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
     emails = (inputs or {}).get("emails")
+    resolve_vars: list = []
     if isinstance(emails, list):
-        from ..email.frame import email_frame, email_trigger_input
-
-        input_data["trigger"] = email_trigger_input(emails)
-        if isinstance(input_data.get("prompt"), str):
-            input_data["prompt"] = f"{input_data['prompt']}\n\n{email_frame(emails)}"
+        resolve_vars = _freeze_email_inputs(turn, input_data, emails)
     if definition["policy"].get("tool_approval", "auto") == "auto":
         grant_tool_approval(
             input_data, untrusted_input=untrusted, named_tools=definition_untrusted_input_tools(definition)
@@ -462,12 +493,53 @@ def build_prepared(
     meta_ns = dict(input_data.get("_meta")) if isinstance(input_data.get("_meta"), dict) else {}
     meta_ns["automation_title"] = definition["title"]
     input_data["_meta"] = meta_ns
-    return {
+    prepared = {
         "workflow_id": definition["target"]["workflow_id"],
         "session_id": session_id,
         "workspace_root": definition["workspace_root"],
         "input_data": input_data,
     }
+    if resolve_vars:
+        prepared[PREPARED_RESOLVE_VARS] = resolve_vars
+    return prepared
+
+
+# `prepared[PREPARED_RESOLVE_VARS]`: top-level input keys whose values hold artifact refs that
+# only the occurrence run resolves (START_SUBWORKFLOW `resolve_vars`), so the controller's
+# records never carry the content (inbound email bodies and the framed prompt).
+PREPARED_RESOLVE_VARS = "resolve_vars"
+EMAIL_ARTIFACT_TAGS = {"kind": "automation_email_input", "source": "email.received@1"}
+
+
+def _freeze_email_inputs(turn: Turn, input_data: Dict[str, Any], emails: list) -> list:
+    """Store an email admission's messages and framed prompt as artifacts; refs stay inline.
+
+    `input_data.trigger` keeps its metadata (`source`, `content_trust`, `notice`, `count`) and
+    `emails` becomes an artifact ref; a string `prompt` becomes a ref to the prompt with the
+    untrusted frame appended (a fresh boundary token per occurrence). The `automation.admitted`
+    record and `pending_occurrence` therefore carry refs, never bodies; the occurrence run
+    resolves them when it starts. Returns the keys to resolve there.
+    """
+    from ..email.frame import email_frame, email_trigger_input, new_boundary
+    from ..storage.artifacts import artifact_ref
+
+    store = turn.artifact_store
+    if store is None:
+        raise ControllerSeamError(
+            "an email-triggered occurrence needs the runtime's artifact store (message bodies are stored "
+            "as artifacts, never inline in the ledger); create the Runtime with artifact_store=..."
+        )
+    trigger = email_trigger_input(emails)
+    meta = store.store_json(trigger["emails"], run_id=turn.automation_id, tags=dict(EMAIL_ARTIFACT_TAGS))
+    trigger["emails"] = artifact_ref(meta.artifact_id)
+    input_data["trigger"] = trigger
+    keys = ["trigger"]
+    if isinstance(input_data.get("prompt"), str):
+        framed = f"{input_data['prompt']}\n\n{email_frame(emails, boundary=new_boundary())}"
+        meta = store.store_text(framed, run_id=turn.automation_id, tags=dict(EMAIL_ARTIFACT_TAGS))
+        input_data["prompt"] = artifact_ref(meta.artifact_id)
+        keys.append("prompt")
+    return keys
 
 
 def admit(turn: Turn) -> str:
@@ -631,19 +703,27 @@ def dispatch(turn: Turn) -> Effect:
             node_id="dispatch",
         )
         pending = turn.state["pending_occurrence"]
-    prepared = resolve_strict(pending["prepared"], artifact_store=turn.artifact_store)
-    return Effect(
-        type=EffectType.START_SUBWORKFLOW,
-        payload={
-            "workflow_id": prepared["workflow_id"],
-            "vars": _occurrence_vars(pending, prepared, automation_id=turn.automation_id),
-            "session_id": prepared["session_id"],
-            "run_id": pending["run_id"],
-            "async": True,
-            "wait": True,
-        },
-        result_key=DISPATCH_RESULT_KEY,
-    )
+    raw = pending["prepared"]
+    raw_input = raw.get("input_data") if isinstance(raw.get("input_data"), dict) else {}
+    held_keys = [k for k in (raw.get(PREPARED_RESOLVE_VARS) or []) if isinstance(k, str) and k in raw_input]
+    # Keys the occurrence run resolves itself stay refs here: the dispatch effect (ledger, node
+    # traces) never carries inbound email content.
+    visible = {**raw, "input_data": {k: v for k, v in raw_input.items() if k not in held_keys}}
+    prepared = resolve_strict(visible, artifact_store=turn.artifact_store)
+    child_vars = _occurrence_vars(pending, prepared, automation_id=turn.automation_id)
+    for key in held_keys:
+        child_vars[key] = copy.deepcopy(raw_input[key])
+    payload: Dict[str, Any] = {
+        "workflow_id": prepared["workflow_id"],
+        "vars": child_vars,
+        "session_id": prepared["session_id"],
+        "run_id": pending["run_id"],
+        "async": True,
+        "wait": True,
+    }
+    if held_keys:
+        payload["resolve_vars"] = sorted(held_keys)
+    return Effect(type=EffectType.START_SUBWORKFLOW, payload=payload, result_key=DISPATCH_RESULT_KEY)
 
 
 # --- record_outcome ------------------------------------------------------------------------------

@@ -434,7 +434,7 @@ def test_all_tools_never_grants_link_tools_to_an_email_triggered_occurrence():
     pol = _grant(untrusted_input=True)  # "allow all tools"
     assert {"fetch_url", "browser_probe"} <= set(pol["withheld_tools"])
     assert "fetch_url" not in pol["auto_approve_tools"]
-    assert "skim_url" in pol["auto_approve_tools"]  # no destination fact on skim_url (follow-up for core)
+    assert "skim_url" in pol["withheld_tools"]  # the runtime's network-reach fact: open
     named = _grant(untrusted_input=True, named_tools=["fetch_url", "send_email"])
     assert "fetch_url" in named["auto_approve_tools"] and "browser_probe" in named["withheld_tools"]
     assert "send_email" in named["withheld_tools"]  # message-sending tools are never granted, named or not

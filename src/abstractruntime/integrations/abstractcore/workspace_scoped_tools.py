@@ -24,7 +24,7 @@ Important limitations:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import json
 import os
@@ -977,14 +977,29 @@ def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Work
         return out
 
     # Email (framework backlog 0992): attachments are LOCAL FILES read and
-    # mailed out, and get_email_attachment writes into a local folder - both
-    # ride the wall like read_file / write_file (an email must not carry
-    # ~/.ssh out of the workspace).
-    if tool_name in ("send_email", "reply_email"):
-        _rewrite_path_list_field("attachments")
-        return out
-    if tool_name == "get_email_attachment":
-        _rewrite_path_field("output_dir", default_to_root=True)
+    # mailed out, and get_email_attachment writes into a local folder. Both are
+    # confined to the run's workspace in EVERY access mode (operator decision
+    # 2026-09-30: "limited to files in the run's workspace"): the allowed-paths
+    # and all-except-ignored modes widen file tools, never what mail carries
+    # out or where a stranger's attachment lands. Ignored paths and the host's
+    # built-in protection still apply.
+    if tool_name in ("send_email", "reply_email", "get_email_attachment"):
+        confined = replace(scope, access_mode="workspace_only", allowed_paths=())
+        if tool_name == "get_email_attachment":
+            raw_dir = out.get("output_dir")
+            if raw_dir is None or (isinstance(raw_dir, str) and not raw_dir.strip()):
+                out["output_dir"] = str(resolve_no_strict(root))
+            else:
+                out["output_dir"] = str(resolve_user_path(scope=confined, user_path=str(raw_dir)))
+            return out
+        raw_att = out.get("attachments")
+        if raw_att is not None:
+            items = list(raw_att) if isinstance(raw_att, (list, tuple)) else [raw_att]
+            out["attachments"] = [
+                str(resolve_user_path(scope=confined, user_path=str(it).strip()))
+                for it in items
+                if str(it or "").strip()
+            ]
         return out
 
     if tool_name == "browser_probe":

@@ -84,7 +84,9 @@ Tools that send messages to recipients the model chooses (`send_email`, `reply_e
 `send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address, or to an address
 listed in the definition's `policy.email_allowed_recipients`, runs; any other recipient waits for approval, so text
 an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
-`email.received@1` also withhold `fetch_url` and `browser_probe`. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
+`email.received@1` grant only tools with no network egress, code execution, messaging, writes outside the workspace or
+delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command` and the like ask unless the user named them in
+`policy.untrusted_input_tools`). Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
 waits.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.

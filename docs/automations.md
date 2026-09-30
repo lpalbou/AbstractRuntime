@@ -118,8 +118,10 @@ the values shown; anything else is refused with `unsupported_feature`. `policy.t
 without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
 `["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
 `policy.untrusted_input_tools` (default `[]`, at most 20) names, one by one, tools that an occurrence of an untrusted
-trigger (`email.received@1`) may run without asking although they reach a model-chosen destination, for example
-`["fetch_url"]`; `"all"` and patterns are refused. See [Tool approval](#tool-approval).
+trigger (`email.received@1`) may run without asking although "allow all tools" does not cover them there (a tool
+that reaches the network, runs code or commands, writes outside the workspace or delegates), for example
+`["fetch_url"]`; `"all"` and patterns are refused, and message-sending tools are never granted this way. See
+[Tool approval](#tool-approval).
 
 ### Creating an automation
 
@@ -181,8 +183,9 @@ Runs the automation when mail arrives in the user's mailbox, in batches no more 
 `1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
 durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
 `unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
-string `prompt`, inside a fixed untrusted frame; their unattended grant withholds tools with a model-chosen
-destination. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
+string `prompt`, inside a fixed untrusted frame (both stored as artifacts; the controller's records carry refs);
+their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
+or delegation. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
 
 ### Adding a source
 
@@ -243,7 +246,9 @@ flowchart TD
   workspace, input data), the trigger envelope, the retry policy and the session kind. Every attempt uses these, so a
   later revision never changes an occurrence that has already been admitted.
 - **prepare_context** checks that the frozen inputs resolve (values offloaded to the artifact store must load).
-- **dispatch** records the attempt and starts the child with `START_SUBWORKFLOW {async: true, wait: true, run_id}`.
+- **dispatch** records the attempt and starts the child with `START_SUBWORKFLOW {async: true, wait: true, run_id}`
+  (plus `resolve_vars` for an email occurrence, whose messages and framed prompt stay artifact refs in the
+  controller's records).
   The child runs outside the controller's tick, driven by the host. Its id is deterministic and it is created only if
   absent, so a dispatch replayed after a crash re-attaches to the same child.
 - **record_outcome** reloads the child and reads its output; it never relies on the resume payload. Success completes
@@ -445,11 +450,22 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - **Pre-authorised recipients.** Every occurrence carries the definition's `policy.email_allowed_recipients` as
     `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
     recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
-  - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
-    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`), even though
-    `"auto"` otherwise grants every tool: the agent must not follow links from the mail it reads. Only a tool the user
-    named individually in `policy.untrusted_input_tools` is granted (within the target's tool ceiling; never a
-    message-sending tool). Schedule and manual automations keep `fetch_url` and `browser_probe` in the grant.
+  - **Untrusted triggers: allow by kind.** When the trigger delivers text written by other people
+    (`email.received@1`), the agent acts only within the automation's mission and never follows links from the mail
+    it reads. `"auto"` then grants only tools whose facts prove all of the following
+    (`untrusted_input_allow_all`): no network egress beyond services the user or administrator configured (the model
+    provider, the user's own mailbox, the agora hub), no code or command execution, no message sending, no writes
+    outside the run's workspace, and no delegation. The facts are the runtime's tool table
+    (`tool_effects.TOOL_EFFECT_CLASSES`, `TOOL_NETWORK_REACH`, `TOOL_WRITE_SCOPE`) and AbstractCore's row facts
+    (`model_controlled_destination`, `comms_send`, `remote_write_capable`, `destructive_capable`); a tool missing
+    from the table is withheld. In practice the grant keeps file reads, workspace-confined file writes (`write_file`
+    and `edit_file` only under `workspace_access_mode: "workspace_only"`, the default), mailbox and hub reads,
+    `get_email_attachment` (into the workspace), memory and plan tools. It withholds, among others, `fetch_url`,
+    `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
+    `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. A withheld tool
+    runs unattended only when the user named it individually in `policy.untrusted_input_tools` (within the target's
+    tool ceiling); message-sending tools (`send_email`, `reply_email`, `agora_post_message`, `agora_send_dm`, ...)
+    are never granted, named or not. Schedule and manual automations keep the full grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next

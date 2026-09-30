@@ -56,7 +56,17 @@ jobs:
             tests/test_budget_law_no_unrequested_caps.py \
             tests/test_discovery_voice_openai_api_key.py \
             tests/test_voice_openai_api_key_path.py \
-            tests/test_discovery_tts_unavailable_reason.py
+            tests/test_discovery_tts_unavailable_reason.py \
+            tests/test_abstractcore_comms_facade.py \
+            tests/test_abstractcore_discovery_facade.py \
+            tests/test_automation_definition.py \
+            tests/test_automation_tool_approval.py \
+            tests/test_default_tools_comms_gating.py \
+            tests/test_every_path_bearing_tool_is_walled.py \
+            tests/test_packaging_extras.py \
+            tests/test_tool_catalog.py \
+            tests/test_trigger_registry.py \
+            tests/test_workspace_read_only.py
 
   build:
     name: Build distributions

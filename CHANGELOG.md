@@ -33,7 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `has_attachment`), batches no more often than `every` (default `1h` for automations that run a model, `60s`
   otherwise; at least `60s`), up to `max_batch` messages, each message at most once per automation across restarts
   and folder rebuilds. Occurrences receive the messages as `input_data.trigger` marked `content_trust: "untrusted"`
-  and, for a string `prompt`, inside a fixed untrusted frame; the recorded envelope carries metadata only.
+  and, for a string `prompt`, inside a fixed untrusted frame whose markers carry a boundary token drawn at random
+  for each occurrence (a body cannot fake the end of its email). The messages and the framed prompt are stored as
+  artifacts at admission: `automation.admitted`, `pending_occurrence` and the dispatch effect carry refs, metadata and
+  event ids, never bodies, and the occurrence run resolves the refs when it starts. Creating this trigger on a
+  runtime without an artifact store is refused (`unsupported_feature`).
 - **Send-email action** (`abstractframework.email-actions@1.0.0:send_email`, `register_email_action_workflow`,
   `email_action_target`): automations without a model send templated mail (fixed placeholders, `each` or `digest`
   mode) through an ordinary `send_email` tool call, under the same approval rule, policy and limits.
@@ -51,17 +55,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`email_facade`** (`abstractruntime.integrations.abstractcore.email_facade`): AbstractCore's mail library for hosts.
 - **Event-inbox retention**: `EventInboxRetention` (default 90 days and 10,000 events), `inbox.prune(...)` and
   `prune_email_inbox(runtime, retention=...)`, which never removes an event an active email automation has not read.
-- **`policy.untrusted_input_tools`**: tools named one by one that an email-triggered occurrence may run without asking.
+- **`policy.untrusted_input_tools`**: tools named one by one that an email-triggered occurrence may run without asking
+  although "allow all tools" does not cover them there; message-sending tools are never granted this way.
+- **`START_SUBWORKFLOW` `payload.resolve_vars`**: top-level vars whose artifact refs are resolved for the child only
+  (strict: a missing artifact fails the start), so the parent's ledger and node traces keep the refs.
+- **Tool facts for untrusted input** (`tool_effects`): `TOOL_NETWORK_REACH` (`none`, `configured`, `open`, `send`) and
+  `TOOL_WRITE_SCOPE` for every tool the runtime exposes, with `untrusted_input_grantable(...)`.
 - `list_tool_catalog(email_off_reason=...)` names why email is off (`not_connected`, `admin_disabled`,
   `not_available` — the administrator has not made agent email tools available to this user — and `agent_tools_off`).
 
 ### Changed
 
 - **Requires AbstractCore 2.20.0 or newer** (`abstractcore.comms.email`, the email tools on a per-run resolver).
-- An automation triggered by `email.received@1` also withholds tools whose row declares a model-chosen destination
-  (`fetch_url`, `browser_probe`) from its unattended grant; `reply_email` is withheld like `send_email`.
-- `send_email` / `reply_email` `attachments` and `get_email_attachment`'s `output_dir` follow the run's workspace
-  scope; `get_email_attachment` is a `write` tool.
+- **Email-triggered automations act only within the user's mission** (operator decision 2026-09-30). Under
+  "allow all tools", an automation triggered by `email.received@1` grants by kind, decided on tool facts and never on
+  names: only tools with no network egress beyond configured services, no code or command execution, no message
+  sending, no writes outside the run's workspace and no delegation run unattended (file reads, workspace-confined
+  file writes, mailbox reads, `get_email_attachment`, memory and plan tools). `fetch_url`, `browser_probe`,
+  `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`, `delegate_agent`,
+  `channel_fs_write`, `agora_post_message`, `agora_send_dm`, MCP tools and every other tool ask, unless the user
+  named them one by one in `policy.untrusted_input_tools`; message-sending tools (`send_email`, `reply_email`,
+  `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted, named or not.
+  Schedule and manual automations keep the full grant. `reply_email` is withheld like `send_email` everywhere.
+- `send_email` / `reply_email` `attachments` and `get_email_attachment`'s `output_dir` are confined to the run's
+  workspace in every workspace access mode (ignored paths and the host's protection still apply);
+  `get_email_attachment` is a `write` tool.
 - A run policy that only withholds tools (`tool_policy.withheld_tools`) is applied like any other run policy, so the
   per-call refiners run for it.
 - The per-call refiners (`send_email_recipient@v2`) also run when a run carries no `_runtime.tool_policy`, on top of
@@ -69,15 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs a person makes the batch wait.
 - No environment variable enables the email tools: `ABSTRACT_ENABLE_EMAIL_TOOLS` is gone and
   `ABSTRACT_ENABLE_COMMS_TOOLS` enables WhatsApp and Telegram only; pass `email_enabled=True`.
-- Under "allow all tools", an email-triggered occurrence still withholds `fetch_url` and `browser_probe` unless the
-  user named them in `policy.untrusted_input_tools`; the untrusted frame tells the agent not to follow links or
-  instructions contained in the emails and to act only on the automation's mission.
+- The untrusted frame tells the agent not to follow links or instructions contained in the emails and to act only
+  on the automation's mission.
 - After a folder rebuild with nothing to resynchronise, the feeder stores the new baseline AbstractCore returns
   (`reset` and `baseline`) instead of fetching one itself.
 - Large structured tool outputs (for example a `read_email` with a big HTML body) are offloaded to session
   attachments under the same inline limit as text outputs; the result carries artifact references.
 - The process-local email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) are no longer
   exported from `abstractruntime.integrations.abstractcore`; they remain on the host facade for single-user installs.
+
+### Removed
+
+- `emails.config.example.yaml` (environment-variable email setup) is no longer shipped; email is configured through
+  the host's per-user settings.
 
 ## [0.7.3] - 2026-09-29
 

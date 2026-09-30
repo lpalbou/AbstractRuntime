@@ -29,6 +29,7 @@ from ..session_history import HISTORY_REPLAY_MAX_TOKENS, ReplayedHistory, fold_h
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
+from ..storage.artifacts import is_artifact_ref
 from .attention import normalize_occurrence_output, resolve_strict
 from .bundle import controller_workflow_spec
 from .controller import AUTOMATION_GRANT_SOURCE, apply_context_mode
@@ -103,6 +104,14 @@ def create_automation(
         raise AutomationError(
             f"trigger {binding['source_id']}@{binding['source_version']} needs the runtime's event inbox, "
             "and this runtime has none (the host must call Runtime.set_event_inbox)",
+            reason_code="unsupported_feature",
+            field="trigger.source_id",
+        )
+    if caps.get("kind") == "event" and getattr(runtime, "artifact_store", None) is None:
+        raise AutomationError(
+            f"trigger {binding['source_id']}@{binding['source_version']} needs the runtime's artifact store "
+            "(inbound content is stored as artifacts, never inline in the ledger), and this runtime has none "
+            "(create the Runtime with artifact_store=...)",
             reason_code="unsupported_feature",
             field="trigger.source_id",
         )
@@ -202,6 +211,12 @@ def list_occurrences(
         if rec["name"] == "automation.admitted":
             envelope = p.get("trigger_envelope") or {}
             prompt = ((p.get("prepared") or {}).get("input_data") or {}).get("prompt")
+            if is_artifact_ref(prompt):
+                # An email occurrence's framed prompt is an artifact (bodies stay out of the ledger).
+                try:
+                    prompt = resolve_strict(prompt, artifact_store=runtime.artifact_store)
+                except Exception:  # noqa: BLE001 - a pruned artifact: the row simply has no user turn
+                    prompt = None
             rows[index] = {
                 "index": index,
                 "run_id": p["run_id"],

@@ -52,6 +52,7 @@ from abstractruntime.integrations.abstractcore.tool_executor import (  # noqa: E
     ToolApprovalPolicy,
 )
 from abstractruntime.scheduler.registry import WorkflowRegistry  # noqa: E402
+from abstractruntime.storage.artifacts import FileArtifactStore  # noqa: E402
 
 pytestmark = pytest.mark.live_email
 
@@ -119,6 +120,7 @@ def _plane(tmp_path: Path, mailbox, *, root: str = "plane"):
     tools = ApprovalToolExecutor(delegate=MappingToolExecutor({"send_email": send_email}),
                                  policy=ToolApprovalPolicy(auto_approve_tools=set(), require_approval_tools=set()))
     rt = Runtime(run_store=run_store, ledger_store=ledger_store, workflow_registry=registry,
+                 artifact_store=FileArtifactStore(tmp_path / root / "artifacts"),
                  effect_handlers={EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools)})
     rt.set_tool_executor_for_resume(tools)
     ctx = mailbox.context(tmp_path / f"{root}-limits")
@@ -187,6 +189,10 @@ def test_live_email_trigger_admits_one_tagged_message_exactly_once(live_mailbox,
     assert trig["source"] == "email.received@1" and trig["content_trust"] == "untrusted" and trig["count"] == 1
     assert trig["emails"][0]["subject"] == subject and nonce in trig["emails"][0]["body_text"]
     assert "send_email" in seen["tool_policy"]["withheld_tools"]
+    # Bodies are artifacts: no ledger carries the body text (the subject is metadata and may appear).
+    assert "(runtime trigger)" in trig["emails"][0]["body_text"]
+    ledgers = list((tmp_path / "plane").rglob("*.jsonl"))
+    assert ledgers and not any("(runtime trigger)" in p.read_text() for p in ledgers)
 
     # Poll 2 + a later wake: nothing is appended or admitted twice.
     report2 = feeder.poll(ctx, now=_now(), force=True)

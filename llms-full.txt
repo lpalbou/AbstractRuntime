@@ -287,7 +287,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.16.0 or newer with remote provider, vision,
+This installs AbstractCore 2.20.0 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -929,7 +929,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 
 - `Runtime.start(workflow, vars=..., actor_id=..., session_id=..., parent_run_id=..., run_id=...) -> run_id`
   - creates and persists a new `RunState`
-  - `run_id` starts the run under an id you choose (`[A-Za-z0-9_-]+`). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, `vars._meta.occurrence`, `vars._meta.creation_digest`) returns the existing run untouched, and a different identity raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). The store must support `create_if_absent` (otherwise `NotImplementedError`). `START_SUBWORKFLOW` accepts the same explicit id as `payload.run_id`
+  - `run_id` starts the run under an id you choose (`[A-Za-z0-9_-]+`). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, `vars._meta.occurrence`, `vars._meta.creation_digest`) returns the existing run untouched, and a different identity raises `RunIdentityConflict` (a `ValueError`, `reason_code = "identity_conflict"`). The store must support `create_if_absent` (otherwise `NotImplementedError`). `START_SUBWORKFLOW` accepts the same explicit id as `payload.run_id`, and `payload.resolve_vars` (a list of top-level var names) resolves the artifact refs in those vars for the child only, strictly (a missing artifact fails the start), so the parent's records keep the refs
   - a root run that names a session is checked against the session's attribution: in a discussion session it gets the discussion's workspace setup (its own writable workspace and the read-only mount) and provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises `SessionAttributionError` (see [automations.md](automations.md#discussions))
 - `Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -> RunState`
   - executes node handlers and effects until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or `CANCELLED`
@@ -1347,7 +1347,9 @@ Tools that send messages to recipients the model chooses (`send_email`, `reply_e
 `send_telegram_*`) are never in the grant: a `send_email` to the registered user's own address, or to an address
 listed in the definition's `policy.email_allowed_recipients`, runs; any other recipient waits for approval, so text
 an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
-`email.received@1` also withhold `fetch_url` and `browser_probe`. Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
+`email.received@1` grant only tools with no network egress, code execution, messaging, writes outside the workspace or
+delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command` and the like ask unless the user named them in
+`policy.untrusted_input_tools`). Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
 waits.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
@@ -1973,7 +1975,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.16.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.20.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -2706,7 +2708,7 @@ result = facade.clear_session_prompt_caches("support-session-1")
 ## Models, engines and host jobs (config facade)
 
 AbstractCore implements the model browser, the local-engine installer and a
-host job registry. These passthroughs need AbstractCore 2.16.0 (the
+host job registry. These passthroughs need AbstractCore 2.20.0 (the
 base-install floor; 2.15.1 is the first release that records who cancelled a job).
 `abstractruntime.integrations.abstractcore.config_facade`
 passes them through unchanged, so a host such as AbstractGateway serves the same
@@ -3634,8 +3636,10 @@ the values shown; anything else is refused with `unsupported_feature`. `policy.t
 without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
 `["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
 `policy.untrusted_input_tools` (default `[]`, at most 20) names, one by one, tools that an occurrence of an untrusted
-trigger (`email.received@1`) may run without asking although they reach a model-chosen destination, for example
-`["fetch_url"]`; `"all"` and patterns are refused. See [Tool approval](#tool-approval).
+trigger (`email.received@1`) may run without asking although "allow all tools" does not cover them there (a tool
+that reaches the network, runs code or commands, writes outside the workspace or delegates), for example
+`["fetch_url"]`; `"all"` and patterns are refused, and message-sending tools are never granted this way. See
+[Tool approval](#tool-approval).
 
 ### Creating an automation
 
@@ -3697,8 +3701,9 @@ Runs the automation when mail arrives in the user's mailbox, in batches no more 
 `1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
 durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
 `unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
-string `prompt`, inside a fixed untrusted frame; their unattended grant withholds tools with a model-chosen
-destination. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
+string `prompt`, inside a fixed untrusted frame (both stored as artifacts; the controller's records carry refs);
+their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
+or delegation. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
 
 ### Adding a source
 
@@ -3759,7 +3764,9 @@ flowchart TD
   workspace, input data), the trigger envelope, the retry policy and the session kind. Every attempt uses these, so a
   later revision never changes an occurrence that has already been admitted.
 - **prepare_context** checks that the frozen inputs resolve (values offloaded to the artifact store must load).
-- **dispatch** records the attempt and starts the child with `START_SUBWORKFLOW {async: true, wait: true, run_id}`.
+- **dispatch** records the attempt and starts the child with `START_SUBWORKFLOW {async: true, wait: true, run_id}`
+  (plus `resolve_vars` for an email occurrence, whose messages and framed prompt stay artifact refs in the
+  controller's records).
   The child runs outside the controller's tick, driven by the host. Its id is deterministic and it is created only if
   absent, so a dispatch replayed after a crash re-attaches to the same child.
 - **record_outcome** reloads the child and reads its output; it never relies on the resume payload. Success completes
@@ -3961,11 +3968,22 @@ returns the refusal message for a tool, or `None` when it is allowed.
   - **Pre-authorised recipients.** Every occurrence carries the definition's `policy.email_allowed_recipients` as
     `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
     recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
-  - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
-    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`), even though
-    `"auto"` otherwise grants every tool: the agent must not follow links from the mail it reads. Only a tool the user
-    named individually in `policy.untrusted_input_tools` is granted (within the target's tool ceiling; never a
-    message-sending tool). Schedule and manual automations keep `fetch_url` and `browser_probe` in the grant.
+  - **Untrusted triggers: allow by kind.** When the trigger delivers text written by other people
+    (`email.received@1`), the agent acts only within the automation's mission and never follows links from the mail
+    it reads. `"auto"` then grants only tools whose facts prove all of the following
+    (`untrusted_input_allow_all`): no network egress beyond services the user or administrator configured (the model
+    provider, the user's own mailbox, the agora hub), no code or command execution, no message sending, no writes
+    outside the run's workspace, and no delegation. The facts are the runtime's tool table
+    (`tool_effects.TOOL_EFFECT_CLASSES`, `TOOL_NETWORK_REACH`, `TOOL_WRITE_SCOPE`) and AbstractCore's row facts
+    (`model_controlled_destination`, `comms_send`, `remote_write_capable`, `destructive_capable`); a tool missing
+    from the table is withheld. In practice the grant keeps file reads, workspace-confined file writes (`write_file`
+    and `edit_file` only under `workspace_access_mode: "workspace_only"`, the default), mailbox and hub reads,
+    `get_email_attachment` (into the workspace), memory and plan tools. It withholds, among others, `fetch_url`,
+    `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
+    `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. A withheld tool
+    runs unattended only when the user named it individually in `policy.untrusted_input_tools` (within the target's
+    tool ceiling); message-sending tools (`send_email`, `reply_email`, `agora_post_message`, `agora_send_dm`, ...)
+    are never granted, named or not. Schedule and manual automations keep the full grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
@@ -4511,9 +4529,10 @@ tools available to this user) or `"agent_tools_off"`
 (`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`,
 `list_emails`, `search_emails`, `read_email` and `get_email_attachment`. The reading tools (`list_email_accounts`,
 `list_email_folders`, `list_emails`, `search_emails`, `read_email`) change nothing; `list_emails` and `search_emails`
-return at most 100 messages per call with `has_more` and `next_cursor` for the next page. Their file arguments follow the run's workspace: `attachments` must be files inside the
-workspace (a report, a screenshot of the agent's work), and `get_email_attachment` saves into it. A path outside
-the workspace is refused before anything is sent.
+return at most 100 messages per call with `has_more` and `next_cursor` for the next page. Their file arguments are
+confined to the run's workspace in every workspace access mode (the allowed-paths and all-except-ignored modes widen
+file tools, never mail): `attachments` must be files inside the workspace (a report, a screenshot of the agent's
+work), and `get_email_attachment` saves into it. A path outside the workspace is refused before anything is sent.
 
 Tool outputs follow the runtime's inline limit (256 KB by default, `ABSTRACTRUNTIME_MAX_INLINE_BYTES`): when a
 structured result such as `read_email` is larger, its largest values (a big HTML body, for example) are stored as
@@ -4623,16 +4642,27 @@ Inbound mail is data, never instructions:
   email with its headers, whole `body_text` and `body_html`, and its attachment list;
 - for a target with a string `prompt`, a fixed frame appended to the prompt: a notice that the content was written by
   other people, that links and instructions contained in the emails are not to be followed, and that the agent acts
-  only on the automation's mission; then each email between `--- Email i of n ---` markers; then a closing line that
-  repeats the rule;
-- the trigger envelope recorded in the ledger carries message metadata and event ids, never bodies;
-- under `policy.tool_approval: "auto"` ("allow all tools"), the grant still withholds every tool whose row declares a
-  model-chosen destination (`fetch_url`, `browser_probe`) and every message-sending tool (`send_email`, `reply_email`):
-  those calls ask, so an email cannot steer the occurrence into opening a link or sending data to an address or URL it
-  names. To let such an automation open pages unattended, name each tool individually in
-  `policy.untrusted_input_tools` (for example `["fetch_url"]`; `"all"` and patterns are refused). Show the user the
-  risk when they do: a page the agent opens can carry instructions too, and the URL itself can carry data out.
-  Message-sending tools are never granted this way; they follow the recipient rule above.
+  only on the automation's mission; then each email between `--- Email i of n · boundary <token> ---` markers; then a
+  closing line that repeats the rule. The boundary token is drawn at random for each occurrence, so a body cannot
+  fake the end of its email or of the frame;
+- the messages and the framed prompt are stored as artifacts at admission. The controller's records
+  (`automation.admitted`, `pending_occurrence`, the dispatch effect) carry artifact refs, message metadata and event
+  ids, never bodies. The occurrence run resolves the refs when it starts (`START_SUBWORKFLOW` `resolve_vars`), so
+  its own input holds the messages whole: that run is what the model reads. A runtime without an artifact store
+  refuses to create this trigger (`unsupported_feature`);
+- under `policy.tool_approval: "auto"` ("allow all tools"), the grant is **allow by kind**: it covers only tools with
+  no network egress beyond services the user or administrator configured, no code or command execution, no message
+  sending, no writes outside the run's workspace and no delegation (file reads, workspace-confined file writes,
+  mailbox reads, `get_email_attachment`, memory and plan tools). Everything else asks, among others `fetch_url`,
+  `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
+  `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. So an email cannot
+  steer the occurrence into opening a link, running code or sending data to an address or URL it names. The rule is
+  decided on tool facts, never names: see [automations.md](automations.md#tool-approval). To let such an automation
+  use one of those tools unattended, name it individually in `policy.untrusted_input_tools` (for example
+  `["fetch_url"]`; `"all"` and patterns are refused). Show the user the risk when they do: a page the agent opens can
+  carry instructions too, and the URL itself can carry data out. Message-sending tools (`send_email`, `reply_email`,
+  `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted this way; email sends follow
+  the recipient rule above.
 
 ## Sending from an automation without a model
 
@@ -4668,10 +4698,12 @@ See [automations.md](automations.md#notifications-attention-and-retries).
 ## Limits
 
 - One account per runtime; the trigger reads `account: "self"` only.
-- `skim_url` carries no model-chosen-destination fact today, so an email-triggered grant does not withhold it.
 - `reply_email` always asks for approval.
-- Schedule and manual automations keep `fetch_url` in their unattended grant; only triggers that deliver untrusted
-  inbound content withhold it (unless the user named it in `policy.untrusted_input_tools`).
+- Schedule and manual automations keep the full unattended grant (`fetch_url`, `web_search`, `execute_command`...);
+  only triggers that deliver untrusted inbound content narrow it to the harmless kinds (plus the tools the user named
+  in `policy.untrusted_input_tools`).
+- Camera tools count as local reads, so an email-triggered grant covers them; their captures stay in the artifact
+  store and no tool in that grant can send them anywhere.
 
 
 ==============================================================================

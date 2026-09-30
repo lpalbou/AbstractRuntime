@@ -43,6 +43,8 @@ nav:
   - Tool Approval: tool-approval.md
   - Entity Runtime: entity-runtime.md
   - Tools and Comms: tools-comms.md
+  - Email: email.md
+  - Automations: automations.md
   - MCP Worker: mcp-worker.md
   - Workflow Bundles: workflow-bundles.md
   - Snapshots: snapshots.md

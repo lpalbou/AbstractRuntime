@@ -564,6 +564,46 @@ def _models_agree(requested: Any, served: Any) -> bool:
     return srv_tail.startswith(req_tail) or req_tail.startswith(srv_tail)
 
 
+def _media_only_output_request(
+    *,
+    prompt: Any,
+    messages: Any,
+    media: Any,
+    params: Mapping[str, Any],
+    capability_defaults: Any,
+) -> bool:
+    """True when the request asks ONLY for non-text outputs (image, video, voice, music, a
+    transcription) and no tools: it never needs the text model (0.7.0 end-to-end: a TTS request
+    built the default text client first and failed when that client could not be built).
+    Decided on AbstractCore's own route resolution (the same specs the local client runs)."""
+
+    output = params.get("output")
+    if not _is_abstractcore_output_request(output):
+        return False
+    try:
+        from abstractcore.core.generate_contract import normalize_generate_request, resolve_generate_route  # type: ignore
+
+        text = params.get("text")
+        prompt_s = str(prompt or "") or ("" if text is None else str(text))
+        route = resolve_generate_route(
+            request=normalize_generate_request(prompt=prompt_s, messages=messages, media=media),
+            output=_strip_runtime_output_metadata_for_core(output),
+            scoped_routes=capability_defaults or {},
+            explicit_text_route={"provider": None, "model": None, "base_url": None},
+            explicit_reasoning=None,
+        )
+        specs = [dict(spec) for spec in route.output_specs]
+    except Exception:  # noqa: BLE001 - undecidable here: the ordinary (text client) path decides
+        return False
+    return bool(specs) and all(
+        not (
+            str(spec.get("modality") or "").strip().lower() == "text"
+            and str(spec.get("task") or "").strip().lower() != "transcription"
+        )
+        for spec in specs
+    )
+
+
 def _stamp_effective_route(
     result: Any,
     *,
@@ -7710,7 +7750,10 @@ class LocalAbstractCoreLLMClient:
         prompt_cache_export_root_dir: Optional[str | Path] = None,
         core_config_file: Optional[str | Path] = None,
         capability_defaults: Optional[Any] = None,
+        llm_factory: Optional[Any] = None,
     ):
+        # `llm_factory(model=..., **kwargs)` builds the provider instead of `create_llm(provider,
+        # ...)`: the pool's media-only client passes AbstractCore's capability host (no text model).
         # In this monorepo layout, `import abstractcore` can resolve to a namespace package
         # (the outer project directory) when running from the repo root. In that case, the
         # top-level re-export `from abstractcore import create_llm` is unavailable even though
@@ -7745,7 +7788,7 @@ class LocalAbstractCoreLLMClient:
             # This enables hosts (AbstractCode/AbstractFlow) to inspect trace payloads by trace_id.
             kwargs.setdefault("max_traces", 50)
         self._llm_kwargs = dict(kwargs)
-        self._llm = create_llm(provider, model=model, **kwargs)
+        self._llm = llm_factory(model=model, **kwargs) if callable(llm_factory) else create_llm(provider, model=model, **kwargs)
         _attach_core_execution_context_to_client(
             self,
             core_config_file=self._core_config_file,
@@ -10310,6 +10353,9 @@ class MultiLocalAbstractCoreLLMClient:
             return False
 
         self._llm_kwargs = next_kwargs
+        # The media-only client carries the capability defaults and the shared kwargs: rebuilt
+        # lazily on the next media request.
+        self.__dict__.pop("_media_host", None)
         self._default_provider = provider_s
         self._default_model = model_s
         # Evict the shared pool: entries built for the OLD default carry its
@@ -10666,6 +10712,49 @@ class MultiLocalAbstractCoreLLMClient:
                     ) from exc
                 raise
         return client
+
+    def _media_host_client(self) -> "LocalAbstractCoreLLMClient":
+        """The pool's media-only client: AbstractCore's capability host (no text model), built
+        once with the pool's provider-agnostic kwargs, core config and capability defaults, so
+        media outputs run exactly as on a text client, without building or loading one."""
+
+        client = self.__dict__.get("_media_host")
+        if client is not None:
+            return client
+        lock = self.__dict__.setdefault("_media_host_lock", threading.Lock())
+        with lock:
+            client = self.__dict__.get("_media_host")
+            if client is not None:
+                return client
+            from abstractcore.providers.capability_host import (  # type: ignore
+                CAPABILITY_HOST_MODEL,
+                CAPABILITY_HOST_PROVIDER,
+                create_capability_host,
+            )
+
+            shared_kwargs, _connection = _split_connection_scoped_llm_kwargs(getattr(self, "_llm_kwargs", None))
+            shared_kwargs.pop("prompt_cache_key", None)
+            explicit = getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults))
+            client = LocalAbstractCoreLLMClient(
+                provider=CAPABILITY_HOST_PROVIDER,
+                model=CAPABILITY_HOST_MODEL,
+                llm_kwargs=shared_kwargs,
+                artifact_store=self._artifact_store,
+                bloc_root_dir=self._bloc_root_dir,
+                prompt_cache_export_root_dir=self._prompt_cache_export_root_dir,
+                core_config_file=self._core_config_file,
+                capability_defaults=self._capability_defaults if explicit else None,
+                llm_factory=create_capability_host,
+            )
+            client._capability_residency_parent = weakref.ref(self)
+            if self._core_config_file or explicit:
+                _attach_core_execution_context_to_client(
+                    client,
+                    core_config_file=self._core_config_file,
+                    capability_defaults=self._capability_defaults if explicit else None,
+                )
+            self._media_host = client
+            return client
 
     @contextmanager
     def _building_claim(self, key: Tuple[str, str]):
@@ -11476,6 +11565,18 @@ class MultiLocalAbstractCoreLLMClient:
         if speculation_request is not None:
             llm_kwargs_override["speculation"] = deepcopy(speculation_request)
 
+        if not tools and _media_only_output_request(
+            prompt=prompt, messages=messages, media=media, params=params,
+            capability_defaults=getattr(self, "_capability_defaults", None),
+        ):
+            # Image / video / voice / music / transcription only: never build (or load) the
+            # text model for it; the capability host runs the same capability plugins.
+            client = self._media_host_client()
+            result = client.generate(
+                prompt=prompt, messages=messages, system_prompt=system_prompt, tools=tools, media=media, params=params,
+            )
+            return _stamp_effective_route(result, requested_provider=provider, requested_model=model, client=client)
+
         client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
         result = client.generate(
             prompt=prompt,
@@ -11516,7 +11617,8 @@ class MultiLocalAbstractCoreLLMClient:
         if provider_api_key:
             llm_kwargs_override["api_key"] = provider_api_key
 
-        client = self._get_client(provider_str, model_str, llm_kwargs_override=llm_kwargs_override or None)
+        # Streaming speech never needs the text model: the capability host's voice plugin.
+        client = self._media_host_client()
         return client.stream_tts(text=text, output=output, params=stream_params)
 
     # CATALOG QUERIES NEVER GO THROUGH A LOADED CLIENT (defect 2026-09-22).

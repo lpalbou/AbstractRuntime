@@ -16,13 +16,49 @@ import copy
 import re
 import threading
 import uuid
-from typing import Any, Dict, Optional, Protocol
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, Optional, Protocol
 
 from ...core.models import Effect, EffectType, RunState, RunStatus, StepPlan
 from ...core.spec import WorkflowSpec
 
 _RESULT_KEY = "result"
 _WORKFLOW_PREFIX = "wf_abstractcore_run_facade"
+
+# Child runs this facade is ticking or resuming IN THIS PROCESS right now. Their workflow exists
+# only inside the facade call (never in a host's registry), so a host runner that scans RUNNING
+# runs must leave them alone: `inline_run_active(run_id)`. Before 0.8.1 the gateway runner tried
+# to tick them, failed to resolve `wf_abstractcore_run_facade_*`, and after 40 attempts marked the
+# child FAILED mid-flight ("Workflow 'wf_abstractcore_run_facade_tts' not registered (after 40
+# attempts)", 0.7.0 end-to-end) -- also for a TTS that succeeded.
+_INLINE_LOCK = threading.Lock()
+_INLINE_RUNS: Dict[str, int] = {}
+
+
+def inline_run_active(run_id: Any) -> bool:
+    """True while this process's run facade is executing `run_id` (a runner must skip it)."""
+
+    rid = str(run_id or "").strip()
+    if not rid:
+        return False
+    with _INLINE_LOCK:
+        return rid in _INLINE_RUNS
+
+
+@contextmanager
+def _inline_execution(run_id: str) -> Iterator[None]:
+    rid = str(run_id)
+    with _INLINE_LOCK:
+        _INLINE_RUNS[rid] = _INLINE_RUNS.get(rid, 0) + 1
+    try:
+        yield
+    finally:
+        with _INLINE_LOCK:
+            n = _INLINE_RUNS.get(rid, 1) - 1
+            if n > 0:
+                _INLINE_RUNS[rid] = n
+            else:
+                _INLINE_RUNS.pop(rid, None)
 
 
 class AbstractCoreRuntimeLike(Protocol):
@@ -235,6 +271,14 @@ class AbstractCoreRunFacade:
 
         return cls(runtime)
 
+    def _tick(self, *, workflow: WorkflowSpec, run_id: str, **kwargs: Any) -> RunState:
+        with _inline_execution(run_id):
+            return self._runtime.tick(workflow=workflow, run_id=run_id, **kwargs)
+
+    def _resume(self, *, workflow: WorkflowSpec, run_id: str, **kwargs: Any) -> RunState:
+        with _inline_execution(run_id):
+            return self._runtime.resume(workflow=workflow, run_id=run_id, **kwargs)
+
     def execute_llm_call(
         self,
         run_id: str,
@@ -310,7 +354,7 @@ class AbstractCoreRunFacade:
             session_id=parent.session_id,
             parent_run_id=parent.run_id,
         )
-        return self._runtime.tick(workflow=workflow, run_id=child_run_id)
+        return self._tick(workflow=workflow, run_id=child_run_id)
 
     def execute_tool_calls(
         self,
@@ -341,7 +385,7 @@ class AbstractCoreRunFacade:
             session_id=parent.session_id,
             parent_run_id=parent.run_id,
         )
-        return self._runtime.tick(workflow=workflow, run_id=child_run_id)
+        return self._tick(workflow=workflow, run_id=child_run_id)
 
     def resume_tool_calls(
         self,
@@ -369,7 +413,7 @@ class AbstractCoreRunFacade:
             result_key=result_key,
             resume_to_node=waiting.resume_to_node,
         )
-        return self._runtime.resume(
+        return self._resume(
             workflow=workflow,
             run_id=child.run_id,
             wait_key=wait_key if wait_key is not None else waiting.wait_key,
@@ -561,7 +605,7 @@ class AbstractCoreRunFacade:
             session_id=parent.session_id,
             parent_run_id=parent.run_id,
         )
-        child = self._runtime.tick(workflow=workflow, run_id=child_run_id)
+        child = self._tick(workflow=workflow, run_id=child_run_id)
         if child.status != RunStatus.WAITING or child.waiting is None:
             raise ValueError("Runtime failed to initialize streaming voice child run.")
 
@@ -615,7 +659,7 @@ class AbstractCoreRunFacade:
                 "run_id": parent.run_id,
             }
             try:
-                self._runtime.resume(
+                self._resume(
                     workflow=workflow,
                     run_id=child.run_id,
                     wait_key=wait_key,
@@ -654,7 +698,7 @@ class AbstractCoreRunFacade:
                     if event_type in {"done", "cancelled", "error"}:
                         terminal_seen = True
                         final_result = _final_result_for_event(event)
-                        final_state = self._runtime.resume(
+                        final_state = self._resume(
                             workflow=workflow,
                             run_id=child.run_id,
                             wait_key=wait_key,
@@ -673,7 +717,7 @@ class AbstractCoreRunFacade:
                         "child_run_id": child.run_id,
                         "run_id": parent.run_id,
                     }
-                    final_state = self._runtime.resume(
+                    final_state = self._resume(
                         workflow=workflow,
                         run_id=child.run_id,
                         wait_key=wait_key,
@@ -702,7 +746,7 @@ class AbstractCoreRunFacade:
                     "run_id": parent.run_id,
                 }
                 try:
-                    final_state = self._runtime.resume(
+                    final_state = self._resume(
                         workflow=workflow,
                         run_id=child.run_id,
                         wait_key=wait_key,
@@ -854,4 +898,5 @@ def get_abstractcore_run_facade(runtime: Any) -> AbstractCoreRunFacade:
 __all__ = [
     "AbstractCoreRunFacade",
     "get_abstractcore_run_facade",
+    "inline_run_active",
 ]

@@ -26,7 +26,8 @@ UNTRUSTED_CLOSING = (
 # Fields of one email in `input_data.trigger.emails[]`.
 EMAIL_INPUT_FIELDS = (
     "uid", "uidvalidity", "folder", "message_id", "from", "from_address", "to", "cc", "reply_to", "subject",
-    "date", "internaldate", "in_reply_to", "references", "body_text", "body_html", "attachments", "size",
+    "date", "internaldate", "in_reply_to", "references", "body_text", "body_html", "body_skipped", "attachments",
+    "size",
 )
 
 
@@ -57,7 +58,12 @@ def email_frame(emails: Sequence[Mapping[str, Any]]) -> str:
     for i, e in enumerate(emails, start=1):
         body = e.get("body_text") or ""
         body_kind = "text"
-        if not str(body).strip() and e.get("body_html"):
+        skipped = e.get("body_skipped")
+        if isinstance(skipped, Mapping):
+            # Over AbstractCore's reading limit: the bodies were never fetched (null, not cut).
+            body_kind = "not fetched"
+            body = f"{skipped.get('cause') or 'The message is over the reading limit.'} {skipped.get('fix') or ''}".strip()
+        elif not str(body).strip() and e.get("body_html"):
             body, body_kind = e.get("body_html"), "html"
         lines.extend(
             [

@@ -40,7 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attention items carry as `channels`. Stored v1 definitions read with the defaults.
 - **Email tools follow the host's decision**: `email_enabled=` on `get_default_toolsets`, `get_default_tools`,
   `list_default_tool_specs`, `build_default_tool_map` and `list_tool_catalog`; the email kind adds `reply_email`,
-  `search_emails` and `get_email_attachment`.
+  `search_emails`, `get_email_attachment` and the read-only `list_email_folders`.
+- **Oversized mail never blocks the feeder**: a message over AbstractCore's reading limit is appended with its headers,
+  attachment list and typed `body_skipped` record (bodies `null`, never cut), listed in `PollReport.body_skipped`,
+  passed to occurrences in `input_data.trigger.emails[].body_skipped` and shown as `Body (not fetched)` in the frame.
 - **The resolver learns who is sending** (`use="agent_tool"` or `use="action"`), so a host applies its users'
   "agent email tools" choice to agent tools only; the send-email action is identified by its node function.
 - **`email_facade`** (`abstractruntime.integrations.abstractcore.email_facade`): AbstractCore's mail library for hosts.
@@ -67,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Under "allow all tools", an email-triggered occurrence still withholds `fetch_url` and `browser_probe` unless the
   user named them in `policy.untrusted_input_tools`; the untrusted frame tells the agent not to follow links or
   instructions contained in the emails and to act only on the automation's mission.
+- After a folder rebuild with nothing to resynchronise, the feeder stores the new baseline AbstractCore returns
+  (`reset` and `baseline`) instead of fetching one itself.
 - Large structured tool outputs (for example a `read_email` with a big HTML body) are offloaded to session
   attachments under the same inline limit as text outputs; the result carries artifact references.
 - The process-local email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) are no longer

@@ -164,8 +164,43 @@ def test_feeder_reset_with_nothing_new_rebaselines(tmp_path, ca, imap):
     st = inbox.stream_state(stream)
     st["cursor"]["last_internaldate"] = "2999-01-01T00:00:00+00:00"
     inbox.set_stream_state(stream, st)
-    assert feeder.poll(ctx).reset
+    old_uv = st["cursor"]["uidvalidity"]
+    report = feeder.poll(ctx)
+    # AbstractCore returns a new baseline in the new epoch (reset AND baseline); the feeder stores
+    # it like the first one: the cursor at the newest message of the rebuilt folder, never UID 0.
+    assert report.ok and report.reset and report.baseline and report.appended == []
+    status = feeder.status()
+    assert status["cursor"]["uidvalidity"] != old_uv and status["cursor"]["last_uid"] >= 3
+    assert inbox.stream_state(stream)["last_reset_at"]
     assert feeder.poll(ctx).appended == [] and inbox.head_seq() == 0  # the old mail never became new mail
+    uid = add_mail(imap, from_="new@example.test", subject="after the rebaseline")
+    assert feeder.poll(ctx).appended == [email_event_id(REF, "INBOX", status["cursor"]["uidvalidity"], uid)]
+
+
+def test_feeder_appends_an_oversized_message_as_metadata_and_moves_on(tmp_path, ca, imap):
+    from abstractruntime.email import email_frame, email_trigger_input
+
+    inbox, feeder, ctx = _feeder(tmp_path, ca, imap)
+    ctx.max_message_bytes = 4096  # the reading limit (AbstractCore's EmailContext)
+    feeder.poll(ctx)  # baseline
+    big = add_mail(imap, from_="big@example.test", subject="too large", text="X" * 20000)
+    small = add_mail(imap, from_="small@example.test", subject="small", text="fits")
+    report = feeder.poll(ctx)
+    assert report.ok and report.error is None and not report.unprocessable
+    assert report.appended == [email_event_id(REF, "INBOX", 1000, big), email_event_id(REF, "INBOX", 1000, small)]
+    assert report.body_skipped == [email_event_id(REF, "INBOX", 1000, big)]
+    assert report.to_dict()["body_skipped"] == report.body_skipped
+    first, second = (e["payload"] for e in inbox.read())
+    assert first["subject"] == "too large" and first["body_text"] is None and first["body_html"] is None
+    assert first["body_skipped"]["code"] == "email_message_too_large" and first["body_skipped"]["limit"] == 4096
+    assert second["body_text"].strip() == "fits" and "body_skipped" not in second
+    assert feeder.status()["cursor"]["last_uid"] == small and feeder.status()["last_error"] is None
+    # The occurrence sees the typed skip, and the frame says why there is no body.
+    trig = email_trigger_input([first, second])
+    assert trig["emails"][0]["body_skipped"]["code"] == "email_message_too_large"
+    frame = email_frame([first, second])
+    assert "Body (not fetched):" in frame and first["body_skipped"]["cause"] in frame
+    assert "X" * 100 not in frame and "fits" in frame
 
 
 def test_feeder_failure_is_typed_backs_off_and_never_raises(tmp_path, ca, imap):

@@ -62,6 +62,7 @@ TOOL_EFFECT_CLASSES: Dict[str, str] = {
     "shell_close": EXEC,
     # comms toolset
     "list_email_accounts": COMMS,
+    "list_email_folders": COMMS,
     "send_email": COMMS,
     "reply_email": COMMS,
     "list_emails": COMMS,

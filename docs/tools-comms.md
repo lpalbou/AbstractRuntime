@@ -14,8 +14,8 @@ Implementation pointers (this repo):
 
 A host that serves users with their own mailboxes binds each run to its user's account and passes
 `email_enabled=True` to the toolset functions for users with a connected account; see [email.md](email.md). The
-email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
-`get_email_attachment`; `send_email` runs unattended only to the user's own address or to recipients pre-authorised
+email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`, `list_emails`, `search_emails`,
+`read_email` and `get_email_attachment`; `send_email` runs unattended only to the user's own address or to recipients pre-authorised
 for the run ([tool-approval.md](tool-approval.md#per-call-refiners)), and file arguments (`attachments`,
 `output_dir`) stay inside the run's workspace.
 

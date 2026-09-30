@@ -57,8 +57,10 @@ pytestmark = pytest.mark.live_email
 
 REF = "live:self:1"
 # A per-run tool policy as a gateway chat run carries it (a rank ceiling below outreach). The
-# send_email_recipient@v2 refiner runs inside the per-run policy pass: a run WITHOUT any
-# `_runtime.tool_policy` falls back to the executor's static policy and asks for every send.
+# send_email_recipient@v2 refiner runs per call with or without it: inside the per-run policy
+# pass here, and over the executor's static policy for a run WITHOUT any `_runtime.tool_policy`
+# (hermetic: test_send_to_self_runs_unattended_without_a_run_policy), so a send to self runs
+# unattended either way; a send to any other address still asks.
 CHAT_POLICY = {"auto_approve_max_risk_rank": 1}
 
 

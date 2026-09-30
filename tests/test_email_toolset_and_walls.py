@@ -20,7 +20,8 @@ from abstractruntime.integrations.abstractcore.workspace_scoped_tools import Wor
 pytestmark = pytest.mark.basic
 
 EMAIL_TOOLS = {
-    "list_email_accounts", "send_email", "reply_email", "list_emails", "search_emails", "read_email", "get_email_attachment",
+    "list_email_accounts", "list_email_folders", "send_email", "reply_email", "list_emails", "search_emails", "read_email",
+    "get_email_attachment",
 }
 
 
@@ -39,6 +40,20 @@ def test_the_email_kind_is_the_full_tool_set():
     assert set(comms_toolset_kinds()["email"]) == EMAIL_TOOLS
     assert EMAIL_TOOLS <= set(TOOL_EFFECT_CLASSES)
     assert TOOL_EFFECT_CLASSES["get_email_attachment"] == "write"
+
+
+def test_list_email_folders_is_a_read_only_member_of_the_email_kind():
+    from abstractcore.tools.comms_tools import list_email_folders
+
+    from abstractruntime.integrations.abstractcore.effect_handlers import _risk_row_for_tool
+
+    assert "list_email_folders" in comms_toolset_kinds()["email"]
+    assert TOOL_EFFECT_CLASSES["list_email_folders"] == "comms"  # never write/exec: allowed under read-only
+    row = _risk_row_for_tool("list_email_folders")  # the served inventory row the approval pass reads
+    assert row is not None and row.get("mutating") is False and not row.get("remote_write_capable")
+    assert row.get("risk_tier") == "observe" == _risk_row_for_tool("list_emails").get("risk_tier")  # list_emails band
+    assert build_default_tool_map(email_enabled=True)["list_email_folders"] is list_email_folders
+    assert "list_email_folders" not in build_default_tool_map(email_enabled=False)
 
 
 def test_host_decides_email_availability_without_env_flags():

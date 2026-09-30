@@ -11,7 +11,11 @@ with the user's `EmailContext`; the feeder does the rest through AbstractCore's 
   (UIDVALIDITY + last UID) advances message by message ONLY after that append is durable;
 - UIDVALIDITY change (the server rebuilt the folder): AbstractCore resynchronises by date and
   the feeder skips messages already in the inbox (same Message-ID), so nothing is lost and
-  nothing is delivered twice;
+  nothing is delivered twice; with nothing to resynchronise AbstractCore returns a new baseline
+  in the new epoch (`reset` and `baseline`), which the feeder stores like the first one;
+- a message whose text/HTML bodies exceed AbstractCore's reading limit arrives as its headers,
+  attachment list and a typed `body_skipped` record (bodies null, never cut): it is appended
+  like any other message and never blocks the mailbox;
 - a message that cannot be fetched on `failure_threshold` (3) polls in a row is recorded as
   unprocessable (uid, code, cause, fix) and passed, so one bad message never blocks the mailbox;
 - a connection / sign-in failure is a typed `{code, cause, fix, retryable}` in the report and the
@@ -83,6 +87,7 @@ class PollReport:
     reset: bool = False
     appended: List[str] = field(default_factory=list)
     duplicates: int = 0
+    body_skipped: List[str] = field(default_factory=list)
     unprocessable: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[Dict[str, Any]] = None
     next_poll_at: Optional[str] = None
@@ -95,6 +100,7 @@ class PollReport:
             "reset": self.reset,
             "appended": list(self.appended),
             "duplicates": self.duplicates,
+            "body_skipped": list(self.body_skipped),
             "unprocessable": [dict(u) for u in self.unprocessable],
             "error": dict(self.error) if self.error else None,
             "next_poll_at": self.next_poll_at,
@@ -207,24 +213,16 @@ class EmailInboxFeeder:
             return fail(err)
 
         report = PollReport(ok=True, baseline=bool(result.baseline), reset=bool(result.reset))
+        if result.reset:
+            st["last_reset_at"] = at
         if result.baseline:
+            # The first poll, or a UIDVALIDITY reset with nothing to resynchronise: AbstractCore
+            # returns a cursor at the newest message of the (new) epoch, never a UID-0 cursor
+            # that would deliver the whole rebuilt folder as new mail.
             st.update(cursor=result.cursor.to_dict(), state="ok", last_poll=at, last_ok=at, consecutive_failures=0,
                       last_error=None, next_poll_at=None)
             save()
             return report
-        if result.reset:
-            st["last_reset_at"] = at
-            if not result.messages:
-                # Nothing to resynchronise: restart from the newest message of the new epoch
-                # (a cursor at UID 0 would deliver the whole rebuilt folder as new mail).
-                try:
-                    rebase = client.fetch_new(None, folder=folder)
-                except EmailError as err:
-                    return fail(err)
-                st.update(cursor=rebase.cursor.to_dict(), state="ok", last_poll=at, last_ok=at,
-                          consecutive_failures=0, last_error=None, next_poll_at=None)
-                save()
-                return report
         seen_until = _parse(cursor.last_internaldate) if (result.reset and cursor is not None) else None
 
         failures_by_uid: Dict[str, int] = dict(st.get("message_failures") or {})
@@ -271,10 +269,15 @@ class EmailInboxFeeder:
                 stopped_on = _typed(err, at)
                 save()
                 break  # retried at the next poll; later messages wait behind it (order kept)
+            payload = email_event_payload(self.account_ref, detail)
+            if payload.get("body_skipped"):
+                # Over the reading limit: the event carries the headers, the attachment list and
+                # the typed `body_skipped` record (bodies null, never cut); the mailbox moves on.
+                report.body_skipped.append(event_id)
             self.inbox.append(
                 stream=stream,
                 event_id=event_id,
-                payload=email_event_payload(self.account_ref, detail),
+                payload=payload,
                 dedupe_key=summary.message_id or None,
                 appended_at=at,
             )

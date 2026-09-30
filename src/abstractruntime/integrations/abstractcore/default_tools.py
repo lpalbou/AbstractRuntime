@@ -26,12 +26,12 @@ ToolCallable = Callable[..., Any]
 _COMMS_KIND_TOOLS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     # Email (framework backlog 0992): the account is the executing run's own
     # (resolved by the host at call time); reply/search/attachment joined in
-    # AbstractCore 2.20.
+    # AbstractCore 2.20; list_email_folders (read-only) with the folder-aware list/search pages.
     "email": (
         "abstractcore.tools.comms_tools",
         (
-            "list_email_accounts", "send_email", "reply_email", "list_emails", "search_emails", "read_email",
-            "get_email_attachment",
+            "list_email_accounts", "list_email_folders", "send_email", "reply_email", "list_emails", "search_emails",
+            "read_email", "get_email_attachment",
         ),
     ),
     "whatsapp": (

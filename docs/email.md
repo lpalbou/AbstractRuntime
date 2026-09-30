@@ -83,8 +83,10 @@ Tool availability follows the host's decision: pass `email_enabled=True` to `get
 enabled and whose agent email tools are on. There is no environment variable for email: without `email_enabled=True`
 the email tools are off. When they are off, `list_tool_catalog(email_enabled=False, email_off_reason=...)` names the
 reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"` or `"agent_tools_off"`
-(`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
-`get_email_attachment`. Their file arguments follow the run's workspace: `attachments` must be files inside the
+(`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`,
+`list_emails`, `search_emails`, `read_email` and `get_email_attachment`. The reading tools (`list_email_accounts`,
+`list_email_folders`, `list_emails`, `search_emails`, `read_email`) change nothing; `list_emails` and `search_emails`
+return at most 100 messages per call with `has_more` and `next_cursor` for the next page. Their file arguments follow the run's workspace: `attachments` must be files inside the
 workspace (a report, a screenshot of the agent's work), and `get_email_attachment` saves into it. A path outside
 the workspace is refused before anything is sent.
 
@@ -141,7 +143,14 @@ if email_trigger_consumers(runtime):          # at least one email automation
   message by message, after each append is durable. Appending an id twice is a no-op.
 - When the server rebuilds the folder (a new UIDVALIDITY), the feeder resynchronises by date and skips messages that
   are already in the inbox (same Message-ID) or older than the newest message seen before, so nothing is lost or
-  delivered twice.
+  delivered twice. When there is nothing to resynchronise, AbstractCore returns a new baseline in the new UIDVALIDITY
+  (`report.reset` and `report.baseline`): the cursor moves to the newest message of the rebuilt folder and the old
+  mail never becomes new mail.
+- A message whose text and HTML bodies are larger than AbstractCore's reading limit (`EmailContext.max_message_bytes`,
+  25 MB by default) is appended with its headers, its attachment list and a typed `body_skipped` record
+  (`{code: "email_message_too_large", cause, fix, uid, folder, size, limit}`); its bodies are `null`, never cut.
+  `report.body_skipped` lists those event ids. It never blocks the mailbox, and the occurrence's frame shows
+  `Body (not fetched):` with the cause and fix.
 - A message that cannot be fetched on three polls in a row is recorded in `feeder.status()["unprocessable"]` with its
   code, cause and fix, and the feeder moves past it.
 - A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,

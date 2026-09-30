@@ -8,7 +8,7 @@ I/O: the controller reads the inbox events after the automation's cursor and pas
 Config (validated strictly; equality / membership and one literal substring, no expressions):
 
     {"account": "self", "folder": "INBOX", "uses_model": true, "every": "1h", "max_batch": 100,
-     "start_at": <RFC3339, default now>,
+     "start_at": <RFC3339, default now>, "auto_submitted": "skip",
      "filter": {"from_in": [addr], "from_domain_in": [domain], "to_in": [addr],
                 "subject_contains": str, "has_attachment": bool}}
 
@@ -22,6 +22,11 @@ Config (validated strictly; equality / membership and one literal substring, no 
   UIDVALIDITY + last UID) persisted in `_runtime.automation`.
 - Mail appended before `start_at` (creation) or while the automation was paused (`rearm`) is
   never admitted.
+- `auto_submitted` (RFC 3834 loop protection): "skip" (default) never admits a message whose
+  `Auto-Submitted` header is present and not "no" (auto-responders, notifications, other
+  automations, this framework's own automatic mail); "admit" lets them through the filter.
+  Independently of this option, the account's own automatic mail (framework marker from this
+  address, or a Message-ID the host recorded as sent) never enters the inbox at all (feeder).
 - `from_domain_in` matches the sender's domain exactly (a subdomain only when listed);
   `to_in` matches any To/Cc address; addresses and domains compare lower-cased.
 """
@@ -50,7 +55,10 @@ SOURCE_ID = "email.received"
 SOURCE_VERSION = 1
 SOURCE_REF = f"{SOURCE_ID}@{SOURCE_VERSION}"
 
-_CONFIG_KEYS = ("account", "folder", "uses_model", "every", "max_batch", "start_at", "filter")
+_CONFIG_KEYS = ("account", "folder", "uses_model", "every", "max_batch", "start_at", "filter", "auto_submitted")
+AUTO_SUBMITTED_SKIP = "skip"
+AUTO_SUBMITTED_ADMIT = "admit"
+AUTO_SUBMITTED_OPTIONS = (AUTO_SUBMITTED_SKIP, AUTO_SUBMITTED_ADMIT)
 _FILTER_KEYS = ("from_in", "from_domain_in", "to_in", "subject_contains", "has_attachment")
 MIN_EVERY = timedelta(seconds=60)
 DEFAULT_EVERY_MODEL = "1h"
@@ -136,11 +144,25 @@ def _addresses(header_value: Any) -> List[str]:
     return [addr.strip().lower() for _name, addr in getaddresses([header_value]) if addr and "@" in addr]
 
 
+def is_auto_submitted(payload: Mapping[str, Any]) -> bool:
+    """RFC 3834: the message says it was sent automatically (`Auto-Submitted` present, not "no").
+
+    Read from AbstractCore's typed summary field `auto_submitted` (None when the header is
+    absent). A message carrying the framework marker counts as automatic as well.
+    """
+    value = payload.get("auto_submitted")
+    if isinstance(value, str) and value.strip() and value.strip().lower() != "no":
+        return True
+    return bool(str(payload.get("framework_marker") or "").strip())
+
+
 def message_matches(config: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
     """Does one inbox email payload pass the binding's folder and typed filter? (pure)"""
     if not isinstance(payload, Mapping) or payload.get("kind") != "email":
         return False
     if str(payload.get("folder") or "") != str(config.get("folder") or "INBOX"):
+        return False
+    if config.get("auto_submitted", AUTO_SUBMITTED_SKIP) != AUTO_SUBMITTED_ADMIT and is_auto_submitted(payload):
         return False
     f = config.get("filter") or {}
     sender = str(payload.get("from_address") or "").strip().lower()
@@ -212,6 +234,7 @@ class EmailReceivedTriggerAdapter:
                 "every": {"type": "string", "format": "duration", "pattern": "^[1-9][0-9]*[smhd]$"},
                 "max_batch": {"type": "integer", "minimum": 1, "maximum": MAX_BATCH},
                 "start_at": {"type": "string", "format": "date-time"},
+                "auto_submitted": {"type": "string", "enum": list(AUTO_SUBMITTED_OPTIONS), "default": AUTO_SUBMITTED_SKIP},
                 "filter": {
                     "type": "object",
                     "additionalProperties": False,
@@ -269,6 +292,12 @@ class EmailReceivedTriggerAdapter:
         max_batch = config.get("max_batch", DEFAULT_MAX_BATCH)
         if isinstance(max_batch, bool) or not isinstance(max_batch, int) or not 1 <= max_batch <= MAX_BATCH:
             raise TriggerConfigError(f"max_batch must be an integer 1..{MAX_BATCH}", field="config.max_batch")
+        auto_submitted = config.get("auto_submitted", AUTO_SUBMITTED_SKIP)
+        if auto_submitted not in AUTO_SUBMITTED_OPTIONS:
+            raise TriggerConfigError(
+                f"auto_submitted must be one of {list(AUTO_SUBMITTED_OPTIONS)} (skip: never run on automatic mail)",
+                field="config.auto_submitted",
+            )
         start = (
             parse_timestamp(config["start_at"], field="config.start_at")
             if config.get("start_at") is not None
@@ -281,6 +310,7 @@ class EmailReceivedTriggerAdapter:
             "every": every,
             "max_batch": max_batch,
             "start_at": format_timestamp(start),
+            "auto_submitted": auto_submitted,
             "filter": validate_filter(config.get("filter")),
         }
 
@@ -411,7 +441,11 @@ class EmailReceivedTriggerAdapter:
 
 
 __all__ = [
+    "AUTO_SUBMITTED_ADMIT",
+    "AUTO_SUBMITTED_OPTIONS",
+    "AUTO_SUBMITTED_SKIP",
     "EmailReceivedTriggerAdapter",
+    "is_auto_submitted",
     "SOURCE_ID",
     "SOURCE_REF",
     "SOURCE_VERSION",

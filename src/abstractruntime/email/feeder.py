@@ -18,6 +18,11 @@ with the user's `EmailContext`; the feeder does the rest through AbstractCore's 
   like any other message and never blocks the mailbox;
 - a message that cannot be fetched on `failure_threshold` (3) polls in a row is recorded as
   unprocessable (uid, code, cause, fix) and passed, so one bad message never blocks the mailbox;
+- the account's OWN automatic mail never enters the inbox (no automation can trigger itself):
+  a message that carries the framework marker (`X-AbstractFramework-Automation`, AbstractCore's
+  `framework_marker`) and comes from this account's address, or whose Message-ID the host
+  recorded as sent by the framework (`is_own_sent`, the gateway's outbox), is passed like a
+  delivered one (`PollReport.own_automatic`), before its body is fetched;
 - a connection / sign-in failure is a typed `{code, cause, fix, retryable}` in the report and the
   stream status, the next poll waits a capped backoff (60 s doubling to 15 min); nothing raises
   and nothing is paused. Credentials never reach the inbox, the status or the report.
@@ -28,7 +33,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .inbox import EventInbox
 
@@ -87,6 +92,7 @@ class PollReport:
     reset: bool = False
     appended: List[str] = field(default_factory=list)
     duplicates: int = 0
+    own_automatic: int = 0
     body_skipped: List[str] = field(default_factory=list)
     unprocessable: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[Dict[str, Any]] = None
@@ -100,6 +106,7 @@ class PollReport:
             "reset": self.reset,
             "appended": list(self.appended),
             "duplicates": self.duplicates,
+            "own_automatic": self.own_automatic,
             "body_skipped": list(self.body_skipped),
             "unprocessable": [dict(u) for u in self.unprocessable],
             "error": dict(self.error) if self.error else None,
@@ -130,6 +137,7 @@ class EmailInboxFeeder:
         failure_threshold: int = 3,
         backoff_initial_s: float = 60.0,
         backoff_max_s: float = 900.0,
+        is_own_sent: Optional[Callable[[str], bool]] = None,
     ) -> None:
         ref = str(account_ref or "").strip()
         if not ref:
@@ -141,6 +149,9 @@ class EmailInboxFeeder:
         self.failure_threshold = max(1, int(failure_threshold))
         self.backoff_initial_s = float(backoff_initial_s)
         self.backoff_max_s = float(backoff_max_s)
+        # Host lookup: was this Message-ID sent by the framework from this account (second
+        # layer behind the marker header; a mail server may rewrite or drop headers)?
+        self.is_own_sent = is_own_sent
 
     def __repr__(self) -> str:
         return f"EmailInboxFeeder(account_ref={self.account_ref!r}, folder={self.folder!r})"
@@ -236,8 +247,30 @@ class EmailInboxFeeder:
             failures_by_uid.pop(str(summary.uid), None)
             st["message_failures"] = failures_by_uid
 
+        own_address = str(getattr(getattr(ctx, "account", None), "address", "") or "").strip().lower()
+
+        def own_automatic(summary: Any) -> bool:
+            marker = str(getattr(summary, "framework_marker", "") or "")
+            sender = str(getattr(summary, "from_address", "") or "").strip().lower()
+            if marker and own_address and sender == own_address:
+                return True
+            mid = str(getattr(summary, "message_id", "") or "").strip()
+            if mid and self.is_own_sent is not None:
+                try:
+                    return bool(self.is_own_sent(mid))
+                except Exception:  # noqa: BLE001 - a broken lookup must not block the mailbox
+                    return False
+            return False
+
         for summary in result.messages:
             event_id = email_event_id(self.account_ref, folder, summary.uidvalidity, summary.uid)
+            if own_automatic(summary):
+                # This account's own automatic mail (a notification, an automation's send):
+                # never an event, so it can never trigger an automation (RFC 3834 loop guard).
+                report.own_automatic += 1
+                advance(summary)
+                save()
+                continue
             older = seen_until is not None and (_parse(summary.internaldate) or seen_until) < seen_until
             if self.inbox.get(event_id) is not None or older or (
                 result.reset and summary.message_id and self.inbox.has_dedupe_key(stream, summary.message_id)

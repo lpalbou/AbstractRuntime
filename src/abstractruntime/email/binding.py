@@ -129,10 +129,58 @@ def bind_email_account(
 
 Resolver = Callable[[EmailBinding], Any]
 
-# (resolver of the executing run's Runtime, the run's binding, the use). Unset outside a tool batch.
-_SCOPE: "ContextVar[Optional[Tuple[Optional[Resolver], Optional[EmailBinding], str]]]" = ContextVar(
+# (resolver of the executing run's Runtime, the run's binding, the use, the automation marker).
+# Unset outside a tool batch.
+_SCOPE: "ContextVar[Optional[Tuple[Optional[Resolver], Optional[EmailBinding], str, str]]]" = ContextVar(
     "abstractruntime_email_scope", default=None
 )
+
+AUTOMATION_MARKER_MAX = 200
+
+
+def automation_marker_for(vars_obj: Any, run_id: Any = None) -> str:
+    """The framework marker for mail a run sends automatically, or "" for a person's run.
+
+    A run of an automation (its controller, an occurrence or any descendant of one, decided on
+    the runtime-set attribution in `_meta`, which a client cannot write) sends automatically:
+    `automation:<automation id>/run:<run id>`; a legacy scheduled run: `schedule:<run id>`.
+    Chats and discussions (a person is there) get "" and their mail is sent unmarked.
+    AbstractCore stamps the marker and RFC 3834 `Auto-Submitted` on every message sent through
+    the run's `EmailContext`, and the mail watcher never admits them back (no self-trigger).
+    """
+    from ..core.run_attribution import automation_index_fields
+
+    rid = str(run_id or "").strip()
+    fields = automation_index_fields(vars_obj, run_id=rid or None)
+    role = fields.get("role")
+    if role in ("controller", "occurrence", "descendant"):
+        aid = str(fields.get("automation_id") or "").strip()
+        marker = f"automation:{aid}/run:{rid}" if rid else f"automation:{aid}"
+    elif role == "legacy_schedule":
+        marker = f"schedule:{rid}"
+    else:
+        return ""
+    if len(marker) > AUTOMATION_MARKER_MAX or any(not (32 <= ord(c) < 127) for c in marker):
+        return "automation"
+    return marker
+
+
+def _with_marker(ctx: Any, marker: str) -> Any:
+    """`ctx` carrying `automation_marker` (a copy; the host's object is never changed)."""
+    if not marker or ctx is None:
+        return ctx
+    import dataclasses
+
+    if not dataclasses.is_dataclass(ctx) or "automation_marker" not in {f.name for f in dataclasses.fields(ctx)}:
+        # An AbstractCore without the marker field would send automatic mail unmarked and the
+        # watcher would admit it again: refuse loudly instead of looping silently.
+        raise RuntimeError(
+            "This AbstractCore cannot mark automatic mail (EmailContext.automation_marker is missing); "
+            "upgrade abstractcore to 2.20.2 or later."
+        )
+    if getattr(ctx, "automation_marker", ""):
+        return ctx
+    return dataclasses.replace(ctx, automation_marker=marker)
 
 
 def resolver_accepts_use(resolver: Any) -> bool:
@@ -175,7 +223,7 @@ def resolve_scoped_context() -> Any:
     scope = _SCOPE.get()
     if scope is None:
         return None
-    resolver, binding, use = scope
+    resolver, binding, use, marker = scope
     if resolver is None or binding is None:
         return None
     from abstractcore.comms.email import EmailError, EmailSecretUnavailable
@@ -189,7 +237,7 @@ def resolve_scoped_context() -> Any:
             "The email account of this run could not be loaded.",
             "Open Settings -> Email and Test the account; connect it again if the test fails.",
         ) from None
-    return ctx
+    return _with_marker(ctx, marker)
 
 
 def install_core_resolver() -> None:
@@ -242,7 +290,8 @@ def email_run_scope(run: Any, *, resolver: Optional[Resolver] = None, use: Optio
     if use not in EMAIL_USES:
         raise ValueError(f"use must be one of {EMAIL_USES}, got {use!r}")
     vars_obj = getattr(run, "vars", None)
-    token = _SCOPE.set((resolver if callable(resolver) else None, binding_of(vars_obj), use))
+    marker = automation_marker_for(vars_obj, getattr(run, "run_id", None))
+    token = _SCOPE.set((resolver if callable(resolver) else None, binding_of(vars_obj), use, marker))
     try:
         yield
     finally:
@@ -270,6 +319,7 @@ __all__ = [
     "EMAIL_USE_ACTION",
     "EMAIL_USE_AGENT_TOOL",
     "EmailBinding",
+    "automation_marker_for",
     "bind_email_account",
     "binding_of",
     "core_resolver_installed",

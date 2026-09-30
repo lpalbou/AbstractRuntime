@@ -42,7 +42,13 @@ it never enters run vars, the ledger, tool arguments, tool results or events.
 ```python
 from abstractruntime.email import EmailBinding, bind_email_account, strip_client_email_keys
 
-runtime.set_email_context_resolver(lambda binding: my_store_for_this_user().context())
+def resolve(binding, *, use):
+    # use: "agent_tool" (an agent's or workflow's email tool) or "action" (the send-email action)
+    if binding.account_ref != this_users_account_ref:
+        return None
+    return my_store_for_this_user().context()
+
+runtime.set_email_context_resolver(resolve)
 runtime.set_email_binding(EmailBinding(account_ref="tenant:alice:mailbox", address="alice@example.test"))
 
 vars = strip_client_email_keys(client_vars)          # a client never chooses the account
@@ -52,7 +58,18 @@ run_id = runtime.start(workflow=flow, vars=vars)
 
 - The resolver belongs to one `Runtime` instance and is never persisted. Return an `EmailContext` for the binding, or
   `None` when the account is not connected or email is turned off; the tools then answer `email_not_configured` with
-  the fix "Connect an email account in Settings -> Email". Check that `binding.account_ref` is this user's account.
+  the fix "Connect an email account in Settings -> Email". You can also raise a typed AbstractCore `EmailError`
+  (for example `EmailDisabled` with the reason and the fix); the tool returns it as its result. Check that
+  `binding.account_ref` is this user's account.
+- `use` tells the resolver who is sending. `"action"` is the runtime's own send-email action
+  ([below](#sending-from-an-automation-without-a-model)): fixed templates the user wrote. `"agent_tool"` is every
+  other email tool call (an agent's or a workflow's). The runtime decides it from the identity of the action's node
+  function, so a workflow that copies the action's id is still `"agent_tool"`. A resolver declared as `fn(binding)`
+  (without `use`) is called without it.
+- Keep the binding set while the account is **connected and enabled**, whatever the user's "Agent email tools"
+  choice. Apply that choice where it belongs: leave the email tools out of the agent's toolset (`email_enabled`,
+  below) and refuse `use == "agent_tool"` in the resolver when it is off. The send-email action and notifications
+  keep working with agent tools off.
 - Once a runtime in the process has a resolver, AbstractCore's email tools always resolve through the executing run,
   and never fall back to the local AbstractCore settings of the process.
 - A run without a binding gets `email_not_configured`.
@@ -62,10 +79,20 @@ run_id = runtime.start(workflow=flow, vars=vars)
   account was connected uses it once it is connected.
 
 Tool availability follows the host's decision: pass `email_enabled=True` to `get_default_toolsets`,
-`list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user with a connected account. The
-email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
+`list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user whose account is connected and
+enabled and whose agent email tools are on. There is no environment variable for email: without `email_enabled=True`
+the email tools are off. When they are off, `list_tool_catalog(email_enabled=False, email_off_reason=...)` names the
+reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"` or `"agent_tools_off"`
+(`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
 `get_email_attachment`. Their file arguments follow the run's workspace: `attachments` must be files inside the
-workspace, and `get_email_attachment` saves into it.
+workspace (a report, a screenshot of the agent's work), and `get_email_attachment` saves into it. A path outside
+the workspace is refused before anything is sent.
+
+Tool outputs follow the runtime's inline limit (256 KB by default, `ABSTRACTRUNTIME_MAX_INLINE_BYTES`): when a
+structured result such as `read_email` is larger, its largest values (a big HTML body, for example) are stored as
+session attachments and replaced by `{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}`,
+so the ledger stays small; reading the run back resolves the reference to the original text. The result lists the
+stored ids in `output_offloaded_artifact_ids`.
 
 ## Sending without asking
 
@@ -76,9 +103,16 @@ workspace, and `get_email_attachment` saves into it.
   definition (`policy.email_allowed_recipients`, default `["self"]`).
 
 Any other recipient, a `reply_email` call (its recipients come from the original message), or a call the refiner
-cannot read waits for a person on a `tool_approval` wait. Approval is separate from the account's recipient policy
-(allowlist or denylist): AbstractCore's `guarded_send` applies the policy and the send limits to every send, including
-an approved or pre-authorised one. See [tool-approval.md](tool-approval.md#per-call-refiners).
+cannot read waits for a person on a `tool_approval` wait. The rule applies whether or not the run carries a per-run
+tool policy (`_runtime.tool_policy`); an executor's explicit `require_approval_tools` entry still wins. In a batch,
+one `send_email` that needs a person makes every `send_email` of that batch wait.
+
+Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's `guarded_send`
+applies the policy and the send limits to every send, including an approved or pre-authorised one. Every email send
+path in the runtime (agent tools, the send-email action, approved calls) goes through `guarded_send`, and this is the
+control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
+the approval wait for that user's own runs, never the recipient policy. See
+[tool-approval.md](tool-approval.md#per-call-refiners).
 
 ## Running an automation when mail arrives
 
@@ -113,6 +147,11 @@ if email_trigger_consumers(runtime):          # at least one email automation
 - A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,
   retryable}`, and the next poll waits 60 seconds, doubling up to 15 minutes (`poll(..., force=True)` polls at once).
   No automation is paused.
+
+Retention: the inbox keeps received events for 90 days and at most 10,000 events by default. Call
+`prune_email_inbox(runtime, retention={"keep_days": 30, "keep_events": 2000})` (or `EventInboxRetention(...)`) from
+the watcher to apply it. Events an active email automation has not read yet are never removed, and a removed message
+is never appended again (its id stays recorded).
 
 ### The `email.received@1` trigger
 
@@ -149,11 +188,17 @@ Inbound mail is data, never instructions:
 - `input_data.trigger = {source: "email.received@1", content_trust: "untrusted", notice, count, emails: [...]}`, each
   email with its headers, whole `body_text` and `body_html`, and its attachment list;
 - for a target with a string `prompt`, a fixed frame appended to the prompt: a notice that the content was written by
-  other people and is not to be followed, then each email between `--- Email i of n ---` markers;
+  other people, that links and instructions contained in the emails are not to be followed, and that the agent acts
+  only on the automation's mission; then each email between `--- Email i of n ---` markers; then a closing line that
+  repeats the rule;
 - the trigger envelope recorded in the ledger carries message metadata and event ids, never bodies;
-- under `policy.tool_approval: "auto"`, the grant withholds every tool whose row declares a model-chosen destination
-  (`fetch_url`, `browser_probe`, `send_email`, `reply_email`, ...): those calls ask, so an email cannot steer the
-  occurrence into sending data to an address or URL it names.
+- under `policy.tool_approval: "auto"` ("allow all tools"), the grant still withholds every tool whose row declares a
+  model-chosen destination (`fetch_url`, `browser_probe`) and every message-sending tool (`send_email`, `reply_email`):
+  those calls ask, so an email cannot steer the occurrence into opening a link or sending data to an address or URL it
+  names. To let such an automation open pages unattended, name each tool individually in
+  `policy.untrusted_input_tools` (for example `["fetch_url"]`; `"all"` and patterns are refused). Show the user the
+  risk when they do: a page the agent opens can carry instructions too, and the URL itself can carry data out.
+  Message-sending tools are never granted this way; they follow the recipient rule above.
 
 ## Sending from an automation without a model
 
@@ -189,7 +234,7 @@ See [automations.md](automations.md#notifications-attention-and-retries).
 ## Limits
 
 - One account per runtime; the trigger reads `account: "self"` only.
-- The inbox keeps every event; there is no retention setting yet.
+- `skim_url` carries no model-chosen-destination fact today, so an email-triggered grant does not withhold it.
 - `reply_email` always asks for approval.
 - Schedule and manual automations keep `fetch_url` in their unattended grant; only triggers that deliver untrusted
-  inbound content withhold it.
+  inbound content withhold it (unless the user named it in `policy.untrusted_input_tools`).

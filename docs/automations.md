@@ -104,7 +104,7 @@ unknown fields are rejected at every level.
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |
 | `context` | `{mode: "independent" \| "growing", growing: {}}` |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients, untrusted_input_tools}` |
 | `notify` | `{channels: ["console"] \| ["console", "email"]}`: where attention items are delivered (default `["console"]`) |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
@@ -117,6 +117,9 @@ the values shown; anything else is refused with `unsupported_feature`. `policy.t
 `"ask"`, see [Tool approval](#tool-approval). `policy.email_allowed_recipients` lists who occurrences may email
 without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
 `["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
+`policy.untrusted_input_tools` (default `[]`, at most 20) names, one by one, tools that an occurrence of an untrusted
+trigger (`email.received@1`) may run without asking although they reach a model-chosen destination, for example
+`["fetch_url"]`; `"all"` and patterns are refused. See [Tool approval](#tool-approval).
 
 ### Creating an automation
 
@@ -443,8 +446,10 @@ returns the refusal message for a tool, or `None` when it is allowed.
     `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
     recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
   - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
-    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`). Schedule and
-    manual automations keep `fetch_url` and `browser_probe` in the grant.
+    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`), even though
+    `"auto"` otherwise grants every tool: the agent must not follow links from the mail it reads. Only a tool the user
+    named individually in `policy.untrusted_input_tools` is granted (within the target's tool ceiling; never a
+    message-sending tool). Schedule and manual automations keep `fetch_url` and `browser_probe` in the grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next

@@ -86,8 +86,16 @@ auto-approves; anything else asks.
 - `reply_email` always asks: its recipients come from the original message,
   not from the arguments.
 - A call with an argument key `send_email` does not accept asks.
+- The refiner runs with or without a per-run `_runtime.tool_policy`. Without
+  one, it lowers the call on top of the executor's static policy; the
+  executor's `require_approval_tools` still wins.
+- Decisions are per call and applied by name: a batch with one `send_email`
+  that needs a person waits as a whole, even beside a send to self.
 - Approval is separate from the account's recipient policy (allowlist or
-  denylist), which AbstractCore enforces on every send afterwards. See
+  denylist), which AbstractCore enforces on every send afterwards
+  (`guarded_send`, on every email send path). A client that auto-approves
+  every tool for its user ("approve all") decides only the approval wait;
+  the recipient policy still decides who can receive mail. See
   [email.md](email.md#sending-without-asking).
 
 `send_email_recipient@v1` (self only) stays registered for older tool rows.

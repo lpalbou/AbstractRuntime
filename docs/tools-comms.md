@@ -19,21 +19,22 @@ email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails
 for the run ([tool-approval.md](tool-approval.md#per-call-refiners)), and file arguments (`attachments`,
 `output_dir`) stay inside the run's workspace.
 
-## Enable (opt-in, process-wide)
+## Enable
 
-The `comms` toolset is disabled by default. For a single process-wide setup, enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
+The `comms` toolset is disabled by default.
 
-- `ABSTRACT_ENABLE_COMMS_TOOLS=1` (enable email + WhatsApp + Telegram)
-- `ABSTRACT_ENABLE_EMAIL_TOOLS=1` (email only)
-- `ABSTRACT_ENABLE_WHATSAPP_TOOLS=1` (WhatsApp only)
-- `ABSTRACT_ENABLE_TELEGRAM_TOOLS=1` (Telegram only)
+- **Email** is enabled only by the host: pass `email_enabled=True` to the toolset functions (see above). No
+  environment variable enables it.
+- **WhatsApp and Telegram** are enabled for the whole process with environment variables (checked by
+  `default_tools.comms_tools_enabled()`): `ABSTRACT_ENABLE_COMMS_TOOLS=1` (both), `ABSTRACT_ENABLE_WHATSAPP_TOOLS=1`
+  or `ABSTRACT_ENABLE_TELEGRAM_TOOLS=1`.
 
 ## Discover what gets enabled
 
 ```bash
 python - <<'PY'
 from abstractruntime.integrations.abstractcore.default_tools import list_default_tool_specs
-comms = [s for s in list_default_tool_specs() if s.get("toolset") == "comms"]
+comms = [s for s in list_default_tool_specs(email_enabled=True) if s.get("toolset") == "comms"]
 print([s.get("name") for s in comms])
 PY
 ```
@@ -46,9 +47,9 @@ import os
 from abstractruntime.integrations.abstractcore import MappingToolExecutor, create_local_runtime
 from abstractruntime.integrations.abstractcore.default_tools import get_default_tools
 
-os.environ["ABSTRACT_ENABLE_COMMS_TOOLS"] = "1"
+os.environ["ABSTRACT_ENABLE_TELEGRAM_TOOLS"] = "1"
 
-tool_executor = MappingToolExecutor.from_tools(get_default_tools())
+tool_executor = MappingToolExecutor.from_tools(get_default_tools(email_enabled=True))
 rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=tool_executor)
 ```
 
@@ -57,7 +58,9 @@ Notes:
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (`PassthroughToolExecutor` in `src/abstractruntime/integrations/abstractcore/tool_executor.py`).
 - For local bridge-owned delivery flows, `ApprovalToolExecutor` can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable `TOOL_CALLS` path, Runtime also exposes **host wrappers** for operator-owned email and Telegram surfaces:
-  - email helpers on `get_abstractcore_host_facade(runtime)` and `abstractruntime.integrations.abstractcore.comms_facade`
+  - single-user email helpers on `get_abstractcore_host_facade(runtime)` (the process's own AbstractCore account; a
+    host that serves users imports AbstractCore's mail library through
+    `abstractruntime.integrations.abstractcore.email_facade` instead)
   - Telegram lifecycle/send wrappers in `abstractruntime.integrations.abstractcore.telegram_facade`
   - read/bootstrap helpers stay host-local and do not create run history by themselves
   - if an outbound send belongs to a run, prefer the durable run facade:

@@ -242,7 +242,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
 - trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
-- definition v2: `policy.email_allowed_recipients` (default `["self"]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
+- definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
 
@@ -253,16 +253,19 @@ from abstractruntime.email import (
     EmailBinding, bind_email_account, strip_client_email_keys, binding_of,   # run-scoped binding
     JsonFileEventInbox, InMemoryEventInbox,                                  # durable event inbox
     EmailInboxFeeder, PollReport, email_event_id,                            # mailbox -> inbox
-    email_trigger_consumers, wake_email_automations,                         # watcher helpers
+    email_trigger_consumers, wake_email_automations, prune_email_inbox,      # watcher helpers
+    EventInboxRetention,                                                     # inbox retention (90 days / 10,000 events)
+    EMAIL_USE_AGENT_TOOL, EMAIL_USE_ACTION, email_use_for_workflow,          # who is sending
     email_action_target, register_email_action_workflow, validate_email_action, render_email_template,
 )
 ```
 
-- `Runtime.set_email_context_resolver(fn)`: `fn(binding) -> EmailContext | None`, per runtime, memory only
+- `Runtime.set_email_context_resolver(fn)`: `fn(binding, *, use) -> EmailContext | None` (`use` is `"agent_tool"` or `"action"`; `fn(binding)` also accepted), per runtime, memory only
 - `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
 - `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
 - `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
-- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`)
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "agent_tools_off")`
+- mail library for hosts: `abstractruntime.integrations.abstractcore.email_facade` re-exports `abstractcore.comms.email` (its `__all__` plus the `legacy` module; `GATEWAY_NAMES` lists the names hosts use)
 - approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
 - read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
@@ -307,7 +310,7 @@ Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - public discovery facade: `AbstractCoreDiscoveryFacade`, `get_abstractcore_discovery_facade(...)` (`src/abstractruntime/integrations/abstractcore/discovery_facade.py`)
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
-- public email comms wrappers: `list_email_accounts(...)`, `list_emails(...)`, `read_email(...)`, `send_email(...)` (`src/abstractruntime/integrations/abstractcore/comms_facade.py`)
+- email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
 - public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
@@ -320,7 +323,7 @@ Entry points:
 - the `MODEL_RESIDENCY` effect supports `list_loaded`, `load`, `unload`, `lock`, and `unlock` operations with the same soft-fail semantics; on `unload`, `force` is forwarded only when authored in the effect payload
 - local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry `source: "provider_server"` and no `task` label), and residency rows normalize provider size extras to `size_bytes` / `size_vram_bytes` while keeping the originals; local text rows also carry registry-declared `modalities` (omitted on a registry miss), host identity (`host_id` / `host_name`), and runtime-owned lock truth (`locked` / `lockable`, with `pinned` a truthful alias of `locked` — never the default-identity flag, which `default` alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
-- host-facade email helpers delegate to Runtime's host-local comms facade/export layer (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
+- host-facade email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) use the process's own AbstractCore account (single-user installs)
 - run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local

@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Email tools follow the host's decision**: `email_enabled=` on `get_default_toolsets`, `get_default_tools`,
   `list_default_tool_specs`, `build_default_tool_map` and `list_tool_catalog`; the email kind adds `reply_email`,
   `search_emails` and `get_email_attachment`.
+- **The resolver learns who is sending** (`use="agent_tool"` or `use="action"`), so a host applies its users'
+  "agent email tools" choice to agent tools only; the send-email action is identified by its node function.
+- **`email_facade`** (`abstractruntime.integrations.abstractcore.email_facade`): AbstractCore's mail library for hosts.
+- **Event-inbox retention**: `EventInboxRetention` (default 90 days and 10,000 events), `inbox.prune(...)` and
+  `prune_email_inbox(runtime, retention=...)`, which never removes an event an active email automation has not read.
+- **`policy.untrusted_input_tools`**: tools named one by one that an email-triggered occurrence may run without asking.
+- `list_tool_catalog(email_off_reason=...)` names why email is off (`not_connected`, `admin_disabled`,
+  `agent_tools_off`).
 
 ### Changed
 
@@ -51,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope; `get_email_attachment` is a `write` tool.
 - A run policy that only withholds tools (`tool_policy.withheld_tools`) is applied like any other run policy, so the
   per-call refiners run for it.
+- The per-call refiners (`send_email_recipient@v2`) also run when a run carries no `_runtime.tool_policy`, on top of
+  the executor's static policy (its `require_approval_tools` still wins), and decide per call: one `send_email` that
+  needs a person makes the batch wait.
+- No environment variable enables the email tools: `ABSTRACT_ENABLE_EMAIL_TOOLS` is gone and
+  `ABSTRACT_ENABLE_COMMS_TOOLS` enables WhatsApp and Telegram only; pass `email_enabled=True`.
+- Under "allow all tools", an email-triggered occurrence still withholds `fetch_url` and `browser_probe` unless the
+  user named them in `policy.untrusted_input_tools`; the untrusted frame tells the agent not to follow links or
+  instructions contained in the emails and to act only on the automation's mission.
+- Large structured tool outputs (for example a `read_email` with a big HTML body) are offloaded to session
+  attachments under the same inline limit as text outputs; the result carries artifact references.
+- The process-local email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) are no longer
+  exported from `abstractruntime.integrations.abstractcore`; they remain on the host facade for single-user installs.
 
 ## [0.7.3] - 2026-09-29
 

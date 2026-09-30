@@ -192,7 +192,10 @@ def test_approved_action_resume_resolves_as_action(tmp_path, ca, smtp):
     rt.tick(workflow=action, run_id=rid)
     run = rt.get_state(rid)
     assert run.status == RunStatus.WAITING and smtp.messages == []
-    rt.resume(workflow=action, run_id=rid, wait_key=run.waiting.wait_key, payload={"approved": True})
+    # Approved after a restart: a fresh runtime over the same stores.
+    rt2 = _runtime(tmp_path, "rt")
+    rt2.set_email_context_resolver(_gateway_like_resolver(ctx, uses, agent_tools_on=False))
+    rt2.resume(workflow=action, run_id=rid, wait_key=run.waiting.wait_key, payload={"approved": True})
     assert uses == [EMAIL_USE_ACTION] and [m["rcpt_tos"] for m in smtp.messages] == [[STRANGER]]
 
 
@@ -389,6 +392,16 @@ def test_several_mid_sized_values_are_offloaded_until_the_output_fits(monkeypatc
     from abstractruntime.core.runtime import _resolve_artifact_backed_value
 
     assert _resolve_artifact_backed_value(out, artifact_store=store) == original
+
+
+def test_values_each_under_the_limit_are_offloaded_when_the_whole_is_over(monkeypatch):
+    original = {"success": True, "subject": "s", "body_text": "t" * 3000, "body_html": "h" * 3500}
+    res, store = _run_dict(original, monkeypatch, inline="4096")  # each value < 4 KB, the whole > 4 KB
+    out = res["output"]
+    assert out["subject"] == "s" and "$artifact" not in out  # field-wise, not the whole output
+    assert out["body_html"]["offloaded"] is True  # the largest first; then it fits
+    assert out["body_text"] == "t" * 3000
+    assert store.load(out["body_html"]["$artifact"]).content == b"h" * 3500
 
 
 def test_a_small_dict_is_untouched(monkeypatch):

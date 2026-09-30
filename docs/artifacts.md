@@ -105,7 +105,12 @@ Offload applies to:
 - `read_file` content above the inline threshold;
 - `execute_command` `stdout` and `stderr`, regardless of exit code (verbose
   failures are offloaded like verbose successes);
-- any other host tool whose string output exceeds the inline threshold.
+- any other host tool whose string output exceeds the inline threshold;
+- any other host tool whose structured (dict) output exceeds the inline threshold as JSON: its largest string
+  values, at any depth, are stored one by one (largest first) until the output fits, each replaced by
+  `{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}`; when many small values make
+  it too large, the whole output is stored as one JSON attachment and replaced by its reference. The result lists
+  the stored ids in `output_offloaded_artifact_ids`, and reading the run back resolves the references.
 
 Thresholds (environment-configurable):
 

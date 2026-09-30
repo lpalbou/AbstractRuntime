@@ -1107,7 +1107,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
 - trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
-- definition v2: `policy.email_allowed_recipients` (default `["self"]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
+- definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
 
@@ -1118,16 +1118,19 @@ from abstractruntime.email import (
     EmailBinding, bind_email_account, strip_client_email_keys, binding_of,   # run-scoped binding
     JsonFileEventInbox, InMemoryEventInbox,                                  # durable event inbox
     EmailInboxFeeder, PollReport, email_event_id,                            # mailbox -> inbox
-    email_trigger_consumers, wake_email_automations,                         # watcher helpers
+    email_trigger_consumers, wake_email_automations, prune_email_inbox,      # watcher helpers
+    EventInboxRetention,                                                     # inbox retention (90 days / 10,000 events)
+    EMAIL_USE_AGENT_TOOL, EMAIL_USE_ACTION, email_use_for_workflow,          # who is sending
     email_action_target, register_email_action_workflow, validate_email_action, render_email_template,
 )
 ```
 
-- `Runtime.set_email_context_resolver(fn)`: `fn(binding) -> EmailContext | None`, per runtime, memory only
+- `Runtime.set_email_context_resolver(fn)`: `fn(binding, *, use) -> EmailContext | None` (`use` is `"agent_tool"` or `"action"`; `fn(binding)` also accepted), per runtime, memory only
 - `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
 - `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
 - `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
-- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`)
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "agent_tools_off")`
+- mail library for hosts: `abstractruntime.integrations.abstractcore.email_facade` re-exports `abstractcore.comms.email` (its `__all__` plus the `legacy` module; `GATEWAY_NAMES` lists the names hosts use)
 - approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
 - read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
@@ -1172,7 +1175,7 @@ Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - public discovery facade: `AbstractCoreDiscoveryFacade`, `get_abstractcore_discovery_facade(...)` (`src/abstractruntime/integrations/abstractcore/discovery_facade.py`)
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
-- public email comms wrappers: `list_email_accounts(...)`, `list_emails(...)`, `read_email(...)`, `send_email(...)` (`src/abstractruntime/integrations/abstractcore/comms_facade.py`)
+- email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
 - public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
@@ -1185,7 +1188,7 @@ Entry points:
 - the `MODEL_RESIDENCY` effect supports `list_loaded`, `load`, `unload`, `lock`, and `unlock` operations with the same soft-fail semantics; on `unload`, `force` is forwarded only when authored in the effect payload
 - local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry `source: "provider_server"` and no `task` label), and residency rows normalize provider size extras to `size_bytes` / `size_vram_bytes` while keeping the originals; local text rows also carry registry-declared `modalities` (omitted on a registry miss), host identity (`host_id` / `host_name`), and runtime-owned lock truth (`locked` / `lockable`, with `pinned` a truthful alias of `locked` — never the default-identity flag, which `default` alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
-- host-facade email helpers delegate to Runtime's host-local comms facade/export layer (`list_email_accounts`, `list_emails`, `read_email`, `send_email`)
+- host-facade email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) use the process's own AbstractCore account (single-user installs)
 - run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
@@ -2838,11 +2841,9 @@ email and Telegram:
   - `list_emails(...)`
   - `read_email(...)`
   - `send_email(...)`
-- `abstractruntime.integrations.abstractcore.comms_facade` also exposes:
-  - `list_email_accounts(...)`
-  - `list_emails(...)`
-  - `read_email(...)`
-  - `send_email(...)`
+- `abstractruntime.integrations.abstractcore.email_facade` re-exports AbstractCore's mail library
+  (`abstractcore.comms.email`: accounts, store, vault, `guarded_send`, policy, OAuth2, typed errors,
+  `legacy`) for hosts that manage per-user accounts ([email.md](../email.md))
 - `abstractruntime.integrations.abstractcore.telegram_facade` exposes:
   - `TelegramTdlibNotAvailable`
   - `bootstrap_telegram_auth_from_env(...)`
@@ -2854,9 +2855,10 @@ Contract notes:
 
 - These are **host-local** wrappers over current public AbstractCore tool
   modules. They do not proxy through the remote AbstractCore server.
-- The host facade email methods and the standalone `comms_facade` functions use
-  the same Runtime-owned email wrapper layer; choose whichever is more natural
-  for the host surface you are building.
+- The host facade email methods act for the process's own AbstractCore
+  account (single-user installs). Once a runtime in the process has an email
+  resolver, they answer `email_not_configured`; a multi-user host binds each
+  run to its user's account instead ([email.md](../email.md)).
 - They are intentionally **nondurable**. They do not write Runtime run history
   on their own.
 - Direct `send_email(...)` on the host facade and direct
@@ -3432,7 +3434,12 @@ Offload applies to:
 - `read_file` content above the inline threshold;
 - `execute_command` `stdout` and `stderr`, regardless of exit code (verbose
   failures are offloaded like verbose successes);
-- any other host tool whose string output exceeds the inline threshold.
+- any other host tool whose string output exceeds the inline threshold;
+- any other host tool whose structured (dict) output exceeds the inline threshold as JSON: its largest string
+  values, at any depth, are stored one by one (largest first) until the output fits, each replaced by
+  `{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}`; when many small values make
+  it too large, the whole output is stored as one JSON attachment and replaced by its reference. The result lists
+  the stored ids in `output_offloaded_artifact_ids`, and reading the run back resolves the references.
 
 Thresholds (environment-configurable):
 
@@ -3613,7 +3620,7 @@ unknown fields are rejected at every level.
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |
 | `context` | `{mode: "independent" \| "growing", growing: {}}` |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients, untrusted_input_tools}` |
 | `notify` | `{channels: ["console"] \| ["console", "email"]}`: where attention items are delivered (default `["console"]`) |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
@@ -3626,6 +3633,9 @@ the values shown; anything else is refused with `unsupported_feature`. `policy.t
 `"ask"`, see [Tool approval](#tool-approval). `policy.email_allowed_recipients` lists who occurrences may email
 without an approval wait: `"self"` (the user's registered address) and exact addresses, at most 50, default
 `["self"]`; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
+`policy.untrusted_input_tools` (default `[]`, at most 20) names, one by one, tools that an occurrence of an untrusted
+trigger (`email.received@1`) may run without asking although they reach a model-chosen destination, for example
+`["fetch_url"]`; `"all"` and patterns are refused. See [Tool approval](#tool-approval).
 
 ### Creating an automation
 
@@ -3952,8 +3962,10 @@ returns the refusal message for a tool, or `None` when it is allowed.
     `_runtime.email_allowed_recipients`, replacing any value in the target's inputs. A `send_email` whose every
     recipient is self or on that list runs unattended; see [email.md](email.md#sending-without-asking).
   - **Untrusted triggers.** When the trigger delivers text written by other people (`email.received@1`), every tool
-    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`). Schedule and
-    manual automations keep `fetch_url` and `browser_probe` in the grant.
+    whose row declares a model-chosen destination is withheld as well (`fetch_url`, `browser_probe`), even though
+    `"auto"` otherwise grants every tool: the agent must not follow links from the mail it reads. Only a tool the user
+    named individually in `policy.untrusted_input_tools` is granted (within the target's tool ceiling; never a
+    message-sending tool). Schedule and manual automations keep `fetch_url` and `browser_probe` in the grant.
 - **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
@@ -4269,8 +4281,16 @@ auto-approves; anything else asks.
 - `reply_email` always asks: its recipients come from the original message,
   not from the arguments.
 - A call with an argument key `send_email` does not accept asks.
+- The refiner runs with or without a per-run `_runtime.tool_policy`. Without
+  one, it lowers the call on top of the executor's static policy; the
+  executor's `require_approval_tools` still wins.
+- Decisions are per call and applied by name: a batch with one `send_email`
+  that needs a person waits as a whole, even beside a send to self.
 - Approval is separate from the account's recipient policy (allowlist or
-  denylist), which AbstractCore enforces on every send afterwards. See
+  denylist), which AbstractCore enforces on every send afterwards
+  (`guarded_send`, on every email send path). A client that auto-approves
+  every tool for its user ("approve all") decides only the approval wait;
+  the recipient policy still decides who can receive mail. See
   [email.md](email.md#sending-without-asking).
 
 `send_email_recipient@v1` (self only) stays registered for older tool rows.
@@ -4317,21 +4337,22 @@ email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails
 for the run ([tool-approval.md](tool-approval.md#per-call-refiners)), and file arguments (`attachments`,
 `output_dir`) stay inside the run's workspace.
 
-## Enable (opt-in, process-wide)
+## Enable
 
-The `comms` toolset is disabled by default. For a single process-wide setup, enable it via env vars (checked by `default_tools.comms_tools_enabled()`):
+The `comms` toolset is disabled by default.
 
-- `ABSTRACT_ENABLE_COMMS_TOOLS=1` (enable email + WhatsApp + Telegram)
-- `ABSTRACT_ENABLE_EMAIL_TOOLS=1` (email only)
-- `ABSTRACT_ENABLE_WHATSAPP_TOOLS=1` (WhatsApp only)
-- `ABSTRACT_ENABLE_TELEGRAM_TOOLS=1` (Telegram only)
+- **Email** is enabled only by the host: pass `email_enabled=True` to the toolset functions (see above). No
+  environment variable enables it.
+- **WhatsApp and Telegram** are enabled for the whole process with environment variables (checked by
+  `default_tools.comms_tools_enabled()`): `ABSTRACT_ENABLE_COMMS_TOOLS=1` (both), `ABSTRACT_ENABLE_WHATSAPP_TOOLS=1`
+  or `ABSTRACT_ENABLE_TELEGRAM_TOOLS=1`.
 
 ## Discover what gets enabled
 
 ```bash
 python - <<'PY'
 from abstractruntime.integrations.abstractcore.default_tools import list_default_tool_specs
-comms = [s for s in list_default_tool_specs() if s.get("toolset") == "comms"]
+comms = [s for s in list_default_tool_specs(email_enabled=True) if s.get("toolset") == "comms"]
 print([s.get("name") for s in comms])
 PY
 ```
@@ -4344,9 +4365,9 @@ import os
 from abstractruntime.integrations.abstractcore import MappingToolExecutor, create_local_runtime
 from abstractruntime.integrations.abstractcore.default_tools import get_default_tools
 
-os.environ["ABSTRACT_ENABLE_COMMS_TOOLS"] = "1"
+os.environ["ABSTRACT_ENABLE_TELEGRAM_TOOLS"] = "1"
 
-tool_executor = MappingToolExecutor.from_tools(get_default_tools())
+tool_executor = MappingToolExecutor.from_tools(get_default_tools(email_enabled=True))
 rt = create_local_runtime(provider="ollama", model="qwen3:4b", tool_executor=tool_executor)
 ```
 
@@ -4355,7 +4376,9 @@ Notes:
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (`PassthroughToolExecutor` in `src/abstractruntime/integrations/abstractcore/tool_executor.py`).
 - For local bridge-owned delivery flows, `ApprovalToolExecutor` can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable `TOOL_CALLS` path, Runtime also exposes **host wrappers** for operator-owned email and Telegram surfaces:
-  - email helpers on `get_abstractcore_host_facade(runtime)` and `abstractruntime.integrations.abstractcore.comms_facade`
+  - single-user email helpers on `get_abstractcore_host_facade(runtime)` (the process's own AbstractCore account; a
+    host that serves users imports AbstractCore's mail library through
+    `abstractruntime.integrations.abstractcore.email_facade` instead)
   - Telegram lifecycle/send wrappers in `abstractruntime.integrations.abstractcore.telegram_facade`
   - read/bootstrap helpers stay host-local and do not create run history by themselves
   - if an outbound send belongs to a run, prefer the durable run facade:
@@ -4443,7 +4466,13 @@ it never enters run vars, the ledger, tool arguments, tool results or events.
 ```python
 from abstractruntime.email import EmailBinding, bind_email_account, strip_client_email_keys
 
-runtime.set_email_context_resolver(lambda binding: my_store_for_this_user().context())
+def resolve(binding, *, use):
+    # use: "agent_tool" (an agent's or workflow's email tool) or "action" (the send-email action)
+    if binding.account_ref != this_users_account_ref:
+        return None
+    return my_store_for_this_user().context()
+
+runtime.set_email_context_resolver(resolve)
 runtime.set_email_binding(EmailBinding(account_ref="tenant:alice:mailbox", address="alice@example.test"))
 
 vars = strip_client_email_keys(client_vars)          # a client never chooses the account
@@ -4453,7 +4482,18 @@ run_id = runtime.start(workflow=flow, vars=vars)
 
 - The resolver belongs to one `Runtime` instance and is never persisted. Return an `EmailContext` for the binding, or
   `None` when the account is not connected or email is turned off; the tools then answer `email_not_configured` with
-  the fix "Connect an email account in Settings -> Email". Check that `binding.account_ref` is this user's account.
+  the fix "Connect an email account in Settings -> Email". You can also raise a typed AbstractCore `EmailError`
+  (for example `EmailDisabled` with the reason and the fix); the tool returns it as its result. Check that
+  `binding.account_ref` is this user's account.
+- `use` tells the resolver who is sending. `"action"` is the runtime's own send-email action
+  ([below](#sending-from-an-automation-without-a-model)): fixed templates the user wrote. `"agent_tool"` is every
+  other email tool call (an agent's or a workflow's). The runtime decides it from the identity of the action's node
+  function, so a workflow that copies the action's id is still `"agent_tool"`. A resolver declared as `fn(binding)`
+  (without `use`) is called without it.
+- Keep the binding set while the account is **connected and enabled**, whatever the user's "Agent email tools"
+  choice. Apply that choice where it belongs: leave the email tools out of the agent's toolset (`email_enabled`,
+  below) and refuse `use == "agent_tool"` in the resolver when it is off. The send-email action and notifications
+  keep working with agent tools off.
 - Once a runtime in the process has a resolver, AbstractCore's email tools always resolve through the executing run,
   and never fall back to the local AbstractCore settings of the process.
 - A run without a binding gets `email_not_configured`.
@@ -4463,10 +4503,20 @@ run_id = runtime.start(workflow=flow, vars=vars)
   account was connected uses it once it is connected.
 
 Tool availability follows the host's decision: pass `email_enabled=True` to `get_default_toolsets`,
-`list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user with a connected account. The
-email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
+`list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user whose account is connected and
+enabled and whose agent email tools are on. There is no environment variable for email: without `email_enabled=True`
+the email tools are off. When they are off, `list_tool_catalog(email_enabled=False, email_off_reason=...)` names the
+reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"` or `"agent_tools_off"`
+(`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `send_email`, `reply_email`, `list_emails`, `search_emails`, `read_email` and
 `get_email_attachment`. Their file arguments follow the run's workspace: `attachments` must be files inside the
-workspace, and `get_email_attachment` saves into it.
+workspace (a report, a screenshot of the agent's work), and `get_email_attachment` saves into it. A path outside
+the workspace is refused before anything is sent.
+
+Tool outputs follow the runtime's inline limit (256 KB by default, `ABSTRACTRUNTIME_MAX_INLINE_BYTES`): when a
+structured result such as `read_email` is larger, its largest values (a big HTML body, for example) are stored as
+session attachments and replaced by `{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}`,
+so the ledger stays small; reading the run back resolves the reference to the original text. The result lists the
+stored ids in `output_offloaded_artifact_ids`.
 
 ## Sending without asking
 
@@ -4477,9 +4527,16 @@ workspace, and `get_email_attachment` saves into it.
   definition (`policy.email_allowed_recipients`, default `["self"]`).
 
 Any other recipient, a `reply_email` call (its recipients come from the original message), or a call the refiner
-cannot read waits for a person on a `tool_approval` wait. Approval is separate from the account's recipient policy
-(allowlist or denylist): AbstractCore's `guarded_send` applies the policy and the send limits to every send, including
-an approved or pre-authorised one. See [tool-approval.md](tool-approval.md#per-call-refiners).
+cannot read waits for a person on a `tool_approval` wait. The rule applies whether or not the run carries a per-run
+tool policy (`_runtime.tool_policy`); an executor's explicit `require_approval_tools` entry still wins. In a batch,
+one `send_email` that needs a person makes every `send_email` of that batch wait.
+
+Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's `guarded_send`
+applies the policy and the send limits to every send, including an approved or pre-authorised one. Every email send
+path in the runtime (agent tools, the send-email action, approved calls) goes through `guarded_send`, and this is the
+control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
+the approval wait for that user's own runs, never the recipient policy. See
+[tool-approval.md](tool-approval.md#per-call-refiners).
 
 ## Running an automation when mail arrives
 
@@ -4514,6 +4571,11 @@ if email_trigger_consumers(runtime):          # at least one email automation
 - A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,
   retryable}`, and the next poll waits 60 seconds, doubling up to 15 minutes (`poll(..., force=True)` polls at once).
   No automation is paused.
+
+Retention: the inbox keeps received events for 90 days and at most 10,000 events by default. Call
+`prune_email_inbox(runtime, retention={"keep_days": 30, "keep_events": 2000})` (or `EventInboxRetention(...)`) from
+the watcher to apply it. Events an active email automation has not read yet are never removed, and a removed message
+is never appended again (its id stays recorded).
 
 ### The `email.received@1` trigger
 
@@ -4550,11 +4612,17 @@ Inbound mail is data, never instructions:
 - `input_data.trigger = {source: "email.received@1", content_trust: "untrusted", notice, count, emails: [...]}`, each
   email with its headers, whole `body_text` and `body_html`, and its attachment list;
 - for a target with a string `prompt`, a fixed frame appended to the prompt: a notice that the content was written by
-  other people and is not to be followed, then each email between `--- Email i of n ---` markers;
+  other people, that links and instructions contained in the emails are not to be followed, and that the agent acts
+  only on the automation's mission; then each email between `--- Email i of n ---` markers; then a closing line that
+  repeats the rule;
 - the trigger envelope recorded in the ledger carries message metadata and event ids, never bodies;
-- under `policy.tool_approval: "auto"`, the grant withholds every tool whose row declares a model-chosen destination
-  (`fetch_url`, `browser_probe`, `send_email`, `reply_email`, ...): those calls ask, so an email cannot steer the
-  occurrence into sending data to an address or URL it names.
+- under `policy.tool_approval: "auto"` ("allow all tools"), the grant still withholds every tool whose row declares a
+  model-chosen destination (`fetch_url`, `browser_probe`) and every message-sending tool (`send_email`, `reply_email`):
+  those calls ask, so an email cannot steer the occurrence into opening a link or sending data to an address or URL it
+  names. To let such an automation open pages unattended, name each tool individually in
+  `policy.untrusted_input_tools` (for example `["fetch_url"]`; `"all"` and patterns are refused). Show the user the
+  risk when they do: a page the agent opens can carry instructions too, and the URL itself can carry data out.
+  Message-sending tools are never granted this way; they follow the recipient rule above.
 
 ## Sending from an automation without a model
 
@@ -4590,10 +4658,10 @@ See [automations.md](automations.md#notifications-attention-and-retries).
 ## Limits
 
 - One account per runtime; the trigger reads `account: "self"` only.
-- The inbox keeps every event; there is no retention setting yet.
+- `skim_url` carries no model-chosen-destination fact today, so an email-triggered grant does not withhold it.
 - `reply_email` always asks for approval.
 - Schedule and manual automations keep `fetch_url` in their unattended grant; only triggers that deliver untrusted
-  inbound content withhold it.
+  inbound content withhold it (unless the user named it in `policy.untrusted_input_tools`).
 
 
 ==============================================================================
@@ -5471,6 +5539,30 @@ Inside the AbstractFramework workspace, prefer `python -P -m pytest tests -q`: `
 `sys.path`, so a workspace folder named like a package (for example `abstractflow/`) cannot shadow it.
 
 If you cloned **only** this repo (without the AbstractFramework workspace), make sure the sibling packages above are importable (install them or clone them next to this repo) before running the full test suite.
+
+### Live email tests (opt-in)
+
+`tests/live_email/` runs the email integration against a **real test mailbox** (framework backlog 0992 WP2): an
+`email.received@1` automation admits one uniquely tagged self-sent message exactly once (not again on a second poll,
+a later wake or a restarted runtime), and a `send_email` tool call to the account's own address runs unattended while
+one to another address parks on a `tool_approval` wait and is never sent. The tests carry the `live_email` marker, are
+not `basic` (CI never selects them), and are skipped unless every variable below is set.
+
+The test harness reads the mailbox from environment variables (the tests' input only; the runtime still gets its
+account from the host resolver): `AF_TEST_EMAIL_IMAP_HOST`, `AF_TEST_EMAIL_IMAP_PORT`, `AF_TEST_EMAIL_IMAP_SECURITY`,
+`AF_TEST_EMAIL_SMTP_HOST`, `AF_TEST_EMAIL_SMTP_PORT`, `AF_TEST_EMAIL_SMTP_SECURITY`, `AF_TEST_EMAIL_USERNAME`,
+`AF_TEST_EMAIL_ADDRESS`, `AF_TEST_EMAIL_PASSWORD`. Keep them in a private file (mode 0600) and load it into the test
+process only:
+
+```bash
+set -a; . ~/.config/abstractframework-test/email.env; set +a; \
+  python -P -m pytest tests/live_email -m live_email -s --durations=0
+```
+
+No credential value is printed (redacting objects, scrubbed failure reports), mail only goes to the test account's
+own address (a guard refuses any other recipient before `MAIL FROM`), and messages are small and tagged
+`[af-live-test]`: the mailbox is read-only, so nothing can be cleaned up. Use a dedicated test mailbox. AbstractCore's
+`tests/email/live/` covers the mail library itself.
 
 ## Repo map (source of truth)
 

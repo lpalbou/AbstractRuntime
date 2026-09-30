@@ -360,3 +360,16 @@ def test_email_attachments_are_confined_to_the_workspace_in_every_mode(mode, tmp
     ok = rewrite_tool_arguments(tool_name="send_email", args={"attachments": ["report.txt"]}, scope=scope)
     assert ok["attachments"] == [str((ws / "report.txt").resolve())]
     assert rewrite_tool_arguments(tool_name="get_email_attachment", args={}, scope=scope)["output_dir"] == str(ws.resolve())
+
+
+def test_camera_tools_are_never_covered_by_an_untrusted_input_grant():
+    """Mail from other people must not make an unattended occurrence use the camera."""
+    from abstractruntime.integrations.abstractcore.tool_effects import (
+        TOOL_PHYSICAL_DEVICE,
+        untrusted_input_grantable,
+    )
+
+    assert "camera_capture_photo" in TOOL_PHYSICAL_DEVICE
+    for name in sorted(TOOL_PHYSICAL_DEVICE):
+        assert untrusted_input_grantable(name) is False, name
+    assert untrusted_input_grantable("read_email") is True

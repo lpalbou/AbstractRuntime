@@ -260,5 +260,5 @@ See [automations.md](automations.md#notifications-attention-and-retries).
 - Schedule and manual automations keep the full unattended grant (`fetch_url`, `web_search`, `execute_command`...);
   only triggers that deliver untrusted inbound content narrow it to the harmless kinds (plus the tools the user named
   in `policy.untrusted_input_tools`).
-- Camera tools count as local reads, so an email-triggered grant covers them; their captures stay in the artifact
-  store and no tool in that grant can send them anywhere.
+- Camera tools are never covered by an email-triggered "allow all tools" grant: mail from other people cannot make an
+  unattended occurrence take pictures or video. Name them in `policy.untrusted_input_tools` if the mission needs them.

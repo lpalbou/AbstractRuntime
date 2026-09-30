@@ -229,6 +229,26 @@ TOOL_WRITE_SCOPE: Dict[str, str] = {
 # Effect classes an untrusted-input grant never covers, whatever the other facts say.
 UNTRUSTED_REFUSED_CLASSES = frozenset({EXEC, DELEGATE})
 
+# Tools that operate a physical sensor (camera). Mail from other people must not make an
+# unattended occurrence take pictures or video, even though the captures stay local: an
+# untrusted-input grant never covers them; the user can still name them in
+# `policy.untrusted_input_tools`.
+TOOL_PHYSICAL_DEVICE = frozenset(
+    {
+        "camera_list_devices",
+        "camera_open",
+        "camera_close",
+        "camera_status",
+        "camera_preview_photo",
+        "camera_capture_photo",
+        "camera_capture_video",
+        "camera_stop_recording",
+        "camera_start_detection",
+        "camera_stop_detection",
+        "camera_get_events",
+    }
+)
+
 
 def untrusted_input_grantable(tool_name: str, *, workspace_access_mode: Any = None) -> bool:
     """True when "allow all tools" may pre-approve `tool_name` for an occurrence whose input was
@@ -244,6 +264,8 @@ def untrusted_input_grantable(tool_name: str, *, workspace_access_mode: Any = No
     if effect is None or reach is None:
         return False
     if effect in UNTRUSTED_REFUSED_CLASSES or reach not in (NET_NONE, NET_CONFIGURED):
+        return False
+    if name in TOOL_PHYSICAL_DEVICE:
         return False
     if effect == WRITE:
         scope = TOOL_WRITE_SCOPE.get(name)
@@ -317,4 +339,5 @@ __all__ = [
     "sends_messages",
     "tool_effect_class",
     "untrusted_input_grantable",
+    "TOOL_PHYSICAL_DEVICE",
 ]

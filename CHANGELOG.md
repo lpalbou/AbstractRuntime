@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending, no writes outside the run's workspace and no delegation run unattended (file reads, workspace-confined
   file writes, mailbox reads, `get_email_attachment`, memory and plan tools). `fetch_url`, `browser_probe`,
   `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`, `delegate_agent`,
-  `channel_fs_write`, `agora_post_message`, `agora_send_dm`, MCP tools and every other tool ask, unless the user
+  `channel_fs_write`, `agora_post_message`, `agora_send_dm`, the camera tools, MCP tools and every other tool ask, unless the user
   named them one by one in `policy.untrusted_input_tools`; message-sending tools (`send_email`, `reply_email`,
   `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted, named or not.
   Schedule and manual automations keep the full grant. `reply_email` is withheld like `send_email` everywhere.

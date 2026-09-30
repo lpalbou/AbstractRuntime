@@ -297,3 +297,57 @@ def test_live_default_automation_parks_a_send_to_another_address(live_mailbox, s
     assert child.status == RunStatus.WAITING and wait["kind"] == "tool_approval"
     assert wait["details"][0]["arguments"]["to"] == FOREIGN
     assert opened == [] and smtp_self_only.count == 0
+
+
+# --- the self-trigger loop guard (0.8.1) --------------------------------------------------------
+
+
+def test_live_an_automation_never_triggers_itself(live_mailbox, smtp_self_only, tmp_path, monkeypatch):
+    """A send-email action forwards each matching message to self with a subject that still
+    matches the filter (the 0.7.0 loop shape). Against the real server: the forward arrives
+    marked (Auto-Submitted + X-AbstractFramework-Automation), the feeder passes it as the
+    account's own automatic mail, and exactly one occurrence runs."""
+    from abstractcore.comms.email import OutgoingMessage, SearchCriteria
+    from abstractruntime.email import email_action_target, register_email_action_workflow
+
+    rt, feeder, ctx, inbox, _ = _plane(tmp_path, live_mailbox, root="loop")
+    register_email_action_workflow(rt.workflow_registry)
+    clock = Clock(monkeypatch, now=_now())
+    base = feeder.poll(ctx, now=_now(), force=True)
+    assert base.ok and base.baseline
+    nonce = new_nonce()
+    target = email_action_target({"to": ["self"], "subject": "Fwd {subject}", "body": "{text}"})
+    target["input_data"]["_runtime"] = {"operator_email": live_mailbox.address}
+    req = request(workflow_id=target["workflow_id"], trigger={"source_id": "email.received", "source_version": 1,
+                                                              "config": {"uses_model": False, "filter": {"subject_contains": nonce}}})
+    req["target"] = target
+    aid = create_automation(rt, req, now=clock.now)[0]
+    drive(rt, aid)
+    time.sleep(1.0)
+    ctx.send(OutgoingMessage(to=(live_mailbox.address,), subject=tagged_subject("loop-trigger", nonce),
+                             text=f"AbstractFramework live loop test. Nonce: {nonce}\n"))
+    client = ctx.client()
+    crit = SearchCriteria.build(subject_contains=nonce)
+    found, _s, _p = wait_for(lambda: client.search(crit, limit=5)["messages"])
+    assert found, "the trigger message did not arrive"
+    feeder.poll(ctx, now=_now(), force=True)
+    clock.set(_now())
+    wake_email_automations(rt)
+    drive(rt, aid)
+    kids = children(rt, aid)
+    assert len(kids) == 1 and kids[0].status == RunStatus.COMPLETED, kids[0].output if kids else None
+    assert smtp_self_only.count == 2  # the trigger + the automation's forward
+
+    # The forward arrives, marked, and never becomes an event.
+    both, _s, _p = wait_for(lambda: (lambda m: m if len(m) >= 2 else [])(client.search(crit, limit=5)["messages"]))
+    assert len(both) >= 2, "the forward did not arrive"
+    fwd = [m for m in both if m.subject.startswith("Fwd ")]
+    assert fwd and fwd[0].auto_submitted == "auto-generated" and fwd[0].framework_marker.startswith(f"automation:{aid}/run:")
+    report = feeder.poll(ctx, now=_now(), force=True)
+    assert report.ok and report.own_automatic >= 1
+    assert len([e for e in inbox.read() if nonce in str((e.get("payload") or {}).get("subject") or "")]) == 1
+    clock.set(_now(120))
+    wake_email_automations(rt)
+    drive(rt, aid)
+    assert len(children(rt, aid)) == 1
+    fact(live_mailbox, "loop guard: own automatic mail passed", report.own_automatic)

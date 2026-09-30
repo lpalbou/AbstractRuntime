@@ -1015,6 +1015,10 @@ class ToolApprovalPolicy:
         req = fold_req if require_approval_tools is None else set(require_approval_tools)
         self.auto_approve_tools = set(auto)
         self.require_approval_tools = set(req)
+        # The names on the require list only because it is the DEFAULT caution list (no list was
+        # given): a per-call refiner may lower one for a call it proves safe (send_email to the
+        # user's own address; effect_handlers). A list the host passed explicitly always wins.
+        self.default_require_approval_tools = frozenset(req) if require_approval_tools is None else frozenset()
 
     def requires_approval(self, tool_calls: Sequence[Dict[str, object]]) -> bool:
         for tc in tool_calls or []:

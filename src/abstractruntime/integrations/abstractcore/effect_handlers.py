@@ -3105,16 +3105,18 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
     # still lower a call they prove safe (framework backlog 0992, live-test finding 2026-09-30:
     # a `send_email` to the user's own address asked for approval in every run that carried no
     # `_runtime.tool_policy`). Only approval-gated executors that expose their static policy.
-    # The static `require_approval_tools` is the executor's DEFAULT caution list (send_email is
-    # on it), not a choice made for this run, so a refiner may lower a name on it for a call it
-    # proves safe (0.7.0 Linux end-to-end F1b: the list made the self-send exception dead code
-    # and every send to the user's own address parked). A per-run policy's require list (the
-    # user's explicit choice, above) still always wins; untrusted-input runs never reach here.
+    # A name on the static require list only because it is the executor's DEFAULT caution list
+    # (`default_require_approval_tools`; send_email is on it) may be lowered by a refiner for a
+    # call it proves safe (0.7.0 Linux end-to-end F1b: the gateway's `ToolApprovalPolicy()` made
+    # the self-send exception dead code and every send to the user's own address parked). A
+    # require list the host passed explicitly, and a per-run policy's (above), always win;
+    # untrusted-input runs never reach here.
     static = getattr(tools, "policy", None)
     if callable(getattr(tools, "execute_approved", None)) and isinstance(static, ToolApprovalPolicy):
         s_auto = set(static.auto_approve_tools)
         s_req = set(static.require_approval_tools)
-        refined = _refined_auto_names(calls, run, auto=s_auto, require=set())
+        lowerable = s_req & set(getattr(static, "default_require_approval_tools", frozenset()))
+        refined = _refined_auto_names(calls, run, auto=s_auto, require=s_req - lowerable)
         if refined:
             try:
                 requires = ToolApprovalPolicy(

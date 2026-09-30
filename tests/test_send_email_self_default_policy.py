@@ -8,7 +8,9 @@ branch, which passed that list to the refiner pass as "require", so `send_email_
 
 Pinned here with that exact executor: self -> sent; a stranger -> approval; a self-send beside a
 stranger -> approval; a per-run require list (the user's explicit choice) still wins; an
-email-triggered (untrusted-input) run under "ask" still asks.
+email-triggered (untrusted-input) run under "ask" still asks. A require list the host passes
+EXPLICITLY still wins too (tests/test_email_review_fixes.py
+`test_a_static_require_still_wins_over_the_refiner`): only the default caution list is lowerable.
 """
 
 from __future__ import annotations

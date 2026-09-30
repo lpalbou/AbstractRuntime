@@ -324,6 +324,7 @@ def test_no_env_flag_turns_email_on(monkeypatch):
     (None, "Connect an email account"),
     ("not_connected", "Connect an email account"),
     ("admin_disabled", "administrator"),
+    ("not_available", "not available for your account"),
     ("agent_tools_off", "Agent email tools"),
 ])
 def test_the_disabled_row_names_the_real_reason(reason, words):
@@ -331,6 +332,14 @@ def test_the_disabled_row_names_the_real_reason(reason, words):
 
     rows = {r["id"]: r for r in list_tool_catalog(email_enabled=False, email_off_reason=reason)}
     assert words in rows["comms.email"]["gate"]
+
+
+def test_not_available_is_its_own_reason():
+    from abstractruntime.integrations.abstractcore.default_tools import EMAIL_OFF_REASONS, email_off_gate
+
+    gate = email_off_gate("not_available")
+    assert gate == "Agent email tools are not available for your account — ask your administrator"
+    assert gate not in {v for k, v in EMAIL_OFF_REASONS.items() if k != "not_available"}
 
 
 def test_an_unknown_reason_is_refused():

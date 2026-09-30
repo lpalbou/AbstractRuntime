@@ -82,6 +82,7 @@ EMAIL_ACCOUNT_GATE = "Connect an email account in Settings -> Email"
 EMAIL_OFF_REASONS: Dict[str, str] = {
     "not_connected": EMAIL_ACCOUNT_GATE,
     "admin_disabled": "Email is turned off for this account by an administrator",
+    "not_available": "Agent email tools are not available for your account — ask your administrator",
     "agent_tools_off": 'Agent email tools are off: turn on "Agent email tools" in Settings -> My email',
 }
 
@@ -425,7 +426,8 @@ def list_tool_catalog(
 
     Email (framework backlog 0992): on only with `email_enabled=True` (the host's decision;
     no env flag; the default is off). When off, `email_off_reason` (one of
-    `EMAIL_OFF_REASONS`: "not_connected" (default), "admin_disabled", "agent_tools_off")
+    `EMAIL_OFF_REASONS`: "not_connected" (default), "admin_disabled", "not_available" (the
+    administrator has not made agent email tools available to this user), "agent_tools_off")
     picks the gate text the disabled `comms.email` row carries."""
     email_gate = email_off_gate(email_off_reason)
     email_enabled = bool(email_enabled)

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
 ### Added
 
 - **Email for each user** (see `docs/email.md`). A run acts for one account: its non-secret binding
@@ -51,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prune_email_inbox(runtime, retention=...)`, which never removes an event an active email automation has not read.
 - **`policy.untrusted_input_tools`**: tools named one by one that an email-triggered occurrence may run without asking.
 - `list_tool_catalog(email_off_reason=...)` names why email is off (`not_connected`, `admin_disabled`,
-  `agent_tools_off`).
+  `not_available` — the administrator has not made agent email tools available to this user — and `agent_tools_off`).
 
 ### Changed
 

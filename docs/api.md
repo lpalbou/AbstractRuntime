@@ -264,7 +264,7 @@ from abstractruntime.email import (
 - `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
 - `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
 - `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
-- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "agent_tools_off")`
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "not_available" | "agent_tools_off")`
 - mail library for hosts: `abstractruntime.integrations.abstractcore.email_facade` re-exports `abstractcore.comms.email` (its `__all__` plus the `legacy` module; `GATEWAY_NAMES` lists the names hosts use)
 - approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root

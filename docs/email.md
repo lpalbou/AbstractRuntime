@@ -82,7 +82,8 @@ Tool availability follows the host's decision: pass `email_enabled=True` to `get
 `list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user whose account is connected and
 enabled and whose agent email tools are on. There is no environment variable for email: without `email_enabled=True`
 the email tools are off. When they are off, `list_tool_catalog(email_enabled=False, email_off_reason=...)` names the
-reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"` or `"agent_tools_off"`
+reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"`, `"not_available"` (the administrator has not made agent email
+tools available to this user) or `"agent_tools_off"`
 (`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`,
 `list_emails`, `search_emails`, `read_email` and `get_email_attachment`. The reading tools (`list_email_accounts`,
 `list_email_folders`, `list_emails`, `search_emails`, `read_email`) change nothing; `list_emails` and `search_emails`

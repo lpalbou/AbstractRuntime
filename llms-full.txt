@@ -53,7 +53,7 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.7.3 • **Python:** 3.10+
+**Version:** 0.8.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -145,7 +145,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.7.3)
+## What’s included (v0.8.0)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -432,7 +432,7 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 # AbstractRuntime — Architecture
 
 > Updated: 2026-09-29
-> Version: 0.7.3
+> Version: 0.8.0
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1129,7 +1129,7 @@ from abstractruntime.email import (
 - `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
 - `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
 - `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
-- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "agent_tools_off")`
+- toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "not_available" | "agent_tools_off")`
 - mail library for hosts: `abstractruntime.integrations.abstractcore.email_facade` re-exports `abstractcore.comms.email` (its `__all__` plus the `legacy` module; `GATEWAY_NAMES` lists the names hosts use)
 - approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
@@ -4506,7 +4506,8 @@ Tool availability follows the host's decision: pass `email_enabled=True` to `get
 `list_default_tool_specs`, `build_default_tool_map` or `list_tool_catalog` for a user whose account is connected and
 enabled and whose agent email tools are on. There is no environment variable for email: without `email_enabled=True`
 the email tools are off. When they are off, `list_tool_catalog(email_enabled=False, email_off_reason=...)` names the
-reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"` or `"agent_tools_off"`
+reason on the disabled `comms.email` row: `"not_connected"` (default), `"admin_disabled"`, `"not_available"` (the administrator has not made agent email
+tools available to this user) or `"agent_tools_off"`
 (`EMAIL_OFF_REASONS`). The email tools are `list_email_accounts`, `list_email_folders`, `send_email`, `reply_email`,
 `list_emails`, `search_emails`, `read_email` and `get_email_attachment`. The reading tools (`list_email_accounts`,
 `list_email_folders`, `list_emails`, `search_emails`, `read_email`) change nothing; `list_emails` and `search_emails`

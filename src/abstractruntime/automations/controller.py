@@ -323,10 +323,24 @@ def _never_granted(name: str) -> bool:
     return _grant_excludes(name) or sends_messages(name)
 
 
+# `_runtime.untrusted_input = True`: the run reads text written by other people (an inbound
+# email). Set by the controller on the occurrence, inherited by child runs (the parent's value
+# wins), and consulted by the tool executor so no static default can auto-approve a tool there.
+UNTRUSTED_INPUT_KEY = "untrusted_input"
+
+
 def grant_tool_approval(
-    input_data: Dict[str, Any], *, untrusted_input: bool = False, named_tools: Sequence[str] = ()
+    input_data: Dict[str, Any],
+    *,
+    untrusted_input: bool = False,
+    named_tools: Sequence[str] = (),
+    approval: str = "auto",
 ) -> None:
-    """`policy.tool_approval == "auto"`: pre-approve the target's tools for this occurrence.
+    """Set the occurrence's per-run tool policy (`_runtime.tool_policy`).
+
+    `approval="auto"` (`policy.tool_approval == "auto"`): pre-approve the target's tools for
+    this occurrence. `approval="ask"` is meaningful only with `untrusted_input=True` (see
+    below); a trusted "ask" occurrence gets no policy (the caller does not call this).
 
     Creating the automation is the consent (an unattended run cannot ask a
     person every tick). The grant is the runtime's existing per-run policy
@@ -361,28 +375,60 @@ def grant_tool_approval(
     `reply_email`, `agora_post_message`, `agora_send_dm`, ...) are never
     granted, named or not. A withheld call asks a person. Schedule and manual
     automations keep the full grant (decision recorded in 0992).
+
+    Untrusted input under `approval="ask"` (framework backlog 0992 re-gate): the
+    policy auto-approves NOTHING but the tools the user named (sending tools
+    never), and lists every other candidate in `require_approval_tools`, so
+    neither the executor's static defaults (the gateway's executor auto-runs
+    `skim_url`, `web_search`, `agora_post_message`, `send_telegram_message`...)
+    nor a per-call refiner can run a call unasked. For untrusted input the policy
+    is ALWAYS set, replacing any `tool_policy` the target inputs carried (recorded
+    as `replaced_target_policy`), and marked `untrusted_input: true`, with the run
+    flag `_runtime.untrusted_input` beside it: the executor then refuses to fall
+    back to its static policy for this run and its children.
     """
     from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
 
+    if approval not in ("auto", "ask"):
+        raise ValueError(f"unknown tool approval {approval!r}")
     runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
+    replaced_target_policy = False
     if "tool_policy" in runtime_ns:
-        return
+        if not untrusted_input:
+            return
+        replaced_target_policy = True
     allowed = runtime_ns.get("allowed_tools")
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
     candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
     named = {n.strip() for n in named_tools if isinstance(n, str) and n.strip()}
     mode = input_data.get("workspace_access_mode") or input_data.get("workspaceAccessMode")
     if untrusted_input:
-        withheld = [
-            n for n in candidates
-            if _never_granted(n) or (n not in named and not untrusted_input_allow_all(n, workspace_access_mode=mode))
-        ]
+        if approval == "ask":
+            withheld = [n for n in candidates if _never_granted(n) or n not in named]
+        else:
+            withheld = [
+                n for n in candidates
+                if _never_granted(n) or (n not in named and not untrusted_input_allow_all(n, workspace_access_mode=mode))
+            ]
     else:
         withheld = [n for n in candidates if _grant_excludes(n)]
     tools = [n for n in candidates if n not in withheld]
+    policy: Dict[str, Any] = {"auto_approve_tools": tools, "withheld_tools": withheld, "source": AUTOMATION_GRANT_SOURCE}
+    if untrusted_input:
+        policy.update(
+            {
+                UNTRUSTED_INPUT_KEY: True,
+                "approval": approval,
+                "untrusted_input_tools": sorted(named),
+                "replaced_target_policy": replaced_target_policy,
+            }
+        )
+        if approval == "ask":
+            policy["require_approval_tools"] = list(withheld)
     input_data["_runtime"] = {
         **runtime_ns,
-        "tool_policy": {"auto_approve_tools": tools, "withheld_tools": withheld, "source": AUTOMATION_GRANT_SOURCE},
+        "tool_policy": policy,
+        **({UNTRUSTED_INPUT_KEY: True} if untrusted_input else {}),
     }
 
 
@@ -458,9 +504,15 @@ def build_prepared(
     resolve_vars: list = []
     if isinstance(emails, list):
         resolve_vars = _freeze_email_inputs(turn, input_data, emails)
-    if definition["policy"].get("tool_approval", "auto") == "auto":
+    approval = definition["policy"].get("tool_approval", "auto")
+    if approval == "auto" or untrusted:
+        # Untrusted input ALWAYS gets a per-run policy, under "ask" too: without one the
+        # executor's static defaults decide, and they auto-run network and sending tools.
         grant_tool_approval(
-            input_data, untrusted_input=untrusted, named_tools=definition_untrusted_input_tools(definition)
+            input_data,
+            untrusted_input=untrusted,
+            named_tools=definition_untrusted_input_tools(definition),
+            approval="ask" if approval != "auto" else "auto",
         )
     apply_context_mode(input_data, mode=definition["context"]["mode"])
     if definition["context"]["mode"] == "growing":

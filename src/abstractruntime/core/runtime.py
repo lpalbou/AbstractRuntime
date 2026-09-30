@@ -4556,6 +4556,21 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("tool_policy", dict(tool_policy))
+            # UNTRUSTED INPUT crosses the hop with the PARENT winning (framework backlog 0992
+            # re-gate): a run that reads text written by other people (an email-triggered
+            # occurrence) hands its flag AND its tool policy to every child, over whatever the
+            # child's own vars carry, so a flow- or model-shaped child policy can never widen
+            # what the occurrence may run unasked.
+            if isinstance(parent_rt, dict) and parent_rt.get("untrusted_input") is True:
+                sub_rt = sub_vars.get("_runtime")
+                if not isinstance(sub_rt, dict):
+                    sub_rt = {}
+                    sub_vars["_runtime"] = sub_rt
+                sub_rt["untrusted_input"] = True
+                if isinstance(tool_policy, dict):
+                    sub_rt["tool_policy"] = copy.deepcopy(tool_policy)
+                else:
+                    sub_rt.pop("tool_policy", None)
             # operator_email crosses the hop too (gateway c4702, dm#246 -
             # the FOURTH rider of the skills_block P1-2 class, exactly as
             # c4388 predicted): bundle agents run send_email in CHILD runs,

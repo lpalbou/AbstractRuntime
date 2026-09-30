@@ -437,7 +437,8 @@ returns the refusal message for a tool, or `None` when it is allowed.
   runs inherit the grant.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
-  - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
+  - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is, except for
+    untrusted triggers (below), whose occurrence policy always replaces it (`replaced_target_policy: true`).
   - **Tools that message model-chosen recipients are never granted**: every tool
     whose inventory row carries `comms_send` (`send_email`, `reply_email`, `send_whatsapp_message`, `send_telegram_message`,
     `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
@@ -460,13 +461,26 @@ returns the refusal message for a tool, or `None` when it is allowed.
     (`model_controlled_destination`, `comms_send`, `remote_write_capable`, `destructive_capable`); a tool missing
     from the table is withheld. In practice the grant keeps file reads, workspace-confined file writes (`write_file`
     and `edit_file` only under `workspace_access_mode: "workspace_only"`, the default), mailbox and hub reads,
-    `get_email_attachment` (into the workspace), memory and plan tools. It withholds, among others, `fetch_url`,
-    `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
-    `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. A withheld tool
+    `get_email_attachment` (into the workspace), `recall_memory` and `update_plan` (the run's own plan). It
+    withholds, among others, `fetch_url`, `browser_probe`, `skim_url`, `skim_websearch`, `web_search`,
+    `execute_command`, `shell_exec`, `execute_python`, `delegate_agent`, `channel_fs_write`, `agora_post_message`,
+    `agora_send_dm`, the memory-writing tools (`remember`, `remember_note` including `scope: "global"`,
+    `compact_memory`: they write the user's lasting memory outside the run's workspace, `TOOL_WRITE_SCOPE`
+    `memory`, so a stranger's email cannot plant a note that later runs obey) and every MCP tool. A withheld tool
     runs unattended only when the user named it individually in `policy.untrusted_input_tools` (within the target's
     tool ceiling); message-sending tools (`send_email`, `reply_email`, `agora_post_message`, `agora_send_dm`, ...)
     are never granted, named or not. Schedule and manual automations keep the full grant.
-- **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
+  - **Untrusted triggers always carry a policy.** The occurrence policy is marked `untrusted_input: true` (with
+    `approval`, `untrusted_input_tools` and `replaced_target_policy`), the run carries `_runtime.untrusted_input:
+    true`, and child runs inherit both with the parent's value winning over their own. For such a run the approval
+    executor never consults its static policy (the gateway's defaults would auto-run `skim_url`, `web_search`, the
+    agora posts and the Telegram sends) or a tier ceiling; it runs a listed tool unasked only when the user named
+    it or (under `"auto"`) its facts pass `untrusted_input_allow_all`, never runs a sending tool unasked, and
+    applies the per-call refiners (`send_email` to self or a pre-authorised recipient) only under `"auto"`.
+- **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat. For an
+  untrusted trigger (`email.received@1`) the occurrence still gets a per-run policy that auto-approves nothing but
+  the tools the user named in `policy.untrusted_input_tools` (sending tools never) and lists every other tool in
+  `require_approval_tools`: every other call waits for a person, `send_email` to the user's own address included.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
 occurrence. Questions a flow asks a person (`ask_user`) still wait in both modes. Discussions never inherit the grant.

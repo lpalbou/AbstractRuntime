@@ -1348,9 +1348,11 @@ Tools that send messages to recipients the model chooses (`send_email`, `reply_e
 listed in the definition's `policy.email_allowed_recipients`, runs; any other recipient waits for approval, so text
 an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
 `email.received@1` grant only tools with no network egress, code execution, messaging, writes outside the workspace or
-delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command` and the like ask unless the user named them in
-`policy.untrusted_input_tools`). Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
-waits.
+delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command`, the memory-writing `remember`,
+`remember_note` and `compact_memory` and the like ask unless the user named them in `policy.untrusted_input_tools`).
+Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval` waits. For an
+email-triggered automation, `"ask"` means every tool call asks except the tools named in
+`policy.untrusted_input_tools` (never a sending tool); the executor's own defaults never decide there.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 
@@ -3955,7 +3957,8 @@ returns the refusal message for a tool, or `None` when it is allowed.
   runs inherit the grant.
   - A name outside the run's tool ceiling (`allowed_tools`) grants nothing: approval never widens the ceiling.
   - A tool outside `TOOL_EFFECT_CLASSES` (a third-party MCP tool, for example) is not in the grant and still asks.
-  - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is.
+  - A `tool_policy` that the target's own `input_data._runtime` already carries is left as it is, except for
+    untrusted triggers (below), whose occurrence policy always replaces it (`replaced_target_policy: true`).
   - **Tools that message model-chosen recipients are never granted**: every tool
     whose inventory row carries `comms_send` (`send_email`, `reply_email`, `send_whatsapp_message`, `send_telegram_message`,
     `send_telegram_artifact`), even when `allowed_tools` names it. They are listed in the grant's
@@ -3978,13 +3981,26 @@ returns the refusal message for a tool, or `None` when it is allowed.
     (`model_controlled_destination`, `comms_send`, `remote_write_capable`, `destructive_capable`); a tool missing
     from the table is withheld. In practice the grant keeps file reads, workspace-confined file writes (`write_file`
     and `edit_file` only under `workspace_access_mode: "workspace_only"`, the default), mailbox and hub reads,
-    `get_email_attachment` (into the workspace), memory and plan tools. It withholds, among others, `fetch_url`,
-    `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
-    `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. A withheld tool
+    `get_email_attachment` (into the workspace), `recall_memory` and `update_plan` (the run's own plan). It
+    withholds, among others, `fetch_url`, `browser_probe`, `skim_url`, `skim_websearch`, `web_search`,
+    `execute_command`, `shell_exec`, `execute_python`, `delegate_agent`, `channel_fs_write`, `agora_post_message`,
+    `agora_send_dm`, the memory-writing tools (`remember`, `remember_note` including `scope: "global"`,
+    `compact_memory`: they write the user's lasting memory outside the run's workspace, `TOOL_WRITE_SCOPE`
+    `memory`, so a stranger's email cannot plant a note that later runs obey) and every MCP tool. A withheld tool
     runs unattended only when the user named it individually in `policy.untrusted_input_tools` (within the target's
     tool ceiling); message-sending tools (`send_email`, `reply_email`, `agora_post_message`, `agora_send_dm`, ...)
     are never granted, named or not. Schedule and manual automations keep the full grant.
-- **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat.
+  - **Untrusted triggers always carry a policy.** The occurrence policy is marked `untrusted_input: true` (with
+    `approval`, `untrusted_input_tools` and `replaced_target_policy`), the run carries `_runtime.untrusted_input:
+    true`, and child runs inherit both with the parent's value winning over their own. For such a run the approval
+    executor never consults its static policy (the gateway's defaults would auto-run `skim_url`, `web_search`, the
+    agora posts and the Telegram sends) or a tier ceiling; it runs a listed tool unasked only when the user named
+    it or (under `"auto"`) its facts pass `untrusted_input_allow_all`, never runs a sending tool unasked, and
+    applies the per-call refiners (`send_email` to self or a pre-authorised recipient) only under `"auto"`.
+- **`"ask"`.** No grant. A tool call that needs approval waits on a `tool_approval` wait, as in a chat. For an
+  untrusted trigger (`email.received@1`) the occurrence still gets a per-run policy that auto-approves nothing but
+  the tools the user named in `policy.untrusted_input_tools` (sending tools never) and lists every other tool in
+  `require_approval_tools`: every other call waits for a person, `send_email` to the user's own address included.
 
 The grant is frozen with the rest of the occurrence's inputs: a revision of `tool_approval` applies from the next
 occurrence. Questions a flow asks a person (`ask_user`) still wait in both modes. Discussions never inherit the grant.
@@ -4653,16 +4669,22 @@ Inbound mail is data, never instructions:
 - under `policy.tool_approval: "auto"` ("allow all tools"), the grant is **allow by kind**: it covers only tools with
   no network egress beyond services the user or administrator configured, no code or command execution, no message
   sending, no writes outside the run's workspace and no delegation (file reads, workspace-confined file writes,
-  mailbox reads, `get_email_attachment`, memory and plan tools). Everything else asks, among others `fetch_url`,
-  `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
-  `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. So an email cannot
-  steer the occurrence into opening a link, running code or sending data to an address or URL it names. The rule is
+  mailbox reads, `get_email_attachment`, `recall_memory` and `update_plan`). Everything else asks, among others
+  `fetch_url`, `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`,
+  `execute_python`, `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm`, the memory-writing
+  tools (`remember`, `remember_note` including `scope: "global"`, `compact_memory`, which write the user's lasting
+  memory outside the run's workspace) and every MCP tool. So an email cannot steer the occurrence into opening a
+  link, running code, sending data to an address or URL it names, or planting a note that later runs obey. The rule is
   decided on tool facts, never names: see [automations.md](automations.md#tool-approval). To let such an automation
   use one of those tools unattended, name it individually in `policy.untrusted_input_tools` (for example
   `["fetch_url"]`; `"all"` and patterns are refused). Show the user the risk when they do: a page the agent opens can
   carry instructions too, and the URL itself can carry data out. Message-sending tools (`send_email`, `reply_email`,
   `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted this way; email sends follow
   the recipient rule above.
+- under `policy.tool_approval: "ask"`, the occurrence still gets a per-run policy: nothing runs unasked except the
+  tools named in `policy.untrusted_input_tools` (sending tools never), and every other call waits for a person,
+  `send_email` to the user's own address included. The executor's own defaults never decide for an email-triggered
+  run or its child runs (`_runtime.untrusted_input`); see [automations.md](automations.md#tool-approval).
 
 ## Sending from an automation without a model
 

@@ -211,16 +211,22 @@ Inbound mail is data, never instructions:
 - under `policy.tool_approval: "auto"` ("allow all tools"), the grant is **allow by kind**: it covers only tools with
   no network egress beyond services the user or administrator configured, no code or command execution, no message
   sending, no writes outside the run's workspace and no delegation (file reads, workspace-confined file writes,
-  mailbox reads, `get_email_attachment`, memory and plan tools). Everything else asks, among others `fetch_url`,
-  `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
-  `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm` and every MCP tool. So an email cannot
-  steer the occurrence into opening a link, running code or sending data to an address or URL it names. The rule is
+  mailbox reads, `get_email_attachment`, `recall_memory` and `update_plan`). Everything else asks, among others
+  `fetch_url`, `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`,
+  `execute_python`, `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm`, the memory-writing
+  tools (`remember`, `remember_note` including `scope: "global"`, `compact_memory`, which write the user's lasting
+  memory outside the run's workspace) and every MCP tool. So an email cannot steer the occurrence into opening a
+  link, running code, sending data to an address or URL it names, or planting a note that later runs obey. The rule is
   decided on tool facts, never names: see [automations.md](automations.md#tool-approval). To let such an automation
   use one of those tools unattended, name it individually in `policy.untrusted_input_tools` (for example
   `["fetch_url"]`; `"all"` and patterns are refused). Show the user the risk when they do: a page the agent opens can
   carry instructions too, and the URL itself can carry data out. Message-sending tools (`send_email`, `reply_email`,
   `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted this way; email sends follow
   the recipient rule above.
+- under `policy.tool_approval: "ask"`, the occurrence still gets a per-run policy: nothing runs unasked except the
+  tools named in `policy.untrusted_input_tools` (sending tools never), and every other call waits for a person,
+  `send_email` to the user's own address included. The executor's own defaults never decide for an email-triggered
+  run or its child runs (`_runtime.untrusted_input`); see [automations.md](automations.md#tool-approval).
 
 ## Sending from an automation without a model
 

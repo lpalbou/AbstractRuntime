@@ -3012,10 +3012,17 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
     (execute_approved present) — plain executors have no approval concept
     to override. Malformed policy = static behavior (fail toward asking)."""
     pol = None
+    run_rt = None
     if isinstance(run.vars, dict):
         rt = run.vars.get("_runtime")
         if isinstance(rt, dict):
+            run_rt = rt
             pol = rt.get("tool_policy")
+    if callable(getattr(tools, "execute_approved", None)) and (
+        (isinstance(run_rt, dict) and run_rt.get("untrusted_input") is True)
+        or (isinstance(pol, dict) and pol.get("untrusted_input") is True)
+    ):
+        return _execute_untrusted_input_run(tools, calls, run, pol if isinstance(pol, dict) else {})
     if (
         isinstance(pol, dict)
         and (pol.get("auto_approve_tools") or pol.get("require_approval_tools")
@@ -3112,6 +3119,64 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
             if not requires:
                 return tools.execute_approved(tool_calls=calls)
     return tools.execute(tool_calls=calls)
+
+
+def _execute_untrusted_input_run(tools: Any, calls: List[Dict[str, Any]], run: "RunState", pol: Dict[str, Any]) -> Dict[str, Any]:
+    """The approval decision for a run that reads text written by other people (framework
+    backlog 0992 re-gate; `_runtime.untrusted_input`, set on email-triggered occurrences).
+
+    Defence in depth behind the controller's per-run policy: the executor's STATIC policy is
+    never consulted (the gateway's defaults auto-run `skim_url`, `web_search`,
+    `agora_post_message`, `send_telegram_message`...), no tier ceiling applies, and a name the
+    policy lists as auto still runs unasked only when it is not a sending tool and either the
+    user named it (`untrusted_input_tools`) or, under `approval: "auto"`, its facts pass
+    `untrusted_input_allow_all`. Per-call refiners (a `send_email` to the user's own address)
+    apply only under `approval: "auto"`. A missing or malformed policy asks for every call.
+    """
+    from ...automations.controller import _never_granted, untrusted_input_allow_all
+
+    def _names(key: str) -> Set[str]:
+        raw = pol.get(key)
+        return {str(t).strip() for t in raw if str(t).strip()} if isinstance(raw, list) else set()
+
+    approval = pol.get("approval")
+    listed = _names("auto_approve_tools")
+    named = _names("untrusted_input_tools")
+    req = _names("require_approval_tools")
+    vars_ = run.vars if isinstance(run.vars, dict) else {}
+    mode = vars_.get("workspace_access_mode") or vars_.get("workspaceAccessMode")
+    auto: Set[str] = set()
+    try:
+        for call in calls:
+            cname = str((call or {}).get("name") or "").strip()
+            if not cname or cname in auto or cname not in listed or cname in req:
+                continue
+            if _never_granted(cname):
+                continue
+            if cname in named or (approval == "auto" and untrusted_input_allow_all(cname, workspace_access_mode=mode)):
+                auto.add(cname)
+    except Exception:  # noqa: BLE001 - a failed fact lookup fails toward asking
+        auto = set()
+    if approval == "auto":
+        auto |= _refined_auto_names(calls, run, auto=auto, require=req)
+    run_policy = ToolApprovalPolicy(auto_approve_tools=auto, require_approval_tools=req)
+    try:
+        requires = run_policy.requires_approval(calls)
+    except Exception:  # noqa: BLE001 - fail toward asking
+        requires = True
+    if not requires:
+        return tools.execute_approved(tool_calls=calls)
+    return {
+        "mode": "approval_required",
+        "wait_reason": "user",
+        "tool_calls": _jsonable(calls),
+        "details": {
+            "kind": "tool_approval",
+            "policy": run_policy.describe(),
+            "policy_source": "run",
+            "untrusted_input": True,
+        },
+    }
 
 
 def _refined_auto_names(calls: List[Dict[str, Any]], run: "RunState", *, auto: Set[str], require: Set[str]) -> Set[str]:

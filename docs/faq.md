@@ -85,9 +85,11 @@ Tools that send messages to recipients the model chooses (`send_email`, `reply_e
 listed in the definition's `policy.email_allowed_recipients`, runs; any other recipient waits for approval, so text
 an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
 `email.received@1` grant only tools with no network egress, code execution, messaging, writes outside the workspace or
-delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command` and the like ask unless the user named them in
-`policy.untrusted_input_tools`). Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval`
-waits.
+delegation (`fetch_url`, `skim_url`, `web_search`, `execute_command`, the memory-writing `remember`,
+`remember_note` and `compact_memory` and the like ask unless the user named them in `policy.untrusted_input_tools`).
+Use `"ask"` to approve each tool batch; pending approvals appear in `pending_waits` as `tool_approval` waits. For an
+email-triggered automation, `"ask"` means every tool call asks except the tools named in
+`policy.untrusted_input_tools` (never a sending tool); the executor's own defaults never decide there.
 
 Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 

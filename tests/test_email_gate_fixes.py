@@ -38,6 +38,7 @@ from abstractruntime.integrations.abstractcore.effect_handlers import make_tool_
 from abstractruntime.integrations.abstractcore.tool_effects import (
     DELEGATE,
     EXEC,
+    MEMORY_WRITE,
     NETWORK_REACHES,
     TOOL_EFFECT_CLASSES,
     TOOL_NETWORK_REACH,
@@ -211,7 +212,7 @@ def test_naming_a_sending_tool_grants_nothing(tool, tmp_path, ca, imap, monkeypa
 def test_every_exposable_tool_has_a_reach_and_every_write_tool_a_scope():
     assert set(TOOL_NETWORK_REACH) == set(TOOL_EFFECT_CLASSES)
     assert set(TOOL_NETWORK_REACH.values()) <= set(NETWORK_REACHES)
-    assert {n for n, c in TOOL_EFFECT_CLASSES.items() if c == WRITE} == set(TOOL_WRITE_SCOPE)
+    assert {n for n, c in TOOL_EFFECT_CLASSES.items() if c in (WRITE, MEMORY_WRITE)} == set(TOOL_WRITE_SCOPE)
 
 
 def test_allow_all_is_decided_by_kind():
@@ -220,7 +221,8 @@ def test_allow_all_is_decided_by_kind():
     for name in granted:
         assert TOOL_EFFECT_CLASSES[name] not in (EXEC, DELEGATE)
         assert TOOL_NETWORK_REACH[name] in ("none", "configured")
-    assert {"read_file", "list_files", "read_email", "list_emails", "remember", "write_file"} <= granted
+    assert {"read_file", "list_files", "read_email", "list_emails", "recall_memory", "update_plan", "write_file"} <= granted
+    assert not granted & {"remember", "remember_note", "compact_memory"}  # the user's lasting memory
     assert not granted & set(MUST_ASK_UNDER_ALLOW_ALL)
     assert "self_improve" not in granted  # writes outside the workspace
     assert not untrusted_input_allow_all("some_mcp_tool")  # unclassified: fails closed

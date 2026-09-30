@@ -217,13 +217,25 @@ WRITES_WORKSPACE_ONLY_MODE = "workspace_only_mode"
 default); the other modes let absolute paths reach allowed or non-ignored folders."""
 WRITES_HOST = "host"
 """Can write outside the run's workspace."""
+WRITES_RUN = "run"
+"""Writes only the run's own state (its plan), which ends with the run."""
+WRITES_MEMORY = "memory"
+"""Writes the user's lasting memory (notes, memory spans, summaries) that later runs read:
+outside the run's workspace, and it outlives the run."""
 
-# The scope of every `write`-class tool (`exec` tools can write anything and have no entry).
+# The scope of every `write`- and `memory-write`-class tool (`exec` tools can write anything and
+# have no entry).
 TOOL_WRITE_SCOPE: Dict[str, str] = {
     "write_file": WRITES_WORKSPACE_ONLY_MODE,
     "edit_file": WRITES_WORKSPACE_ONLY_MODE,
     "get_email_attachment": WRITES_WORKSPACE,
     "self_improve": WRITES_HOST,
+    # Memory tools (framework backlog 0992 re-gate): a stranger's email must not plant a lasting
+    # note (`remember_note` with scope=global) that every later run reads as the user's word.
+    "remember": WRITES_MEMORY,
+    "remember_note": WRITES_MEMORY,
+    "compact_memory": WRITES_MEMORY,
+    "update_plan": WRITES_RUN,
 }
 
 # Effect classes an untrusted-input grant never covers, whatever the other facts say.
@@ -271,6 +283,9 @@ def untrusted_input_grantable(tool_name: str, *, workspace_access_mode: Any = No
         scope = TOOL_WRITE_SCOPE.get(name)
         mode = str(workspace_access_mode or "workspace_only").strip() or "workspace_only"
         return scope == WRITES_WORKSPACE or (scope == WRITES_WORKSPACE_ONLY_MODE and mode == "workspace_only")
+    if effect == MEMORY_WRITE:
+        # Only the run's own state; the user's lasting memory is a write outside the workspace.
+        return TOOL_WRITE_SCOPE.get(name) == WRITES_RUN
     return True
 
 
@@ -333,6 +348,8 @@ __all__ = [
     "UNTRUSTED_REFUSED_CLASSES",
     "WRITE",
     "WRITES_HOST",
+    "WRITES_MEMORY",
+    "WRITES_RUN",
     "WRITES_WORKSPACE",
     "WRITES_WORKSPACE_ONLY_MODE",
     "read_only_refusal",

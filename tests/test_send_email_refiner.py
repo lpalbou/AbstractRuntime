@@ -5,11 +5,15 @@ recipient anywhere -> ask. Deny-safe at every gap the adversary named.
 """
 from __future__ import annotations
 
+import pytest
+
 from abstractruntime.core.models import RunState, RunStatus
 from abstractruntime.integrations.abstractcore.effect_handlers import (
     _execute_with_run_policy,
     _send_email_recipient_refiner,
 )
+
+pytestmark = pytest.mark.basic
 
 
 def _run(self_email=None, policy=None) -> RunState:

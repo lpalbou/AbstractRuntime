@@ -60,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`START_SUBWORKFLOW` `payload.resolve_vars`**: top-level vars whose artifact refs are resolved for the child only
   (strict: a missing artifact fails the start), so the parent's ledger and node traces keep the refs.
 - **Tool facts for untrusted input** (`tool_effects`): `TOOL_NETWORK_REACH` (`none`, `configured`, `open`, `send`) and
-  `TOOL_WRITE_SCOPE` for every tool the runtime exposes, with `untrusted_input_grantable(...)`.
+  `TOOL_WRITE_SCOPE` (`workspace`, `workspace_only_mode`, `host`, and for the memory tools `run` and `memory`) for
+  every tool the runtime exposes, with `untrusted_input_grantable(...)`.
 - `list_tool_catalog(email_off_reason=...)` names why email is off (`not_connected`, `admin_disabled`,
   `not_available` — the administrator has not made agent email tools available to this user — and `agent_tools_off`).
 
@@ -71,12 +72,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "allow all tools", an automation triggered by `email.received@1` grants by kind, decided on tool facts and never on
   names: only tools with no network egress beyond configured services, no code or command execution, no message
   sending, no writes outside the run's workspace and no delegation run unattended (file reads, workspace-confined
-  file writes, mailbox reads, `get_email_attachment`, memory and plan tools). `fetch_url`, `browser_probe`,
-  `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`, `delegate_agent`,
-  `channel_fs_write`, `agora_post_message`, `agora_send_dm`, the camera tools, MCP tools and every other tool ask, unless the user
-  named them one by one in `policy.untrusted_input_tools`; message-sending tools (`send_email`, `reply_email`,
-  `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never granted, named or not.
-  Schedule and manual automations keep the full grant. `reply_email` is withheld like `send_email` everywhere.
+  file writes, mailbox reads, `get_email_attachment`, `recall_memory` and `update_plan`). `fetch_url`,
+  `browser_probe`, `skim_url`, `skim_websearch`, `web_search`, `execute_command`, `shell_exec`, `execute_python`,
+  `delegate_agent`, `channel_fs_write`, `agora_post_message`, `agora_send_dm`, the camera tools, the memory-writing
+  tools (`remember`, `remember_note` including `scope: "global"`, `compact_memory`: they write the user's lasting
+  memory, outside the run's workspace, so a stranger's email cannot plant a note later runs obey), MCP tools and
+  every other tool ask, unless the user named them one by one in `policy.untrusted_input_tools`; message-sending
+  tools (`send_email`, `reply_email`, `agora_post_message`, `agora_send_dm`, WhatsApp and Telegram sends) are never
+  granted, named or not. Schedule and manual automations keep the full grant. `reply_email` is withheld like
+  `send_email` everywhere.
+- **Email-triggered automations under "ask" run nothing unasked** (re-gate 2026-09-30). Their occurrences always carry
+  a per-run tool policy: under `policy.tool_approval: "ask"` it auto-approves only the tools the user named in
+  `policy.untrusted_input_tools` (sending tools never) and requires approval for every other tool, so neither the
+  executor's static defaults (which auto-run `skim_url`, `web_search`, the agora posts and the Telegram sends) nor a
+  per-call refiner decide there. The policy replaces any `tool_policy` the target inputs carried
+  (`replaced_target_policy: true`) and is marked `untrusted_input: true`, beside the run flag
+  `_runtime.untrusted_input`. Child runs inherit both, the parent's value winning over the child's own. Defence in
+  depth: for a run with that flag the approval executor never consults its static policy or a tier ceiling, runs a
+  listed tool unasked only when the user named it or (under "auto") its facts pass `untrusted_input_allow_all`,
+  never runs a sending tool unasked, and applies the per-call refiners only under "auto".
 - `send_email` / `reply_email` `attachments` and `get_email_attachment`'s `output_dir` are confined to the run's
   workspace in every workspace access mode (ignored paths and the host's protection still apply);
   `get_email_attachment` is a `write` tool.

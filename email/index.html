@@ -576,6 +576,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mail-sent-by-automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mail sent by automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#running-an-automation-when-mail-arrives" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1152,6 +1163,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mail-sent-by-automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mail sent by automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#running-an-automation-when-mail-arrives" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1353,7 +1375,9 @@ stored ids in <code>output_offloaded_artifact_ids</code>.</p>
 </ul>
 <p>Any other recipient, a <code>reply_email</code> call (its recipients come from the original message), or a call the refiner
 cannot read waits for a person on a <code>tool_approval</code> wait. The rule applies whether or not the run carries a per-run
-tool policy (<code>_runtime.tool_policy</code>); an executor's explicit <code>require_approval_tools</code> entry still wins. In a batch,
+tool policy (<code>_runtime.tool_policy</code>), including under the executor's default policy (<code>ToolApprovalPolicy()</code>, whose
+default caution list names <code>send_email</code>); a <code>require_approval_tools</code> list the host passes explicitly, or a per-run
+policy's, still wins. Email-triggered runs under <code>approval: "ask"</code> never use the refiner. In a batch,
 one <code>send_email</code> that needs a person makes every <code>send_email</code> of that batch wait.</p>
 <p>Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's <code>guarded_send</code>
 applies the policy and the send limits to every send, including an approved or pre-authorised one. Every email send
@@ -1361,6 +1385,13 @@ path in the runtime (agent tools, the send-email action, approved calls) goes th
 control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
 the approval wait for that user's own runs, never the recipient policy. See
 <a href="../tool-approval/#per-call-refiners">tool-approval.md</a>.</p>
+<h2 id="mail-sent-by-automations">Mail sent by automations<a class="headerlink" href="#mail-sent-by-automations" title="Permanent link">&para;</a></h2>
+<p>Every message a run of an automation sends (its controller, an occurrence or any run it starts, including the
+send-email action) is automatic mail: the runtime hands AbstractCore the run's account with
+<code>EmailContext.automation_marker = "automation:&lt;automation id&gt;/run:&lt;run id&gt;"</code>, so each send carries
+<code>Auto-Submitted: auto-generated</code> (<code>auto-replied</code> for a reply) and <code>X-AbstractFramework-Automation</code>. Chats and
+discussions (a person is there) send ordinary mail. The marker is decided on the run's automation attribution, which
+the runtime sets and a client cannot write (<code>automation_marker_for(vars, run_id)</code>).</p>
 <h2 id="running-an-automation-when-mail-arrives">Running an automation when mail arrives<a class="headerlink" href="#running-an-automation-when-mail-arrives" title="Permanent link">&para;</a></h2>
 <h3 id="the-inbox-and-the-watcher">The inbox and the watcher<a class="headerlink" href="#the-inbox-and-the-watcher" title="Permanent link">&para;</a></h3>
 <p>The runtime keeps a durable event inbox (<code>JsonFileEventInbox(base_dir)</code> or <code>InMemoryEventInbox()</code>), attached with
@@ -1394,6 +1425,10 @@ the approval wait for that user's own runs, never the recipient policy. See
   <code>Body (not fetched):</code> with the cause and fix.</li>
 <li>A message that cannot be fetched on three polls in a row is recorded in <code>feeder.status()["unprocessable"]</code> with its
   code, cause and fix, and the feeder moves past it.</li>
+<li>The account's own automatic mail never becomes an event, so an automation can never trigger itself: a message
+  that carries the framework marker (<code>X-AbstractFramework-Automation</code>) and comes from the account's own address, or
+  whose Message-ID the host reports as sent by the framework (<code>EmailInboxFeeder(..., is_own_sent=callable)</code>), is
+  passed before its body is fetched and counted in <code>report.own_automatic</code>.</li>
 <li>A connection or sign-in failure never raises: the report and <code>feeder.status()</code> carry <code>{code, cause, fix,
   retryable}</code>, and the next poll waits 60 seconds, doubling up to 15 minutes (<code>poll(..., force=True)</code> polls at once).
   No automation is paused.</li>
@@ -1410,6 +1445,7 @@ is never appended again (its id stays recorded).</p>
         <span class="s2">"every"</span><span class="p">:</span> <span class="s2">"1h"</span><span class="p">,</span>               <span class="c1"># batch interval, at least "60s"</span>
         <span class="s2">"folder"</span><span class="p">:</span> <span class="s2">"INBOX"</span><span class="p">,</span>
         <span class="s2">"max_batch"</span><span class="p">:</span> <span class="mi">100</span><span class="p">,</span>
+        <span class="s2">"auto_submitted"</span><span class="p">:</span> <span class="s2">"skip"</span><span class="p">,</span>    <span class="c1"># default; "admit" runs on automatic mail too</span>
         <span class="s2">"filter"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"from_domain_in"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"example.test"</span><span class="p">],</span> <span class="s2">"subject_contains"</span><span class="p">:</span> <span class="s2">"invoice"</span><span class="p">},</span>
     <span class="p">},</span>
 <span class="p">}</span>
@@ -1418,6 +1454,9 @@ is never appended again (its id stays recorded).</p>
 <li><strong>Filters</strong> are typed: <code>from_in</code> (addresses), <code>from_domain_in</code> (exact domains; list a subdomain to match it),
   <code>to_in</code> (any To or Cc address), <code>subject_contains</code> (one literal, case-insensitive substring) and <code>has_attachment</code>.
   There are no patterns or expressions.</li>
+<li><strong>Automatic mail</strong> (RFC 3834): with <code>auto_submitted: "skip"</code> (the default) a message whose <code>Auto-Submitted</code> header
+  is present and not <code>no</code> (auto-responders, notifications, other automations) is never admitted; <code>"admit"</code> lets it
+  reach the filters. The account's own automatic mail is kept out of the inbox whatever this option says.</li>
 <li><strong>Batches</strong>: the automation runs at most once per <code>every</code>, with every matching message received since its previous
   run (up to <code>max_batch</code>; the rest go to the next run). An automation that runs a model defaults to once an hour; one
   that needs no model defaults to every minute.</li>

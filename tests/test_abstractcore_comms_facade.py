@@ -14,19 +14,16 @@ from abstractruntime.integrations.abstractcore.comms_facade import (
 )
 
 
-def test_public_comms_facade_exports_are_available() -> None:
-    assert abstractcore.list_email_accounts is list_email_accounts
-    assert abstractcore.list_emails is list_emails
-    assert abstractcore.read_email is read_email
-    assert abstractcore.send_email is send_email
-    assert "list_email_accounts" in abstractcore.__all__
-    assert "list_emails" in abstractcore.__all__
-    assert "read_email" in abstractcore.__all__
-    assert "send_email" in abstractcore.__all__
-    assert "list_email_accounts" in comms_facade.__all__
-    assert "list_emails" in comms_facade.__all__
-    assert "read_email" in comms_facade.__all__
-    assert "send_email" in comms_facade.__all__
+def test_legacy_comms_helpers_are_internal_not_package_exports() -> None:
+    """Framework backlog 0992: the process-local email helpers are internal; hosts use
+    `email_facade` + the run-scoped binding. The module keeps its own names for the host
+    facade methods."""
+    for name in ("list_email_accounts", "list_emails", "read_email", "send_email"):
+        assert name not in abstractcore.__all__
+        assert not hasattr(abstractcore, name)
+        assert name in comms_facade.__all__
+    assert list_email_accounts is comms_facade.list_email_accounts
+    assert (list_emails, read_email, send_email) == (comms_facade.list_emails, comms_facade.read_email, comms_facade.send_email)
 
 
 def test_list_email_accounts_delegates_to_core_helper(monkeypatch: pytest.MonkeyPatch) -> None:

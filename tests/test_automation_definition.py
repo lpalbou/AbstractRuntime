@@ -39,7 +39,8 @@ def test_definition_defaults():
     assert d["context"] == {"mode": "independent", "growing": {}}
     assert d["policy"] == {"serial": True, "misfire": "coalesce", "failure": "continue",
                            "retry": {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}},
-                           "tool_approval": "auto", "email_allowed_recipients": ["self"]}
+                           "tool_approval": "auto", "email_allowed_recipients": ["self"],
+                           "untrusted_input_tools": []}
     assert d["notify"] == {"channels": ["console"]}
     assert d["trigger"]["binding_id"] == str(uuid.uuid5(uuid.UUID(AID), "binding:1"))
     assert d["trigger"]["config"] == {"start_at": NOW, "anchor": NOW, "every": "2m"}

@@ -53,9 +53,11 @@ def comms_toolset_kinds() -> Dict[str, List[str]]:
     can never disagree with what registers."""
     return {kind: list(names) for kind, (_module, names) in _COMMS_KIND_TOOLS.items()}
 
+# WhatsApp / Telegram only. Email has NO env flag (operator ruling, framework backlog 0992):
+# the email kind is on only when the host passes `email_enabled=True` for a user whose account
+# is connected and enabled and whose "Agent email tools" choice is on.
 _COMMS_ENABLE_ENV_VARS = (
     "ABSTRACT_ENABLE_COMMS_TOOLS",
-    "ABSTRACT_ENABLE_EMAIL_TOOLS",
     "ABSTRACT_ENABLE_WHATSAPP_TOOLS",
     "ABSTRACT_ENABLE_TELEGRAM_TOOLS",
 )
@@ -69,20 +71,27 @@ def _env_flag(name: str) -> bool:
 
 
 def comms_tools_enabled() -> bool:
-    """Return True when the host explicitly opts into comms tools via env."""
+    """True when the host opts into the WhatsApp/Telegram comms tools via env (never email)."""
     return any(_env_flag(k) for k in _COMMS_ENABLE_ENV_VARS)
 
 
-def email_tools_enabled() -> bool:
-    """Legacy switch: the process-global email account behind the env flags.
-
-    Hosts that bind each run to its user's account (framework backlog 0992) pass
-    `email_enabled=` to the toolset functions instead (True for a user with a connected,
-    enabled account)."""
-    return _env_flag("ABSTRACT_ENABLE_COMMS_TOOLS") or _env_flag("ABSTRACT_ENABLE_EMAIL_TOOLS")
-
-
+# Why the email tools are off for a principal: the host names the reason (typed), the catalog
+# row's gate says it in words. Framework backlog 0992: the binding follows the account (connected
+# + enabled); the agent-tools toggle gates only the agent tools.
 EMAIL_ACCOUNT_GATE = "Connect an email account in Settings -> Email"
+EMAIL_OFF_REASONS: Dict[str, str] = {
+    "not_connected": EMAIL_ACCOUNT_GATE,
+    "admin_disabled": "Email is turned off for this account by an administrator",
+    "agent_tools_off": 'Agent email tools are off: turn on "Agent email tools" in Settings -> My email',
+}
+
+
+def email_off_gate(reason: Optional[str] = None) -> str:
+    """The catalog gate text for a typed `reason` (None -> "not_connected"); unknown -> ValueError."""
+    key = "not_connected" if reason is None else str(reason)
+    if key not in EMAIL_OFF_REASONS:
+        raise ValueError(f"email_off_reason must be one of {sorted(EMAIL_OFF_REASONS)}, got {reason!r}")
+    return EMAIL_OFF_REASONS[key]
 
 
 def whatsapp_tools_enabled() -> bool:
@@ -395,7 +404,12 @@ def _normalize_tool_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     return spec
 
 
-def list_tool_catalog(include_disabled: bool = True, *, email_enabled: Optional[bool] = None) -> List[Dict[str, Any]]:
+def list_tool_catalog(
+    include_disabled: bool = True,
+    *,
+    email_enabled: Optional[bool] = None,
+    email_off_reason: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """The FULL toolset catalog (tool-tiers item H, laurent dm#221): every
     toolset runtime knows how to compose - enabled AND disabled - each row
     carrying {id, label, enabled, gate, tools}. Disabled rows still import
@@ -407,7 +421,14 @@ def list_tool_catalog(include_disabled: bool = True, *, email_enabled: Optional[
     `gate` names what governs enablement TODAY (the env flags; they migrate
     to gateway config per dm#177/dm#210 - the gate string is the honest
     pointer either way). Import failures on disabled rows degrade to
-    tool_names-only rows with a #FALLBACK note, never a raised catalog."""
+    tool_names-only rows with a #FALLBACK note, never a raised catalog.
+
+    Email (framework backlog 0992): on only with `email_enabled=True` (the host's decision;
+    no env flag; the default is off). When off, `email_off_reason` (one of
+    `EMAIL_OFF_REASONS`: "not_connected" (default), "admin_disabled", "agent_tools_off")
+    picks the gate text the disabled `comms.email` row carries."""
+    email_gate = email_off_gate(email_off_reason)
+    email_enabled = bool(email_enabled)
     catalog: List[Dict[str, Any]] = []
     enabled_sets = get_default_toolsets(email_enabled=email_enabled)
     for ts_id, ts in enabled_sets.items():
@@ -475,10 +496,8 @@ def list_tool_catalog(include_disabled: bool = True, *, email_enabled: Optional[
     # enabled comms row). Each channel that is OFF gets its own disabled
     # row with ITS gate; enabled channels ride the enabled comms row as
     # before (get_default_toolsets composition unchanged - the pin holds).
-    if not (email_tools_enabled() if email_enabled is None else email_enabled):
-        _disabled("comms.email", "Comms - Email",
-                  "ABSTRACT_ENABLE_COMMS_TOOLS or ABSTRACT_ENABLE_EMAIL_TOOLS" if email_enabled is None else EMAIL_ACCOUNT_GATE,
-                  _load_email)
+    if not email_enabled:
+        _disabled("comms.email", "Comms - Email", email_gate, _load_email)
     if not whatsapp_tools_enabled():
         _disabled("comms.whatsapp", "Comms - WhatsApp",
                   "ABSTRACT_ENABLE_COMMS_TOOLS or ABSTRACT_ENABLE_WHATSAPP_TOOLS", _load_whatsapp)
@@ -500,7 +519,7 @@ def list_tool_catalog(include_disabled: bool = True, *, email_enabled: Optional[
 # The gate names for ENABLED rows (the catalog's provenance column).
 _CATALOG_GATES: Dict[str, str] = {
     "files": "always", "web": "always", "system": "always",
-    "comms": "ABSTRACT_ENABLE_COMMS_TOOLS (or per-channel flags)",
+    "comms": "email: the host (connected account + Agent email tools on); WhatsApp/Telegram: ABSTRACT_ENABLE_COMMS_TOOLS or the per-channel flag",
     "agora": "ABSTRACT_ENABLE_AGORA_TOOLS AND an AGORA_API_KEY",
     "shell": "ABSTRACT_ENABLE_SHELL_TOOLS",
     "camera": "installed = registered (abstractcamera via core)",
@@ -524,9 +543,11 @@ def get_default_toolsets(
     host's explicit subtraction on top).
 
     `email_enabled` (framework backlog 0992 B2): the host's decision for the
-    email tools — True for a user whose account is connected and enabled (each
-    run then resolves ITS user's account at call time), False to leave them
-    out. None keeps the legacy env-flag behaviour (`email_tools_enabled`)."""
+    email tools — True for a user whose account is connected and enabled and
+    whose "Agent email tools" choice is on (each run then resolves ITS user's
+    account at call time); False or None (the default) leaves them out. There
+    is no env flag for email (operator ruling): `ABSTRACT_ENABLE_COMMS_TOOLS`
+    turns on WhatsApp and Telegram only."""
     from abstractcore.tools.common_tools import (
         list_files,
         skim_folders,
@@ -581,7 +602,7 @@ def get_default_toolsets(
         "tools": [execute_command, *LOCAL_HELPER_TOOLS],
     }
 
-    email_on = email_tools_enabled() if email_enabled is None else bool(email_enabled)
+    email_on = bool(email_enabled)
     if comms_tools_enabled() or email_on:
         comms: list[ToolCallable] = []
         # Composition consumes the exported kind map (one source, c4899):

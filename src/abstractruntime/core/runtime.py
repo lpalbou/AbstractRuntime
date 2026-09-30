@@ -1268,8 +1268,11 @@ class Runtime:
     def set_email_context_resolver(self, resolver: Optional[Callable[[Any], Any]]) -> None:
         """Install the host's account resolver for THIS runtime (None removes it).
 
-        `resolver(binding: EmailBinding) -> EmailContext | None` is called when a tool (or
-        the runtime's send-email action) of a run bound to an account needs it. It lives in
+        `resolver(binding: EmailBinding, *, use: str) -> EmailContext | None` is called when a
+        tool (or the runtime's send-email action) of a run bound to an account needs it.
+        `use` is "agent_tool" (apply the user's "Agent email tools" choice) or "action" (the
+        runtime's own send-email action: the account being connected and enabled is enough);
+        a resolver without a `use` parameter is called as `resolver(binding)`. It lives in
         memory only. Installing one also points AbstractCore's email tools at the executing
         run process-wide (`abstractruntime.email.install_core_resolver`).
         """
@@ -2615,6 +2618,12 @@ class Runtime:
                 # run's account through this runtime's resolver; the
                 # automation controller reads the inbox and the binding.
                 setattr(run, "_runtime_email_resolver", self._email_context_resolver)
+                # Who sends: "action" only for the runtime's own send-email action
+                # (node-function identity), else "agent_tool" (the host applies the
+                # user's "Agent email tools" choice to those).
+                from ..email.actions import email_use_for_workflow
+
+                setattr(run, "_runtime_email_use", email_use_for_workflow(workflow))
                 setattr(run, "_runtime_email_binding", self._email_binding)
                 setattr(run, "_runtime_event_inbox", self._event_inbox)
             except Exception:
@@ -3154,7 +3163,13 @@ class Runtime:
                                         # binding and this runtime's resolver (0992 WP2).
                                         from ..email.binding import email_run_scope
 
-                                        with email_run_scope(run, resolver=self._email_context_resolver):
+                                        from ..email.actions import email_use_for_workflow
+
+                                        with email_run_scope(
+                                            run,
+                                            resolver=self._email_context_resolver,
+                                            use=email_use_for_workflow(workflow),
+                                        ):
                                             out = (
                                                 exec_approved(tool_calls=allowed_calls)
                                                 if callable(exec_approved)

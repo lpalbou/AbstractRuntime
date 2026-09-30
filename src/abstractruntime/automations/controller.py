@@ -27,7 +27,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from ..core.models import Effect, EffectType, RunState, RunStatus
 from ..triggers.manual import manual_event_id
@@ -46,6 +46,7 @@ from .models import (
     add_delay,
     backoff_delay,
     definition_email_allowed_recipients,
+    definition_untrusted_input_tools,
     definition_notify,
     occurrence_run_id,
     trigger_state_of,
@@ -297,7 +298,9 @@ def _withholds_destination(name: str) -> bool:
     return any(bool(r and r.get("model_controlled_destination")) for r in (row, core_row))
 
 
-def grant_tool_approval(input_data: Dict[str, Any], *, untrusted_input: bool = False) -> None:
+def grant_tool_approval(
+    input_data: Dict[str, Any], *, untrusted_input: bool = False, named_tools: Sequence[str] = ()
+) -> None:
     """`policy.tool_approval == "auto"`: pre-approve the target's tools for this occurrence.
 
     Creating the automation is the consent (an unattended run cannot ask a
@@ -321,9 +324,14 @@ def grant_tool_approval(input_data: Dict[str, Any], *, untrusted_input: bool = F
     `untrusted_input=True` (the trigger delivers text written by other people:
     `email.received@1`): tools whose row carries `model_controlled_destination`
     (`fetch_url`, `browser_probe`) are withheld too, so an inbound email cannot
-    steer an unattended occurrence into sending data to a URL it names
-    (framework backlog 0992, the WP0 follow-up). Schedule and manual
-    automations keep them in the grant (decision recorded in 0992).
+    steer an unattended occurrence into following a link or sending data to a
+    URL it names (framework backlog 0992). "Allow all tools" does NOT grant
+    them (operator decision 2026-09-30): only a tool the user NAMED
+    individually in the definition (`policy.untrusted_input_tools`, passed as
+    `named_tools`) is granted, and only within the target's tool ceiling;
+    message-sending tools are never granted, named or not. A withheld call
+    asks a person. Schedule and manual automations keep `fetch_url` in the
+    grant (decision recorded in 0992).
     """
     from ..integrations.abstractcore.tool_effects import TOOL_EFFECT_CLASSES
 
@@ -333,7 +341,11 @@ def grant_tool_approval(input_data: Dict[str, Any], *, untrusted_input: bool = F
     allowed = runtime_ns.get("allowed_tools")
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
     candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
-    withheld = [n for n in candidates if _grant_excludes(n) or (untrusted_input and _withholds_destination(n))]
+    named = {n.strip() for n in named_tools if isinstance(n, str) and n.strip()}
+    withheld = [
+        n for n in candidates
+        if _grant_excludes(n) or (untrusted_input and n not in named and _withholds_destination(n))
+    ]
     tools = [n for n in candidates if n not in withheld]
     input_data["_runtime"] = {
         **runtime_ns,
@@ -416,7 +428,9 @@ def build_prepared(
         if isinstance(input_data.get("prompt"), str):
             input_data["prompt"] = f"{input_data['prompt']}\n\n{email_frame(emails)}"
     if definition["policy"].get("tool_approval", "auto") == "auto":
-        grant_tool_approval(input_data, untrusted_input=untrusted)
+        grant_tool_approval(
+            input_data, untrusted_input=untrusted, named_tools=definition_untrusted_input_tools(definition)
+        )
     apply_context_mode(input_data, mode=definition["context"]["mode"])
     if definition["context"]["mode"] == "growing":
         from ..session_history import session_chat_messages

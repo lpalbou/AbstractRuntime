@@ -8,10 +8,16 @@ moment a tool needs it:
   for. Set by the host at its door (`bind_email_account`) after popping client-supplied values
   (`strip_client_email_keys`), and by the automation controller at admission from
   `Runtime.email_binding`. Child runs inherit it (the parent's value wins).
-- `Runtime.set_email_context_resolver(fn)`: `fn(binding) -> EmailContext | None`, held in
-  memory on that Runtime only. The tool-call handler and the approval-resume path run each tool
+- `Runtime.set_email_context_resolver(fn)`: `fn(binding, *, use) -> EmailContext | None`, held
+  in memory on that Runtime only. The tool-call handler and the approval-resume path run each tool
   batch inside `email_run_scope(...)`, so AbstractCore's email tools resolve the account of the
   EXECUTING run, never a process-wide one.
+- `use` says who is sending, so the host can apply the right switch: `"agent_tool"` (an agent's
+  or a workflow's email tool call: the user's "Agent email tools" choice applies) or `"action"`
+  (the runtime's own send-email action, `abstractruntime.email.actions`, which the user authored
+  as fixed templates: the account being connected and enabled is enough). The binding itself
+  follows the ACCOUNT (connected + enabled), never the agent-tools choice. A resolver written as
+  `fn(binding)` (no `use` parameter) keeps working and is called without it.
 
 Credentials never enter run vars, the ledger, tool arguments or results: the `EmailContext`
 exists only in memory during the tool call.
@@ -28,6 +34,11 @@ from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 EMAIL_ACCOUNT_KEY = "email_account"
 EMAIL_ALLOWED_RECIPIENTS_KEY = "email_allowed_recipients"
 CLIENT_EMAIL_KEYS = (EMAIL_ACCOUNT_KEY, EMAIL_ALLOWED_RECIPIENTS_KEY)
+
+# Who is using the account (passed to the host's resolver as `use=`).
+EMAIL_USE_AGENT_TOOL = "agent_tool"
+EMAIL_USE_ACTION = "action"
+EMAIL_USES = (EMAIL_USE_AGENT_TOOL, EMAIL_USE_ACTION)
 
 NOT_BOUND_CAUSE = "No email account is connected for this run."
 NOT_BOUND_FIX = "Connect an email account in Settings -> Email, then retry."
@@ -118,10 +129,32 @@ def bind_email_account(
 
 Resolver = Callable[[EmailBinding], Any]
 
-# (resolver of the executing run's Runtime, the run's binding). Unset outside a tool batch.
-_SCOPE: "ContextVar[Optional[Tuple[Optional[Resolver], Optional[EmailBinding]]]]" = ContextVar(
+# (resolver of the executing run's Runtime, the run's binding, the use). Unset outside a tool batch.
+_SCOPE: "ContextVar[Optional[Tuple[Optional[Resolver], Optional[EmailBinding], str]]]" = ContextVar(
     "abstractruntime_email_scope", default=None
 )
+
+
+def resolver_accepts_use(resolver: Any) -> bool:
+    """True when `resolver` takes a `use` keyword (or `**kwargs`); decided on its signature."""
+    import inspect
+
+    try:
+        params = inspect.signature(resolver).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    for p in params:
+        if p.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if p.name == "use" and p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            return True
+    return False
+
+
+def _call_resolver(resolver: Resolver, binding: EmailBinding, use: str) -> Any:
+    if resolver_accepts_use(resolver):
+        return resolver(binding, use=use)
+    return resolver(binding)
 _INSTALL_LOCK = threading.Lock()
 _CORE_RESOLVER_INSTALLED = False
 
@@ -142,13 +175,13 @@ def resolve_scoped_context() -> Any:
     scope = _SCOPE.get()
     if scope is None:
         return None
-    resolver, binding = scope
+    resolver, binding, use = scope
     if resolver is None or binding is None:
         return None
     from abstractcore.comms.email import EmailError, EmailSecretUnavailable
 
     try:
-        ctx = resolver(binding)
+        ctx = _call_resolver(resolver, binding, use)
     except EmailError:
         raise
     except Exception:  # noqa: BLE001 - the host's failure text may carry details; never echo it
@@ -193,30 +226,36 @@ def core_resolver_installed() -> bool:
 
 
 @contextmanager
-def email_run_scope(run: Any, *, resolver: Optional[Resolver] = None) -> Iterator[None]:
-    """Run a tool batch as `run`: its binding and its Runtime's resolver.
+def email_run_scope(run: Any, *, resolver: Optional[Resolver] = None, use: Optional[str] = None) -> Iterator[None]:
+    """Run a tool batch as `run`: its binding, its Runtime's resolver and who is sending.
 
-    `resolver` defaults to `run._runtime_email_resolver` (set by `Runtime.tick`). The scope is
-    always entered, even for an unbound run, so a nested batch never inherits another run's
-    account.
+    `resolver` defaults to `run._runtime_email_resolver` and `use` to `run._runtime_email_use`
+    (both set by `Runtime.tick`; `use` is "action" only while the runtime's own send-email
+    action workflow runs, decided on the identity of its node function, else "agent_tool").
+    The scope is always entered, even for an unbound run, so a nested batch never inherits
+    another run's account.
     """
     if resolver is None:
         resolver = getattr(run, "_runtime_email_resolver", None)
+    if use is None:
+        use = getattr(run, "_runtime_email_use", None) or EMAIL_USE_AGENT_TOOL
+    if use not in EMAIL_USES:
+        raise ValueError(f"use must be one of {EMAIL_USES}, got {use!r}")
     vars_obj = getattr(run, "vars", None)
-    token = _SCOPE.set((resolver if callable(resolver) else None, binding_of(vars_obj)))
+    token = _SCOPE.set((resolver if callable(resolver) else None, binding_of(vars_obj), use))
     try:
         yield
     finally:
         _SCOPE.reset(token)
 
 
-def resolve_email_context(run: Any, *, resolver: Optional[Resolver] = None) -> Any:
-    """The `EmailContext` of `run` for runtime-owned sends (the send-email action).
+def resolve_email_context(run: Any, *, resolver: Optional[Resolver] = None, use: Optional[str] = None) -> Any:
+    """The `EmailContext` of `run` for runtime-owned code that needs it outside a tool batch.
 
     Raises `EmailNotConfigured` when the run is unbound or its Runtime has no resolver / the
     resolver returns None.
     """
-    with email_run_scope(run, resolver=resolver):
+    with email_run_scope(run, resolver=resolver, use=use):
         ctx = resolve_scoped_context()
     if ctx is None:
         raise _not_bound_error()
@@ -227,6 +266,9 @@ __all__ = [
     "CLIENT_EMAIL_KEYS",
     "EMAIL_ACCOUNT_KEY",
     "EMAIL_ALLOWED_RECIPIENTS_KEY",
+    "EMAIL_USES",
+    "EMAIL_USE_ACTION",
+    "EMAIL_USE_AGENT_TOOL",
     "EmailBinding",
     "bind_email_account",
     "binding_of",
@@ -235,6 +277,7 @@ __all__ = [
     "install_core_resolver",
     "resolve_email_context",
     "resolve_scoped_context",
+    "resolver_accepts_use",
     "strip_client_email_keys",
     "uninstall_core_resolver",
 ]

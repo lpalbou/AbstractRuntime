@@ -7,7 +7,7 @@ from abstractruntime.integrations.abstractcore.default_tools import list_tool_ca
 
 
 def test_catalog_serves_disabled_toolsets_with_real_specs(monkeypatch) -> None:
-    for var in ("ABSTRACT_ENABLE_COMMS_TOOLS", "ABSTRACT_ENABLE_EMAIL_TOOLS",
+    for var in ("ABSTRACT_ENABLE_COMMS_TOOLS",
                 "ABSTRACT_ENABLE_TELEGRAM_TOOLS", "ABSTRACT_ENABLE_WHATSAPP_TOOLS",
                 "ABSTRACT_ENABLE_AGORA_TOOLS", "ABSTRACT_ENABLE_SHELL_TOOLS",
                 "AGORA_API_KEY"):
@@ -22,7 +22,10 @@ def test_catalog_serves_disabled_toolsets_with_real_specs(monkeypatch) -> None:
                        ("comms.telegram", "send_telegram_message")):
         row = cat[cid]
         assert row["enabled"] is False
-        assert "ABSTRACT_ENABLE_COMMS_TOOLS" in row["gate"], "the gate is named"
+        if cid == "comms.email":  # no env flag: the host decides (framework backlog 0992)
+            assert "Settings -> Email" in row["gate"], "the gate is named"
+        else:
+            assert "ABSTRACT_ENABLE_COMMS_TOOLS" in row["gate"], "the gate is named"
         names = {getattr(getattr(f, "_tool_definition", None), "name", getattr(f, "__name__", "")) for f in row["tools"]}
         assert probe in names, f"real callables ride the disabled row {cid}: {names}"
 
@@ -50,15 +53,15 @@ def test_catalog_include_disabled_false_is_enabled_only() -> None:
 
 
 def test_catalog_partial_comms_enablement_never_vanishes(monkeypatch) -> None:
-    """gateway c4573 (the never-neither break): email ON via its per-channel
-    flag, whatsapp/telegram OFF - the enabled comms row carries email tools
-    AND the missing channels still appear as their own disabled rows."""
+    """gateway c4573 (the never-neither break): email ON (the host's
+    email_enabled=True; no env flag since 0992), whatsapp/telegram OFF - the
+    enabled comms row carries email tools AND the missing channels still
+    appear as their own disabled rows."""
     for var in ("ABSTRACT_ENABLE_COMMS_TOOLS", "ABSTRACT_ENABLE_TELEGRAM_TOOLS",
                 "ABSTRACT_ENABLE_WHATSAPP_TOOLS", "ABSTRACT_ENABLE_AGORA_TOOLS",
                 "ABSTRACT_ENABLE_SHELL_TOOLS", "AGORA_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("ABSTRACT_ENABLE_EMAIL_TOOLS", "1")
-    cat = {row["id"]: row for row in list_tool_catalog()}
+    cat = {row["id"]: row for row in list_tool_catalog(email_enabled=True)}
     assert cat["comms"]["enabled"] is True, "email channel rides the enabled row"
     assert "comms.email" not in cat, "an enabled channel never doubles as disabled"
     assert cat["comms.whatsapp"]["enabled"] is False

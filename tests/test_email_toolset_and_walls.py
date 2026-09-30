@@ -42,7 +42,7 @@ def test_the_email_kind_is_the_full_tool_set():
 
 
 def test_host_decides_email_availability_without_env_flags():
-    assert not (EMAIL_TOOLS & _names(list_default_tool_specs()))  # legacy default: off
+    assert not (EMAIL_TOOLS & _names(list_default_tool_specs()))  # default: off
     assert EMAIL_TOOLS <= _names(list_default_tool_specs(email_enabled=True))
     assert EMAIL_TOOLS <= set(build_default_tool_map(email_enabled=True))
     names = _names(list_default_tool_specs(email_enabled=True))
@@ -54,8 +54,8 @@ def test_disabled_email_row_names_the_account_fix():
     rows = {r["id"]: r for r in list_tool_catalog(email_enabled=False)}
     assert rows["comms.email"]["enabled"] is False and rows["comms.email"]["gate"] == EMAIL_ACCOUNT_GATE
     assert {getattr(t, "__name__", "") for t in rows["comms.email"]["tools"]} == EMAIL_TOOLS
-    legacy = {r["id"]: r for r in list_tool_catalog()}
-    assert "ABSTRACT_ENABLE_EMAIL_TOOLS" in legacy["comms.email"]["gate"]
+    default = {r["id"]: r for r in list_tool_catalog()}  # no host decision: off, no env flag
+    assert default["comms.email"]["enabled"] is False and default["comms.email"]["gate"] == EMAIL_ACCOUNT_GATE
 
 
 def _scope(tmp_path: Path) -> WorkspaceScope:

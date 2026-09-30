@@ -22,27 +22,32 @@ from .actions import (
     EmailActionError,
     email_action_target,
     email_action_workflow_spec,
+    email_use_for_workflow,
     plan_email_action,
     register_email_action_workflow,
     render_email_template,
     validate_email_action,
 )
-from .automations import email_trigger_consumers, wake_email_automations
+from .automations import email_trigger_consumers, prune_email_inbox, wake_email_automations
 from .binding import (
     EMAIL_ACCOUNT_KEY,
     EMAIL_ALLOWED_RECIPIENTS_KEY,
+    EMAIL_USE_ACTION,
+    EMAIL_USE_AGENT_TOOL,
+    EMAIL_USES,
     EmailBinding,
     bind_email_account,
     binding_of,
     email_run_scope,
     install_core_resolver,
     resolve_email_context,
+    resolver_accepts_use,
     strip_client_email_keys,
     uninstall_core_resolver,
 )
 from .feeder import EmailInboxFeeder, PollReport, email_event_id, email_event_payload, email_stream
-from .frame import UNTRUSTED_NOTICE, email_frame, email_trigger_input
-from .inbox import AppendResult, EventInbox, InMemoryEventInbox, JsonFileEventInbox
+from .frame import UNTRUSTED_CLOSING, UNTRUSTED_NOTICE, email_frame, email_trigger_input
+from .inbox import AppendResult, EventInbox, EventInboxRetention, InMemoryEventInbox, JsonFileEventInbox
 
 __all__ = [
     "AppendResult",
@@ -54,13 +59,18 @@ __all__ = [
     "EMAIL_ACTION_KEY",
     "EMAIL_ACTION_WORKFLOW_ID",
     "EMAIL_ALLOWED_RECIPIENTS_KEY",
+    "EMAIL_USES",
+    "EMAIL_USE_ACTION",
+    "EMAIL_USE_AGENT_TOOL",
     "EmailActionError",
     "EmailBinding",
     "EmailInboxFeeder",
     "EventInbox",
+    "EventInboxRetention",
     "InMemoryEventInbox",
     "JsonFileEventInbox",
     "PollReport",
+    "UNTRUSTED_CLOSING",
     "UNTRUSTED_NOTICE",
     "bind_email_account",
     "binding_of",
@@ -73,11 +83,14 @@ __all__ = [
     "email_stream",
     "email_trigger_consumers",
     "email_trigger_input",
+    "email_use_for_workflow",
     "install_core_resolver",
     "plan_email_action",
+    "prune_email_inbox",
     "register_email_action_workflow",
     "render_email_template",
     "resolve_email_context",
+    "resolver_accepts_use",
     "strip_client_email_keys",
     "uninstall_core_resolver",
     "validate_email_action",

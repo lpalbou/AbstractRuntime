@@ -1,7 +1,12 @@
-"""Runtime-owned email/comms wrapper surface for AbstractCore-backed hosts.
+"""INTERNAL: legacy host-local email helpers (not a host API).
 
-Hosts should import this module instead of reaching into
-`abstractcore.tools.comms_tools` directly.
+Framework backlog 0992: these four wrappers call AbstractCore's email tools against the
+PROCESS'S own account (the local AbstractCore settings). They are no longer re-exported from
+`abstractruntime.integrations.abstractcore`; they back only
+`AbstractCoreHostFacade.list_email_accounts/list_emails/read_email/send_email` (single-user,
+local installs). A host that serves users imports `email_facade` (AbstractCore's mail library)
+and binds each run to its user's account (`abstractruntime.email`). Once a runtime in the
+process has an email resolver, these helpers answer `email_not_configured` outside a run.
 
 Scope:
 - host-local email account listing

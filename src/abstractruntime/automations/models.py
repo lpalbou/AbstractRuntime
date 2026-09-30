@@ -53,9 +53,16 @@ TOOL_APPROVAL_MODES = ("auto", "ask")
 # which AbstractCore enforces on every send whatever this says.
 DEFAULT_EMAIL_ALLOWED_RECIPIENTS = ["self"]
 MAX_EMAIL_ALLOWED_RECIPIENTS = 50
+# Tools the user NAMED individually that an occurrence whose trigger delivers untrusted content
+# (`email.received@1`) may run without asking although they reach a model-chosen destination
+# (`fetch_url`, `browser_probe`). Default: none. "Allow all tools" (`tool_approval: "auto"`)
+# never grants them to such an occurrence (operator decision 2026-09-30, framework backlog 0992).
+DEFAULT_UNTRUSTED_INPUT_TOOLS: list = []
+MAX_UNTRUSTED_INPUT_TOOLS = 20
 DEFAULT_POLICY = {
     "serial": True, "misfire": "coalesce", "failure": "continue", "retry": DEFAULT_RETRY, "tool_approval": "auto",
     "email_allowed_recipients": DEFAULT_EMAIL_ALLOWED_RECIPIENTS,
+    "untrusted_input_tools": DEFAULT_UNTRUSTED_INPUT_TOOLS,
 }
 NOTIFY_CHANNELS = ("console", "email")
 DEFAULT_NOTIFY = {"channels": ["console"]}
@@ -75,7 +82,7 @@ class AutomationDefinition(TypedDict):
     target: Dict[str, Any]  # {workflow_id, bundle_ref, flow_id, input_data}
     trigger: Dict[str, Any]  # TriggerBinding
     context: Dict[str, Any]  # {mode, growing}
-    policy: Dict[str, Any]  # {serial, misfire, failure, retry, tool_approval, email_allowed_recipients}
+    policy: Dict[str, Any]  # {serial, misfire, failure, retry, tool_approval, email_allowed_recipients, untrusted_input_tools}
     notify: Dict[str, Any]  # {channels: ["console"] | ["console", "email"]} (schema v2)
     session_id: str
     workspace_root: str
@@ -293,6 +300,31 @@ def validate_email_allowed_recipients(value: Any) -> list:
     return out
 
 
+def validate_untrusted_input_tools(value: Any) -> list:
+    """`["fetch_url", ...]`: tool names, each named individually (no "all", no wildcard).
+
+    Order kept, de-duplicated. The grant uses them only for an occurrence whose trigger
+    delivers untrusted content, only within the target's tool ceiling, and never for a
+    message-sending tool (those always go through the recipient refiner).
+    """
+    field = "policy.untrusted_input_tools"
+    if not isinstance(value, list):
+        raise _invalid(f"{field} must be a list of tool names", field)
+    if len(value) > MAX_UNTRUSTED_INPUT_TOOLS:
+        raise _invalid(f"{field} holds at most {MAX_UNTRUSTED_INPUT_TOOLS} entries", field)
+    out: list = []
+    for i, entry in enumerate(value):
+        name = entry.strip() if isinstance(entry, str) else ""
+        if (
+            not name or len(name) > 100 or name.lower() in ("all", "any")
+            or not all(c.isalnum() or c in "_.-" for c in name)
+        ):
+            raise _invalid(f"{field}[{i}] must be one tool name, such as fetch_url (not all or a pattern)", f"{field}[{i}]")
+        if name not in out:
+            out.append(name)
+    return out
+
+
 def validate_notify(value: Any) -> Dict[str, Any]:
     """`{channels: [...]}`: where the automation's attention items are delivered (schema v2).
 
@@ -315,7 +347,11 @@ def validate_notify(value: Any) -> Dict[str, Any]:
 
 def validate_policy(value: Any) -> Dict[str, Any]:
     policy = _require_mapping(value if value is not None else {}, "policy")
-    _reject_unknown(policy, ("serial", "misfire", "failure", "retry", "tool_approval", "email_allowed_recipients"), "policy")
+    _reject_unknown(
+        policy,
+        ("serial", "misfire", "failure", "retry", "tool_approval", "email_allowed_recipients", "untrusted_input_tools"),
+        "policy",
+    )
     tool_approval = policy.get("tool_approval", "auto")
     if tool_approval not in TOOL_APPROVAL_MODES:
         raise _invalid(f"policy.tool_approval must be one of {list(TOOL_APPROVAL_MODES)}", "policy.tool_approval")
@@ -347,6 +383,9 @@ def validate_policy(value: Any) -> Dict[str, Any]:
         "tool_approval": tool_approval,
         "email_allowed_recipients": validate_email_allowed_recipients(
             policy.get("email_allowed_recipients", list(DEFAULT_EMAIL_ALLOWED_RECIPIENTS))
+        ),
+        "untrusted_input_tools": validate_untrusted_input_tools(
+            policy.get("untrusted_input_tools", list(DEFAULT_UNTRUSTED_INPUT_TOOLS))
         ),
     }
 
@@ -507,6 +546,12 @@ def definition_email_allowed_recipients(definition: Mapping[str, Any]) -> list:
     return validate_email_allowed_recipients(raw) if raw is not None else list(DEFAULT_EMAIL_ALLOWED_RECIPIENTS)
 
 
+def definition_untrusted_input_tools(definition: Mapping[str, Any]) -> list:
+    """The tools the user named for untrusted-input occurrences (older definitions: none)."""
+    raw = (definition.get("policy") or {}).get("untrusted_input_tools")
+    return validate_untrusted_input_tools(raw) if raw is not None else list(DEFAULT_UNTRUSTED_INPUT_TOOLS)
+
+
 def backoff_delay(policy: Mapping[str, Any], attempt: int) -> timedelta:
     """Delay before attempt `attempt + 1`: min(initial * factor^(attempt-1), max)."""
     backoff = policy["retry"]["backoff"]
@@ -572,6 +617,7 @@ __all__ = [
     "build_definition",
     "canonical_json",
     "definition_email_allowed_recipients",
+    "definition_untrusted_input_tools",
     "definition_notify",
     "discussion_ids",
     "initial_state",
@@ -582,6 +628,7 @@ __all__ = [
     "trigger_state_of",
     "validate_context",
     "validate_email_allowed_recipients",
+    "validate_untrusted_input_tools",
     "validate_notify",
     "validate_policy",
     "validate_target",

@@ -10,7 +10,7 @@ Provides:
 - Public discovery facade for provider/media/catalog snapshot queries
 - Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
 - Public config facade for AbstractCore capability-default routes and config API keys
-- Public comms facade for host-local email helper operations
+- Public email facade (`email_facade`): AbstractCore's mail library re-exported for hosts
 - Public Telegram host wrappers for TDLib bootstrap/global-client/send parity
 - Public durable run facade for run-scoped AbstractCore LLM/tool child runs, including outbound comms sends
 - RuntimeConfig for limits and model capabilities
@@ -30,12 +30,6 @@ from .embeddings_client import AbstractCoreEmbeddingsClient, EmbeddingsResult
 from .host_facade import (
     AbstractCoreHostFacade,
     get_abstractcore_host_facade,
-)
-from .comms_facade import (
-    list_email_accounts,
-    list_emails,
-    read_email,
-    send_email,
 )
 from .config_facade import (
     capability_default_config_file,
@@ -108,9 +102,6 @@ __all__ = [
     "list_capability_defaults",
     "read_config_api_key",
     "set_capability_default",
-    "list_email_accounts",
-    "list_emails",
-    "read_email",
     "get_global_telegram_client",
     "get_abstractcore_run_facade",
     "create_local_runtime",
@@ -118,7 +109,6 @@ __all__ = [
     "create_hybrid_runtime",
     "create_local_file_runtime",
     "create_remote_file_runtime",
-    "send_email",
     "send_telegram_message",
     "stop_global_telegram_client",
     "attach_global_event_bus_bridge",

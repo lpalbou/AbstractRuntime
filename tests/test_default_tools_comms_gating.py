@@ -34,9 +34,10 @@ def test_comms_tools_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ABSTRACT_ENABLE_COMMS_TOOLS", "1")
     specs2 = list_default_tool_specs()
     names2 = _tool_names(specs2)
-    assert "send_email" in names2
-    assert "list_emails" in names2
-    assert "read_email" in names2
+    # Email has no env flag (framework backlog 0992): only the host's email_enabled=True.
+    assert "send_email" not in names2
+    names3 = _tool_names(list_default_tool_specs(email_enabled=True))
+    assert {"send_email", "list_emails", "read_email"} <= names3
     assert "send_whatsapp_message" in names2
     assert "list_whatsapp_messages" in names2
     assert "read_whatsapp_message" in names2

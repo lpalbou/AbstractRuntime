@@ -311,6 +311,21 @@ def email_action_workflow_spec() -> WorkflowSpec:
     )
 
 
+def email_use_for_workflow(workflow: Any) -> str:
+    """"action" when `workflow` is the runtime's own send-email action, else "agent_tool".
+
+    Decided on the IDENTITY of the action's node function (`_plan_node`), never on a workflow
+    id or a payload a bundle could copy: only the spec built by `email_action_workflow_spec`
+    carries it. The host's resolver receives it as `use=` (see `abstractruntime.email.binding`).
+    """
+    from .binding import EMAIL_USE_ACTION, EMAIL_USE_AGENT_TOOL
+
+    nodes = getattr(workflow, "nodes", None)
+    if isinstance(nodes, dict) and nodes.get("plan") is _plan_node:
+        return EMAIL_USE_ACTION
+    return EMAIL_USE_AGENT_TOOL
+
+
 def register_email_action_workflow(registry: Any) -> WorkflowSpec:
     """Register the action in a workflow registry (anything with `register(spec)`)."""
     spec = email_action_workflow_spec()
@@ -340,6 +355,7 @@ __all__ = [
     "EmailActionError",
     "email_action_target",
     "email_action_workflow_spec",
+    "email_use_for_workflow",
     "plan_email_action",
     "register_email_action_workflow",
     "render_email_template",

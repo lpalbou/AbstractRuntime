@@ -20,7 +20,7 @@ import tempfile
 import datetime
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple, Type
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
@@ -3076,18 +3076,7 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
         # designed per-argument exception (the model is not choosing a
         # dangerous destination when the destination is provably self).
         # require always wins; a missing/failed refiner adds nothing (ask).
-        try:
-            for call in calls:
-                cname = str((call or {}).get("name") or "").strip()
-                if not cname or cname in req or cname in auto:
-                    continue
-                row = _risk_row_for_tool(cname)
-                refiner_id = str((row or {}).get("risk_refiner") or "").strip()
-                fn = _TOOL_REFINERS.get(refiner_id) if refiner_id else None
-                if fn is not None and fn(call, run) == "auto":
-                    auto.add(cname)
-        except Exception:  # noqa: BLE001 - a refiner-pass failure fails toward asking
-            pass
+        auto |= _refined_auto_names(calls, run, auto=auto, require=req)
         run_policy = ToolApprovalPolicy(auto_approve_tools=auto, require_approval_tools=req)
         try:
             requires = run_policy.requires_approval(calls)
@@ -3105,7 +3094,49 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
                 "policy_source": "run",
             },
         }
+    # No per-run policy: the executor's static policy decides, EXCEPT that the per-call refiners
+    # still lower a call they prove safe (framework backlog 0992, live-test finding 2026-09-30:
+    # a `send_email` to the user's own address asked for approval in every run that carried no
+    # `_runtime.tool_policy`). Only approval-gated executors that expose their static policy;
+    # the static `require_approval_tools` still wins; anything else keeps the static path.
+    static = getattr(tools, "policy", None)
+    if callable(getattr(tools, "execute_approved", None)) and isinstance(static, ToolApprovalPolicy):
+        s_auto = set(static.auto_approve_tools)
+        s_req = set(static.require_approval_tools)
+        refined = _refined_auto_names(calls, run, auto=s_auto, require=s_req)
+        if refined:
+            try:
+                requires = ToolApprovalPolicy(auto_approve_tools=s_auto | refined, require_approval_tools=s_req).requires_approval(calls)
+            except Exception:  # noqa: BLE001 - fail toward asking
+                requires = True
+            if not requires:
+                return tools.execute_approved(tool_calls=calls)
     return tools.execute(tool_calls=calls)
+
+
+def _refined_auto_names(calls: List[Dict[str, Any]], run: "RunState", *, auto: Set[str], require: Set[str]) -> Set[str]:
+    """Tool names the per-call refiners lower to auto for THIS batch (send_email_recipient@v2).
+
+    A name is returned only when EVERY call of that name in the batch refines to "auto": one
+    `send_email` to a stranger keeps the whole name asking, even beside a send to self (the
+    approval decision is by name, so a single safe call must never carry an unsafe sibling).
+    Names already auto or required are skipped (require always wins). A missing refiner or a
+    refiner failure adds nothing (ask)."""
+    verdict: Dict[str, bool] = {}
+    try:
+        for call in calls:
+            cname = str((call or {}).get("name") or "").strip()
+            if not cname or cname in require or cname in auto:
+                continue
+            if verdict.get(cname) is False:
+                continue
+            row = _risk_row_for_tool(cname)
+            refiner_id = str((row or {}).get("risk_refiner") or "").strip()
+            fn = _TOOL_REFINERS.get(refiner_id) if refiner_id else None
+            verdict[cname] = bool(fn is not None and fn(call, run) == "auto")
+    except Exception:  # noqa: BLE001 - a refiner-pass failure fails toward asking
+        return set()
+    return {name for name, ok in verdict.items() if ok}
 
 
 def make_tool_calls_handler(
@@ -4422,7 +4453,7 @@ def make_tool_calls_handler(
             except Exception:
                 max_inline_bytes = 256 * 1024
 
-            def _offload_text(text: str, *, source: str) -> tuple[Optional[str], bool, int]:
+            def _offload_text(text: str, *, source: str, force: bool = False) -> tuple[Optional[str], bool, int]:
                 """Offload a large tool-output string to a session artifact (backlog 0215).
 
                 Returns (artifact_id, too_large, n_bytes):
@@ -4438,7 +4469,7 @@ def make_tool_calls_handler(
                     n = len(str(text or "").encode("utf-8"))
                 except Exception:
                     n = len(str(text or ""))
-                if n <= max_inline_bytes:
+                if n <= max_inline_bytes and not force:  # `force`: one value of an oversized dict
                     return (None, False, n)
                 if artifact_store is None or not sid_str:
                     return (None, False, n)  # cannot offload without a store/session; keep inline
@@ -4455,6 +4486,92 @@ def make_tool_calls_handler(
                     f"it was NOT stored to keep the run record bounded. Re-run narrowing the output "
                     f"(e.g. pipe through head/grep, or redirect to a file and read a bounded range).]"
                 )
+
+            def _json_bytes(value: Any) -> int:
+                try:
+                    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+                except Exception:
+                    return len(str(value).encode("utf-8", errors="replace"))
+
+            def _offload_dict(out_obj: Dict[str, Any], *, tool_name: str) -> Tuple[Dict[str, Any], list[str]]:
+                """Offload a large DICT tool output under the same rule as strings (framework
+                backlog 0992: a 5 MB HTML mail from `read_email` must not land inline in the ledger).
+
+                When the output's JSON is <= max_inline_bytes it is returned unchanged. Otherwise
+                its largest string values (at any depth) are stored as session attachments,
+                largest first, until the output fits; each becomes an artifact ref
+                `{"$artifact": id, "offloaded": true, "bytes": n, "open": "..."}` (replay and
+                `_resolve_artifact_backed_value` restore the original string). A value beyond the
+                retention cap becomes an explicit notice (never kept inline, never silently
+                dropped). If the output still does not fit (many small values), the whole output
+                is stored as one JSON attachment and replaced by its ref. Returns (output, ids).
+                """
+                if _json_bytes(out_obj) <= max_inline_bytes or artifact_store is None or not sid_str:
+                    return out_obj, []
+                work = deepcopy(out_obj)
+                leaves: list[Tuple[int, Any, Any, str]] = []
+
+                def _walk(cur: Any, path: str, depth: int) -> None:
+                    if depth > 12:
+                        return
+                    items = cur.items() if isinstance(cur, dict) else enumerate(cur) if isinstance(cur, list) else ()
+                    for key, val in items:
+                        sub = f"{path}.{key}" if isinstance(cur, dict) else f"{path}[{key}]"
+                        if isinstance(val, str):
+                            n = len(val.encode("utf-8", errors="replace"))
+                            if n > 1024:
+                                leaves.append((n, cur, key, sub.lstrip(".")))
+                        elif isinstance(val, (dict, list)) and not is_artifact_ref(val):
+                            _walk(val, sub, depth + 1)
+
+                _walk(work, "", 0)
+                leaves.sort(key=lambda t: t[0], reverse=True)
+                ids: list[str] = []
+                notes: list[str] = []
+                for n, container, key, path in leaves:
+                    if _json_bytes(work) <= max_inline_bytes:
+                        break
+                    aid, too_large, n_bytes = _offload_text(container[key], source=f"tool.{tool_name}.{path}", force=True)
+                    if aid:
+                        container[key] = {
+                            "$artifact": aid,
+                            "offloaded": True,
+                            "bytes": n_bytes,
+                            "open": f"open_attachment(artifact_id='{aid}', start_line=1, end_line=200)",
+                        }
+                        ids.append(aid)
+                        notes.append(f"{path} ({n_bytes} bytes) -> attachment id={aid}")
+                    elif too_large:
+                        container[key] = _too_large_notice(n_bytes, what=f"The value of {path}").strip()
+                        notes.append(f"{path} ({n_bytes} bytes) exceeded the retention limit and was not stored")
+                if _json_bytes(work) > max_inline_bytes:
+                    text = json.dumps(out_obj, ensure_ascii=False, default=str)
+                    aid, too_large, n_bytes = _offload_text(text, source=f"tool.{tool_name}.output", force=True)
+                    if aid:
+                        return (
+                            {
+                                "$artifact": aid,
+                                "offloaded": True,
+                                "bytes": n_bytes,
+                                "content_type": "application/json",
+                                "open": f"open_attachment(artifact_id='{aid}', start_line=1, end_line=200)",
+                            },
+                            ids + [aid],
+                        )
+                    if too_large:
+                        return ({"offloaded": False, "notice": _too_large_notice(n_bytes, what="Tool output").strip()}, ids)
+                    return work, ids
+                if notes:
+                    hint = (
+                        "\n\n(Large values were stored as attachments: " + "; ".join(notes)
+                        + ". Use open_attachment(artifact_id=..., start_line=1, end_line=200) for bounded excerpts.)"
+                    )
+                    rendered = work.get("rendered")
+                    if isinstance(rendered, str):
+                        work["rendered"] = rendered + hint
+                    else:
+                        work["offload_notice"] = hint.strip()
+                return work, ids
 
             for seg_item, r in zip(seg_items, seg_results):
                 idx = int(seg_item.get("idx") or 0)
@@ -4529,12 +4646,18 @@ def make_tool_calls_handler(
                     continue
 
                 if seg_item.get("name") != "read_file":
-                    # Generic offload for ANY other host tool that returns a large string output
-                    # (backlog 0215: "any output of any tool execution"). Structured/dict outputs are
-                    # left untouched (we can't know which field is the payload); read_file and
+                    # Generic offload for ANY other host tool that returns a large output (backlog
+                    # 0215: "any output of any tool execution"): a string whole; a dict by its
+                    # largest string values (framework backlog 0992, `_offload_dict`); read_file and
                     # execute_command have dedicated branches above.
                     generic_out = r_out.get("output") if isinstance(r_out, dict) else None
-                    if isinstance(generic_out, str) and generic_out:
+                    if isinstance(generic_out, dict) and generic_out:
+                        new_out, dict_ids = _offload_dict(generic_out, tool_name=str(seg_item.get("name") or "output"))
+                        if dict_ids or new_out is not generic_out:
+                            r_out["output"] = new_out
+                            if dict_ids:
+                                r_out["output_offloaded_artifact_ids"] = dict_ids
+                    elif isinstance(generic_out, str) and generic_out:
                         aid, too_large, n_bytes = _offload_text(generic_out, source=f"tool.{seg_item.get('name') or 'output'}")
                         if aid:
                             r_out["output"] = (

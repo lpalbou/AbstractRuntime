@@ -5,11 +5,13 @@
 - `wake_email_automations(runtime)`: after the watcher appended mail, wake the idle
   controllers so they read the inbox now (a controller also re-reads it at every wake, so a
   missed wake only delays delivery until its next one; nothing is lost).
+- `prune_email_inbox(runtime, retention=...)`: apply the inbox retention (default 90 days AND
+  10,000 events) without removing mail an active email automation has not read yet.
 """
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Dict, List
 
 from ..triggers.email_received import SOURCE_ID, SOURCE_VERSION
 
@@ -68,4 +70,35 @@ def wake_email_automations(runtime: Any) -> List[str]:
     return woken
 
 
-__all__ = ["email_trigger_consumers", "wake_email_automations"]
+def prune_email_inbox(runtime: Any, *, retention: Any = None, now: Any = None) -> Dict[str, Any]:
+    """Apply the inbox retention without losing unread mail; returns the inbox's report.
+
+    `retention`: an `EventInboxRetention`, a `{keep_days, keep_events}` dict, or None (the
+    default: 90 days AND 10,000 events). Events an ACTIVE email automation has not read yet
+    (past its `source_state.cursor_seq`) are never removed; mail received while an automation
+    is paused is not processed anyway, so paused automations do not hold events back. Raises
+    `RuntimeError` when the runtime has no event inbox (`set_event_inbox`).
+    """
+    from ..automations.ledger import state_of
+
+    inbox = getattr(runtime, "event_inbox", None)
+    if inbox is None:
+        raise RuntimeError("This runtime has no event inbox; call runtime.set_event_inbox(...) first.")
+    head = int(inbox.head_seq())
+    cursors: List[int] = []
+    for automation_id in email_trigger_consumers(runtime):
+        run = runtime.run_store.load(automation_id)
+        if run is None:
+            continue
+        try:
+            src = state_of(run).get("source_state") or {}
+        except LookupError:
+            continue
+        cursors.append(int(src.get("cursor_seq") or 0) if isinstance(src, dict) else 0)
+    protect_after = min(cursors) if cursors else head
+    report = dict(inbox.prune(retention=retention, protect_after_seq=protect_after, now=now))
+    report["protect_after_seq"] = protect_after
+    return report
+
+
+__all__ = ["email_trigger_consumers", "prune_email_inbox", "wake_email_automations"]

@@ -43,10 +43,10 @@ from abstractruntime.utils.workspace_paths import merge_builtin_workspace_protec
 def _every_default_tool_name(monkeypatch) -> List[str]:
     import abstractruntime.integrations.abstractcore.default_tools as dt
 
-    for gate in ("comms_tools_enabled", "email_tools_enabled", "whatsapp_tools_enabled",
+    for gate in ("comms_tools_enabled", "whatsapp_tools_enabled",
                  "telegram_tools_enabled", "agora_tools_enabled", "shell_tools_enabled"):
         monkeypatch.setattr(dt, gate, lambda: True)
-    return [str(spec["name"]) for spec in dt.list_default_tool_specs()]
+    return [str(spec["name"]) for spec in dt.list_default_tool_specs(email_enabled=True)]
 
 
 def test_every_exposable_runtime_tool_is_classified(monkeypatch) -> None:

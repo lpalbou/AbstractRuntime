@@ -15,6 +15,14 @@ BEFORE any automation sees them, so a busy or restarting controller never misses
 Two stores: `InMemoryEventInbox` (tests, ephemeral hosts) and `JsonFileEventInbox(base_dir)`
 (one JSON file per event, an index written atomically after the event file; a crash between
 the two is repaired on the next open by re-indexing the event files past the index).
+
+Retention (`EventInboxRetention`, typed; default: keep 90 days AND at most 10,000 events):
+`prune(retention=..., protect_after_seq=...)` removes the stored events (their payloads, the
+mail bodies) that are older than `keep_days` or beyond the newest `keep_events`, never one a
+consumer has not read yet (`seq > protect_after_seq`). The id/dedupe receipts stay in the
+index, so a pruned message is still never appended twice. Hosts call
+`abstractruntime.email.prune_email_inbox(runtime)`, which computes `protect_after_seq` from the
+active email automations' cursors.
 """
 
 from __future__ import annotations
@@ -45,6 +53,68 @@ class AppendResult:
     event_id: str
     duplicate: bool
     record: Dict[str, Any]
+
+
+DEFAULT_KEEP_DAYS = 90
+DEFAULT_KEEP_EVENTS = 10_000
+MAX_KEEP_DAYS = 3650
+MAX_KEEP_EVENTS = 1_000_000
+
+
+@dataclass(frozen=True)
+class EventInboxRetention:
+    """How long received events are kept: at most `keep_days` days AND `keep_events` events."""
+
+    keep_days: int = DEFAULT_KEEP_DAYS
+    keep_events: int = DEFAULT_KEEP_EVENTS
+
+    def __post_init__(self) -> None:
+        for name, value, top in (("keep_days", self.keep_days, MAX_KEEP_DAYS), ("keep_events", self.keep_events, MAX_KEEP_EVENTS)):
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= top:
+                raise ValueError(f"EventInboxRetention.{name} must be an integer 1..{top}, got {value!r}")
+
+    def to_dict(self) -> Dict[str, int]:
+        return {"keep_days": self.keep_days, "keep_events": self.keep_events}
+
+    @classmethod
+    def from_value(cls, value: Any) -> "EventInboxRetention":
+        """From an `EventInboxRetention`, a `{keep_days?, keep_events?}` dict, or None (default)."""
+        if value is None:
+            return cls()
+        if isinstance(value, EventInboxRetention):
+            return value
+        if not isinstance(value, dict):
+            raise TypeError("retention must be an EventInboxRetention, a {keep_days, keep_events} dict, or None")
+        unknown = sorted(k for k in value if k not in ("keep_days", "keep_events"))
+        if unknown:
+            raise ValueError(f"retention has unknown field(s): {unknown}")
+        return cls(**value)
+
+
+def _prunable(records: List[Dict[str, Any]], *, head: int, retention: EventInboxRetention,
+              protect_after_seq: Optional[int], now: Optional[datetime]) -> List[int]:
+    """The seqs to remove among `records` (each {seq, appended_at})."""
+    from datetime import timedelta
+
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=retention.keep_days)
+    oldest_kept_by_count = head - retention.keep_events  # seq <= this is beyond the newest N
+    out: List[int] = []
+    for rec in records:
+        seq = int(rec.get("seq") or 0)
+        if protect_after_seq is not None and seq > int(protect_after_seq):
+            continue  # a consumer has not read it yet
+        too_many = seq <= oldest_kept_by_count
+        too_old = False
+        try:
+            at = datetime.fromisoformat(str(rec.get("appended_at")))
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            too_old = at < cutoff
+        except ValueError:
+            too_old = False  # an unreadable date is kept (the count limit still applies)
+        if too_many or too_old:
+            out.append(seq)
+    return out
 
 
 @runtime_checkable
@@ -95,7 +165,7 @@ class InMemoryEventInbox:
         with self._lock:
             seq = self._by_id.get(event_id)
             if seq is not None:
-                rec = self._events[seq - 1]
+                rec = self._events[seq - 1] or {"seq": seq, "event_id": event_id, "stream": stream, "pruned": True}
                 return AppendResult(seq=seq, event_id=event_id, duplicate=True, record=copy.deepcopy(rec))
             seq = len(self._events) + 1
             rec = {
@@ -115,12 +185,25 @@ class InMemoryEventInbox:
     def get(self, event_id):
         with self._lock:
             seq = self._by_id.get(str(event_id))
-            return copy.deepcopy(self._events[seq - 1]) if seq else None
+            return copy.deepcopy(self._events[seq - 1]) if seq and self._events[seq - 1] else None
 
     def read(self, *, after_seq=0, stream=None, limit=None):
         with self._lock:
-            out = [copy.deepcopy(r) for r in self._events[max(0, int(after_seq)):] if stream is None or r["stream"] == stream]
+            out = [
+                copy.deepcopy(r) for r in self._events[max(0, int(after_seq)):]
+                if r is not None and (stream is None or r["stream"] == stream)
+            ]
         return out[: int(limit)] if limit else out
+
+    def prune(self, *, retention: Any = None, protect_after_seq: Optional[int] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Remove stored events per `retention` (see the module doc); returns a report."""
+        policy = EventInboxRetention.from_value(retention)
+        with self._lock:
+            live = [r for r in self._events if r is not None]
+            gone = _prunable(live, head=len(self._events), retention=policy, protect_after_seq=protect_after_seq, now=now)
+            for seq in gone:
+                self._events[seq - 1] = None  # the id/dedupe receipts stay
+            return {"removed": len(gone), "kept": len(live) - len(gone), "head_seq": len(self._events), "retention": policy.to_dict()}
 
     def head_seq(self) -> int:
         with self._lock:
@@ -242,7 +325,11 @@ class JsonFileEventInbox:
             idx = self._load_index()
             existing = idx["event_ids"].get(event_id)
             if existing is not None:
-                rec = json.loads(self._event_path(existing).read_text(encoding="utf-8"))
+                path = self._event_path(existing)
+                if path.is_file():
+                    rec = json.loads(path.read_text(encoding="utf-8"))
+                else:  # pruned by retention: the receipt proves it was received
+                    rec = {"seq": int(existing), "event_id": event_id, "stream": stream, "pruned": True}
                 return AppendResult(seq=int(existing), event_id=event_id, duplicate=True, record=rec)
             seq = int(idx["next_seq"])
             rec = {
@@ -266,7 +353,7 @@ class JsonFileEventInbox:
     def get(self, event_id):
         with self._FileLock(self):
             seq = self._load_index()["event_ids"].get(str(event_id))
-            if seq is None:
+            if seq is None or not self._event_path(seq).is_file():
                 return None
             return json.loads(self._event_path(seq).read_text(encoding="utf-8"))
 
@@ -290,6 +377,29 @@ class JsonFileEventInbox:
         with self._FileLock(self):
             return int(self._load_index()["next_seq"]) - 1
 
+    def prune(self, *, retention: Any = None, protect_after_seq: Optional[int] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Delete stored event files per `retention` (see the module doc); returns a report.
+
+        The index keeps `next_seq` and the id/dedupe receipts, so sequence numbers never repeat
+        and a pruned message is never appended again."""
+        policy = EventInboxRetention.from_value(retention)
+        with self._FileLock(self):
+            head = int(self._load_index()["next_seq"]) - 1
+            records: List[Dict[str, Any]] = []
+            for path in sorted(self._events_dir.glob("*.json")):
+                try:
+                    rec = json.loads(path.read_text(encoding="utf-8"))
+                except ValueError:
+                    continue
+                records.append({"seq": rec.get("seq"), "appended_at": rec.get("appended_at")})
+            gone = _prunable(records, head=head, retention=policy, protect_after_seq=protect_after_seq, now=now)
+            for seq in gone:
+                try:
+                    self._event_path(seq).unlink()
+                except FileNotFoundError:
+                    pass
+            return {"removed": len(gone), "kept": len(records) - len(gone), "head_seq": head, "retention": policy.to_dict()}
+
     def has_dedupe_key(self, stream, key) -> bool:
         if not key:
             return False
@@ -312,4 +422,12 @@ class JsonFileEventInbox:
             _atomic_write_json(self._stream_path(stream), {"stream": stream, "state": dict(state)})
 
 
-__all__ = ["AppendResult", "EventInbox", "InMemoryEventInbox", "JsonFileEventInbox"]
+__all__ = [
+    "AppendResult",
+    "DEFAULT_KEEP_DAYS",
+    "DEFAULT_KEEP_EVENTS",
+    "EventInbox",
+    "EventInboxRetention",
+    "InMemoryEventInbox",
+    "JsonFileEventInbox",
+]

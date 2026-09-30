@@ -3104,16 +3104,22 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
     # No per-run policy: the executor's static policy decides, EXCEPT that the per-call refiners
     # still lower a call they prove safe (framework backlog 0992, live-test finding 2026-09-30:
     # a `send_email` to the user's own address asked for approval in every run that carried no
-    # `_runtime.tool_policy`). Only approval-gated executors that expose their static policy;
-    # the static `require_approval_tools` still wins; anything else keeps the static path.
+    # `_runtime.tool_policy`). Only approval-gated executors that expose their static policy.
+    # The static `require_approval_tools` is the executor's DEFAULT caution list (send_email is
+    # on it), not a choice made for this run, so a refiner may lower a name on it for a call it
+    # proves safe (0.7.0 Linux end-to-end F1b: the list made the self-send exception dead code
+    # and every send to the user's own address parked). A per-run policy's require list (the
+    # user's explicit choice, above) still always wins; untrusted-input runs never reach here.
     static = getattr(tools, "policy", None)
     if callable(getattr(tools, "execute_approved", None)) and isinstance(static, ToolApprovalPolicy):
         s_auto = set(static.auto_approve_tools)
         s_req = set(static.require_approval_tools)
-        refined = _refined_auto_names(calls, run, auto=s_auto, require=s_req)
+        refined = _refined_auto_names(calls, run, auto=s_auto, require=set())
         if refined:
             try:
-                requires = ToolApprovalPolicy(auto_approve_tools=s_auto | refined, require_approval_tools=s_req).requires_approval(calls)
+                requires = ToolApprovalPolicy(
+                    auto_approve_tools=s_auto | refined, require_approval_tools=s_req - refined
+                ).requires_approval(calls)
             except Exception:  # noqa: BLE001 - fail toward asking
                 requires = True
             if not requires:

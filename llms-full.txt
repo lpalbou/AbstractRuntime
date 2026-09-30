@@ -53,7 +53,7 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.8.0 • **Python:** 3.10+
+**Version:** 0.8.1 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
@@ -81,7 +81,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.20.0 or newer (its light install:
+The base install includes AbstractCore 2.20.2 or newer (its light install:
 remote providers, tools, vision, voice, audio, and music integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -145,7 +145,7 @@ state = rt.resume(
 assert state.status.value == "completed"
 ```
 
-## What’s included (v0.8.0)
+## What’s included (v0.8.1)
 
 Kernel (import-light):
 - workflow graphs: `WorkflowSpec` (`src/abstractruntime/core/spec.py`)
@@ -287,7 +287,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.20.0 or newer with remote provider, vision,
+This installs AbstractCore 2.20.2 or newer with remote provider, vision,
 voice, audio, music, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -432,7 +432,7 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 # AbstractRuntime — Architecture
 
 > Updated: 2026-09-29
-> Version: 0.8.0
+> Version: 0.8.1
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -1167,7 +1167,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.20.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.20.2 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1177,7 +1177,7 @@ Entry points:
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
 - email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
-- public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
+- public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`); `inline_run_active(run_id)` is true while the facade executes a child run in this process (its workflow exists only inside that call), so a host runner that scans `RUNNING` runs skips it
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
@@ -1213,6 +1213,7 @@ Multimodal support:
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
 - optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; local media warmup that no capability plugin can serve (`image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, `music_generation`) reports `requires_long_lived_server=true`, and image/video tasks also report `execution_mode="local_one_shot_subprocess"`
@@ -1678,7 +1679,7 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.20.0`.
+- The current AbstractCore integration expects `abstractcore>=2.20.2`.
 
 Verify:
 
@@ -4566,7 +4567,9 @@ stored ids in `output_offloaded_artifact_ids`.
 
 Any other recipient, a `reply_email` call (its recipients come from the original message), or a call the refiner
 cannot read waits for a person on a `tool_approval` wait. The rule applies whether or not the run carries a per-run
-tool policy (`_runtime.tool_policy`); an executor's explicit `require_approval_tools` entry still wins. In a batch,
+tool policy (`_runtime.tool_policy`), including under the executor's default policy (`ToolApprovalPolicy()`, whose
+default caution list names `send_email`); a `require_approval_tools` list the host passes explicitly, or a per-run
+policy's, still wins. Email-triggered runs under `approval: "ask"` never use the refiner. In a batch,
 one `send_email` that needs a person makes every `send_email` of that batch wait.
 
 Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's `guarded_send`
@@ -4575,6 +4578,15 @@ path in the runtime (agent tools, the send-email action, approved calls) goes th
 control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
 the approval wait for that user's own runs, never the recipient policy. See
 [tool-approval.md](tool-approval.md#per-call-refiners).
+
+## Mail sent by automations
+
+Every message a run of an automation sends (its controller, an occurrence or any run it starts, including the
+send-email action) is automatic mail: the runtime hands AbstractCore the run's account with
+`EmailContext.automation_marker = "automation:<automation id>/run:<run id>"`, so each send carries
+`Auto-Submitted: auto-generated` (`auto-replied` for a reply) and `X-AbstractFramework-Automation`. Chats and
+discussions (a person is there) send ordinary mail. The marker is decided on the run's automation attribution, which
+the runtime sets and a client cannot write (`automation_marker_for(vars, run_id)`).
 
 ## Running an automation when mail arrives
 
@@ -4613,6 +4625,10 @@ if email_trigger_consumers(runtime):          # at least one email automation
   `Body (not fetched):` with the cause and fix.
 - A message that cannot be fetched on three polls in a row is recorded in `feeder.status()["unprocessable"]` with its
   code, cause and fix, and the feeder moves past it.
+- The account's own automatic mail never becomes an event, so an automation can never trigger itself: a message
+  that carries the framework marker (`X-AbstractFramework-Automation`) and comes from the account's own address, or
+  whose Message-ID the host reports as sent by the framework (`EmailInboxFeeder(..., is_own_sent=callable)`), is
+  passed before its body is fetched and counted in `report.own_automatic`.
 - A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,
   retryable}`, and the next poll waits 60 seconds, doubling up to 15 minutes (`poll(..., force=True)` polls at once).
   No automation is paused.
@@ -4632,6 +4648,7 @@ trigger = {
         "every": "1h",               # batch interval, at least "60s"
         "folder": "INBOX",
         "max_batch": 100,
+        "auto_submitted": "skip",    # default; "admit" runs on automatic mail too
         "filter": {"from_domain_in": ["example.test"], "subject_contains": "invoice"},
     },
 }
@@ -4640,6 +4657,9 @@ trigger = {
 - **Filters** are typed: `from_in` (addresses), `from_domain_in` (exact domains; list a subdomain to match it),
   `to_in` (any To or Cc address), `subject_contains` (one literal, case-insensitive substring) and `has_attachment`.
   There are no patterns or expressions.
+- **Automatic mail** (RFC 3834): with `auto_submitted: "skip"` (the default) a message whose `Auto-Submitted` header
+  is present and not `no` (auto-responders, notifications, other automations) is never admitted; `"admit"` lets it
+  reach the filters. The account's own automatic mail is kept out of the inbox whatever this option says.
 - **Batches**: the automation runs at most once per `every`, with every matching message received since its previous
   run (up to `max_batch`; the rest go to the next run). An automation that runs a model defaults to once an hour; one
   that needs no model defaults to every minute.

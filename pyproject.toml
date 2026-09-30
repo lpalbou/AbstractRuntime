@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.8.0"
+version = "0.8.1"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -53,7 +53,7 @@ dependencies = [
   # plugins) without selecting local inference engines. 2.19.2 floors
   # abstractvision>=0.3.33, whose resident loads report `loaded_new` and whose
   # unload frees the pipeline (the resident media path relies on both).
-  "abstractcore>=2.20.0",
+  "abstractcore>=2.20.2",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -70,12 +70,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.20.0",
+  "abstractcore[apple]>=2.20.2",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.20.0",
+  "abstractcore[gpu]>=2.20.2",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]

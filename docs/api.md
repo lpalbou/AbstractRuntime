@@ -302,7 +302,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.20.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.20.2 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -312,7 +312,7 @@ Entry points:
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
 - email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
-- public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`)
+- public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`); `inline_run_active(run_id)` is true while the facade executes a child run in this process (its workflow exists only inside that call), so a host runner that scans `RUNNING` runs skips it
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
@@ -348,6 +348,7 @@ Multimodal support:
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
 - optional local media residency failures complete with `status_hint="warning"` and `degraded=true`; local media warmup that no capability plugin can serve (`image_generation`, `image_upscale`, `video_generation`, `text_to_video`, `image_to_video`, `tts`, `stt`, `music_generation`) reports `requires_long_lived_server=true`, and image/video tasks also report `execution_mode="local_one_shot_subprocess"`

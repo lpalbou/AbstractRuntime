@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-30
+
+Email automations never trigger themselves, speech and images work without a buildable text model,
+and a chat's mail to its owner runs without asking. Requires AbstractCore 2.20.2.
+
+### Added
+- Mail sent by an automation run (controller, occurrence, any run it starts, the send-email action)
+  is automatic mail: the run's `EmailContext` gets `automation_marker =
+  "automation:<automation id>/run:<run id>"`, so every send carries `Auto-Submitted` and
+  `X-AbstractFramework-Automation`. `automation_marker_for(vars, run_id)` is exported from
+  `abstractruntime.email.binding`. Chats and discussions send ordinary mail.
+- `email.received@1` config `auto_submitted`: `"skip"` (default) never admits a message whose
+  `Auto-Submitted` header is present and not `no`; `"admit"` lets it reach the filters. Stored
+  configs without the key behave like `"skip"`.
+- `EmailInboxFeeder(..., is_own_sent=callable)` and `PollReport.own_automatic`: the account's own
+  automatic mail (the framework marker from its own address, or a Message-ID the host recorded as
+  sent) never enters the event inbox.
+- `abstractruntime.integrations.abstractcore.run_facade.inline_run_active(run_id)`: true while the
+  run facade executes a child run in this process; host runners skip such runs.
+- `ToolApprovalPolicy.default_require_approval_tools`: the names on the require list only because
+  no list was given (the default caution list).
+
+### Changed
+- The pooled local client runs media-only requests (image, video, voice, music, transcription, no
+  tools) and streaming TTS on AbstractCore's capability host instead of building the default text
+  client: text-to-speech no longer fails when the text default cannot be built (for example an
+  MLX route on an install without MLX), and no text model is loaded for a media request.
+- Without a per-run tool policy, the `send_email_recipient@v2` refiner now also lowers a name that
+  is on the executor's default caution list (`send_email` under `ToolApprovalPolicy()`): a chat
+  run's send to its owner's own address runs without an approval wait. An explicitly passed
+  require list and a per-run policy's still win; email-triggered runs under `approval: "ask"` are
+  unchanged.
+
+### Dependencies
+- `abstractcore>=2.20.2` (also `[apple]` and `[gpu]`).
+
 ## [0.8.0] - 2026-09-30
 
 ### Added

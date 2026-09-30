@@ -108,7 +108,9 @@ stored ids in `output_offloaded_artifact_ids`.
 
 Any other recipient, a `reply_email` call (its recipients come from the original message), or a call the refiner
 cannot read waits for a person on a `tool_approval` wait. The rule applies whether or not the run carries a per-run
-tool policy (`_runtime.tool_policy`); an executor's explicit `require_approval_tools` entry still wins. In a batch,
+tool policy (`_runtime.tool_policy`), including under the executor's default policy (`ToolApprovalPolicy()`, whose
+default caution list names `send_email`); a `require_approval_tools` list the host passes explicitly, or a per-run
+policy's, still wins. Email-triggered runs under `approval: "ask"` never use the refiner. In a batch,
 one `send_email` that needs a person makes every `send_email` of that batch wait.
 
 Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's `guarded_send`
@@ -117,6 +119,15 @@ path in the runtime (agent tools, the send-email action, approved calls) goes th
 control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
 the approval wait for that user's own runs, never the recipient policy. See
 [tool-approval.md](tool-approval.md#per-call-refiners).
+
+## Mail sent by automations
+
+Every message a run of an automation sends (its controller, an occurrence or any run it starts, including the
+send-email action) is automatic mail: the runtime hands AbstractCore the run's account with
+`EmailContext.automation_marker = "automation:<automation id>/run:<run id>"`, so each send carries
+`Auto-Submitted: auto-generated` (`auto-replied` for a reply) and `X-AbstractFramework-Automation`. Chats and
+discussions (a person is there) send ordinary mail. The marker is decided on the run's automation attribution, which
+the runtime sets and a client cannot write (`automation_marker_for(vars, run_id)`).
 
 ## Running an automation when mail arrives
 
@@ -155,6 +166,10 @@ if email_trigger_consumers(runtime):          # at least one email automation
   `Body (not fetched):` with the cause and fix.
 - A message that cannot be fetched on three polls in a row is recorded in `feeder.status()["unprocessable"]` with its
   code, cause and fix, and the feeder moves past it.
+- The account's own automatic mail never becomes an event, so an automation can never trigger itself: a message
+  that carries the framework marker (`X-AbstractFramework-Automation`) and comes from the account's own address, or
+  whose Message-ID the host reports as sent by the framework (`EmailInboxFeeder(..., is_own_sent=callable)`), is
+  passed before its body is fetched and counted in `report.own_automatic`.
 - A connection or sign-in failure never raises: the report and `feeder.status()` carry `{code, cause, fix,
   retryable}`, and the next poll waits 60 seconds, doubling up to 15 minutes (`poll(..., force=True)` polls at once).
   No automation is paused.
@@ -174,6 +189,7 @@ trigger = {
         "every": "1h",               # batch interval, at least "60s"
         "folder": "INBOX",
         "max_batch": 100,
+        "auto_submitted": "skip",    # default; "admit" runs on automatic mail too
         "filter": {"from_domain_in": ["example.test"], "subject_contains": "invoice"},
     },
 }
@@ -182,6 +198,9 @@ trigger = {
 - **Filters** are typed: `from_in` (addresses), `from_domain_in` (exact domains; list a subdomain to match it),
   `to_in` (any To or Cc address), `subject_contains` (one literal, case-insensitive substring) and `has_attachment`.
   There are no patterns or expressions.
+- **Automatic mail** (RFC 3834): with `auto_submitted: "skip"` (the default) a message whose `Auto-Submitted` header
+  is present and not `no` (auto-responders, notifications, other automations) is never admitted; `"admit"` lets it
+  reach the filters. The account's own automatic mail is kept out of the inbox whatever this option says.
 - **Batches**: the automation runs at most once per `every`, with every matching message received since its previous
   run (up to `max_batch`; the rest go to the next run). An automation that runs a model defaults to once an hour; one
   that needs no model defaults to every minute.

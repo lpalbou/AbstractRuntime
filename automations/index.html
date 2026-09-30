@@ -13,6 +13,10 @@
         <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/automations/">
       
       
+        <link rel="prev" href="../email/">
+      
+      
+        <link rel="next" href="../mcp-worker/">
       
       
         
@@ -490,6 +494,468 @@
   
   
     <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#mental-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mental model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-definition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The definition
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The definition">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#creating-an-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating an automation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triggers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Triggers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#schedule1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule@1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        manual@1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emailreceived1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        email.received@1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a source
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The controller
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#occurrences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Occurrences
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-independent-or-growing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context: independent or growing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#discussions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discussions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Discussions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-only-mounts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-only mounts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-only-workspaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-only workspaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-approval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool approval
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#waits-on-a-person" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Waits on a person
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notifications-attention-and-retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications, attention and retries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Notifications, attention and retries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-asks-for-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What asks for attention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runs-sessions-and-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runs, sessions and history
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runs, sessions and history">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#run-attribution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run attribution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#turn-roots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Turn roots
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage guarantees
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Storage guarantees">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#crash-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Crash safety
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits-in-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits in v1
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../mcp-worker/" class="md-nav__link">
         
   
@@ -714,10 +1180,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -735,8 +1201,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -997,6 +1463,17 @@
     <span class="md-ellipsis">
       
         manual@1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emailreceived1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        email.received@1
       
     </span>
   </a>
@@ -1380,7 +1857,7 @@ unknown fields are rejected at every level.</p>
 <tbody>
 <tr>
 <td><code>schema_version</code></td>
-<td><code>1</code></td>
+<td><code>2</code> (a stored <code>1</code> reads with the defaults of the v2 fields and becomes <code>2</code> at its next revision)</td>
 </tr>
 <tr>
 <td><code>revision</code></td>
@@ -1408,7 +1885,11 @@ unknown fields are rejected at every level.</p>
 </tr>
 <tr>
 <td><code>policy</code></td>
-<td><code>{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval}</code></td>
+<td><code>{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients, untrusted_input_tools}</code></td>
+</tr>
+<tr>
+<td><code>notify</code></td>
+<td><code>{channels: ["console"] \| ["console", "email"]}</code>: where attention items are delivered (default <code>["console"]</code>)</td>
 </tr>
 <tr>
 <td><code>session_id</code></td>
@@ -1428,11 +1909,18 @@ unknown fields are rejected at every level.</p>
 <code>{max_attempts: 3, backoff: {initial: "30s", factor: 2, max: "10m"}}</code>. <code>max_attempts</code> is 1 to 10, <code>factor</code> is 1 to 10,
 and <code>initial</code> and <code>max</code> are durations (see <a href="#schedule1"><code>schedule@1</code></a>). <code>serial</code>, <code>misfire</code> and <code>failure</code> accept only
 the values shown; anything else is refused with <code>unsupported_feature</code>. <code>policy.tool_approval</code> is <code>"auto"</code> (default) or
-<code>"ask"</code>, see <a href="#tool-approval">Tool approval</a>.</p>
+<code>"ask"</code>, see <a href="#tool-approval">Tool approval</a>. <code>policy.email_allowed_recipients</code> lists who occurrences may email
+without an approval wait: <code>"self"</code> (the user's registered address) and exact addresses, at most 50, default
+<code>["self"]</code>; display names, domains and patterns are refused. A revision that changes other policy fields keeps it.
+<code>policy.untrusted_input_tools</code> (default <code>[]</code>, at most 20) names, one by one, tools that an occurrence of an untrusted
+trigger (<code>email.received@1</code>) may run without asking although "allow all tools" does not cover them there (a tool
+that reaches the network, runs code or commands, writes outside the workspace or delegates), for example
+<code>["fetch_url"]</code>; <code>"all"</code> and patterns are refused, and message-sending tools are never granted this way. See
+<a href="#tool-approval">Tool approval</a>.</p>
 <h3 id="creating-an-automation">Creating an automation<a class="headerlink" href="#creating-an-automation" title="Permanent link">&para;</a></h3>
 <p><code>create_automation(runtime, request, *, now=None, actor_id=None) -&gt; (automation_id, revision)</code>.</p>
 <p>The request is <code>{request_id, title, target, trigger: {source_id, source_version, config}, context?, policy?,
-workspace_root, tenant?, user?}</code>.</p>
+notify?, workspace_root, tenant?, user?}</code>.</p>
 <ul>
 <li>The automation id is <code>uuid5(AUTOMATION_NAMESPACE, "&lt;tenant&gt;:&lt;user&gt;:&lt;request_id&gt;")</code>; <code>tenant</code> and <code>user</code> default to
   <code>local</code>. Sending the same request again returns the same automation, unchanged. Reusing a <code>request_id</code> for a
@@ -1475,6 +1963,14 @@ descriptor carries <code>id</code>, <code>version</code>, <code>label</code>, <c
 <h3 id="manual1"><code>manual@1</code><a class="headerlink" href="#manual1" title="Permanent link">&para;</a></h3>
 <p>Config: <code>{}</code>. The automation runs only when asked with <code>automation.run_now</code>. A manual run of any automation, whatever
 its trigger, carries a <code>manual</code> envelope with event id <code>manual:&lt;command_id&gt;</code>.</p>
+<h3 id="emailreceived1"><code>email.received@1</code><a class="headerlink" href="#emailreceived1" title="Permanent link">&para;</a></h3>
+<p>Runs the automation when mail arrives in the user's mailbox, in batches no more often than <code>config.every</code> (default
+<code>1h</code> when <code>uses_model</code> is true, the default, and <code>60s</code> otherwise), each message at most once. It reads the runtime's
+durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
+<code>unsupported_feature</code>. Its occurrences receive the messages as <code>input_data.trigger</code> (marked untrusted) and, for a
+string <code>prompt</code>, inside a fixed untrusted frame (both stored as artifacts; the controller's records carry refs);
+their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
+or delegation. See <a href="../email/#the-emailreceived1-trigger">email.md</a> for the config, the filters and the guarantees.</p>
 <h3 id="adding-a-source">Adding a source<a class="headerlink" href="#adding-a-source" title="Permanent link">&para;</a></h3>
 <p>Declare the adapter in the entry-point group <code>abstractruntime.trigger_sources</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[project.entry-points.</span><span class="s2">"abstractruntime.trigger_sources"</span><span class="k">]</span>
@@ -1487,8 +1983,12 @@ its trigger, carries a <code>manual</code> envelope with event id <code>manual:&
   <code>available: false</code> and a reason. It cannot be selected, and the other sources keep working.</li>
 <li>The built-in sources are required: if one is missing or broken, discovery raises <code>TriggerRegistryError</code>.</li>
 <li><code>reset_trigger_registry()</code> forgets cached discovery (after installing a source package, or in tests).</li>
-<li>The v1 controller waits on deadlines (<code>prepare</code> returning <code>until</code>), on commands only (<code>idle</code>), or ends
-  (<code>exhausted</code>). A source whose <code>prepare</code> returns an <code>event</code> wait fails the controller step.</li>
+<li>The controller waits on deadlines (<code>prepare</code> returning <code>until</code>), without a deadline (<code>idle</code>: commands, or a
+  watcher's wake for event sources), or ends (<code>exhausted</code>). A source whose <code>prepare</code> returns an <code>event</code> wait fails
+  the controller step.</li>
+<li>A source whose <code>capabilities.kind</code> is <code>event</code> receives <code>events=</code> (the inbox records after its cursor, read by the
+  controller) in <code>prepare</code> and <code>admit</code>, may keep its own state in <code>source_state</code>, and may return <code>inputs</code> with an
+  admission (data for the occurrence's inputs that stays out of the recorded envelope).</li>
 </ul>
 <h2 id="the-controller">The controller<a class="headerlink" href="#the-controller" title="Permanent link">&para;</a></h2>
 <p>The controller is the packaged VisualFlow bundle <code>abstractframework.automation-controller@1.0.0</code> (package data under
@@ -1524,7 +2024,9 @@ its trigger, carries a <code>manual</code> envelope with event id <code>manual:&
   workspace, input data), the trigger envelope, the retry policy and the session kind. Every attempt uses these, so a
   later revision never changes an occurrence that has already been admitted.</li>
 <li><strong>prepare_context</strong> checks that the frozen inputs resolve (values offloaded to the artifact store must load).</li>
-<li><strong>dispatch</strong> records the attempt and starts the child with <code>START_SUBWORKFLOW {async: true, wait: true, run_id}</code>.
+<li><strong>dispatch</strong> records the attempt and starts the child with <code>START_SUBWORKFLOW {async: true, wait: true, run_id}</code>
+  (plus <code>resolve_vars</code> for an email occurrence, whose messages and framed prompt stay artifact refs in the
+  controller's records).
   The child runs outside the controller's tick, driven by the host. Its id is deterministic and it is created only if
   absent, so a dispatch replayed after a crash re-attaches to the same child.</li>
 <li><strong>record_outcome</strong> reloads the child and reads its output; it never relies on the resume payload. Success completes
@@ -1762,9 +2264,10 @@ returns the refusal message for a tool, or <code>None</code> when it is allowed.
   runs inherit the grant.</li>
 <li>A name outside the run's tool ceiling (<code>allowed_tools</code>) grants nothing: approval never widens the ceiling.</li>
 <li>A tool outside <code>TOOL_EFFECT_CLASSES</code> (a third-party MCP tool, for example) is not in the grant and still asks.</li>
-<li>A <code>tool_policy</code> that the target's own <code>input_data._runtime</code> already carries is left as it is.</li>
-<li><strong>Tools that message model-chosen recipients are never granted</strong> (framework backlog 0992 WP0): every tool
-    whose inventory row carries <code>comms_send</code> (<code>send_email</code>, <code>send_whatsapp_message</code>, <code>send_telegram_message</code>,
+<li>A <code>tool_policy</code> that the target's own <code>input_data._runtime</code> already carries is left as it is, except for
+    untrusted triggers (below), whose occurrence policy always replaces it (<code>replaced_target_policy: true</code>).</li>
+<li><strong>Tools that message model-chosen recipients are never granted</strong>: every tool
+    whose inventory row carries <code>comms_send</code> (<code>send_email</code>, <code>reply_email</code>, <code>send_whatsapp_message</code>, <code>send_telegram_message</code>,
     <code>send_telegram_artifact</code>), even when <code>allowed_tools</code> names it. They are listed in the grant's
     <code>withheld_tools</code> and go through the normal approval point: a <code>send_email</code> whose every recipient is the
     registered user's address (<code>_runtime.operator_email</code>, set by the host; the gateway freezes it into the
@@ -1772,7 +2275,39 @@ returns the refusal message for a tool, or <code>None</code> when it is allowed.
     until a person approves or refuses it. An occurrence that reads untrusted text (an inbound email, a fetched
     page) therefore cannot mail data to an address that text names. When the inventory cannot be read, every
     <code>comms</code> tool is withheld.</li>
-<li><strong><code>"ask"</code>.</strong> No grant. A tool call that needs approval waits on a <code>tool_approval</code> wait, as in a chat.</li>
+<li><strong>Pre-authorised recipients.</strong> Every occurrence carries the definition's <code>policy.email_allowed_recipients</code> as
+    <code>_runtime.email_allowed_recipients</code>, replacing any value in the target's inputs. A <code>send_email</code> whose every
+    recipient is self or on that list runs unattended; see <a href="../email/#sending-without-asking">email.md</a>.</li>
+<li><strong>Untrusted triggers: allow by kind.</strong> When the trigger delivers text written by other people
+    (<code>email.received@1</code>), the agent acts only within the automation's mission and never follows links from the mail
+    it reads. <code>"auto"</code> then grants only tools whose facts prove all of the following
+    (<code>untrusted_input_allow_all</code>): no network egress beyond services the user or administrator configured (the model
+    provider, the user's own mailbox, the agora hub), no code or command execution, no message sending, no writes
+    outside the run's workspace, and no delegation. The facts are the runtime's tool table
+    (<code>tool_effects.TOOL_EFFECT_CLASSES</code>, <code>TOOL_NETWORK_REACH</code>, <code>TOOL_WRITE_SCOPE</code>) and AbstractCore's row facts
+    (<code>model_controlled_destination</code>, <code>comms_send</code>, <code>remote_write_capable</code>, <code>destructive_capable</code>); a tool missing
+    from the table is withheld. In practice the grant keeps file reads, workspace-confined file writes (<code>write_file</code>
+    and <code>edit_file</code> only under <code>workspace_access_mode: "workspace_only"</code>, the default), mailbox and hub reads,
+    <code>get_email_attachment</code> (into the workspace), <code>recall_memory</code> and <code>update_plan</code> (the run's own plan). It
+    withholds, among others, <code>fetch_url</code>, <code>browser_probe</code>, <code>skim_url</code>, <code>skim_websearch</code>, <code>web_search</code>,
+    <code>execute_command</code>, <code>shell_exec</code>, <code>execute_python</code>, <code>delegate_agent</code>, <code>channel_fs_write</code>, <code>agora_post_message</code>,
+    <code>agora_send_dm</code>, the memory-writing tools (<code>remember</code>, <code>remember_note</code> including <code>scope: "global"</code>,
+    <code>compact_memory</code>: they write the user's lasting memory outside the run's workspace, <code>TOOL_WRITE_SCOPE</code>
+    <code>memory</code>, so a stranger's email cannot plant a note that later runs obey) and every MCP tool. A withheld tool
+    runs unattended only when the user named it individually in <code>policy.untrusted_input_tools</code> (within the target's
+    tool ceiling); message-sending tools (<code>send_email</code>, <code>reply_email</code>, <code>agora_post_message</code>, <code>agora_send_dm</code>, ...)
+    are never granted, named or not. Schedule and manual automations keep the full grant.</li>
+<li><strong>Untrusted triggers always carry a policy.</strong> The occurrence policy is marked <code>untrusted_input: true</code> (with
+    <code>approval</code>, <code>untrusted_input_tools</code> and <code>replaced_target_policy</code>), the run carries <code>_runtime.untrusted_input:
+    true</code>, and child runs inherit both with the parent's value winning over their own. For such a run the approval
+    executor never consults its static policy (the gateway's defaults would auto-run <code>skim_url</code>, <code>web_search</code>, the
+    agora posts and the Telegram sends) or a tier ceiling; it runs a listed tool unasked only when the user named
+    it or (under <code>"auto"</code>) its facts pass <code>untrusted_input_allow_all</code>, never runs a sending tool unasked, and
+    applies the per-call refiners (<code>send_email</code> to self or a pre-authorised recipient) only under <code>"auto"</code>.</li>
+<li><strong><code>"ask"</code>.</strong> No grant. A tool call that needs approval waits on a <code>tool_approval</code> wait, as in a chat. For an
+  untrusted trigger (<code>email.received@1</code>) the occurrence still gets a per-run policy that auto-approves nothing but
+  the tools the user named in <code>policy.untrusted_input_tools</code> (sending tools never) and lists every other tool in
+  <code>require_approval_tools</code>: every other call waits for a person, <code>send_email</code> to the user's own address included.</li>
 </ul>
 <p>The grant is frozen with the rest of the occurrence's inputs: a revision of <code>tool_approval</code> applies from the next
 occurrence. Questions a flow asks a person (<code>ask_user</code>) still wait in both modes. Discussions never inherit the grant.
@@ -1829,7 +2364,8 @@ Waits on a person are live facts read from run state; they are not attention ite
 <p>The output is read by structure. An agent-style target ends with <code>response</code> / <code>success</code> / <code>meta</code>; a plain flow ends
 with its end-node values or <code>{success, result}</code>. An output with <code>success: false</code> counts as a failure. A workflow that
 must flag a result adds <code>notify</code> next to its answer.</p>
-<p>Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the
+<p>Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's <code>channels</code> repeats the definition's <code>notify.channels</code>; a host that delivers notifications by email
+mails the owner when <code>email</code> is listed.
 occurrence's <code>automation.completed</code> record with a per-automation sequence number.</p>
 <p><code>list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)</code> returns
 <code>{items, next_cursor}</code>, oldest first. Each item is <code>{kind: "notify" | "failure", automation_id, run_id, index, at,
@@ -2037,8 +2573,8 @@ receives its result directly.</p>
 <ul>
 <li>Schedules are fixed UTC intervals (<code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, at most <code>366d</code>). There are no cron expressions, calendar
   months, time zones or daylight-saving rules, and <code>anchor</code> must equal <code>start_at</code>.</li>
-<li>The shipped trigger sources are <code>schedule@1</code> and <code>manual@1</code>. There are no external or event triggers; the v1
-  controller does not wait on <code>event</code> sources.</li>
+<li>The shipped trigger sources are <code>schedule@1</code>, <code>manual@1</code> and <code>email.received@1</code>. There is no generic external
+  event source yet.</li>
 <li>Occurrences run one at a time (<code>serial</code>), missed ticks coalesce, and a failed occurrence never stops the
   automation (<code>failure: "continue"</code>). These policies cannot be changed.</li>
 <li>Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
@@ -2054,6 +2590,7 @@ receives its result directly.</p>
 <li><a href="../api/#automations">api.md</a>: the import surface</li>
 <li><a href="../architecture/#automations">architecture.md</a>: where automations sit in the runtime</li>
 <li><a href="../tool-approval/">tool-approval.md</a>: tool risk tiers and the run policy</li>
+<li><a href="../email/">email.md</a>: email accounts, the <code>email.received@1</code> trigger and the send-email action</li>
 <li><a href="../faq/">faq.md</a>: common questions</li>
 <li><a href="../troubleshooting/#an-automation-does-not-fire">troubleshooting.md</a>: symptom-oriented fixes</li>
 </ul>

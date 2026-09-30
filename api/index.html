@@ -459,6 +459,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#email" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sessions-and-history" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -745,6 +756,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../mcp-worker/" class="md-nav__link">
         
   
@@ -969,10 +1034,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -990,8 +1055,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1296,6 +1361,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#email" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sessions-and-history" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1443,7 +1519,7 @@
 <ul>
 <li><code>Runtime.start(workflow, vars=..., actor_id=..., session_id=..., parent_run_id=..., run_id=...) -&gt; run_id</code></li>
 <li>creates and persists a new <code>RunState</code></li>
-<li><code>run_id</code> starts the run under an id you choose (<code>[A-Za-z0-9_-]+</code>). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, <code>vars._meta.occurrence</code>, <code>vars._meta.creation_digest</code>) returns the existing run untouched, and a different identity raises <code>RunIdentityConflict</code> (a <code>ValueError</code>, <code>reason_code = "identity_conflict"</code>). The store must support <code>create_if_absent</code> (otherwise <code>NotImplementedError</code>). <code>START_SUBWORKFLOW</code> accepts the same explicit id as <code>payload.run_id</code></li>
+<li><code>run_id</code> starts the run under an id you choose (<code>[A-Za-z0-9_-]+</code>). The run is created only if that id is free; starting it again with the same identity (workflow, session, parent, <code>vars._meta.occurrence</code>, <code>vars._meta.creation_digest</code>) returns the existing run untouched, and a different identity raises <code>RunIdentityConflict</code> (a <code>ValueError</code>, <code>reason_code = "identity_conflict"</code>). The store must support <code>create_if_absent</code> (otherwise <code>NotImplementedError</code>). <code>START_SUBWORKFLOW</code> accepts the same explicit id as <code>payload.run_id</code>, and <code>payload.resolve_vars</code> (a list of top-level var names) resolves the artifact refs in those vars for the child only, strictly (a missing artifact fails the start), so the parent's records keep the refs</li>
 <li>a root run that names a session is checked against the session's attribution: in a discussion session it gets the discussion's workspace setup (its own writable workspace and the read-only mount) and provenance, and when the attribution cannot be read (an invalid discussion root, or a store without a run index) the start raises <code>SessionAttributionError</code> (see <a href="../automations/#discussions">automations.md</a>)</li>
 <li><code>Runtime.tick(workflow, run_id, max_steps=..., step_gate=None) -&gt; RunState</code></li>
 <li>executes node handlers and effects until the run becomes <code>WAITING</code>, <code>COMPLETED</code>, <code>FAILED</code>, or <code>CANCELLED</code></li>
@@ -1586,7 +1662,29 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <li>reads: <code>get_automation(run_store, id)</code>, <code>list_occurrences(runtime, id, cursor=, limit=)</code>, <code>list_attention(ledger_store, id, after_seq=, cursor=, limit=)</code>, <code>pending_waits(run_store, id, limit=)</code> with typed waits (<code>ask_user</code>, <code>tool_approval</code>, <code>event</code>) and <code>ANSWER_PAYLOADS</code>; <code>list_automations(run_store, status=, cursor=, limit=)</code>, <code>automation_summary(run)</code>, <code>latest_occurrence(run_store, id)</code></li>
 <li><code>start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)</code>: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable <code>workspace_root</code> with the automation's workspace mounted read-only</li>
 <li>controller bundle: <code>register_controller_bundle(registry)</code>, <code>controller_workflow_spec()</code>, <code>controller_bundle_path()</code>; <code>CONTROLLER_WORKFLOW_ID</code> is <code>abstractframework.automation-controller@1.0.0:controller</code></li>
-<li>trigger sources: <code>trigger_sources()</code>, <code>get_trigger_adapter(id, version)</code>, built-ins <code>schedule@1</code> and <code>manual@1</code>, third-party sources through the <code>abstractruntime.trigger_sources</code> entry-point group</li>
+<li>trigger sources: <code>trigger_sources()</code>, <code>get_trigger_adapter(id, version)</code>, built-ins <code>schedule@1</code>, <code>manual@1</code> and <code>email.received@1</code>, third-party sources through the <code>abstractruntime.trigger_sources</code> entry-point group</li>
+<li>definition v2: <code>policy.email_allowed_recipients</code> (default <code>["self"]</code>), <code>policy.untrusted_input_tools</code> (default <code>[]</code>) and <code>notify.channels</code> (default <code>["console"]</code>); attention items carry <code>channels</code></li>
+</ul>
+<h2 id="email">Email<a class="headerlink" href="#email" title="Permanent link">&para;</a></h2>
+<p>Implementation: <code>src/abstractruntime/email/*</code>, <code>src/abstractruntime/triggers/email_received.py</code>. Deep dive: <a href="../email/">email.md</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.email</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">EmailBinding</span><span class="p">,</span> <span class="n">bind_email_account</span><span class="p">,</span> <span class="n">strip_client_email_keys</span><span class="p">,</span> <span class="n">binding_of</span><span class="p">,</span>   <span class="c1"># run-scoped binding</span>
+    <span class="n">JsonFileEventInbox</span><span class="p">,</span> <span class="n">InMemoryEventInbox</span><span class="p">,</span>                                  <span class="c1"># durable event inbox</span>
+    <span class="n">EmailInboxFeeder</span><span class="p">,</span> <span class="n">PollReport</span><span class="p">,</span> <span class="n">email_event_id</span><span class="p">,</span>                            <span class="c1"># mailbox -&gt; inbox</span>
+    <span class="n">email_trigger_consumers</span><span class="p">,</span> <span class="n">wake_email_automations</span><span class="p">,</span> <span class="n">prune_email_inbox</span><span class="p">,</span>      <span class="c1"># watcher helpers</span>
+    <span class="n">EventInboxRetention</span><span class="p">,</span>                                                     <span class="c1"># inbox retention (90 days / 10,000 events)</span>
+    <span class="n">EMAIL_USE_AGENT_TOOL</span><span class="p">,</span> <span class="n">EMAIL_USE_ACTION</span><span class="p">,</span> <span class="n">email_use_for_workflow</span><span class="p">,</span>          <span class="c1"># who is sending</span>
+    <span class="n">email_action_target</span><span class="p">,</span> <span class="n">register_email_action_workflow</span><span class="p">,</span> <span class="n">validate_email_action</span><span class="p">,</span> <span class="n">render_email_template</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<ul>
+<li><code>Runtime.set_email_context_resolver(fn)</code>: <code>fn(binding, *, use) -&gt; EmailContext | None</code> (<code>use</code> is <code>"agent_tool"</code> or <code>"action"</code>; <code>fn(binding)</code> also accepted), per runtime, memory only</li>
+<li><code>Runtime.set_email_binding(binding | None)</code> / <code>Runtime.email_binding</code>: the account occurrences are bound to</li>
+<li><code>Runtime.set_event_inbox(inbox)</code> / <code>Runtime.event_inbox</code>: required by <code>email.received@1</code></li>
+<li><code>EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -&gt; PollReport</code> and <code>.status()</code></li>
+<li>toolsets: <code>get_default_toolsets(..., email_enabled=True)</code> (also <code>list_default_tool_specs</code>, <code>build_default_tool_map</code>, <code>list_tool_catalog</code>); no env flag; <code>list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "not_available" | "agent_tools_off")</code></li>
+<li>mail library for hosts: <code>abstractruntime.integrations.abstractcore.email_facade</code> re-exports <code>abstractcore.comms.email</code> (its <code>__all__</code> plus the <code>legacy</code> module; <code>GATEWAY_NAMES</code> lists the names hosts use)</li>
+<li>approval: the <code>send_email_recipient@v2</code> refiner (<a href="../tool-approval/#per-call-refiners">tool-approval.md</a>)</li>
 <li><code>adopt_legacy_schedule_projection(run)</code>: read-only summary of a legacy gateway <code>scheduled:*</code> root</li>
 <li>read-only mounts: <code>_runtime.workspace_read_only_paths</code> (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers <code>read_only_paths(vars)</code>, <code>path_is_read_only(vars, path)</code> and <code>READ_ONLY_PATHS_KEY</code> in <code>abstractruntime.utils.workspace_paths</code></li>
 <li>read-only workspaces: run vars <code>workspace_read_only: true</code> (or <code>_runtime.workspace_read_only: true</code>); <code>abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES</code> classifies every exposable tool as <code>read</code>, <code>write</code>, <code>exec</code>, <code>delegate</code>, <code>comms</code> or <code>memory-write</code></li>
@@ -1616,13 +1714,13 @@ When available, it also includes <code>resolved_actions</code>: bounded capabili
 from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.19.2 or newer is part of the base install).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.20.0 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
 - public discovery facade: <code>AbstractCoreDiscoveryFacade</code>, <code>get_abstractcore_discovery_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/discovery_facade.py</code>)
 - public host facade: <code>AbstractCoreHostFacade</code>, <code>get_abstractcore_host_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>)
-- public email comms wrappers: <code>list_email_accounts(...)</code>, <code>list_emails(...)</code>, <code>read_email(...)</code>, <code>send_email(...)</code> (<code>src/abstractruntime/integrations/abstractcore/comms_facade.py</code>)
+- email facade: <code>email_facade</code> (AbstractCore's mail library for hosts; see <a href="#email">Email</a>)
 - public Telegram host wrappers: <code>TelegramTdlibNotAvailable</code>, <code>bootstrap_telegram_auth_from_env(...)</code>, <code>get_global_telegram_client(...)</code>, <code>stop_global_telegram_client()</code>, <code>send_telegram_message(...)</code> (<code>src/abstractruntime/integrations/abstractcore/telegram_facade.py</code>)
 - public durable run facade: <code>AbstractCoreRunFacade</code>, <code>get_abstractcore_run_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/run_facade.py</code>)
 - effect handler wiring: <code>build_effect_handlers(...)</code> (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>)
@@ -1635,7 +1733,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 - the <code>MODEL_RESIDENCY</code> effect supports <code>list_loaded</code>, <code>load</code>, <code>unload</code>, <code>lock</code>, and <code>unlock</code> operations with the same soft-fail semantics; on <code>unload</code>, <code>force</code> is forwarded only when authored in the effect payload
 - local <code>list_model_residency</code> merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry <code>source: "provider_server"</code> and no <code>task</code> label), and residency rows normalize provider size extras to <code>size_bytes</code> / <code>size_vram_bytes</code> while keeping the originals; local text rows also carry registry-declared <code>modalities</code> (omitted on a registry miss), host identity (<code>host_id</code> / <code>host_name</code>), and runtime-owned lock truth (<code>locked</code> / <code>lockable</code>, with <code>pinned</code> a truthful alias of <code>locked</code> — never the default-identity flag, which <code>default</code> alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (<code>list_prompt_cache_exports</code>, <code>prompt_cache_export</code>, <code>prompt_cache_import</code>) and is intentionally local-only
-- host-facade email helpers delegate to Runtime's host-local comms facade/export layer (<code>list_email_accounts</code>, <code>list_emails</code>, <code>read_email</code>, <code>send_email</code>)
+- host-facade email helpers (<code>list_email_accounts</code>, <code>list_emails</code>, <code>read_email</code>, <code>send_email</code>) use the process's own AbstractCore account (single-user installs)
 - run-facade helpers create and resume durable child runs for existing runs (<code>execute_llm_call</code>, <code>execute_tool_calls</code>, <code>resume_tool_calls</code>, <code>generate_image</code>, <code>edit_image</code>, <code>upscale_image</code>, <code>generate_video</code>, <code>image_to_video</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>transcribe_audio</code>, <code>send_email</code>, <code>send_telegram_message</code>)
 - task-specific image/video helpers preserve batch and adapter controls such as
   <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>; local

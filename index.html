@@ -594,6 +594,60 @@
   
   
     <li class="md-nav__item">
+      <a href="email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="mcp-worker/" class="md-nav__link">
         
   
@@ -818,10 +872,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -839,8 +893,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1122,14 +1176,15 @@
 <li><code>artifacts.md</code> — Runtime artifact identity, descriptors, provenance, catalog search, and access stats</li>
 <li><code>integrations/abstractcore.md</code> — wiring <code>LLM_CALL</code> / <code>TOOL_CALLS</code>, the <code>config_facade</code> models/engines/host-jobs passthroughs for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore</li>
 <li><code>tools-comms.md</code> — enabling the optional comms toolset (email/WhatsApp/Telegram)</li>
-<li><code>tool-approval.md</code> — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the <code>send_email</code> self-recipient rule)</li>
+<li><code>email.md</code> — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the <code>email.received@1</code> trigger, and the send-email action</li>
+<li><code>tool-approval.md</code> — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the <code>send_email</code> recipient rule: self and pre-authorised recipients)</li>
 <li><code>api.md#workflowbundles-flow-and-visualflow-distribution</code> — VisualFlow compiler APIs, media nodes, and document nodes (<code>read_pdf</code> / <code>write_pdf</code> / <code>write_docx</code>)</li>
 <li><code>api.md#sessions-and-history</code> — session history replay: one window, the most recent 50,000 tokens of whole turns (<code>HISTORY_REPLAY_MAX_TOKENS</code>), returned as a <code>ReplayedHistory</code> whose <code>.report</code> records what was replayed and dropped</li>
 <li><code>api.md#run-history-bundle-export-portable-replay-artifact</code> — run history bundles, including <code>resolved_actions</code> summaries for cross-client capability replay</li>
 </ul>
 <h2 id="features-reference">Features (reference)<a class="headerlink" href="#features-reference" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>automations.md</code> — automations: a workflow run on a schedule or on request as a durable controller run; triggers (<code>schedule@1</code>, <code>manual@1</code>, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)</li>
+<li><code>automations.md</code> — automations: a workflow run on a schedule or on request as a durable controller run; triggers (<code>schedule@1</code>, <code>manual@1</code>, <code>email.received@1</code>, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)</li>
 <li><code>entity-runtime.md</code> — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (<code>$act_only</code> refs), durable visit waits with deadlines</li>
 <li><code>evidence.md</code> — artifact-backed evidence capture for external-boundary tools</li>
 <li><code>mcp-worker.md</code> — MCP worker CLI (<code>abstractruntime-mcp-worker</code>)</li>

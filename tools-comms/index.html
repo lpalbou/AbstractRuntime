@@ -16,7 +16,7 @@
         <link rel="prev" href="../entity-runtime/">
       
       
-        <link rel="next" href="../mcp-worker/">
+        <link rel="next" href="../email/">
       
       
         
@@ -527,10 +527,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#enable-opt-in" class="md-nav__link">
+  <a href="#email-for-each-user" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Enable (opt-in)
+        Email for each user
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable
       
     </span>
   </a>
@@ -596,6 +607,60 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -831,10 +896,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -852,8 +917,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1037,10 +1102,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#enable-opt-in" class="md-nav__link">
+  <a href="#email-for-each-user" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Enable (opt-in)
+        Email for each user
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable
       
     </span>
   </a>
@@ -1130,18 +1206,26 @@
 <p>Implementation pointers (this repo):
 - toolset gating: <code>src/abstractruntime/integrations/abstractcore/default_tools.py</code>
 - tool execution: <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code></p>
-<h2 id="enable-opt-in">Enable (opt-in)<a class="headerlink" href="#enable-opt-in" title="Permanent link">&para;</a></h2>
-<p>The <code>comms</code> toolset is disabled by default. Enable it via env vars (checked by <code>default_tools.comms_tools_enabled()</code>):</p>
+<h2 id="email-for-each-user">Email for each user<a class="headerlink" href="#email-for-each-user" title="Permanent link">&para;</a></h2>
+<p>A host that serves users with their own mailboxes binds each run to its user's account and passes
+<code>email_enabled=True</code> to the toolset functions for users with a connected account; see <a href="../email/">email.md</a>. The
+email tools are <code>list_email_accounts</code>, <code>list_email_folders</code>, <code>send_email</code>, <code>reply_email</code>, <code>list_emails</code>, <code>search_emails</code>,
+<code>read_email</code> and <code>get_email_attachment</code>; <code>send_email</code> runs unattended only to the user's own address or to recipients pre-authorised
+for the run (<a href="../tool-approval/#per-call-refiners">tool-approval.md</a>), and file arguments (<code>attachments</code>,
+<code>output_dir</code>) stay inside the run's workspace.</p>
+<h2 id="enable">Enable<a class="headerlink" href="#enable" title="Permanent link">&para;</a></h2>
+<p>The <code>comms</code> toolset is disabled by default.</p>
 <ul>
-<li><code>ABSTRACT_ENABLE_COMMS_TOOLS=1</code> (enable email + WhatsApp + Telegram)</li>
-<li><code>ABSTRACT_ENABLE_EMAIL_TOOLS=1</code> (email only)</li>
-<li><code>ABSTRACT_ENABLE_WHATSAPP_TOOLS=1</code> (WhatsApp only)</li>
-<li><code>ABSTRACT_ENABLE_TELEGRAM_TOOLS=1</code> (Telegram only)</li>
+<li><strong>Email</strong> is enabled only by the host: pass <code>email_enabled=True</code> to the toolset functions (see above). No
+  environment variable enables it.</li>
+<li><strong>WhatsApp and Telegram</strong> are enabled for the whole process with environment variables (checked by
+  <code>default_tools.comms_tools_enabled()</code>): <code>ABSTRACT_ENABLE_COMMS_TOOLS=1</code> (both), <code>ABSTRACT_ENABLE_WHATSAPP_TOOLS=1</code>
+  or <code>ABSTRACT_ENABLE_TELEGRAM_TOOLS=1</code>.</li>
 </ul>
 <h2 id="discover-what-gets-enabled">Discover what gets enabled<a class="headerlink" href="#discover-what-gets-enabled" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
 <span class="s">from abstractruntime.integrations.abstractcore.default_tools import list_default_tool_specs</span>
-<span class="s">comms = [s for s in list_default_tool_specs() if s.get("toolset") == "comms"]</span>
+<span class="s">comms = [s for s in list_default_tool_specs(email_enabled=True) if s.get("toolset") == "comms"]</span>
 <span class="s">print([s.get("name") for s in comms])</span>
 <span class="s">PY</span>
 </code></pre></div>
@@ -1151,9 +1235,9 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">MappingToolExecutor</span><span class="p">,</span> <span class="n">create_local_runtime</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore.default_tools</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_default_tools</span>
 
-<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"ABSTRACT_ENABLE_COMMS_TOOLS"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"1"</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"ABSTRACT_ENABLE_TELEGRAM_TOOLS"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"1"</span>
 
-<span class="n">tool_executor</span> <span class="o">=</span> <span class="n">MappingToolExecutor</span><span class="o">.</span><span class="n">from_tools</span><span class="p">(</span><span class="n">get_default_tools</span><span class="p">())</span>
+<span class="n">tool_executor</span> <span class="o">=</span> <span class="n">MappingToolExecutor</span><span class="o">.</span><span class="n">from_tools</span><span class="p">(</span><span class="n">get_default_tools</span><span class="p">(</span><span class="n">email_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
 <span class="n">rt</span> <span class="o">=</span> <span class="n">create_local_runtime</span><span class="p">(</span><span class="n">provider</span><span class="o">=</span><span class="s2">"ollama"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"qwen3:4b"</span><span class="p">,</span> <span class="n">tool_executor</span><span class="o">=</span><span class="n">tool_executor</span><span class="p">)</span>
 </code></pre></div>
 <p>Notes:
@@ -1161,7 +1245,9 @@
 - In untrusted deployments, prefer passthrough tools so a host/worker boundary approves and executes tool calls (<code>PassthroughToolExecutor</code> in <code>src/abstractruntime/integrations/abstractcore/tool_executor.py</code>).
 - For local bridge-owned delivery flows, <code>ApprovalToolExecutor</code> can auto-run the Telegram send tools while requiring approval for email, WhatsApp, unknown tools, and write/command-style tools by default.
 - Separate from the durable <code>TOOL_CALLS</code> path, Runtime also exposes <strong>host wrappers</strong> for operator-owned email and Telegram surfaces:
-  - email helpers on <code>get_abstractcore_host_facade(runtime)</code> and <code>abstractruntime.integrations.abstractcore.comms_facade</code>
+  - single-user email helpers on <code>get_abstractcore_host_facade(runtime)</code> (the process's own AbstractCore account; a
+    host that serves users imports AbstractCore's mail library through
+    <code>abstractruntime.integrations.abstractcore.email_facade</code> instead)
   - Telegram lifecycle/send wrappers in <code>abstractruntime.integrations.abstractcore.telegram_facade</code>
   - read/bootstrap helpers stay host-local and do not create run history by themselves
   - if an outbound send belongs to a run, prefer the durable run facade:
@@ -1175,10 +1261,10 @@
 - Telegram: <code>abstractcore.tools.telegram_tools</code></p>
 <p>AbstractRuntime does <strong>not</strong> store secrets in run state. Secrets should be supplied as environment variables in the <strong>process that executes the tool calls</strong>.</p>
 <p>Practical starting points (provided by AbstractCore; see <code>pyproject.toml</code> for the minimum supported version):
-- Email:
-  - <code>ABSTRACT_EMAIL_ACCOUNTS_CONFIG=/path/to/emails.yaml</code> (YAML/JSON config), or <code>ABSTRACT_EMAIL_{IMAP,SMTP}_*</code> env vars
-  - Passwords are resolved indirectly via <code>*_PASSWORD_ENV_VAR</code> (default: <code>EMAIL_PASSWORD</code>)
-  - Repo template (this repo): <code>emails.config.example.yaml</code> (static examples: OVH + Gmail)
+- Email: the account is configured in AbstractCore's email settings (<code>abstractcore email connect ...</code>, or the Email
+  page of the AbstractCore consoles), with credentials encrypted at rest; a multi-user host supplies each run's
+  account through <code>Runtime.set_email_context_resolver</code> (<a href="../email/">email.md</a>). AbstractCore imports a pre-2.20
+  configuration once and then ignores it (see AbstractCore's email documentation).
 - WhatsApp (Twilio):
   - defaults use <code>TWILIO_ACCOUNT_SID</code> and <code>TWILIO_AUTH_TOKEN</code>
 - Telegram:

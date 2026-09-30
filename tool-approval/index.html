@@ -506,10 +506,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#per-call-refiners-send_email_recipientv1" class="md-nav__link">
+  <a href="#per-call-refiners" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-call refiners (send_email_recipient@v1)
+        Per-call refiners
       
     </span>
   </a>
@@ -566,6 +566,60 @@
     
   
     Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
   
 
     
@@ -809,10 +863,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -830,8 +884,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1048,10 +1102,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#per-call-refiners-send_email_recipientv1" class="md-nav__link">
+  <a href="#per-call-refiners" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-call refiners (send_email_recipient@v1)
+        Per-call refiners
       
     </span>
   </a>
@@ -1158,14 +1212,40 @@ honest that it is unvetted rather than proven-destructive).</p>
 <code>fetch_url</code>, and see the refiner below) are <strong>never silenced by the ceiling</strong>:
 the approval prompt is the exfiltration defense. Only an explicit
 <code>auto_approve_tools</code> name — the operator's conscious act — overrides that.</p>
-<h2 id="per-call-refiners-send_email_recipientv1">Per-call refiners (<code>send_email_recipient@v1</code>)<a class="headerlink" href="#per-call-refiners-send_email_recipientv1" title="Permanent link">&para;</a></h2>
+<h2 id="per-call-refiners">Per-call refiners<a class="headerlink" href="#per-call-refiners" title="Permanent link">&para;</a></h2>
 <p>Some tools carry a <code>risk_refiner</code> id on their row. A refiner may <strong>only lower</strong>
 a single call below its band, at approval time, when it can <em>prove</em> the call
 is safe; it can never raise the band, and any call it cannot prove holds the
 ceiling (deny-safe).</p>
-<p><code>send_email</code> (band <code>outreach</code>) declares <code>send_email_recipient@v1</code> (operator
-ruling dm#244): a send to <strong>the registered operator's own address</strong>
-auto-approves; a send to any other recipient asks.</p>
+<p><code>send_email</code> and <code>reply_email</code> (band <code>outreach</code>) declare
+<code>send_email_recipient@v2</code>: a <code>send_email</code> whose every recipient is <strong>the
+registered user's own address</strong> or <strong>a recipient pre-authorised for the run</strong>
+auto-approves; anything else asks.</p>
+<ul>
+<li>Self is <code>_runtime.operator_email</code> (below). Pre-authorised recipients are
+  <code>_runtime.email_allowed_recipients</code>: exact addresses (and <code>"self"</code>) that an
+  automation takes from its definition (<code>policy.email_allowed_recipients</code>,
+  default <code>["self"]</code>, see <a href="../automations/#tool-approval">automations.md</a>).
+  The key is model-unwritable: the controller sets it at admission, hosts pop
+  client-supplied values (<code>strip_client_email_keys</code>), and a child run takes
+  its parent's value.</li>
+<li><code>reply_email</code> always asks: its recipients come from the original message,
+  not from the arguments.</li>
+<li>A call with an argument key <code>send_email</code> does not accept asks.</li>
+<li>The refiner runs with or without a per-run <code>_runtime.tool_policy</code>. Without
+  one, it lowers the call on top of the executor's static policy; the
+  executor's <code>require_approval_tools</code> still wins.</li>
+<li>Decisions are per call and applied by name: a batch with one <code>send_email</code>
+  that needs a person waits as a whole, even beside a send to self.</li>
+<li>Approval is separate from the account's recipient policy (allowlist or
+  denylist), which AbstractCore enforces on every send afterwards
+  (<code>guarded_send</code>, on every email send path). A client that auto-approves
+  every tool for its user ("approve all") decides only the approval wait;
+  the recipient policy still decides who can receive mail. See
+  <a href="../email/#sending-without-asking">email.md</a>.</li>
+</ul>
+<p><code>send_email_recipient@v1</code> (self only) stays registered for older tool rows.
+The rules below apply to both versions.</p>
 <ul>
 <li>The operator address arrives as <code>_runtime.operator_email</code> — a
   <strong>model-unwritable</strong> key the gateway injects from the account record at run

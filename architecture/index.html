@@ -790,6 +790,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../mcp-worker/" class="md-nav__link">
         
   
@@ -1014,10 +1068,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -1035,8 +1089,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1491,7 +1545,7 @@
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>Updated: 2026-09-29
-Version: 0.7.3
+Version: 0.8.0
 Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
@@ -1780,7 +1834,8 @@ involved: a host drives a controller like any other run. See <a href="../automat
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run&lt;br/&gt;(automation-controller@1.0.0)"]
-    Triggers["trigger registry&lt;br/&gt;schedule@1, manual@1,&lt;br/&gt;entry-point sources"]
+    Triggers["trigger registry&lt;br/&gt;schedule@1, manual@1, email.received@1,&lt;br/&gt;entry-point sources"]
+    Inbox["event inbox&lt;br/&gt;(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /&lt;br/&gt;list_attention / pending_waits /&lt;br/&gt;list_automations"]
   end
   subgraph Runs["runs"]
@@ -1799,6 +1854,7 @@ involved: a host drives a controller like any other run. See <a href="../automat
   Loop --&gt; Controller
   Loop --&gt; Occ
   Controller --&gt;|"prepare / admit / rearm"| Triggers
+  Controller --&gt;|"events after its cursor"| Inbox
   Controller --&gt;|"START_SUBWORKFLOW run_id"| Occ
   Occ --&gt; Desc
   Controller --&gt; RS
@@ -1808,6 +1864,10 @@ involved: a host drives a controller like any other run. See <a href="../automat
   Queries --&gt; RS
   Queries --&gt; LS
 </code></pre></div>
+<p>Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
+(<code>abstractruntime.email.feeder</code>) and wakes the controller, and the <code>email.received@1</code> adapter batches the messages
+after the automation's cursor. Tool calls resolve the executing run's email account through the host's per-runtime
+resolver at call time. See <a href="../email/">email.md</a>.</p>
 <p>Invariants the design rests on:</p>
 <ul>
 <li><strong>Create-if-absent.</strong> Controllers, occurrences and discussions are created under explicit ids through
@@ -1855,6 +1915,7 @@ involved: a host drives a controller like any other run. See <a href="../automat
 <li><code>getting-started.md</code> — first steps</li>
 <li><code>api.md</code> — public API surface (imports + pointers)</li>
 <li><code>automations.md</code> — automations: controller, triggers, commands, context, discussions, storage guarantees</li>
+<li><code>email.md</code> — email accounts per run, the event inbox, the <code>email.received@1</code> trigger, the send-email action</li>
 <li><code>limits.md</code> — <code>_limits</code> and RuntimeConfig</li>
 <li><code>snapshots.md</code> — snapshot/bookmark stores</li>
 <li><code>provenance.md</code> — hash chain and verification</li>

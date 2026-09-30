@@ -640,6 +640,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../mcp-worker/" class="md-nav__link">
         
   
@@ -864,10 +918,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -885,8 +939,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1277,7 +1331,12 @@ durable record stays lean.</p>
 <li><code>read_file</code> content above the inline threshold;</li>
 <li><code>execute_command</code> <code>stdout</code> and <code>stderr</code>, regardless of exit code (verbose
   failures are offloaded like verbose successes);</li>
-<li>any other host tool whose string output exceeds the inline threshold.</li>
+<li>any other host tool whose string output exceeds the inline threshold;</li>
+<li>any other host tool whose structured (dict) output exceeds the inline threshold as JSON: its largest string
+  values, at any depth, are stored one by one (largest first) until the output fits, each replaced by
+  <code>{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}</code>; when many small values make
+  it too large, the whole output is stored as one JSON attachment and replaced by its reference. The result lists
+  the stored ids in <code>output_offloaded_artifact_ids</code>, and reading the run back resolves the references.</li>
 </ul>
 <p>Thresholds (environment-configurable):</p>
 <ul>

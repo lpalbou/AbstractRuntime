@@ -856,6 +856,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../mcp-worker/" class="md-nav__link">
         
   
@@ -1080,10 +1134,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -1101,8 +1155,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1632,7 +1686,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.16.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.20.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -2302,7 +2356,7 @@ request/output summary, and effective route actually ran.</p>
 </code></pre></div>
 <h2 id="models-engines-and-host-jobs-config-facade">Models, engines and host jobs (config facade)<a class="headerlink" href="#models-engines-and-host-jobs-config-facade" title="Permanent link">&para;</a></h2>
 <p>AbstractCore implements the model browser, the local-engine installer and a
-host job registry. These passthroughs need AbstractCore 2.16.0 (the
+host job registry. These passthroughs need AbstractCore 2.20.0 (the
 base-install floor; 2.15.1 is the first release that records who cancelled a job).
 <code>abstractruntime.integrations.abstractcore.config_facade</code>
 passes them through unchanged, so a host such as AbstractGateway serves the same
@@ -2470,11 +2524,9 @@ email and Telegram:</p>
 <li><code>list_emails(...)</code></li>
 <li><code>read_email(...)</code></li>
 <li><code>send_email(...)</code></li>
-<li><code>abstractruntime.integrations.abstractcore.comms_facade</code> also exposes:</li>
-<li><code>list_email_accounts(...)</code></li>
-<li><code>list_emails(...)</code></li>
-<li><code>read_email(...)</code></li>
-<li><code>send_email(...)</code></li>
+<li><code>abstractruntime.integrations.abstractcore.email_facade</code> re-exports AbstractCore's mail library
+  (<code>abstractcore.comms.email</code>: accounts, store, vault, <code>guarded_send</code>, policy, OAuth2, typed errors,
+  <code>legacy</code>) for hosts that manage per-user accounts (<a href="../../email/">email.md</a>)</li>
 <li><code>abstractruntime.integrations.abstractcore.telegram_facade</code> exposes:</li>
 <li><code>TelegramTdlibNotAvailable</code></li>
 <li><code>bootstrap_telegram_auth_from_env(...)</code></li>
@@ -2486,9 +2538,10 @@ email and Telegram:</p>
 <ul>
 <li>These are <strong>host-local</strong> wrappers over current public AbstractCore tool
   modules. They do not proxy through the remote AbstractCore server.</li>
-<li>The host facade email methods and the standalone <code>comms_facade</code> functions use
-  the same Runtime-owned email wrapper layer; choose whichever is more natural
-  for the host surface you are building.</li>
+<li>The host facade email methods act for the process's own AbstractCore
+  account (single-user installs). Once a runtime in the process has an email
+  resolver, they answer <code>email_not_configured</code>; a multi-user host binds each
+  run to its user's account instead (<a href="../../email/">email.md</a>).</li>
 <li>They are intentionally <strong>nondurable</strong>. They do not write Runtime run history
   on their own.</li>
 <li>Direct <code>send_email(...)</code> on the host facade and direct

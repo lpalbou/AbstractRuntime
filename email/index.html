@@ -1,0 +1,1564 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/email/">
+      
+      
+        <link rel="prev" href="../tools-comms/">
+      
+      
+        <link rel="next" href="../automations/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Email - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#email-one-user-one-runtime-one-mailbox" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Email
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#binding-a-run-to-an-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding a run to an account
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sending-without-asking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending without asking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-an-automation-when-mail-arrives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running an automation when mail arrives
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running an automation when mail arrives">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-inbox-and-the-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inbox and the watcher
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-emailreceived1-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The email.received@1 trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-occurrence-receives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the occurrence receives
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sending-from-an-automation-without-a-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending from an automation without a model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
+        
+          
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#binding-a-run-to-an-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binding a run to an account
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sending-without-asking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending without asking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-an-automation-when-mail-arrives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running an automation when mail arrives
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running an automation when mail arrives">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-inbox-and-the-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inbox and the watcher
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-emailreceived1-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The email.received@1 trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-occurrence-receives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the occurrence receives
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sending-from-an-automation-without-a-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending from an automation without a model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="email-one-user-one-runtime-one-mailbox">Email: one user, one runtime, one mailbox<a class="headerlink" href="#email-one-user-one-runtime-one-mailbox" title="Permanent link">&para;</a></h1>
+<p>AbstractRuntime lets each run act for its user's own email account, run automations when mail arrives, and send
+mail from automations, while the credentials stay with the host. This page covers the runtime side; the mail library,
+the account store and the recipient policy live in AbstractCore (<code>abstractcore.comms.email</code>), and the per-user
+settings, the mail watcher and the notification dispatcher live in AbstractGateway.</p>
+<p>Related pages: <a href="../tools-comms/">tools-comms.md</a> (the email tools), <a href="../automations/">automations.md</a> (triggers,
+definitions, tool approval), <a href="../tool-approval/">tool-approval.md</a> (the <code>send_email_recipient@v2</code> refiner),
+<a href="../api/#email">api.md</a> (imports).</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  subgraph Host["Host (gateway), per user"]
+    Store["Account store\n(encrypted secret)"]
+    Watcher["Mail watcher\n(calls poll)"]
+  end
+  subgraph Runtime["Runtime (one per user)"]
+    Resolver["set_email_context_resolver(fn)"]
+    Inbox["Durable event inbox"]
+    Controller["Automation controller\nemail.received@1"]
+    Tools["Tool batch\n(email_run_scope)"]
+  end
+  Mailbox[("IMAP / SMTP")]
+  Watcher -- "EmailInboxFeeder.poll(ctx)" --&gt; Mailbox
+  Watcher -- "append (durable)" --&gt; Inbox
+  Watcher -- "wake_email_automations" --&gt; Controller
+  Inbox --&gt; Controller
+  Controller -- "occurrence (untrusted input)" --&gt; Tools
+  Tools -- "binding" --&gt; Resolver
+  Resolver -- "EmailContext (memory only)" --&gt; Store
+  Tools -- "guarded_send / read" --&gt; Mailbox
+</code></pre></div>
+<h2 id="binding-a-run-to-an-account">Binding a run to an account<a class="headerlink" href="#binding-a-run-to-an-account" title="Permanent link">&para;</a></h2>
+<p>A run carries a non-secret binding in its vars, <code>_runtime.email_account = {"account_ref": ..., "address": ...}</code>. When
+one of its email tools runs, the runtime calls the host's resolver with that binding and hands the returned
+<code>EmailContext</code> to the tool for the duration of the call. The context holds the password or OAuth token in memory only:
+it never enters run vars, the ledger, tool arguments, tool results or events.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.email</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmailBinding</span><span class="p">,</span> <span class="n">bind_email_account</span><span class="p">,</span> <span class="n">strip_client_email_keys</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">resolve</span><span class="p">(</span><span class="n">binding</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">use</span><span class="p">):</span>
+    <span class="c1"># use: "agent_tool" (an agent's or workflow's email tool) or "action" (the send-email action)</span>
+    <span class="k">if</span> <span class="n">binding</span><span class="o">.</span><span class="n">account_ref</span> <span class="o">!=</span> <span class="n">this_users_account_ref</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">my_store_for_this_user</span><span class="p">()</span><span class="o">.</span><span class="n">context</span><span class="p">()</span>
+
+<span class="n">runtime</span><span class="o">.</span><span class="n">set_email_context_resolver</span><span class="p">(</span><span class="n">resolve</span><span class="p">)</span>
+<span class="n">runtime</span><span class="o">.</span><span class="n">set_email_binding</span><span class="p">(</span><span class="n">EmailBinding</span><span class="p">(</span><span class="n">account_ref</span><span class="o">=</span><span class="s2">"tenant:alice:mailbox"</span><span class="p">,</span> <span class="n">address</span><span class="o">=</span><span class="s2">"alice@example.test"</span><span class="p">))</span>
+
+<span class="nb">vars</span> <span class="o">=</span> <span class="n">strip_client_email_keys</span><span class="p">(</span><span class="n">client_vars</span><span class="p">)</span>          <span class="c1"># a client never chooses the account</span>
+<span class="n">bind_email_account</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">binding</span><span class="o">=</span><span class="n">runtime</span><span class="o">.</span><span class="n">email_binding</span><span class="p">)</span>
+<span class="n">run_id</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">flow</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="nb">vars</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>The resolver belongs to one <code>Runtime</code> instance and is never persisted. Return an <code>EmailContext</code> for the binding, or
+  <code>None</code> when the account is not connected or email is turned off; the tools then answer <code>email_not_configured</code> with
+  the fix "Connect an email account in Settings -&gt; Email". You can also raise a typed AbstractCore <code>EmailError</code>
+  (for example <code>EmailDisabled</code> with the reason and the fix); the tool returns it as its result. Check that
+  <code>binding.account_ref</code> is this user's account.</li>
+<li><code>use</code> tells the resolver who is sending. <code>"action"</code> is the runtime's own send-email action
+  (<a href="#sending-from-an-automation-without-a-model">below</a>): fixed templates the user wrote. <code>"agent_tool"</code> is every
+  other email tool call (an agent's or a workflow's). The runtime decides it from the identity of the action's node
+  function, so a workflow that copies the action's id is still <code>"agent_tool"</code>. A resolver declared as <code>fn(binding)</code>
+  (without <code>use</code>) is called without it.</li>
+<li>Keep the binding set while the account is <strong>connected and enabled</strong>, whatever the user's "Agent email tools"
+  choice. Apply that choice where it belongs: leave the email tools out of the agent's toolset (<code>email_enabled</code>,
+  below) and refuse <code>use == "agent_tool"</code> in the resolver when it is off. The send-email action and notifications
+  keep working with agent tools off.</li>
+<li>Once a runtime in the process has a resolver, AbstractCore's email tools always resolve through the executing run,
+  and never fall back to the local AbstractCore settings of the process.</li>
+<li>A run without a binding gets <code>email_not_configured</code>.</li>
+<li>Child runs inherit <code>_runtime.email_account</code> and <code>_runtime.email_allowed_recipients</code>; the parent's value replaces any
+  value the child's own vars carry.</li>
+<li>Automation occurrences are bound at admission from <code>runtime.email_binding</code>, so an automation created before the
+  account was connected uses it once it is connected.</li>
+</ul>
+<p>Tool availability follows the host's decision: pass <code>email_enabled=True</code> to <code>get_default_toolsets</code>,
+<code>list_default_tool_specs</code>, <code>build_default_tool_map</code> or <code>list_tool_catalog</code> for a user whose account is connected and
+enabled and whose agent email tools are on. There is no environment variable for email: without <code>email_enabled=True</code>
+the email tools are off. When they are off, <code>list_tool_catalog(email_enabled=False, email_off_reason=...)</code> names the
+reason on the disabled <code>comms.email</code> row: <code>"not_connected"</code> (default), <code>"admin_disabled"</code>, <code>"not_available"</code> (the administrator has not made agent email
+tools available to this user) or <code>"agent_tools_off"</code>
+(<code>EMAIL_OFF_REASONS</code>). The email tools are <code>list_email_accounts</code>, <code>list_email_folders</code>, <code>send_email</code>, <code>reply_email</code>,
+<code>list_emails</code>, <code>search_emails</code>, <code>read_email</code> and <code>get_email_attachment</code>. The reading tools (<code>list_email_accounts</code>,
+<code>list_email_folders</code>, <code>list_emails</code>, <code>search_emails</code>, <code>read_email</code>) change nothing; <code>list_emails</code> and <code>search_emails</code>
+return at most 100 messages per call with <code>has_more</code> and <code>next_cursor</code> for the next page. Their file arguments are
+confined to the run's workspace in every workspace access mode (the allowed-paths and all-except-ignored modes widen
+file tools, never mail): <code>attachments</code> must be files inside the workspace (a report, a screenshot of the agent's
+work), and <code>get_email_attachment</code> saves into it. A path outside the workspace is refused before anything is sent.</p>
+<p>Tool outputs follow the runtime's inline limit (256 KB by default, <code>ABSTRACTRUNTIME_MAX_INLINE_BYTES</code>): when a
+structured result such as <code>read_email</code> is larger, its largest values (a big HTML body, for example) are stored as
+session attachments and replaced by <code>{"$artifact": id, "offloaded": true, "bytes": n, "open": "open_attachment(...)"}</code>,
+so the ledger stays small; reading the run back resolves the reference to the original text. The result lists the
+stored ids in <code>output_offloaded_artifact_ids</code>.</p>
+<h2 id="sending-without-asking">Sending without asking<a class="headerlink" href="#sending-without-asking" title="Permanent link">&para;</a></h2>
+<p><code>send_email</code> runs without an approval wait only when every recipient (To, Cc and Bcc) is:</p>
+<ul>
+<li><strong>self</strong>: the user's registered address, <code>_runtime.operator_email</code> (set by the host), or</li>
+<li><strong>pre-authorised</strong>: an exact address in <code>_runtime.email_allowed_recipients</code>, which an automation takes from its
+  definition (<code>policy.email_allowed_recipients</code>, default <code>["self"]</code>).</li>
+</ul>
+<p>Any other recipient, a <code>reply_email</code> call (its recipients come from the original message), or a call the refiner
+cannot read waits for a person on a <code>tool_approval</code> wait. The rule applies whether or not the run carries a per-run
+tool policy (<code>_runtime.tool_policy</code>); an executor's explicit <code>require_approval_tools</code> entry still wins. In a batch,
+one <code>send_email</code> that needs a person makes every <code>send_email</code> of that batch wait.</p>
+<p>Approval is separate from the account's recipient policy (allowlist or denylist): AbstractCore's <code>guarded_send</code>
+applies the policy and the send limits to every send, including an approved or pre-authorised one. Every email send
+path in the runtime (agent tools, the send-email action, approved calls) goes through <code>guarded_send</code>, and this is the
+control that decides who can receive mail at all. A client that approves every tool on its own ("approve all") skips
+the approval wait for that user's own runs, never the recipient policy. See
+<a href="../tool-approval/#per-call-refiners">tool-approval.md</a>.</p>
+<h2 id="running-an-automation-when-mail-arrives">Running an automation when mail arrives<a class="headerlink" href="#running-an-automation-when-mail-arrives" title="Permanent link">&para;</a></h2>
+<h3 id="the-inbox-and-the-watcher">The inbox and the watcher<a class="headerlink" href="#the-inbox-and-the-watcher" title="Permanent link">&para;</a></h3>
+<p>The runtime keeps a durable event inbox (<code>JsonFileEventInbox(base_dir)</code> or <code>InMemoryEventInbox()</code>), attached with
+<code>runtime.set_event_inbox(inbox)</code>. The host's watcher fills it with <code>EmailInboxFeeder.poll(ctx)</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.email</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmailInboxFeeder</span><span class="p">,</span> <span class="n">JsonFileEventInbox</span><span class="p">,</span> <span class="n">email_trigger_consumers</span><span class="p">,</span> <span class="n">wake_email_automations</span>
+
+<span class="n">inbox</span> <span class="o">=</span> <span class="n">JsonFileEventInbox</span><span class="p">(</span><span class="n">plane_dir</span> <span class="o">/</span> <span class="s2">"event_inbox"</span><span class="p">)</span>
+<span class="n">runtime</span><span class="o">.</span><span class="n">set_event_inbox</span><span class="p">(</span><span class="n">inbox</span><span class="p">)</span>
+<span class="n">feeder</span> <span class="o">=</span> <span class="n">EmailInboxFeeder</span><span class="p">(</span><span class="n">inbox</span><span class="p">,</span> <span class="n">account_ref</span><span class="o">=</span><span class="s2">"tenant:alice:mailbox"</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">email_trigger_consumers</span><span class="p">(</span><span class="n">runtime</span><span class="p">):</span>          <span class="c1"># at least one email automation</span>
+    <span class="n">report</span> <span class="o">=</span> <span class="n">feeder</span><span class="o">.</span><span class="n">poll</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>                 <span class="c1"># every 60 s</span>
+    <span class="k">if</span> <span class="n">report</span><span class="o">.</span><span class="n">appended</span><span class="p">:</span>
+        <span class="n">wake_email_automations</span><span class="p">(</span><span class="n">runtime</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>The mailbox is opened read-only; nothing is marked read, moved or deleted.</li>
+<li>The first poll is a baseline: mail already in the folder never becomes an event.</li>
+<li>Each new message is fetched whole and appended as one event,
+  <code>email_event_id(account_ref, folder, uidvalidity, uid)</code>. The folder cursor (UIDVALIDITY and last UID) advances
+  message by message, after each append is durable. Appending an id twice is a no-op.</li>
+<li>When the server rebuilds the folder (a new UIDVALIDITY), the feeder resynchronises by date and skips messages that
+  are already in the inbox (same Message-ID) or older than the newest message seen before, so nothing is lost or
+  delivered twice. When there is nothing to resynchronise, AbstractCore returns a new baseline in the new UIDVALIDITY
+  (<code>report.reset</code> and <code>report.baseline</code>): the cursor moves to the newest message of the rebuilt folder and the old
+  mail never becomes new mail.</li>
+<li>A message whose text and HTML bodies are larger than AbstractCore's reading limit (<code>EmailContext.max_message_bytes</code>,
+  25 MB by default) is appended with its headers, its attachment list and a typed <code>body_skipped</code> record
+  (<code>{code: "email_message_too_large", cause, fix, uid, folder, size, limit}</code>); its bodies are <code>null</code>, never cut.
+  <code>report.body_skipped</code> lists those event ids. It never blocks the mailbox, and the occurrence's frame shows
+  <code>Body (not fetched):</code> with the cause and fix.</li>
+<li>A message that cannot be fetched on three polls in a row is recorded in <code>feeder.status()["unprocessable"]</code> with its
+  code, cause and fix, and the feeder moves past it.</li>
+<li>A connection or sign-in failure never raises: the report and <code>feeder.status()</code> carry <code>{code, cause, fix,
+  retryable}</code>, and the next poll waits 60 seconds, doubling up to 15 minutes (<code>poll(..., force=True)</code> polls at once).
+  No automation is paused.</li>
+</ul>
+<p>Retention: the inbox keeps received events for 90 days and at most 10,000 events by default. Call
+<code>prune_email_inbox(runtime, retention={"keep_days": 30, "keep_events": 2000})</code> (or <code>EventInboxRetention(...)</code>) from
+the watcher to apply it. Events an active email automation has not read yet are never removed, and a removed message
+is never appended again (its id stays recorded).</p>
+<h3 id="the-emailreceived1-trigger">The <code>email.received@1</code> trigger<a class="headerlink" href="#the-emailreceived1-trigger" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">trigger</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"source_id"</span><span class="p">:</span> <span class="s2">"email.received"</span><span class="p">,</span> <span class="s2">"source_version"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="s2">"config"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"uses_model"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>          <span class="c1"># default; "every" then defaults to "1h" (false: "60s")</span>
+        <span class="s2">"every"</span><span class="p">:</span> <span class="s2">"1h"</span><span class="p">,</span>               <span class="c1"># batch interval, at least "60s"</span>
+        <span class="s2">"folder"</span><span class="p">:</span> <span class="s2">"INBOX"</span><span class="p">,</span>
+        <span class="s2">"max_batch"</span><span class="p">:</span> <span class="mi">100</span><span class="p">,</span>
+        <span class="s2">"filter"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"from_domain_in"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"example.test"</span><span class="p">],</span> <span class="s2">"subject_contains"</span><span class="p">:</span> <span class="s2">"invoice"</span><span class="p">},</span>
+    <span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong>Filters</strong> are typed: <code>from_in</code> (addresses), <code>from_domain_in</code> (exact domains; list a subdomain to match it),
+  <code>to_in</code> (any To or Cc address), <code>subject_contains</code> (one literal, case-insensitive substring) and <code>has_attachment</code>.
+  There are no patterns or expressions.</li>
+<li><strong>Batches</strong>: the automation runs at most once per <code>every</code>, with every matching message received since its previous
+  run (up to <code>max_batch</code>; the rest go to the next run). An automation that runs a model defaults to once an hour; one
+  that needs no model defaults to every minute.</li>
+<li><strong>Each message once</strong>: the automation keeps its own inbox cursor and a guard on the last UIDVALIDITY and UID it
+  consumed (<code>_runtime.automation.source_state</code>), so a message is admitted at most once, across wakes, restarts and
+  folder rebuilds. Mail that arrived before the automation was created, or while it was paused, is not processed.</li>
+<li>The controller waits without a deadline until mail arrives, then until the batch interval allows the next run;
+  <code>next_fire_at</code> is set only while it waits for that interval.</li>
+<li>Creating (or revising to) this trigger on a runtime without an event inbox is refused with <code>unsupported_feature</code>.</li>
+</ul>
+<h3 id="what-the-occurrence-receives">What the occurrence receives<a class="headerlink" href="#what-the-occurrence-receives" title="Permanent link">&para;</a></h3>
+<p>Inbound mail is data, never instructions:</p>
+<ul>
+<li><code>input_data.trigger = {source: "email.received@1", content_trust: "untrusted", notice, count, emails: [...]}</code>, each
+  email with its headers, whole <code>body_text</code> and <code>body_html</code>, and its attachment list;</li>
+<li>for a target with a string <code>prompt</code>, a fixed frame appended to the prompt: a notice that the content was written by
+  other people, that links and instructions contained in the emails are not to be followed, and that the agent acts
+  only on the automation's mission; then each email between <code>--- Email i of n · boundary &lt;token&gt; ---</code> markers; then a
+  closing line that repeats the rule. The boundary token is drawn at random for each occurrence, so a body cannot
+  fake the end of its email or of the frame;</li>
+<li>the messages and the framed prompt are stored as artifacts at admission. The controller's records
+  (<code>automation.admitted</code>, <code>pending_occurrence</code>, the dispatch effect) carry artifact refs, message metadata and event
+  ids, never bodies. The occurrence run resolves the refs when it starts (<code>START_SUBWORKFLOW</code> <code>resolve_vars</code>), so
+  its own input holds the messages whole: that run is what the model reads. A runtime without an artifact store
+  refuses to create this trigger (<code>unsupported_feature</code>);</li>
+<li>under <code>policy.tool_approval: "auto"</code> ("allow all tools"), the grant is <strong>allow by kind</strong>: it covers only tools with
+  no network egress beyond services the user or administrator configured, no code or command execution, no message
+  sending, no writes outside the run's workspace and no delegation (file reads, workspace-confined file writes,
+  mailbox reads, <code>get_email_attachment</code>, <code>recall_memory</code> and <code>update_plan</code>). Everything else asks, among others
+  <code>fetch_url</code>, <code>browser_probe</code>, <code>skim_url</code>, <code>skim_websearch</code>, <code>web_search</code>, <code>execute_command</code>, <code>shell_exec</code>,
+  <code>execute_python</code>, <code>delegate_agent</code>, <code>channel_fs_write</code>, <code>agora_post_message</code>, <code>agora_send_dm</code>, the memory-writing
+  tools (<code>remember</code>, <code>remember_note</code> including <code>scope: "global"</code>, <code>compact_memory</code>, which write the user's lasting
+  memory outside the run's workspace) and every MCP tool. So an email cannot steer the occurrence into opening a
+  link, running code, sending data to an address or URL it names, or planting a note that later runs obey. The rule is
+  decided on tool facts, never names: see <a href="../automations/#tool-approval">automations.md</a>. To let such an automation
+  use one of those tools unattended, name it individually in <code>policy.untrusted_input_tools</code> (for example
+  <code>["fetch_url"]</code>; <code>"all"</code> and patterns are refused). Show the user the risk when they do: a page the agent opens can
+  carry instructions too, and the URL itself can carry data out. Message-sending tools (<code>send_email</code>, <code>reply_email</code>,
+  <code>agora_post_message</code>, <code>agora_send_dm</code>, WhatsApp and Telegram sends) are never granted this way; email sends follow
+  the recipient rule above.</li>
+<li>under <code>policy.tool_approval: "ask"</code>, the occurrence still gets a per-run policy: nothing runs unasked except the
+  tools named in <code>policy.untrusted_input_tools</code> (sending tools never), and every other call waits for a person,
+  <code>send_email</code> to the user's own address included. The executor's own defaults never decide for an email-triggered
+  run or its child runs (<code>_runtime.untrusted_input</code>); see <a href="../automations/#tool-approval">automations.md</a>.</li>
+</ul>
+<h2 id="sending-from-an-automation-without-a-model">Sending from an automation without a model<a class="headerlink" href="#sending-from-an-automation-without-a-model" title="Permanent link">&para;</a></h2>
+<p>The send-email action is a target for automations whose steps need no model ("forward invoices to me"):</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.email</span><span class="w"> </span><span class="kn">import</span> <span class="n">email_action_target</span><span class="p">,</span> <span class="n">register_email_action_workflow</span>
+
+<span class="n">register_email_action_workflow</span><span class="p">(</span><span class="n">workflow_registry</span><span class="p">)</span>
+<span class="n">target</span> <span class="o">=</span> <span class="n">email_action_target</span><span class="p">({</span>
+    <span class="s2">"to"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"self"</span><span class="p">],</span>
+    <span class="s2">"subject"</span><span class="p">:</span> <span class="s2">"[</span><span class="si">{automation_title}</span><span class="s2">] </span><span class="si">{subject}</span><span class="s2">"</span><span class="p">,</span>
+    <span class="s2">"body"</span><span class="p">:</span> <span class="s2">"From </span><span class="si">{from}</span><span class="se">\n\n</span><span class="si">{text}</span><span class="s2">"</span><span class="p">,</span>
+    <span class="s2">"mode"</span><span class="p">:</span> <span class="s2">"each"</span><span class="p">,</span>                  <span class="c1"># or "digest": one message per batch</span>
+<span class="p">})</span>
+</code></pre></div>
+<ul>
+<li>Placeholders form a fixed list: <code>{from} {from_address} {to} {subject} {date} {text} {uid} {automation_title}</code> in
+  <code>each</code> mode; <code>{count} {list} {automation_title}</code> in <code>digest</code> mode. <code>{{</code> and <code>}}</code> are literal braces. Anything else
+  is refused by <code>validate_email_action</code>. Rendered subjects are one line.</li>
+<li><code>"self"</code> is the registered address (<code>_runtime.operator_email</code>).</li>
+<li>The action sends through an ordinary <code>send_email</code> tool call, so the approval rule above, the recipient policy and the
+  send limits apply, and the ledger records the call.</li>
+<li>A send a person refused is reported and not retried; when every send failed the occurrence fails (and is retried);
+  when some were sent, the result lists the others and asks for attention.</li>
+</ul>
+<h2 id="notifications">Notifications<a class="headerlink" href="#notifications" title="Permanent link">&para;</a></h2>
+<p><code>notify.channels</code> in an automation definition (<code>["console"]</code> by default, or <code>["console", "email"]</code>) is copied onto
+each attention item (<code>channels</code>). A host that delivers notifications by email mails the owner when <code>email</code> is listed.
+See <a href="../automations/#notifications-attention-and-retries">automations.md</a>.</p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<ul>
+<li>One account per runtime; the trigger reads <code>account: "self"</code> only.</li>
+<li><code>reply_email</code> always asks for approval.</li>
+<li>Schedule and manual automations keep the full unattended grant (<code>fetch_url</code>, <code>web_search</code>, <code>execute_command</code>...);
+  only triggers that deliver untrusted inbound content narrow it to the harmless kinds (plus the tools the user named
+  in <code>policy.untrusted_input_tools</code>).</li>
+<li>Camera tools are never covered by an email-triggered "allow all tools" grant: mail from other people cannot make an
+  unattended occurrence take pictures or video. Name them in <code>policy.untrusted_input_tools</code> if the mission needs them.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

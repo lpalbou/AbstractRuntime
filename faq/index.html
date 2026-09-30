@@ -494,6 +494,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../mcp-worker/" class="md-nav__link">
         
   
@@ -1205,10 +1259,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
         
           
-          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
             
   
   
@@ -1226,8 +1280,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_19">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1928,11 +1982,16 @@ session. Filter the run index with <code>session_kind="chat,discussion"</code> t
 <p>Not by default. With <code>policy.tool_approval: "auto"</code>, creating the automation is the consent: each occurrence gets a
 frozen grant for the target's tools (its <code>allowed_tools</code>, or every tool the runtime classifies). Tools the runtime
 does not classify, such as third-party MCP tools, still ask, and <code>ask_user</code> questions still wait for a person.
-Tools that send messages to recipients the model chooses (<code>send_email</code>, <code>send_whatsapp_message</code>,
-<code>send_telegram_*</code>) are never in the grant: a <code>send_email</code> to the registered user's own address runs, any other
-recipient waits for approval, so text an occurrence reads (an inbound email, a web page) cannot make it mail data
-elsewhere. Use <code>"ask"</code> to approve each tool batch; pending approvals appear in <code>pending_waits</code> as <code>tool_approval</code>
-waits.</p>
+Tools that send messages to recipients the model chooses (<code>send_email</code>, <code>reply_email</code>, <code>send_whatsapp_message</code>,
+<code>send_telegram_*</code>) are never in the grant: a <code>send_email</code> to the registered user's own address, or to an address
+listed in the definition's <code>policy.email_allowed_recipients</code>, runs; any other recipient waits for approval, so text
+an occurrence reads (an inbound email, a web page) cannot make it mail data elsewhere. Automations triggered by
+<code>email.received@1</code> grant only tools with no network egress, code execution, messaging, writes outside the workspace or
+delegation (<code>fetch_url</code>, <code>skim_url</code>, <code>web_search</code>, <code>execute_command</code>, the memory-writing <code>remember</code>,
+<code>remember_note</code> and <code>compact_memory</code> and the like ask unless the user named them in <code>policy.untrusted_input_tools</code>).
+Use <code>"ask"</code> to approve each tool batch; pending approvals appear in <code>pending_waits</code> as <code>tool_approval</code> waits. For an
+email-triggered automation, <code>"ask"</code> means every tool call asks except the tools named in
+<code>policy.untrusted_input_tools</code> (never a sending tool); the executor's own defaults never decide there.</p>
 <p>Docs: <code>automations.md#tool-approval</code>, <code>automations.md#waits-on-a-person</code>.</p>
 <h2 id="can-a-discussion-of-an-automation-run-change-my-files">Can a discussion of an automation run change my files?<a class="headerlink" href="#can-a-discussion-of-an-automation-run-change-my-files" title="Permanent link">&para;</a></h2>
 <p>Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as

@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-01
+
+Pausing an automation also stops its retries. Requires AbstractCore 2.20.2 (unchanged).
+
 ### Changed
 - `automation.pause` also stops retries: an occurrence waiting in retry backoff is cancelled
   (quietly, like `stop_current`), and a scheduled attempt that fails while the automation is paused
   completes `failed` without a retry. An attempt already running still finishes, and a manual run
-  (`run_now`, allowed while paused) keeps its retries. Previously the pending retry still started
-  after its backoff.
+  (`run_now`, allowed while paused) keeps its retries.
+
+### Notes
+- A retry that is waiting in backoff when you pause an automation is cancelled instead of starting
+  after its backoff. Resume the automation, or use `run_now`, to run it again.
 
 ## [0.8.1] - 2026-09-30
 

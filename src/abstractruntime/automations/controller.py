@@ -320,7 +320,17 @@ def _never_granted(name: str) -> bool:
     `send` network reach (`agora_post_message`, `agora_send_dm`, which have no core row)."""
     from ..integrations.abstractcore.tool_effects import sends_messages
 
-    return _grant_excludes(name) or sends_messages(name)
+    return _grant_excludes(name) or sends_messages(name) or _is_mcp_tool(name)
+
+
+# Tools of registered MCP servers (`mcp::<server>::<tool>`, AbstractCore's naming): external
+# programs whose effects no fact table here describes. A run that reads text written by other
+# people is never offered one and never granted one, named or not.
+_MCP_TOOL_PREFIX = "mcp::"
+
+
+def _is_mcp_tool(name: Any) -> bool:
+    return str(name or "").strip().startswith(_MCP_TOOL_PREFIX)
 
 
 # `_runtime.untrusted_input = True`: the run reads text written by other people (an inbound
@@ -368,12 +378,13 @@ def grant_tool_approval(
     beyond configured services, no code or command execution, no messaging, no
     writes outside the run's workspace, no delegation). Every other tool
     (`fetch_url`, `skim_url`, `web_search`, `execute_command`, `shell_exec`,
-    `execute_python`, `delegate_agent`, `channel_fs_write`, MCP tools...) is
+    `execute_python`, `delegate_agent`, `channel_fs_write`...) is
     granted only when the user NAMED it individually in the definition
     (`policy.untrusted_input_tools`, passed as `named_tools`), and only within
     the target's tool ceiling. Message-sending tools (`send_email`,
     `reply_email`, `agora_post_message`, `agora_send_dm`, ...) are never
-    granted, named or not. A withheld call asks a person. Schedule and manual
+    granted, named or not. MCP tools (`mcp::<server>::<tool>`) leave the run's tool lists
+    and are never granted. A withheld call asks a person. Schedule and manual
     automations keep the full grant (decision recorded in 0992).
 
     Untrusted input under `approval="ask"` (framework backlog 0992 re-gate): the
@@ -397,6 +408,15 @@ def grant_tool_approval(
         if not untrusted_input:
             return
         replaced_target_policy = True
+    mcp_withheld: list = []
+    if untrusted_input:
+        # Untrusted input: every MCP tool leaves the run's tool lists (the agent's `tools` input and
+        # the `_runtime.allowed_tools` ceiling), so the model is never offered one.
+        for holder, key in ((input_data, "tools"), (runtime_ns, "allowed_tools")):
+            raw = holder.get(key)
+            if isinstance(raw, list) and any(_is_mcp_tool(t) for t in raw):
+                mcp_withheld += [str(t).strip() for t in raw if _is_mcp_tool(t)]
+                holder[key] = [t for t in raw if not _is_mcp_tool(t)]
     allowed = runtime_ns.get("allowed_tools")
     names = allowed if isinstance(allowed, list) else list(TOOL_EFFECT_CLASSES)
     candidates = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
@@ -413,6 +433,7 @@ def grant_tool_approval(
     else:
         withheld = [n for n in candidates if _grant_excludes(n)]
     tools = [n for n in candidates if n not in withheld]
+    withheld = withheld + sorted(set(mcp_withheld) - set(withheld))
     policy: Dict[str, Any] = {"auto_approve_tools": tools, "withheld_tools": withheld, "source": AUTOMATION_GRANT_SOURCE}
     if untrusted_input:
         policy.update(

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `integrations.abstractcore.mcp_facade`: opens a stdio or HTTP MCP client (a stdio server starts
+  with exactly the environment given), turns a server's tool into an `mcp::<server>::<tool>` spec
+  without its URL, and runs `tools/call` with the runtime's result mapping. The gateway calls
+  registered MCP servers through it.
+
+### Changed
+
+- An automation run started by an email from someone else (untrusted input) is never offered an MCP
+  tool: every `mcp::...` name leaves its tool lists and is never granted, even when named.
+
 ## [0.8.2] - 2026-10-01
 
 Pausing an automation also stops its retries. Requires AbstractCore 2.20.2 (unchanged).

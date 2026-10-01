@@ -2081,7 +2081,7 @@ expected_revision=None, now=None)</code> is the only way to change an automation
 <tbody>
 <tr>
 <td><code>automation.pause</code></td>
-<td>Stops <strong>scheduled</strong> admissions. The current occurrence and its retries finish, and <code>run_now</code> still works. This is separate from the runtime's own pause.</td>
+<td>Stops <strong>scheduled</strong> admissions. An attempt already running finishes, but no retry follows: an occurrence waiting in retry backoff is cancelled (quietly), and a scheduled attempt that fails while paused completes <code>failed</code> without a retry. <code>run_now</code> still works (a manual run keeps its retries). This is separate from the runtime's own pause.</td>
 <td><code>invalid_state</code> when archived or finished</td>
 </tr>
 <tr>

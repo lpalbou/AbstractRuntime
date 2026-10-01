@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
 ### Added
 
 - `integrations.abstractcore.mcp_facade`: opens a stdio or HTTP MCP client (a stdio server starts

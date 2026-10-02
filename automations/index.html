@@ -941,6 +941,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#growing-context-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Growing context limit
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1746,6 +1757,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#growing-context-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Growing context limit
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2147,7 +2169,7 @@ controller is woken with <code>max_steps=0</code>; the host (or <code>drive_auto
 <tr>
 <td>History given to the occurrence</td>
 <td>none</td>
-<td>the automation's previous turns as <code>input_data.context.messages</code>: the most recent 50,000 tokens of whole turns (the session history window)</td>
+<td>the automation's previous turns as <code>input_data.context.messages</code>: the most recent whole turns within the configured token budget (50,000 tokens by default) (the session history window)</td>
 </tr>
 <tr>
 <td><code>use_context</code> given to the target</td>
@@ -2357,7 +2379,7 @@ Waits on a person are live facts read from run state; they are not attention ite
 <li>its output carries <code>notify: true</code>: the item's title is the automation title and its body is the answer, cut to 280
   characters;</li>
 <li>its output carries <code>notify: {title, body}</code>: title at most 120 characters (the automation title when empty), body at
-  most 2,000 characters. A missing, <code>false</code> or empty <code>notify</code> stays quiet;</li>
+  most 2,000 characters. A missing, <code>false</code> or empty <code>notify</code> stays quiet unless result email is enabled;</li>
 <li>it <strong>failed after its last retry</strong>: the title is "<automation title> failed" and the body is the error. A failure
   that a retry fixed is quiet, and so is a cancelled occurrence.</li>
 </ul>
@@ -2365,7 +2387,7 @@ Waits on a person are live facts read from run state; they are not attention ite
 with its end-node values or <code>{success, result}</code>. An output with <code>success: false</code> counts as a failure. A workflow that
 must flag a result adds <code>notify</code> next to its answer.</p>
 <p>Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's <code>channels</code> repeats the definition's <code>notify.channels</code>; a host that delivers notifications by email
-mails the owner when <code>email</code> is listed.
+emails every completed result when <code>email</code> is listed. <code>notify.recipients</code> selects delivery addresses (default <code>["self"]</code>); the full answer is retained for email while console previews stay bounded.
 occurrence's <code>automation.completed</code> record with a per-automation sequence number.</p>
 <p><code>list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)</code> returns
 <code>{items, next_cursor}</code>, oldest first. Each item is <code>{kind: "notify" | "failure", automation_id, run_id, index, at,
@@ -2577,7 +2599,7 @@ receives its result directly.</p>
   event source yet.</li>
 <li>Occurrences run one at a time (<code>serial</code>), missed ticks coalesce, and a failed occurrence never stops the
   automation (<code>failure: "continue"</code>). These policies cannot be changed.</li>
-<li>Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
+<li>Growing history is the most recent whole turns within the configured token budget (50,000 tokens by default) and is not summarized automatically; older turns
   drop out of the replay (they stay in the store).</li>
 <li>Tools outside <code>TOOL_EFFECT_CLASSES</code>, such as third-party MCP tools, still ask for approval under <code>auto</code>.</li>
 <li>Retries repeat external effects.</li>
@@ -2594,6 +2616,14 @@ receives its result directly.</p>
 <li><a href="../faq/">faq.md</a>: common questions</li>
 <li><a href="../troubleshooting/#an-automation-does-not-fire">troubleshooting.md</a>: symptom-oriented fixes</li>
 </ul>
+<h2 id="growing-context-limit">Growing context limit<a class="headerlink" href="#growing-context-limit" title="Permanent link">&para;</a></h2>
+<p>Choose <strong>Growing</strong> to set <strong>Max growing context (tokens)</strong> when creating or editing an
+automation. The default is 50,000; enter <code>30000</code> for a 30,000-token history budget.
+The limit is hidden for <strong>Independent</strong> runs. Changing it affects subsequent occurrences;
+already admitted occurrences retain their history for retries. History retains whole turns,
+including the newest turn even when that turn alone exceeds the budget.</p>
+<p>The API field is <code>context.growing.max_tokens</code>, a positive integer. Existing definitions
+that omit it retain the 50,000-token default.</p>
 
 
 

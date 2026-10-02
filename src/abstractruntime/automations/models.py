@@ -254,14 +254,18 @@ def validate_context(value: Any) -> Dict[str, Any]:
     if mode not in CONTEXT_MODES:
         raise _invalid(f"context.mode must be one of {list(CONTEXT_MODES)}", "context.mode")
     growing = _require_mapping(ctx.get("growing", {}), "context.growing")
-    _reject_unknown(growing, ("summary",), "context.growing")
+    _reject_unknown(growing, ("summary", "max_tokens"), "context.growing")
     if "summary" in growing:
         raise _invalid(
             "automatic growing-mode summaries are not supported in v1",
             "context.growing.summary",
             reason_code="unsupported_feature",
         )
-    return {"mode": mode, "growing": {}}
+    if "max_tokens" in growing:
+        limit = growing["max_tokens"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise _invalid("Max growing context must be a positive whole number of tokens", "context.growing.max_tokens")
+    return {"mode": mode, "growing": dict(growing)}
 
 
 def _duration(value: Any, field: str) -> str:
@@ -272,13 +276,12 @@ def _duration(value: Any, field: str) -> str:
     return value
 
 
-def validate_email_allowed_recipients(value: Any) -> list:
+def validate_email_allowed_recipients(value: Any, *, field: str = "policy.email_allowed_recipients") -> list:
     """`["self" | "name@example.test", ...]`, lower-cased and de-duplicated (order kept).
 
     Exact addresses only: no display names, groups, domains or patterns (a pre-authorisation
     must name the person). Empty list = nobody, not even self, runs unattended.
     """
-    field = "policy.email_allowed_recipients"
     if not isinstance(value, list):
         raise _invalid(f"{field} must be a list of 'self' or email addresses", field)
     if len(value) > MAX_EMAIL_ALLOWED_RECIPIENTS:
@@ -332,7 +335,7 @@ def validate_notify(value: Any) -> Dict[str, Any]:
     dispatcher mails the owner's registered address).
     """
     notify = _require_mapping(value if value is not None else {}, "notify")
-    _reject_unknown(notify, ("channels",), "notify")
+    _reject_unknown(notify, ("channels", "recipients"), "notify")
     channels = notify.get("channels", DEFAULT_NOTIFY["channels"])
     if not isinstance(channels, list) or not channels:
         raise _invalid(f"notify.channels must be a non-empty list of {list(NOTIFY_CHANNELS)}", "notify.channels")
@@ -342,7 +345,13 @@ def validate_notify(value: Any) -> Dict[str, Any]:
             raise _invalid(f"notify.channels[{i}] must be one of {list(NOTIFY_CHANNELS)}", f"notify.channels[{i}]")
         if ch not in out:
             out.append(ch)
-    return {"channels": [c for c in NOTIFY_CHANNELS if c in out]}
+    result = {"channels": [c for c in NOTIFY_CHANNELS if c in out]}
+    if "recipients" in notify:
+        recipients = validate_email_allowed_recipients(notify["recipients"], field="notify.recipients")
+        if not recipients:
+            raise _invalid("Choose at least one result recipient", "notify.recipients")
+        result["recipients"] = recipients
+    return result
 
 
 def validate_policy(value: Any) -> Dict[str, Any]:

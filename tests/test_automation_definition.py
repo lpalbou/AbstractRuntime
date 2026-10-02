@@ -166,3 +166,16 @@ def test_the_longest_accepted_interval_runs():
     binding = {"binding_id": "b", "source_id": "schedule", "source_version": 1, "config": cfg}
     state = a.admit(binding, state=a.initial_state(cfg), now=NOW)["state"]
     assert a.prepare(binding, state=state, now=NOW)["until"] == "2027-01-02T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, False, 1.5, "30000", None])
+def test_growing_context_rejects_invalid_token_limit(limit):
+    with pytest.raises(AutomationError) as exc:
+        _build(context={"mode": "growing", "growing": {"max_tokens": limit}})
+    assert exc.value.field == "context.growing.max_tokens"
+
+
+def test_growing_context_keeps_custom_token_limit():
+    assert _build(context={"mode": "growing", "growing": {"max_tokens": 30_000}})["context"] == {
+        "mode": "growing", "growing": {"max_tokens": 30_000},
+    }

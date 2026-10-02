@@ -537,7 +537,7 @@ def build_prepared(
         )
     apply_context_mode(input_data, mode=definition["context"]["mode"])
     if definition["context"]["mode"] == "growing":
-        from ..session_history import session_chat_messages
+        from ..session_history import HISTORY_REPLAY_MAX_TOKENS, session_chat_messages
 
         messages = session_chat_messages(
             run_store=turn.run_store,
@@ -545,6 +545,7 @@ def build_prepared(
             artifact_store=turn.artifact_store,
             session_id=definition["session_id"],
             automation_id=turn.automation_id,
+            max_tokens=definition["context"].get("growing", {}).get("max_tokens", HISTORY_REPLAY_MAX_TOKENS),
             strict=True,
         )
         context = input_data.get("context") if isinstance(input_data.get("context"), dict) else {}
@@ -809,8 +810,10 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
     attention = None
     notify = None
     seq = int(state.get("attention_seq") or 0)
+    delivery = definition_notify(definition)
+    email_result = "email" in delivery["channels"] and status == "completed"
     if status == "completed" and outcome is not None:
-        notify = notify_payload(outcome.get("notify"), title=definition["title"], answer=outcome.get("answer") or "")
+        notify = notify_payload(True if email_result else outcome.get("notify"), title=definition["title"], answer=outcome.get("answer") or "")
         if notify is not None:
             seq += 1
             attention = {"kind": "notify", "seq": seq, **notify}
@@ -821,7 +824,10 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
     if attention is not None:
         # Where the item is delivered (schema v2 `notify.channels`): "email" asks the host's
         # notification dispatcher to mail the owner (framework backlog 0992 B5/C5).
-        attention["channels"] = list(definition_notify(definition)["channels"])
+        attention["channels"] = list(delivery["channels"])
+        if email_result:
+            attention["email_result"] = str((outcome or {}).get("answer") or "")
+            attention["recipients"] = list(delivery.get("recipients", ["self"]))
     last_outcome = {
         "run_id": pending["run_id"],
         "index": int(pending["index"]),

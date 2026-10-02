@@ -159,3 +159,42 @@ def test_the_context_mode_decides_use_context_not_a_stale_target_input(env, tmp_
     fork = runtime.get_state(started["run_id"])
     assert fork.vars["use_context"] is True
     assert fork.vars["_runtime"]["automation_context"] == {"mode": "discussion", "use_context": True, "target_use_context": False}
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_custom_growing_budget_is_persisted_and_revised_for_future_runs(env):
+    from automation_harness import request
+    from abstractruntime.automations import create_automation, get_automation, apply_automation_command
+    from abstractruntime.core.models import RunState
+
+    runtime, clock = env
+    req = request(mode="growing")
+    req["context"]["growing"] = {"max_tokens": 30_000}
+    aid, _ = create_automation(runtime, req, now=clock.now)
+    # Enough complete turns to exceed both windows, without an oversized turn.
+    for i in range(30):
+        ts = f"2025-12-31T23:{i:02d}:00+00:00"
+        runtime.run_store.save(RunState(
+            run_id=f"budget-prior-{i}", workflow_id="echo", status=RunStatus.COMPLETED, current_node="done",
+            vars={"prompt": f"question {i}"}, output={"response": "word " * 3000},
+            created_at=ts, updated_at=ts, session_id=f"automation:{aid}", actor_id="t",
+        ))
+    drive(runtime, aid)
+    first = children(runtime, aid)[0]
+    receipt = first.vars["_runtime"]["session_history"]
+    assert receipt["max_tokens"] == 30_000
+    assert 0 < receipt["replayed_tokens"] <= 30_000 and receipt["dropped_messages"] > 0
+    result = apply_automation_command(runtime, automation_id=aid, command_id="budget-revise",
+        type="automation.revise", now=clock.now,
+        payload={"changes": {"context": {"mode": "growing", "growing": {"max_tokens": 10_000}}}})
+    assert result["status"] == "applied"
+    detail = get_automation(runtime.run_store, aid)
+    assert detail["definition"]["context"]["growing"]["max_tokens"] == 10_000
+    from abstractruntime.automation_queries import automation_summary
+    assert automation_summary(runtime.get_state(aid))["growing_max_tokens"] == 10_000
+    at(runtime, clock, aid, "2026-01-01T00:02:00+00:00")
+    second = children(runtime, aid)[1]
+    assert second.vars["_runtime"]["session_history"]["max_tokens"] == 10_000
+    assert second.vars["_runtime"]["session_history"]["replayed_tokens"] <= 10_000
+    assert len(second.vars["context"]["messages"]) < len(first.vars["context"]["messages"])
+    assert runtime.get_state(first.run_id).vars["_runtime"]["session_history"]["max_tokens"] == 30_000

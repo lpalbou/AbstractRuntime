@@ -23,6 +23,7 @@ from .automations.controller import current_occurrence as _current_occurrence
 from .automations.controller import next_fire_at as _next_fire_at
 from .automations.models import AUTOMATION_STATUSES, automation_status
 from .core.models import RunState, RunStatus, WaitReason
+from .session_history import HISTORY_REPLAY_MAX_TOKENS
 
 # Upper bound for one automation's index scan (occurrence rows, controllers).
 # Rows are column-only and cheap; a bound keeps a runaway store from turning a
@@ -116,6 +117,7 @@ def automation_summary(controller: RunState) -> Dict[str, Any]:
         "revision": definition.get("revision"),
         "trigger": definition.get("trigger"),
         "context_mode": context.get("mode", "independent"),
+        "growing_max_tokens": context.get("growing", {}).get("max_tokens", HISTORY_REPLAY_MAX_TOKENS),
         "target": definition.get("target"),
         "session_id": controller.session_id,
         "workspace_root": definition.get("workspace_root"),

@@ -318,7 +318,7 @@ controller is woken with `max_steps=0`; the host (or `drive_automation`) then ti
 | | Independent (default) | Growing |
 |---|---|---|
 | Session | a new session per occurrence, named after its attempt-1 run id | the automation's session, `automation:<automation_id>` |
-| History given to the occurrence | none | the automation's previous turns as `input_data.context.messages`: the most recent 50,000 tokens of whole turns (the session history window) |
+| History given to the occurrence | none | the automation's previous turns as `input_data.context.messages`: the most recent whole turns within the configured token budget (50,000 tokens by default) (the session history window) |
 | `use_context` given to the target | `false` | `true` |
 | `_meta.occurrence.session_kind` | `occurrence` | `automation` |
 
@@ -514,7 +514,7 @@ Automations are **quiet by default**. An occurrence creates an attention item on
 - its output carries `notify: true`: the item's title is the automation title and its body is the answer, cut to 280
   characters;
 - its output carries `notify: {title, body}`: title at most 120 characters (the automation title when empty), body at
-  most 2,000 characters. A missing, `false` or empty `notify` stays quiet;
+  most 2,000 characters. A missing, `false` or empty `notify` stays quiet unless result email is enabled;
 - it **failed after its last retry**: the title is "<automation title> failed" and the body is the error. A failure
   that a retry fixed is quiet, and so is a cancelled occurrence.
 
@@ -523,7 +523,7 @@ with its end-node values or `{success, result}`. An output with `success: false`
 must flag a result adds `notify` next to its answer.
 
 Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's `channels` repeats the definition's `notify.channels`; a host that delivers notifications by email
-mails the owner when `email` is listed.
+emails every completed result when `email` is listed. `notify.recipients` selects delivery addresses (default `["self"]`); the full answer is retained for email while console previews stay bounded.
 occurrence's `automation.completed` record with a per-automation sequence number.
 
 `list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)` returns
@@ -685,7 +685,7 @@ receives its result directly.
   event source yet.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
-- Growing history is the most recent 50,000 tokens of whole turns and is not summarized automatically; older turns
+- Growing history is the most recent whole turns within the configured token budget (50,000 tokens by default) and is not summarized automatically; older turns
   drop out of the replay (they stay in the store).
 - Tools outside `TOOL_EFFECT_CLASSES`, such as third-party MCP tools, still ask for approval under `auto`.
 - Retries repeat external effects.
@@ -701,3 +701,14 @@ receives its result directly.
 - [email.md](email.md): email accounts, the `email.received@1` trigger and the send-email action
 - [faq.md](faq.md): common questions
 - [troubleshooting.md](troubleshooting.md#an-automation-does-not-fire): symptom-oriented fixes
+
+## Growing context limit
+
+Choose **Growing** to set **Max growing context (tokens)** when creating or editing an
+automation. The default is 50,000; enter `30000` for a 30,000-token history budget.
+The limit is hidden for **Independent** runs. Changing it affects subsequent occurrences;
+already admitted occurrences retain their history for retries. History retains whole turns,
+including the newest turn even when that turn alone exceeds the budget.
+
+The API field is `context.growing.max_tokens`, a positive integer. Existing definitions
+that omit it retain the 50,000-token default.

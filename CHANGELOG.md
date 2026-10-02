@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.8.4] - 2026-10-02
+
+- Automations accept `context.growing.max_tokens` at creation and revision, defaulting to 50,000 tokens. Whole-turn history and admitted retry inputs are preserved.
+- Email-enabled automations produce a result notification for every completed occurrence, with the full answer and configurable `notify.recipients`.
+
 ## [0.8.3] - 2026-10-01
 
 

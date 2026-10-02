@@ -60,6 +60,7 @@ jobs:
             tests/test_abstractcore_comms_facade.py \
             tests/test_abstractcore_discovery_facade.py \
             tests/test_automation_definition.py \
+            tests/test_automation_email_results.py \
             tests/test_automation_tool_approval.py \
             tests/test_default_tools_comms_gating.py \
             tests/test_every_path_bearing_tool_is_walled.py \

@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.20.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.24.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -1168,3 +1168,19 @@ This is useful when building a `MappingToolExecutor` quickly.
 - `../architecture.md` — effect handler boundaries and durability invariants
 - `../tools-comms.md` — enabling email/WhatsApp/Telegram tools
 - `../adr/0002_execution_modes_local_remote_hybrid.md` — rationale for local/remote/hybrid
+
+## Host-managed serving
+
+Hosts that expose AbstractCore serving routes use
+`abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token, allow_unauthenticated=False)`.
+The facade lazily loads the Core ASGI application and keeps the host's independent
+inbound authentication policy scoped to the entire response, including streamed
+bodies. Concurrent requests retain separate policies; cancellation and exceptions
+restore the previous policy.
+
+The host owns route admission, network exposure, origin checks, and token storage.
+Provide a nonempty token even for open access: absent Authorization is allowed when
+`allow_unauthenticated=True`, while any supplied Authorization must validate.
+Anonymous callers cannot use server-held cloud credentials; explicit provider
+keys use `X-AbstractCore-Provider-API-Key`. This serving facade does not create
+durable Runtime runs. The AbstractCore server dependencies must be installed.

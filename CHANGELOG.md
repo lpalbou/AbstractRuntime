@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.8.5] - 2026-10-03
+
+- Hosts can serve AbstractCore ASGI requests through `integrations.abstractcore.server_facade.serve_core_request`, with independent request-scoped authentication preserved throughout streaming. Requires AbstractCore 2.24.0 or newer.
+
 ## [0.8.4] - 2026-10-02
 
 - Automations accept `context.growing.max_tokens` at creation and revision, defaulting to 50,000 tokens. Whole-turn history and admitted retry inputs are preserved.

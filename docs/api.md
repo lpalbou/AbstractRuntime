@@ -302,7 +302,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.20.2 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.24.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -391,3 +391,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 - `architecture.md` — component map + durability invariants
 - `faq.md` — common questions and gotchas
 - `integrations/abstractcore.md` — `LLM_CALL` / `TOOL_CALLS` wiring
+
+### Host ASGI serving
+
+`abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.

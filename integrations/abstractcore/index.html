@@ -706,6 +706,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#host-managed-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-managed serving
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1654,6 +1665,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#host-managed-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-managed serving
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1686,7 +1708,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.20.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.24.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -2779,6 +2801,19 @@ final audio artifact when the stream succeeds.</p>
 <li><code>../tools-comms.md</code> — enabling email/WhatsApp/Telegram tools</li>
 <li><code>../adr/0002_execution_modes_local_remote_hybrid.md</code> — rationale for local/remote/hybrid</li>
 </ul>
+<h2 id="host-managed-serving">Host-managed serving<a class="headerlink" href="#host-managed-serving" title="Permanent link">&para;</a></h2>
+<p>Hosts that expose AbstractCore serving routes use
+<code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token, allow_unauthenticated=False)</code>.
+The facade lazily loads the Core ASGI application and keeps the host's independent
+inbound authentication policy scoped to the entire response, including streamed
+bodies. Concurrent requests retain separate policies; cancellation and exceptions
+restore the previous policy.</p>
+<p>The host owns route admission, network exposure, origin checks, and token storage.
+Provide a nonempty token even for open access: absent Authorization is allowed when
+<code>allow_unauthenticated=True</code>, while any supplied Authorization must validate.
+Anonymous callers cannot use server-held cloud credentials; explicit provider
+keys use <code>X-AbstractCore-Provider-API-Key</code>. This serving facade does not create
+durable Runtime runs. The AbstractCore server dependencies must be installed.</p>
 
 
 

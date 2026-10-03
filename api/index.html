@@ -550,6 +550,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="See also">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-asgi-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host ASGI serving
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1452,6 +1469,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="See also">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-asgi-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host ASGI serving
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1714,7 +1748,7 @@ When available, it also includes <code>resolved_actions</code>: bounded capabili
 from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.20.2 or newer is part of the base install).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.24.0 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1791,6 +1825,8 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 <li><code>faq.md</code> — common questions and gotchas</li>
 <li><code>integrations/abstractcore.md</code> — <code>LLM_CALL</code> / <code>TOOL_CALLS</code> wiring</li>
 </ul>
+<h3 id="host-asgi-serving">Host ASGI serving<a class="headerlink" href="#host-asgi-serving" title="Permanent link">&para;</a></h3>
+<p><code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)</code> delegates host-admitted ASGI requests with request-scoped Core authentication. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a> for network and credential responsibilities.</p>
 
 
 

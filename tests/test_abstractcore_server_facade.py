@@ -9,6 +9,8 @@ import pytest
 from abstractruntime.integrations.abstractcore import server_facade
 from abstractcore.server.auth_policy import current_server_auth_policy
 
+pytestmark = pytest.mark.basic
+
 
 def test_concurrent_streams_keep_separate_auth_and_import_off_loop(monkeypatch):
     main_thread = threading.get_ident()

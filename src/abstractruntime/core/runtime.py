@@ -1055,6 +1055,7 @@ class Runtime:
         # automations are bound to, and the durable event inbox.
         self._email_context_resolver: Optional[Callable[[Any], Any]] = None
         self._email_binding: Optional[Any] = None
+        self._occurrence_input_resolver: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]] = None
         self._event_inbox: Optional[Any] = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
@@ -1302,6 +1303,19 @@ class Runtime:
     @property
     def email_binding(self) -> Optional[Any]:
         return self._email_binding
+
+    def set_occurrence_input_resolver(self, resolver: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]]) -> None:
+        """Host hook for automation occurrences: `resolver(definition, input_data) -> input_data`,
+        called at each admission (the occurrence's run start) and frozen with its inputs, so a
+        replayed dispatch stays byte-identical. The gateway re-resolves a definition that follows
+        its owner's default workspaces here. None (default): the definition's inputs as stored."""
+        if resolver is not None and not callable(resolver):
+            raise TypeError("set_occurrence_input_resolver expects a callable or None")
+        self._occurrence_input_resolver = resolver
+
+    @property
+    def occurrence_input_resolver(self) -> Optional[Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]]:
+        return self._occurrence_input_resolver
 
     def set_event_inbox(self, inbox: Optional[Any]) -> None:
         """The runtime's durable external-event inbox (`abstractruntime.email.inbox`)."""
@@ -2625,6 +2639,7 @@ class Runtime:
 
                 setattr(run, "_runtime_email_use", email_use_for_workflow(workflow))
                 setattr(run, "_runtime_email_binding", self._email_binding)
+                setattr(run, "_runtime_occurrence_input_resolver", self._occurrence_input_resolver)
                 setattr(run, "_runtime_event_inbox", self._event_inbox)
             except Exception:
                 pass

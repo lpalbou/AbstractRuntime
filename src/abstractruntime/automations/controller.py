@@ -81,6 +81,10 @@ class Turn:
     # the account its occurrences are bound to (both host-set on the Runtime).
     event_inbox: Any = None
     email_binding: Any = None
+    # Host-set (`Runtime.set_occurrence_input_resolver`): re-resolves what the
+    # host decides per occurrence (the gateway's workspaces for a definition
+    # that follows its owner's default) at admission; frozen into `prepared`.
+    occurrence_input_resolver: Any = None
 
     @classmethod
     def from_run(cls, run: RunState, *, now: Optional[str] = None) -> "Turn":
@@ -99,6 +103,7 @@ class Turn:
             now=now or _now_iso(),
             event_inbox=getattr(run, "_runtime_event_inbox", None),
             email_binding=getattr(run, "_runtime_email_binding", None),
+            occurrence_input_resolver=getattr(run, "_runtime_occurrence_input_resolver", None),
         )
 
     @property
@@ -521,6 +526,15 @@ def build_prepared(
     except Exception:  # noqa: BLE001 - an unknown source: treat its input as untrusted
         untrusted = True
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
+    if turn.occurrence_input_resolver is not None:
+        # The host's per-occurrence inputs (e.g. the workspaces of a definition
+        # that follows its owner's default, resolved NOW, not at creation).
+        # Frozen with the rest below, so a replayed dispatch stays identical.
+        # A failure fails the admission: never run on stale inputs silently.
+        resolved = turn.occurrence_input_resolver(copy.deepcopy(definition), copy.deepcopy(input_data))
+        if not isinstance(resolved, dict):
+            raise ControllerSeamError(f"the occurrence input resolver returned {type(resolved).__name__}, not the input dict")
+        input_data = resolved
     emails = (inputs or {}).get("emails")
     resolve_vars: list = []
     if isinstance(emails, list):

@@ -13,6 +13,7 @@ Nothing yet.
 
 ### Added
 
+- `workspace_writable_paths`: writable exceptions inside read-only roots (`workspace_read_only_paths`), the more specific rule winning. The tool scope, `path_is_read_only` and VisualFlow writers honour them; child runs and file nodes inherit the parent's exactly and never add one. Used by AbstractGateway 0.13.0 for "Allow everything, refuse listed workspaces" with a read-only default.
 - `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).
 
 ## [0.8.5] - 2026-10-03

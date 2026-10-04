@@ -1134,6 +1134,7 @@ from abstractruntime.email import (
 - approval: the `send_email_recipient@v2` refiner ([tool-approval.md](tool-approval.md#per-call-refiners))
 - `adopt_legacy_schedule_projection(run)`: read-only summary of a legacy gateway `scheduled:*` root
 - read-only mounts: `_runtime.workspace_read_only_paths` (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers `read_only_paths(vars)`, `path_is_read_only(vars, path)` and `READ_ONLY_PATHS_KEY` in `abstractruntime.utils.workspace_paths`
+- writable exceptions inside read-only roots: `workspace_writable_paths` (top-level or `_runtime`; absolute folders). A path is read-only when a read-only root contains it and no writable path inside that root contains it, so the more specific rule wins (a host sets `/` read-only plus the run's folder and its read & write folders for a read-only default). Child runs and VisualFlow file nodes get the parent's exceptions exactly; a child never adds one. Helpers: `writable_paths(vars)`, `is_read_only_target(path, read_only_roots, writable_roots)`, `WRITABLE_PATHS_KEY`.
 - read-only workspaces: run vars `workspace_read_only: true` (or `_runtime.workspace_read_only: true`); `abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES` classifies every exposable tool as `read`, `write`, `exec`, `delegate`, `comms` or `memory-write`
 
 ## Sessions and history

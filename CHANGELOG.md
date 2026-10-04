@@ -5,7 +5,7 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-10-05
 
 ### Added
 
@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `integrations.abstractcore.command_sandbox_host`: hosts configure the command sandbox through the runtime (`configure_host`, `host_policy`, `host_sandbox_kind`, `KIND_LABELS`, `KIND_NONE`, `reset_host_for_tests`; pure re-exports of `abstractcore.tools.sandbox`), so a host never imports AbstractCore directly. Used by AbstractGateway's `serve`.
 - `MappingToolExecutor` never drops the `_sandbox` stamp: a tool whose signature cannot take it (an AbstractAgent older than 0.3.18) gets a failed result naming the stamp and does not run. Its argument-name normalization never maps a model key (`sandbox`, `registry_namespace`, ...) onto a hidden `_`-prefixed parameter.
 - CI: a `linux-sandbox` job installs bubblewrap on Ubuntu and runs the command-sandbox tests end to end inside it (the end-to-end tests now run inside the host's OS sandbox: macOS `sandbox-exec` or Linux bubblewrap); the job fails when any of them is skipped.
+- `workspace_writable_paths`: writable exceptions inside read-only roots (`workspace_read_only_paths`), the more specific rule winning. The tool scope, `path_is_read_only` and VisualFlow writers honour them; child runs and file nodes inherit the parent's exactly and never add one. Used by AbstractGateway 0.13.0 for "Allow everything, refuse listed workspaces" with a read-only default.
+- `integrations.abstractcore.structured_facade` (also flat from `integrations.abstractcore`): `parse_response_format` and AbstractCore's own `ResponseFormatError`, so hosts check an OpenAI `response_format` without importing AbstractCore. Used by AbstractGateway 0.13.0's `/v1/chat/completions`.
+- Workspace context of a tool-using `LLM_CALL`: after the default working directory (the run's own workspace), `Allowed workspaces:` lists each allowed workspace outside it with its mode (`(read-only)` / `(read & write)`, from `workspace_read_only_paths` and `workspace_writable_paths`), and under `all_except_ignored` `Everything else: (…)`; refused paths are never listed as allowed. Used by AbstractGateway 0.13.0 on every run start.
+- `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).
 
 ### Changed
 
@@ -26,15 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `workspace_shared_path` / `SHARED_WORKSPACE_KEY` / `shared_workspace_path` (added during 0.9.0 development, never released): AbstractGateway 0.13.0 has no shared workspace any more (round 11), so the workspace context names no "Shared workspace"; the allowed workspaces and their modes are listed as before. A stale key in a run's vars is ignored.
-
-## [0.9.0] - 2026-10-04
-
-### Added
-
-- `workspace_writable_paths`: writable exceptions inside read-only roots (`workspace_read_only_paths`), the more specific rule winning. The tool scope, `path_is_read_only` and VisualFlow writers honour them; child runs and file nodes inherit the parent's exactly and never add one. Used by AbstractGateway 0.13.0 for "Allow everything, refuse listed workspaces" with a read-only default.
-- `integrations.abstractcore.structured_facade` (also flat from `integrations.abstractcore`): `parse_response_format` and AbstractCore's own `ResponseFormatError`, so hosts check an OpenAI `response_format` without importing AbstractCore. Used by AbstractGateway 0.13.0's `/v1/chat/completions`.
-- Workspace context of a tool-using `LLM_CALL`: after the default working directory (the run's own workspace), `Allowed workspaces:` lists each allowed workspace outside it with its mode (`(read-only)` / `(read & write)`, from `workspace_read_only_paths` and `workspace_writable_paths`), and under `all_except_ignored` `Everything else: (…)`; refused paths are never listed as allowed. Used by AbstractGateway 0.13.0 on every run start.
-- `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).
 
 ## [0.8.5] - 2026-10-03
 

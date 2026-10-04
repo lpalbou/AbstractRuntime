@@ -38,8 +38,10 @@ from abstractruntime.utils.workspace_paths import (
     WorkspacePathResolution,
     build_workspace_mounts,
     is_under_path,
+    is_read_only_target,
     is_workspace_read_only,
     read_only_paths as _read_only_paths,
+    writable_paths as _writable_paths,
     resolve_no_strict,
     resolve_workspace_path as resolve_canonical_workspace_path,
 )
@@ -479,6 +481,9 @@ class WorkspaceScope:
     # WRITE tools targeting a path under one are refused; reads and exec tools
     # are allowed (the shell is not sandboxed — mounts protect file tools).
     read_only_paths: Tuple[str, ...] = ()
+    # Writable exceptions inside read-only roots (`workspace_writable_paths`, realpath): the more
+    # specific rule wins (a read & write folder under a read-only default).
+    writable_paths: Tuple[str, ...] = ()
 
     @classmethod
     def from_input_data(
@@ -536,6 +541,7 @@ class WorkspaceScope:
             builtin_allow=builtin_allow,
             read_only=read_only,
             read_only_paths=mounts,
+            writable_paths=_writable_paths(input_data),
         )
 
 
@@ -569,6 +575,8 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
             "Read-only mounts (read them, never write into them; write in your own workspace): "
             + json.dumps(list(scope.read_only_paths))
         )
+    if scope.writable_paths and scope.read_only_paths:
+        lines.append("Writable inside those (read & write): " + json.dumps(list(scope.writable_paths)))
     if scope.read_only:
         lines.append(
             "This workspace is READ-ONLY: tools that write files or run commands/code are refused."
@@ -812,7 +820,7 @@ def rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Works
     out_args = _rewrite_tool_arguments(tool_name=tool_name, args=args, scope=scope)
     if scope.read_only_paths:
         for target in _written_paths(out_args):
-            if _under_mount(target, scope.read_only_paths):
+            if _under_mount(target, scope.read_only_paths, scope.writable_paths):
                 refusal = read_only_refusal(tool_name, path=target)
                 if refusal is not None:
                     raise ValueError(refusal)
@@ -832,9 +840,9 @@ def _written_paths(args: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _under_mount(path: str, mounts: Tuple[str, ...]) -> bool:
+def _under_mount(path: str, mounts: Tuple[str, ...], writable: Tuple[str, ...] = ()) -> bool:
     target = Path(os.path.realpath(str(Path(path).expanduser())))
-    return any(is_under_path(target, Path(m)) for m in mounts)
+    return is_read_only_target(target, mounts, writable)
 
 
 def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: WorkspaceScope) -> Dict[str, Any]:

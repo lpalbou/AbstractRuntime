@@ -2813,7 +2813,14 @@ def _create_visual_function_handler(
         # workspace is read-only, file/artifact nodes get
         # `workspace_read_only: True` OVER whatever their inputs say (the
         # other ambient keys below only fill gaps with setdefault).
-        from ..utils.workspace_paths import READ_ONLY_KEY, READ_ONLY_PATHS_KEY, is_workspace_read_only, read_only_paths
+        from ..utils.workspace_paths import (
+            READ_ONLY_KEY,
+            READ_ONLY_PATHS_KEY,
+            WRITABLE_PATHS_KEY,
+            is_workspace_read_only,
+            read_only_paths,
+            writable_paths,
+        )
 
         run_read_only = is_workspace_read_only(run.vars)
         # Read-only mounts ride the node inputs the same way (union: node
@@ -2825,6 +2832,8 @@ def _create_visual_function_handler(
                 merged[READ_ONLY_KEY] = True
             if run_mounts:
                 merged[READ_ONLY_PATHS_KEY] = sorted(set(run_mounts) | set(read_only_paths(merged)))
+                # The run's writable exceptions, exactly (node inputs never add one).
+                merged[WRITABLE_PATHS_KEY] = list(writable_paths(run.vars))
 
         if visual_node_type in {"read_file", "write_file", "read_pdf", "write_pdf", "write_docx", "write_chart"} and isinstance(run.vars, dict):
             ambient: Dict[str, Any] = {}

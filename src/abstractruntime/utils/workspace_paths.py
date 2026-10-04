@@ -206,6 +206,12 @@ READ_ONLY_KEY = "workspace_read_only"
 # child runs. The shell/exec tools are NOT sandboxed by it: a mount is enforced
 # for the file tools and the VisualFlow writers only.
 READ_ONLY_PATHS_KEY = "workspace_read_only_paths"
+# Writable EXCEPTIONS under read-only roots (gateway workspace policy, round 9: "any folder except
+# denied" with a read-only default, then read & write folders). A path is read-only when a
+# read-only root contains it and no writable path that contains it lies inside that root. Like the
+# read-only roots, they ride `_runtime` or the top-level key; a child run never adds its own (it
+# inherits the parent's exactly), so a child cannot reopen a parent's read-only root.
+WRITABLE_PATHS_KEY = "workspace_writable_paths"
 
 
 def _real_root(raw: object) -> Optional[str]:
@@ -237,15 +243,47 @@ def read_only_paths(vars_obj: object) -> tuple:
     return tuple(sorted(found))
 
 
+def writable_paths(vars_obj: object) -> tuple:
+    """The run's writable exceptions (realpath, sorted, unique), from
+    `_runtime.workspace_writable_paths` and the top-level key."""
+    if not isinstance(vars_obj, Mapping):
+        return ()
+    found: set = set()
+    runtime_ns = vars_obj.get("_runtime")
+    for raw in (
+        vars_obj.get(WRITABLE_PATHS_KEY),
+        runtime_ns.get(WRITABLE_PATHS_KEY) if isinstance(runtime_ns, Mapping) else None,
+    ):
+        for entry in _path_entries(raw):
+            root = _real_root(entry)
+            if root:
+                found.add(root)
+    return tuple(sorted(found))
+
+
+def is_read_only_target(target: Path, read_only_roots: Iterable[str], writable_roots: Iterable[str] = ()) -> bool:
+    """True when `target` (already a realpath) is under a read-only root R and no writable
+    exception W with target ⊆ W ⊆ R exists (the more specific rule wins)."""
+    writable = [Path(w) for w in writable_roots]
+    for root in read_only_roots:
+        r = Path(root)
+        if not is_under_path(target, r):
+            continue
+        if not any(is_under_path(target, w) and is_under_path(w, r) for w in writable):
+            return True
+    return False
+
+
 def path_is_read_only(vars_obj: object, path: object) -> bool:
-    """True when `path` (realpath) lies under one of the run's read-only roots."""
+    """True when `path` (realpath) lies under one of the run's read-only roots and not under a
+    writable exception inside that root."""
     roots = read_only_paths(vars_obj)
     if not roots:
         return False
     import os
 
     target = Path(os.path.realpath(str(Path(str(path)).expanduser())))
-    return any(is_under_path(target, Path(root)) for root in roots)
+    return is_read_only_target(target, roots, writable_paths(vars_obj))
 
 
 def is_workspace_read_only(vars_obj: object) -> bool:
@@ -312,6 +350,10 @@ def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
     if parent_mounts:
         # Union: a child may add read-only roots, never clear or shrink them.
         out[READ_ONLY_PATHS_KEY] = sorted(set(parent_mounts) | set(read_only_paths(child)))
+        # Writable exceptions are the parent's, exactly: a child never adds one (it would reopen a
+        # parent's read-only root), and keeps the parent's (else it would lose write access the
+        # parent had).
+        out[WRITABLE_PATHS_KEY] = list(writable_paths(parent))
     parent_deny = _path_entries(parent.get(BUILTIN_DENY_KEY))
     if not parent_deny:
         return out
@@ -332,6 +374,9 @@ __all__ = [
     "BUILTIN_DENY_KEY",
     "READ_ONLY_KEY",
     "READ_ONLY_PATHS_KEY",
+    "WRITABLE_PATHS_KEY",
+    "is_read_only_target",
+    "writable_paths",
     "is_workspace_read_only",
     "path_is_read_only",
     "read_only_paths",

@@ -38,7 +38,10 @@ MESSAGE_SENDING_TOOLS = {"send_email", "reply_email", "send_whatsapp_message", "
 OWNER = "owner@example.invalid"
 
 
-def _run_command(command: str) -> str:
+def _run_command(command: str, _sandbox: dict = None) -> str:
+    # Round 12: a host tool named execute_command receives the run's sandbox stamp (a tool that
+    # cannot take it is refused, never run unsandboxed); this fake records the call only.
+    assert _sandbox is None or _sandbox.get("private_workspace")
     EXECUTED.append(command)
     return f"ran {command}"
 

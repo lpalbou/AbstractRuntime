@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `integrations.abstractcore.command_sandbox_host`: hosts configure the command sandbox through the runtime (`configure_host`, `host_policy`, `host_sandbox_kind`, `KIND_LABELS`, `KIND_NONE`, `reset_host_for_tests`; pure re-exports of `abstractcore.tools.sandbox`), so a host never imports AbstractCore directly. Used by AbstractGateway's `serve`.
 - `MappingToolExecutor` never drops the `_sandbox` stamp: a tool whose signature cannot take it (an AbstractAgent older than 0.3.18) gets a failed result naming the stamp and does not run. Its argument-name normalization never maps a model key (`sandbox`, `registry_namespace`, ...) onto a hidden `_`-prefixed parameter.
+- CI: a `linux-sandbox` job installs bubblewrap on Ubuntu and runs the command-sandbox tests end to end inside it (the end-to-end tests now run inside the host's OS sandbox: macOS `sandbox-exec` or Linux bubblewrap); the job fails when any of them is skipped.
 
 ### Changed
 

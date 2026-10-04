@@ -69,6 +69,59 @@ jobs:
             tests/test_trigger_registry.py \
             tests/test_workspace_read_only.py
 
+  # The command sandbox end to end on Linux: run vars -> TOOL_CALLS handler ->
+  # `_sandbox` stamp -> AbstractCore's spawning tools inside bubblewrap. The
+  # end-to-end tests in tests/test_r12_workspace_sandbox.py skip with their
+  # reason on a host without an OS sandbox, so the job above proves nothing
+  # about Linux. This job installs bubblewrap, lets it create user namespaces
+  # (Ubuntu 24.04 restricts them through AppArmor by default), and FAILS unless
+  # every sandbox test ran and passed: a skip here is a red job, never a green one.
+  linux-sandbox:
+    name: Linux command sandbox (bubblewrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # bwrap is not setuid on Ubuntu: it needs unprivileged user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+          bwrap --ro-bind / / --dev /dev --proc /proc -- /bin/true
+          uname -r
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[test]"
+      - name: Pytest (sandbox tests must run, not skip)
+        run: |
+          python -m pytest -rs -p no:cacheprovider \
+            tests/test_r12_workspace_sandbox.py tests/test_command_sandbox_host_facade.py \
+            --junitxml=sandbox-junit.xml
+      - name: Assert the sandbox tests ran
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = list(ET.parse("sandbox-junit.xml").getroot().iter("testcase"))
+          skipped = [c for c in cases if c.find("skipped") is not None]
+          failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
+          e2e = [c for c in cases if (c.get("name") or "").startswith("test_e2e_")]
+          e2e_passed = [c for c in e2e if c not in skipped and c not in failed]
+          passed = len(cases) - len(skipped) - len(failed)
+          print(f"sandbox tests: {len(cases)} collected, {passed} passed, {len(skipped)} skipped, {len(failed)} failed; end-to-end passed {len(e2e_passed)}/{len(e2e)}")
+          for c in skipped:
+              print("SKIPPED:", c.get("name"), "-", (c.find("skipped").get("message") or ""))
+          if len(e2e) < 7 or len(e2e_passed) != len(e2e) or skipped or failed:
+              sys.exit("The sandbox tests did not all run and pass inside bubblewrap on this Linux host.")
+          PY
+
   build:
     name: Build distributions
     runs-on: ubuntu-latest

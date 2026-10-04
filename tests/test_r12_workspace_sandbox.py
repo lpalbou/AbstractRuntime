@@ -5,8 +5,8 @@
 - `sandbox_stamp(scope)`: the run's effective workspace set, from the SAME keys the file tools
   read, stamped as the hidden `_sandbox` arg of every process-spawning tool (a model value is
   never honoured).
-- End to end on macOS: gateway-shaped run vars -> TOOL_CALLS handler -> core execute_command /
-  shell_exec / runtime local_helper_start / the entity exec tool, all inside sandbox-exec.
+- End to end inside the host's OS sandbox (macOS sandbox-exec; Linux bubblewrap in CI): gateway-shaped run vars -> TOOL_CALLS handler -> core execute_command /
+  shell_exec / runtime local_helper_start / the entity exec tool.
 """
 
 from __future__ import annotations
@@ -34,10 +34,27 @@ from abstractruntime.integrations.abstractcore.workspace_scoped_tools import (
 MARK = "R12-RUNTIME-REFUSED-MARKER"
 CHILD = "R12-RUNTIME-CHILD-OK"
 
-macos_only = pytest.mark.skipif(
-    sys.platform != "darwin" or not os.access(core_sandbox.SANDBOX_EXEC, os.X_OK),
-    reason="real sandbox end-to-end: this host is not macOS with /usr/bin/sandbox-exec (core's test_sandbox_linux.py covers Linux)",
+# The end-to-end tests run inside the host's real OS sandbox: macOS sandbox-exec, or Linux
+# bubblewrap (the CI job `linux-sandbox` installs bwrap and fails if these tests skip).
+if sys.platform == "darwin":
+    HOST_KIND = core_sandbox.KIND_MACOS if os.access(core_sandbox.SANDBOX_EXEC, os.X_OK) else None
+elif sys.platform.startswith("linux"):
+    HOST_KIND = core_sandbox.KIND_BWRAP if core_sandbox._bwrap_path() else None
+else:
+    HOST_KIND = None
+HOST_LABEL = core_sandbox.KIND_LABELS.get(HOST_KIND or "", "")
+
+real_sandbox = pytest.mark.skipif(
+    HOST_KIND is None,
+    reason="real sandbox end-to-end: this host has neither /usr/bin/sandbox-exec (macOS) nor bubblewrap (Linux)",
 )
+
+
+def _disable_host_sandbox(monkeypatch, t: Path) -> None:
+    """Make this host's sandbox unavailable (the fail-closed path)."""
+    monkeypatch.setattr(core_sandbox, "SANDBOX_EXEC", str(t / "missing-sandbox-exec"))
+    monkeypatch.setattr(core_sandbox, "_bwrap_path", lambda: None)
+    monkeypatch.setattr(core_sandbox, "_landlock_abi", lambda: 0)
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +216,7 @@ def _result(outcome) -> Dict[str, Any]:
     return res
 
 
-@macos_only
+@real_sandbox
 @pytest.mark.parametrize("posture,default_ro", [("any_except_denied", False), ("any_except_denied", True), ("allowed_only", False)])
 def test_e2e_execute_command_through_the_runtime(t, posture, default_ro):
     handler = _real_handler()
@@ -216,7 +233,7 @@ def test_e2e_execute_command_through_the_runtime(t, posture, default_ro):
         text = str(res.get("output"))
         listing = [ln.strip() for ln in str((res.get("output") or {}).get("stdout") or "").splitlines()]
         assert MARK not in text and "secret.txt" not in listing, cmd
-        assert "macos-sandbox-exec" in text
+        assert HOST_KIND in text
     res = _result(handler(run, _effect("execute_command", {"command": f"cat {t}/home/parent/child/ok.txt && echo hi > note.txt && cat note.txt"}), None))
     text = str(res.get("output"))
     assert CHILD in text and "hi" in text, text  # allowed child + private workspace work
@@ -228,21 +245,21 @@ def test_e2e_execute_command_through_the_runtime(t, posture, default_ro):
         assert MARK in str(res.get("output"))
 
 
-@macos_only
+@real_sandbox
 def test_e2e_shell_session_through_the_runtime(t):
     handler = _real_handler()
     run = RunState.new(workflow_id="wf", entry_node="n", session_id="s", vars=_vars(t))
     try:
         res = _result(handler(run, _effect("shell_exec", {"command": f"cd {t}/refused; cat secret.txt; cat {t}/home/parent/child/ok.txt"}), None))
         text = str(res.get("output"))
-        assert MARK not in text and CHILD in text and "Sandbox: macOS sandbox-exec" in text
+        assert MARK not in text and CHILD in text and f"Sandbox: {HOST_LABEL}" in text
     finally:
         from abstractcore.tools.shell_session import get_shell_session_registry
 
         get_shell_session_registry().close_namespace(str(run.run_id))
 
 
-@macos_only
+@real_sandbox
 def test_e2e_local_helper_is_sandboxed(t):
     handler = _real_handler()
     run = RunState.new(workflow_id="wf", entry_node="n", session_id="s", vars=_vars(t))
@@ -251,12 +268,12 @@ def test_e2e_local_helper_is_sandboxed(t):
     time.sleep(0.5)
     handler(run, _effect("local_helper_stop", {}), None)
     assert not leak.exists() or MARK not in leak.read_text()
-    assert "macos-sandbox-exec" in str(res.get("output"))
+    assert HOST_KIND in str(res.get("output"))
 
 
-@macos_only
+@real_sandbox
 def test_e2e_fail_closed_keeps_the_run_going(t, monkeypatch):
-    monkeypatch.setattr(core_sandbox, "SANDBOX_EXEC", str(t / "missing-sandbox-exec"))
+    _disable_host_sandbox(monkeypatch, t)
     handler = _real_handler()
     run = RunState.new(workflow_id="wf", entry_node="n", session_id="s", vars=_vars(t))
     outcome = handler(run, _effect("execute_command", {"command": f"cat {t}/refused/secret.txt"}), None)
@@ -266,7 +283,7 @@ def test_e2e_fail_closed_keeps_the_run_going(t, monkeypatch):
     assert MARK not in str(res)
 
 
-@macos_only
+@real_sandbox
 def test_e2e_entity_exec_is_sandboxed(t):
     from abstractruntime.identity.tools import WorkspaceRoot, _run_execute_command
 

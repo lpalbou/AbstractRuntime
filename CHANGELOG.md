@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.9.0] - 2026-10-04
+
 ### Added
 
 - `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).

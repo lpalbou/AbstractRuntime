@@ -221,7 +221,7 @@ Deep dive: [automations.md](automations.md).
 
 ```python
 from abstractruntime.automations import (
-    apply_automation_command,   # pause / resume / run_now / revise / stop_current / archive
+    apply_automation_command,   # pause / resume / run_now / revise / stop_current / archive / unarchive
     create_automation,          # -> (automation_id, revision)
     drive_automation,           # standalone run loop
     get_automation,

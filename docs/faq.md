@@ -51,7 +51,9 @@ Docs: `getting-started.md`. Code: `src/abstractruntime/core/runtime.py`, `src/ab
 Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
 occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`) or `manual@1` (run now only).
 `create_automation(...)` creates it, `apply_automation_command(...)` pauses, resumes, runs now, edits, stops the
-current occurrence or archives it, and the host drives it like any run (`drive_automation` does this in-process).
+current occurrence, archives it or unarchives it (it comes back paused with its history), and the host drives it
+like any run (`drive_automation` does this in-process). Nothing is deleted: an archived automation keeps its
+occurrences and history and stays listed with status `archived`.
 
 The `Scheduler` is different: it is a driver loop that resumes due waits of existing runs. It does not create runs.
 

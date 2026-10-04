@@ -1048,8 +1048,14 @@ Public durable entry points:
 These helpers create child runs under an existing parent run and execute the real
 `LLM_CALL`, `TOOL_CALLS`, or stream finalization through Runtime rather than
 doing external work in host/controller code. `stream_voice(...)` yields TTS
-stream events for progressive playback and completes the child run with the
-final audio artifact when the stream succeeds.
+stream events for progressive playback; it is never a wait: nothing durable
+exists while audio streams, and when the stream ends (done, error, cancel or
+the consumer closing it) the child run is created already completed with the
+outcome (the final audio artifact on success). The child's id is announced up
+front in the `runtime_start` event (`child_run_id`). A host that finds a
+streamed-speech wait left by a runtime before this behaviour
+(`is_interrupted_voice_stream_wait`) closes it with
+`close_interrupted_voice_stream(child_run_id, reason=...)`.
 
 Example:
 

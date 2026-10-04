@@ -212,6 +212,11 @@ READ_ONLY_PATHS_KEY = "workspace_read_only_paths"
 # read-only roots, they ride `_runtime` or the top-level key; a child run never adds its own (it
 # inherits the parent's exactly), so a child cannot reopen a parent's read-only root.
 WRITABLE_PATHS_KEY = "workspace_writable_paths"
+# The host's SHARED workspace (AbstractGateway: the one workspace every account's agents may always
+# use). Set by the host at the run's entry; a fact for the agent's workspace context (the tool
+# scope lists it as "Shared workspace: <path> (read & write)"), never a grant: access still comes
+# from `workspace_allowed_paths` / the access mode. A child run carries the parent's exactly.
+SHARED_WORKSPACE_KEY = "workspace_shared_path"
 
 
 def _real_root(raw: object) -> Optional[str]:
@@ -241,6 +246,21 @@ def read_only_paths(vars_obj: object) -> tuple:
             if root:
                 found.add(root)
     return tuple(sorted(found))
+
+
+def shared_workspace_path(vars_obj: object) -> Optional[str]:
+    """The run's shared workspace (realpath), from the top-level key or `_runtime`; None when unset."""
+    if not isinstance(vars_obj, Mapping):
+        return None
+    runtime_ns = vars_obj.get("_runtime")
+    for raw in (
+        vars_obj.get(SHARED_WORKSPACE_KEY),
+        runtime_ns.get(SHARED_WORKSPACE_KEY) if isinstance(runtime_ns, Mapping) else None,
+    ):
+        root = _real_root(raw)
+        if root:
+            return root
+    return None
 
 
 def writable_paths(vars_obj: object) -> tuple:
@@ -355,6 +375,10 @@ def merge_builtin_workspace_protection(parent: Mapping, child: Mapping) -> dict:
         # parent's read-only root), and keeps the parent's (else it would lose write access the
         # parent had).
         out[WRITABLE_PATHS_KEY] = list(writable_paths(parent))
+    parent_shared = shared_workspace_path(parent)
+    if parent_shared:
+        # The host's fact, exactly: a child never names another shared workspace.
+        out[SHARED_WORKSPACE_KEY] = parent_shared
     parent_deny = _path_entries(parent.get(BUILTIN_DENY_KEY))
     if not parent_deny:
         return out
@@ -376,6 +400,8 @@ __all__ = [
     "READ_ONLY_KEY",
     "READ_ONLY_PATHS_KEY",
     "WRITABLE_PATHS_KEY",
+    "SHARED_WORKSPACE_KEY",
+    "shared_workspace_path",
     "is_read_only_target",
     "writable_paths",
     "is_workspace_read_only",

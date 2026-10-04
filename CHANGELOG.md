@@ -15,6 +15,7 @@ Nothing yet.
 
 - `workspace_writable_paths`: writable exceptions inside read-only roots (`workspace_read_only_paths`), the more specific rule winning. The tool scope, `path_is_read_only` and VisualFlow writers honour them; child runs and file nodes inherit the parent's exactly and never add one. Used by AbstractGateway 0.13.0 for "Allow everything, refuse listed workspaces" with a read-only default.
 - `integrations.abstractcore.structured_facade` (also flat from `integrations.abstractcore`): `parse_response_format` and AbstractCore's own `ResponseFormatError`, so hosts check an OpenAI `response_format` without importing AbstractCore. Needs AbstractCore 2.25.0 or newer (imported on first use). Used by AbstractGateway 0.13.0's `/v1/chat/completions`.
+- `workspace_shared_path`: the host's shared workspace as a run fact. The workspace context of a tool-using `LLM_CALL` lists `Shared workspace: "<path>" (read & write)`, each allowed workspace outside the root with its mode (`(read-only)` / `(read & write)`), and under `all_except_ignored` `Everything else: (…)`; refused paths are never listed as allowed. A child run carries the parent's value exactly (`merge_builtin_workspace_protection`). Used by AbstractGateway 0.13.0 on every run start.
 - `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).
 
 ## [0.8.5] - 2026-10-03

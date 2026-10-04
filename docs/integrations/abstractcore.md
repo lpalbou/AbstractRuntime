@@ -1184,3 +1184,18 @@ Provide a nonempty token even for open access: absent Authorization is allowed w
 Anonymous callers cannot use server-held cloud credentials; explicit provider
 keys use `X-AbstractCore-Provider-API-Key`. This serving facade does not create
 durable Runtime runs. The AbstractCore server dependencies must be installed.
+
+## Structured-output checks for hosts (structured facade)
+
+A host that accepts an OpenAI `response_format` checks it before any model sees it with
+`abstractruntime.integrations.abstractcore.structured_facade` (also exported flat from
+`abstractruntime.integrations.abstractcore`):
+
+- `parse_response_format(raw)` returns `(kind, schema, name)`, where kind is `"text"`,
+  `"json_object"` or `"json_schema"` and schema is `None` unless kind is `"json_schema"`.
+- `ResponseFormatError` is AbstractCore's own error class, so `except ResponseFormatError`
+  catches exactly what Core raises; `.param` names the offending field
+  (`"response_format"` or a nested name such as `"response_format.type"`).
+
+AbstractCore is imported on first use; it needs AbstractCore 2.25.0 or newer. AbstractGateway's
+`/v1/chat/completions` uses this facade, so the gateway never imports AbstractCore itself.

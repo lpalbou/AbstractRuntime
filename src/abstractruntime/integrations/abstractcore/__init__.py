@@ -10,6 +10,7 @@ Provides:
 - Public discovery facade for provider/media/catalog snapshot queries
 - Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
 - Public config facade for AbstractCore capability-default routes and config API keys
+- Public structured-output facade (`structured_facade`): `parse_response_format` / `ResponseFormatError` for hosts
 - Public email facade (`email_facade`): AbstractCore's mail library re-exported for hosts
 - Public Telegram host wrappers for TDLib bootstrap/global-client/send parity
 - Public durable run facade for run-scoped AbstractCore LLM/tool child runs, including outbound comms sends
@@ -39,6 +40,7 @@ from .config_facade import (
     read_config_api_key,
     set_capability_default,
 )
+from .structured_facade import parse_response_format
 from .discovery_facade import (
     AbstractCoreDiscoveryFacade,
     get_abstractcore_discovery_facade,
@@ -102,6 +104,8 @@ __all__ = [
     "list_capability_defaults",
     "read_config_api_key",
     "set_capability_default",
+    "parse_response_format",
+    "ResponseFormatError",
     "get_global_telegram_client",
     "get_abstractcore_run_facade",
     "create_local_runtime",
@@ -114,3 +118,13 @@ __all__ = [
     "attach_global_event_bus_bridge",
     "emit_step_record",
 ]
+
+
+def __getattr__(name: str):
+    # AbstractCore's ResponseFormatError, resolved on first use: the structured
+    # module needs AbstractCore >= 2.25.0, which importing this package must not.
+    if name == "ResponseFormatError":
+        from . import structured_facade
+
+        return structured_facade.ResponseFormatError
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

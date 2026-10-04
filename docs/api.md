@@ -396,3 +396,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 ### Host ASGI serving
 
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.
+
+### Structured-output checks
+
+`abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -> (kind, schema, name)` checks an OpenAI `response_format` and raises `ResponseFormatError` (AbstractCore's own class, with `.param`) for an unusable one. Both are also exported flat from `abstractruntime.integrations.abstractcore`. Requires AbstractCore 2.25.0 or newer. See [structured-output checks for hosts](integrations/abstractcore.md#structured-output-checks-for-hosts-structured-facade).

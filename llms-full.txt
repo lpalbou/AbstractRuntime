@@ -1262,6 +1262,10 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.
 
+### Structured-output checks
+
+`abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -> (kind, schema, name)` checks an OpenAI `response_format` and raises `ResponseFormatError` (AbstractCore's own class, with `.param`) for an unusable one. Both are also exported flat from `abstractruntime.integrations.abstractcore`. Requires AbstractCore 2.25.0 or newer. See [structured-output checks for hosts](integrations/abstractcore.md#structured-output-checks-for-hosts-structured-facade).
+
 
 ==============================================================================
 # FILE: docs/faq.md
@@ -3153,6 +3157,21 @@ Provide a nonempty token even for open access: absent Authorization is allowed w
 Anonymous callers cannot use server-held cloud credentials; explicit provider
 keys use `X-AbstractCore-Provider-API-Key`. This serving facade does not create
 durable Runtime runs. The AbstractCore server dependencies must be installed.
+
+## Structured-output checks for hosts (structured facade)
+
+A host that accepts an OpenAI `response_format` checks it before any model sees it with
+`abstractruntime.integrations.abstractcore.structured_facade` (also exported flat from
+`abstractruntime.integrations.abstractcore`):
+
+- `parse_response_format(raw)` returns `(kind, schema, name)`, where kind is `"text"`,
+  `"json_object"` or `"json_schema"` and schema is `None` unless kind is `"json_schema"`.
+- `ResponseFormatError` is AbstractCore's own error class, so `except ResponseFormatError`
+  catches exactly what Core raises; `.param` names the offending field
+  (`"response_format"` or a nested name such as `"response_format.type"`).
+
+AbstractCore is imported on first use; it needs AbstractCore 2.25.0 or newer. AbstractGateway's
+`/v1/chat/completions` uses this facade, so the gateway never imports AbstractCore itself.
 
 
 ==============================================================================
@@ -5855,7 +5874,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `faq.md` — common questions (recommended)
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
-- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
+- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger, and the send-email action
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)

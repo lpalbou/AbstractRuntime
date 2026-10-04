@@ -41,7 +41,6 @@ from abstractruntime.utils.workspace_paths import (
     is_read_only_target,
     is_workspace_read_only,
     read_only_paths as _read_only_paths,
-    shared_workspace_path as _shared_workspace_path,
     writable_paths as _writable_paths,
     resolve_no_strict,
     resolve_workspace_path as resolve_canonical_workspace_path,
@@ -485,9 +484,6 @@ class WorkspaceScope:
     # Writable exceptions inside read-only roots (`workspace_writable_paths`, realpath): the more
     # specific rule wins (a read & write folder under a read-only default).
     writable_paths: Tuple[str, ...] = ()
-    # The host's shared workspace (`workspace_shared_path`, realpath): described to the agent,
-    # never a grant by itself.
-    shared_path: Optional[str] = None
 
     @classmethod
     def from_input_data(
@@ -546,7 +542,6 @@ class WorkspaceScope:
             read_only=read_only,
             read_only_paths=mounts,
             writable_paths=_writable_paths(input_data),
-            shared_path=_shared_workspace_path(input_data),
         )
 
 
@@ -558,19 +553,16 @@ def _mode_words(scope: WorkspaceScope, path: str) -> str:
 
 
 def _workspace_lines(scope: WorkspaceScope) -> List[str]:
-    """The run's workspaces as the host passed them: the shared workspace, then each allowed
-    workspace (outside the default working directory) with its mode, and under
+    """The run's workspaces as the host passed them: each allowed workspace (outside the default
+    working directory, the run's own private workspace) with its mode, and under
     `all_except_ignored` the mode of everything else. Refused paths are never listed here."""
     out: List[str] = []
     root = str(scope.root)
-    shared = scope.shared_path
-    if shared and shared != root:
-        out.append(f"Shared workspace: {json.dumps(shared)} ({_mode_words(scope, shared)})")
     if scope.access_mode in ("workspace_or_allowed", "all_except_ignored"):
         listed = []
         for p in scope.allowed_paths:
             s = str(p)
-            if s in (root, shared) or s in listed:
+            if s == root or s in listed:
                 continue
             listed.append(s)
         if listed:

@@ -46,8 +46,10 @@ from .discovery_facade import (
     get_abstractcore_discovery_facade,
 )
 from .run_facade import (
+    LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX,
     AbstractCoreRunFacade,
     get_abstractcore_run_facade,
+    is_interrupted_voice_stream_wait,
 )
 from .telegram_facade import (
     TelegramTdlibNotAvailable,
@@ -108,6 +110,8 @@ __all__ = [
     "ResponseFormatError",
     "get_global_telegram_client",
     "get_abstractcore_run_facade",
+    "is_interrupted_voice_stream_wait",
+    "LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX",
     "create_local_runtime",
     "create_remote_runtime",
     "create_hybrid_runtime",

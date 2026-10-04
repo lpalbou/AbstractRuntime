@@ -191,30 +191,26 @@ def _build_tool_calls_resume_workflow(
     )
 
 
-def _build_stream_wait_workflow(
-    *,
-    workflow_id: str,
-    wait_key: str,
-    payload: Dict[str, Any],
-    result_key: str,
-) -> WorkflowSpec:
-    def wait(run: RunState, ctx: Any) -> StepPlan:
-        _ = run, ctx
-        return StepPlan(
-            node_id="wait",
-            effect=Effect(
-                type=EffectType.WAIT_EVENT,
-                payload={
-                    "wait_key": wait_key,
-                    "resume_to_node": "done",
-                    "prompt": "Streaming voice synthesis is running.",
-                    "allow_free_text": False,
-                    "details": copy.deepcopy(payload),
-                },
-                result_key=result_key,
-            ),
-            next_node="done",
-        )
+# Legacy (runtimes before R13.1): the streamed-speech child run waited on this
+# key prefix for the whole stream. No new run waits on it; hosts finish the
+# ones a dead process left behind (`close_interrupted_voice_stream`).
+LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX = "abstractcore.voice.tts.stream:"
+
+
+def is_interrupted_voice_stream_wait(waiting: Any) -> bool:
+    """True for a legacy streamed-speech wait (by key prefix or the stream's details mode)."""
+
+    key = str(getattr(waiting, "wait_key", "") or "")
+    details = getattr(waiting, "details", None)
+    mode = details.get("mode") if isinstance(details, dict) else None
+    return key.startswith(LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX) or mode == "abstractcore_voice_stream"
+
+
+def _build_stream_record_workflow(*, workflow_id: str, result_key: str) -> WorkflowSpec:
+    """One node that completes with ``vars[result_key]`` (the stream's outcome).
+
+    Also the resume target for a legacy stream wait (its resume node was
+    ``done``)."""
 
     def done(run: RunState, ctx: Any) -> StepPlan:
         _ = ctx
@@ -225,8 +221,8 @@ def _build_stream_wait_workflow(
 
     return WorkflowSpec(
         workflow_id=workflow_id,
-        entry_node="wait",
-        nodes={"wait": wait, "done": done},
+        entry_node="done",
+        nodes={"done": done},
     )
 
 
@@ -572,7 +568,19 @@ class AbstractCoreRunFacade:
         params: Optional[Dict[str, Any]] = None,
         child_vars: Optional[Dict[str, Any]] = None,
     ):
-        """Create a durable child run and yield Runtime-owned TTS stream events."""
+        """Yield Runtime-owned TTS stream events; record a durable child run when the stream ends.
+
+        The stream is NOT a wait (R13.1, 2026-10-04). It used to start a child
+        run parked on ``WAIT_EVENT abstractcore.voice.tts.stream:<uuid>`` for
+        the whole stream: clients folded that waiting record into the parent
+        run (a Read aloud during a live turn showed "Waiting for an event"),
+        and a gateway restart mid-stream left the child WAITING forever with
+        nothing able to resume it. Now nothing durable exists while audio is
+        produced; when the stream ends (done, error, cancel or disconnect) the
+        child run is created already COMPLETED with the outcome — the id is
+        allocated up front and announced in the ``runtime_start`` event and
+        the trace metadata. A crash mid-stream leaves no run behind.
+        """
 
         client = getattr(self._runtime, "_abstractcore_llm_client", None)
         stream_fn = getattr(client, "stream_tts", None)
@@ -584,40 +592,39 @@ class AbstractCoreRunFacade:
         if isinstance(output, dict):
             spec.update(copy.deepcopy(output))
         stream_params = copy.deepcopy(params) if isinstance(params, dict) else {}
-        wait_key = f"abstractcore.voice.tts.stream:{uuid.uuid4()}"
         result_key = _RESULT_KEY
-        payload = {
-            "mode": "abstractcore_voice_stream",
-            "text": str(text or ""),
-            "output": copy.deepcopy(spec),
-            "params": copy.deepcopy(stream_params),
-        }
-        workflow = _build_stream_wait_workflow(
+        child_run_id = str(uuid.uuid4())
+        workflow = _build_stream_record_workflow(
             workflow_id=f"{_workflow_id_for_output(spec)}_stream",
-            wait_key=wait_key,
-            payload=payload,
             result_key=result_key,
         )
-        child_run_id = self._runtime.start(
-            workflow=workflow,
-            vars=_build_child_vars(parent=parent, child_vars=child_vars),
-            actor_id=parent.actor_id,
-            session_id=parent.session_id,
-            parent_run_id=parent.run_id,
-        )
-        child = self._tick(workflow=workflow, run_id=child_run_id)
-        if child.status != RunStatus.WAITING or child.waiting is None:
-            raise ValueError("Runtime failed to initialize streaming voice child run.")
+        recorded: Dict[str, Any] = {"state": None}
+
+        def _record(final_result: Dict[str, Any]) -> RunState:
+            if recorded["state"] is not None:
+                return recorded["state"]
+            record_vars = _build_child_vars(parent=parent, child_vars=child_vars)
+            record_vars[result_key] = copy.deepcopy(final_result)
+            started = self._runtime.start(
+                workflow=workflow,
+                vars=record_vars,
+                actor_id=parent.actor_id,
+                session_id=parent.session_id,
+                parent_run_id=parent.run_id,
+                run_id=child_run_id,
+            )
+            recorded["state"] = self._tick(workflow=workflow, run_id=started)
+            return recorded["state"]
 
         cancel_event = threading.Event()
         trace_metadata = dict(stream_params.get("trace_metadata") or {}) if isinstance(stream_params.get("trace_metadata"), dict) else {}
-        trace_metadata.setdefault("run_id", child.run_id)
+        trace_metadata.setdefault("run_id", child_run_id)
         trace_metadata.setdefault("parent_run_id", parent.run_id)
         if parent.session_id is not None:
             trace_metadata.setdefault("session_id", parent.session_id)
         if parent.actor_id is not None:
             trace_metadata.setdefault("actor_id", parent.actor_id)
-        trace_metadata.setdefault("workflow_id", child.workflow_id)
+        trace_metadata.setdefault("workflow_id", workflow.workflow_id)
         stream_params["trace_metadata"] = trace_metadata
         stream_params["output"] = copy.deepcopy(spec)
         stream_params["cancel_event"] = cancel_event
@@ -649,82 +656,43 @@ class AbstractCoreRunFacade:
                 "metadata": {"streaming": True, "terminal_event": copy.deepcopy(event)},
             }
 
-        def _resume_cancelled(reason: str) -> None:
-            event = {
-                "type": "cancelled",
-                "ok": False,
-                "cancelled": True,
-                "error": str(reason or "TTS stream was cancelled."),
-                "child_run_id": child.run_id,
-                "run_id": parent.run_id,
-            }
-            try:
-                self._resume(
-                    workflow=workflow,
-                    run_id=child.run_id,
-                    wait_key=wait_key,
-                    payload=_final_result_for_event(event),
-                    max_steps=100,
-                )
-                return
-            except Exception:
-                pass
-            cancel_run = getattr(self._runtime, "cancel_run", None)
-            if callable(cancel_run):
-                try:
-                    cancel_run(child.run_id, reason=str(reason or "TTS stream was cancelled."))
-                except Exception:
-                    pass
+        def _status(state: RunState) -> str:
+            return str(state.status.value if hasattr(state.status, "value") else state.status)
 
         def _events():
             terminal_seen = False
             try:
                 yield {
                     "type": "runtime_start",
-                    "schema": "abstractruntime.tts_stream.start.v1",
+                    "schema": "abstractruntime.tts_stream.start.v2",
                     "ok": True,
                     "run_id": parent.run_id,
-                    "child_run_id": child.run_id,
-                    "wait_key": wait_key,
-                    "durability": "runtime_child_run",
+                    "child_run_id": child_run_id,
+                    "durability": "runtime_child_run_on_completion",
                     "transport": "jsonl",
                     "chunk_format": "wav-segment",
                 }
                 for raw_event in stream:
                     event = dict(raw_event) if isinstance(raw_event, dict) else {"type": "event", "value": str(raw_event)}
-                    event.setdefault("child_run_id", child.run_id)
+                    event.setdefault("child_run_id", child_run_id)
                     event.setdefault("run_id", parent.run_id)
                     event_type = str(event.get("type") or "").strip().lower()
                     if event_type in {"done", "cancelled", "error"}:
                         terminal_seen = True
-                        final_result = _final_result_for_event(event)
-                        final_state = self._resume(
-                            workflow=workflow,
-                            run_id=child.run_id,
-                            wait_key=wait_key,
-                            payload=final_result,
-                            max_steps=100,
-                        )
-                        event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                        event["child_run_status"] = _status(_record(_final_result_for_event(event)))
                         yield event
                         return
                     yield event
                 if not terminal_seen:
+                    terminal_seen = True
                     event = {
                         "type": "error",
                         "ok": False,
                         "error": "TTS stream ended without a terminal event.",
-                        "child_run_id": child.run_id,
+                        "child_run_id": child_run_id,
                         "run_id": parent.run_id,
                     }
-                    final_state = self._resume(
-                        workflow=workflow,
-                        run_id=child.run_id,
-                        wait_key=wait_key,
-                        payload=_final_result_for_event(event),
-                        max_steps=100,
-                    )
-                    event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                    event["child_run_status"] = _status(_record(_final_result_for_event(event)))
                     yield event
             except GeneratorExit:
                 cancel_event.set()
@@ -735,35 +703,68 @@ class AbstractCoreRunFacade:
                     except Exception:
                         pass
                 if not terminal_seen:
-                    _resume_cancelled("TTS stream disconnected before completion")
+                    try:
+                        _record(
+                            _final_result_for_event(
+                                {
+                                    "type": "cancelled",
+                                    "ok": False,
+                                    "cancelled": True,
+                                    "error": "TTS stream disconnected before completion",
+                                    "child_run_id": child_run_id,
+                                    "run_id": parent.run_id,
+                                }
+                            )
+                        )
+                    except Exception:
+                        pass
                 raise
             except Exception as exc:
                 event = {
                     "type": "error",
                     "ok": False,
                     "error": str(exc),
-                    "child_run_id": child.run_id,
+                    "child_run_id": child_run_id,
                     "run_id": parent.run_id,
                 }
                 try:
-                    final_state = self._resume(
-                        workflow=workflow,
-                        run_id=child.run_id,
-                        wait_key=wait_key,
-                        payload=_final_result_for_event(event),
-                        max_steps=100,
-                    )
-                    event["child_run_status"] = str(final_state.status.value if hasattr(final_state.status, "value") else final_state.status)
+                    event["child_run_status"] = _status(_record(_final_result_for_event(event)))
                 except Exception:
-                    cancel_run = getattr(self._runtime, "cancel_run", None)
-                    if callable(cancel_run):
-                        try:
-                            cancel_run(child.run_id, reason=str(exc))
-                        except Exception:
-                            pass
+                    pass
                 yield event
 
         return _events()
+
+    def close_interrupted_voice_stream(self, child_run_id: str, *, reason: str) -> RunState:
+        """Finish a LEGACY streamed-speech child run left WAITING by a process that died.
+
+        Runtimes before R13.1 parked the stream's child run on
+        ``WAIT_EVENT abstractcore.voice.tts.stream:<uuid>`` while audio
+        streamed; only the process holding the stream could resume it, so a
+        gateway restart mid-stream left it waiting forever. Hosts call this at
+        boot for such runs (``is_interrupted_voice_stream_wait``): the run
+        completes with ``errors[0] = {"code": "interrupted", "message": reason}``
+        and is never waiting again.
+        """
+
+        child = self._runtime.get_state(child_run_id)
+        waiting = child.waiting
+        if child.status != RunStatus.WAITING or waiting is None or not is_interrupted_voice_stream_wait(waiting):
+            raise ValueError(f"Run '{child_run_id}' is not waiting on a streamed-speech event")
+        result_key = str(waiting.result_key or _RESULT_KEY).strip() or _RESULT_KEY
+        workflow = _build_stream_record_workflow(workflow_id=str(child.workflow_id or "voice_stream"), result_key=result_key)
+        return self._resume(
+            workflow=workflow,
+            run_id=child.run_id,
+            wait_key=waiting.wait_key,
+            payload={
+                "content": None,
+                "outputs": {},
+                "errors": [{"message": str(reason or "The speech stream was interrupted."), "code": "interrupted"}],
+                "metadata": {"streaming": True, "interrupted": True},
+            },
+            max_steps=10,
+        )
 
     def generate_music(
         self,
@@ -896,7 +897,9 @@ def get_abstractcore_run_facade(runtime: Any) -> AbstractCoreRunFacade:
 
 
 __all__ = [
+    "LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX",
     "AbstractCoreRunFacade",
+    "is_interrupted_voice_stream_wait",
     "get_abstractcore_run_facade",
     "inline_run_active",
 ]

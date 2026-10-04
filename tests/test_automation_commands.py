@@ -478,3 +478,41 @@ def test_crash_around_a_command_commit_applies_it_exactly_once(tmp_path, monkeyp
         assert st["manual_pending"] == {"command_id": "c1"}
         drive(runtime, aid)
         assert len(children(runtime, aid)) == 1
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_unarchive_brings_an_ended_automation_back_paused_with_its_history(env):
+    runtime, clock = env
+    aid = create(runtime, clock, trigger=HOURLY)
+    drive(runtime, aid)  # occurrence 1 at 00:00, then parks
+    assert cmd(runtime, aid, "arch", "archive", "2026-01-01T00:10:00+00:00")["status"] == "applied"
+    assert drive(runtime, aid).status == RunStatus.COMPLETED  # nothing running: the controller ended
+    before = len(children(runtime, aid))
+    assert cmd(runtime, aid, "un", "unarchive", "2026-01-01T00:20:00+00:00") == {"status": "applied", "duplicate": False}
+    detail = get_automation(runtime.run_store, aid)
+    assert detail["status"] == "paused" and detail["definition"]["archived_at"] is None
+    state = drive(runtime, aid)
+    assert state.status == RunStatus.WAITING and state.waiting.until is None  # parked: paused, no deadline
+    assert get_automation(runtime.run_store, aid)["status"] == "paused"
+    assert len(children(runtime, aid)) == before  # history kept, nothing fired
+    assert [r["payload"]["status"] for r in automation_records(runtime.ledger_store, aid, "automation.unarchived")] == ["paused"]
+    # Replaying the same command is a duplicate; resume then re-arms the schedule.
+    assert cmd(runtime, aid, "un", "unarchive", "2026-01-01T00:20:00+00:00")["duplicate"] is True
+    clock.set("2026-01-01T00:30:00+00:00")
+    assert cmd(runtime, aid, "res", "resume", "2026-01-01T00:30:00+00:00")["status"] == "applied"
+    assert drive(runtime, aid).waiting.until == "2026-01-01T01:00:00+00:00"
+    at(runtime, clock, aid, "2026-01-01T01:00:00+00:00")
+    assert len(children(runtime, aid)) == before + 1
+
+
+@pytest.mark.parametrize("env", STORES, indirect=True)
+def test_unarchive_of_a_live_archived_automation_and_of_an_unarchived_one(env):
+    runtime, clock = env
+    aid = create(runtime, clock, workflow_id="ask", trigger=HOURLY)
+    drive(runtime, aid)  # the occurrence waits on a human: the controller is not terminal
+    assert cmd(runtime, aid, "arch", "archive", "2026-01-01T00:01:00+00:00")["status"] == "applied"
+    assert cmd(runtime, aid, "un", "unarchive", "2026-01-01T00:02:00+00:00")["status"] == "applied"
+    assert get_automation(runtime.run_store, aid)["status"] == "paused"
+    # Not archived: an applied no-op that changes nothing.
+    assert cmd(runtime, aid, "un2", "unarchive", "2026-01-01T00:03:00+00:00")["status"] == "applied"
+    assert get_automation(runtime.run_store, aid)["status"] == "paused"

@@ -34,7 +34,7 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 ```mermaid
 flowchart LR
   Trigger["Trigger source<br/>schedule@1 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
-  Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive"] -->|"decision + wake"| Controller
+  Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive / unarchive"] -->|"decision + wake"| Controller
   Controller -->|"START_SUBWORKFLOW<br/>deterministic run_id"| Occurrence["Occurrence run<br/>role: occurrence<br/>(a session turn)"]
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
   Occurrence -->|"output: answer, notify"| Controller
@@ -292,6 +292,7 @@ expected_revision=None, now=None)` is the only way to change an automation. It r
 | `automation.revise` | `payload.changes = {title?, target?, trigger?, context?, policy?}` (at least one). `title`, `target`, `trigger` and `context` are replaced whole; `policy` fields are merged, so a field you do not send keeps its value. The next revision applies from the controller's next step. A changed trigger gets a new binding and is re-armed after now, so no past tick fires; an unchanged trigger keeps its binding. | `invalid_state` when archived or finished; the definition's own reason codes for invalid changes |
 | `automation.stop_current` | Cancels the running occurrence tree, or its pending retry. The occurrence completes as `cancelled`, quietly. | `invalid_state` when nothing is running |
 | `automation.archive` | Stops further admissions; the current occurrence finishes and the controller then ends. History is kept and the automation stays listed. Archiving twice is an applied no-op. | — |
+| `automation.unarchive` | Lifts the archive mark and brings the automation back **paused** (send `automation.resume` to re-arm its trigger). A controller that ended because it was archived restarts at `read_definition` and parks on its wake wait; occurrences, ledger and history are untouched. An exhausted or failed automation only loses the archive mark and keeps its status. Unarchiving an automation that is not archived is an applied no-op. | — |
 
 Every command can also be rejected with:
 
@@ -305,7 +306,7 @@ Commands are idempotent per `command_id`. A `command_id` is tied to its whole co
 `expected_revision`). The `automation.command_result` record, keyed
 `automation:command_result:<automation_id>:<command_id>`, is the decision. Sending the same command again returns the
 recorded result with `duplicate: true` and repeats only the follow-ups that are safe to repeat: the observation
-record (`automation.paused`, `automation.resumed`, `automation.revised`, `automation.archived`), waking the
+record (`automation.paused`, `automation.resumed`, `automation.revised`, `automation.archived`, `automation.unarchived`), waking the
 controller, and cancelling the stopped child. A host that fails to carry out a command itself records the failure
 with `record_automation_command_result(...)`, passing the same `payload` and `expected_revision` so a later replay is
 recognized.

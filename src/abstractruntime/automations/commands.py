@@ -1,7 +1,7 @@
 """Automation commands (contract A/D, C8, C16): the ONE applier.
 
 `apply_automation_command` applies `automation.revise | pause | resume | run_now
-| stop_current | archive` under the automation's `run_mutation_lock`, through
+| stop_current | archive | unarchive` under the automation's `run_mutation_lock`, through
 the decision protocol (`automations.ledger`): reconcile, exact key lookup of
 `automation:command_result:<automation_id>:<command_id>`, decide from persisted
 state (including `expected_revision`), append the decision, apply it, save.
@@ -28,6 +28,10 @@ Semantics:
 - stop_current: cancels the current occurrence tree (or its backoff); it
   completes `cancelled` (quiet).
 - archive: no further admission; the current occurrence finishes; history kept.
+- unarchive: clears `archived_at` and brings the automation back PAUSED (resume
+  re-arms it). A controller that ended because it was archived is revived at
+  `read_definition` and parks on its wake wait; an exhausted or failed one keeps
+  its terminal status (only the archive mark is lifted). History is untouched.
 Repeats of an already-true state (pause while paused, ...) are applied no-ops.
 """
 
@@ -58,6 +62,7 @@ AUTOMATION_COMMAND_TYPES = (
     "automation.run_now",
     "automation.stop_current",
     "automation.archive",
+    "automation.unarchive",
 )
 
 
@@ -129,6 +134,14 @@ def _decide(
         if archived:
             return {"delta": {}}
         return {"delta": {"definition": {**copy.deepcopy(definition), "archived_at": now}}}
+
+    if command_type == "automation.unarchive":
+        if not archived:
+            return {"delta": {}}
+        delta_u: Dict[str, Any] = {"definition": {**copy.deepcopy(definition), "archived_at": None}}
+        if not state.get("exhausted") and run.status not in (RunStatus.FAILED, RunStatus.CANCELLED):
+            delta_u["state"] = {"paused": True}
+        return {"delta": delta_u}
 
     if command_type == "automation.revise":
         if archived or terminal:
@@ -212,6 +225,9 @@ def _follow_ups(runtime: Any, automation_id: str, command_type: str) -> None:
             except StaleResumeError:
                 pass  # the host resumed it first
         return
+    if command_type == "automation.unarchive":
+        _revive_unarchived(runtime, run, state)
+        return
     # Every other command changes what the idle controller should do: wake it.
     if run.status == RunStatus.WAITING and run.waiting is not None and run.waiting.wait_key == wake_wait_key(automation_id):
         try:
@@ -224,6 +240,26 @@ def _follow_ups(runtime: Any, automation_id: str, command_type: str) -> None:
             )
         except StaleResumeError:
             pass  # woken by someone else; the controller re-reads state anyway
+
+
+def _revive_unarchived(runtime: Any, run: Any, state: Dict[str, Any]) -> None:
+    """A controller that ENDED because it was archived restarts at `read_definition`.
+
+    Condition-based (re-run on replay, and by any later unarchive): only a
+    `completed` controller that is no longer archived, not exhausted, and
+    paused. The host drives the RUNNING run like any other; it parks on its
+    wake wait because the automation is paused.
+    """
+    if run.status != RunStatus.COMPLETED or definition_of(run).get("archived_at"):
+        return
+    if state.get("exhausted") or not state.get("paused"):
+        return
+    run.status = RunStatus.RUNNING
+    run.current_node = "read_definition"
+    run.waiting = None
+    run.output = None
+    run.error = None
+    runtime.run_store.save(run)
 
 
 def apply_automation_command(
@@ -346,6 +382,8 @@ def _observation_for(run: Any, command_type: str, *, command_id: str, now: str) 
     if command_type == "automation.archive":
         pending = state.get("pending_occurrence")
         return ("automation.archived", command_id, {"active_occurrence_run_id": pending["run_id"]} if pending else {})
+    if command_type == "automation.unarchive":
+        return ("automation.unarchived", command_id, {"status": "paused" if state.get("paused") else None})
     if command_type == "automation.revise":
         return (
             "automation.revised",

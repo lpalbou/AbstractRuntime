@@ -262,6 +262,7 @@ from abstractruntime.email import (
 
 - `Runtime.set_email_context_resolver(fn)`: `fn(binding, *, use) -> EmailContext | None` (`use` is `"agent_tool"` or `"action"`; `fn(binding)` also accepted), per runtime, memory only
 - `Runtime.set_email_binding(binding | None)` / `Runtime.email_binding`: the account occurrences are bound to
+- `Runtime.set_occurrence_input_resolver(fn | None)` / `Runtime.occurrence_input_resolver`: `fn(definition, input_data) -> input_data`, called at each automation occurrence's admission (its run start) and frozen with the occurrence's inputs (a replayed dispatch stays identical); a non-dict answer fails the admission. The gateway re-resolves an automation's "Use my default" workspaces here. None (default): the definition's inputs as stored
 - `Runtime.set_event_inbox(inbox)` / `Runtime.event_inbox`: required by `email.received@1`
 - `EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -> PollReport` and `.status()`
 - toolsets: `get_default_toolsets(..., email_enabled=True)` (also `list_default_tool_specs`, `build_default_tool_map`, `list_tool_catalog`); no env flag; `list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "not_available" | "agent_tools_off")`

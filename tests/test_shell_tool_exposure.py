@@ -244,10 +244,12 @@ def test_shell_tools_env_opt_in(monkeypatch):
 def test_schema_wording_is_honest_and_namespace_hidden():
     d = shell_exec._tool_definition
     text = f"{d.description} {d.when_to_use or ''}".lower()
-    assert "not a sandbox" in text
+    # Round 12: the session IS sandboxed to the run's workspaces now; the schema says so.
+    assert "sandboxed to this run's workspaces" in text and "not a sandbox" not in text
     assert "not durable" in text
     assert "persist" in text
     assert "_registry_namespace" not in d.parameters  # trust-boundary arg hidden from the model
+    assert "_sandbox" not in d.parameters  # the sandbox stamp too
     assert "_registry_namespace" not in shell_write_stdin._tool_definition.parameters
     assert "_registry_namespace" not in shell_close._tool_definition.parameters
 

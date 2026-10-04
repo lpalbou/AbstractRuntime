@@ -1095,6 +1095,7 @@ _EXEC_OUTPUT_CAP = 24_000
 def _run_execute_command(command_text: str, ws: Any) -> str:
     import shlex
     import subprocess
+    from pathlib import Path
 
     raw = (command_text or "").strip().splitlines()[0].strip() if (command_text or "").strip() else ""
     if not raw:
@@ -1185,6 +1186,33 @@ def _run_execute_command(command_text: str, ws: Any) -> str:
     # escapee (core's chrome-headless finding) is the residual the bounded
     # drain caps at seconds instead of forever.
     posix = os.name == "posix"
+    # Round 12: the program runs inside an OS sandbox limited to the entity's workspace (rw)
+    # and its whitelisted mounts (their modes): the argv screen above is policy, the sandbox
+    # is the wall (an interpreter or a script cannot read outside). No sandbox = refused.
+    from abstractruntime.integrations.abstractcore.workspace_scoped_tools import core_sandbox_module
+
+    try:
+        core_sb = core_sandbox_module()
+    except ValueError as exc:
+        return f"refused: {exc}"
+    KIND_UNSANDBOXED, sandbox_for_tool_call = core_sb.KIND_UNSANDBOXED, core_sb.sandbox_for_tool_call
+
+    stamp = {
+        "private_workspace": str(ws.root),
+        "posture": "allowed_only",
+        "allowed": [
+            {"path": m["path"], "mode": m["mode"]}
+            for m in ws.mounts()
+            if Path(str(m.get("path") or "")).is_absolute() and m.get("mode") in ("ro", "rw")
+        ],
+    }
+    sandbox = sandbox_for_tool_call(stamp)
+    if sandbox.refuses:
+        return f"refused: {sandbox.refusal()}"
+    if sandbox.kind == KIND_UNSANDBOXED:
+        child_env = sandbox.env_for(child_env)
+    else:
+        argv, child_env = sandbox.wrap(argv, str(ws.root), child_env)
     try:
         proc = subprocess.Popen(
             argv, cwd=str(ws.root), env=child_env,

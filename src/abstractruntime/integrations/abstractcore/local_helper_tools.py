@@ -263,14 +263,14 @@ def _start_result(helper: LocalHelperProcess, *, ready_timeout_s: float) -> Dict
 @tool(
     description=(
         "Start one long-lived local helper process for this run (dev server, watcher, background helper) "
-        "with an optional readiness contract. NOT a sandbox; helper is auto-cleaned when the run ends."
+        "with an optional readiness contract; sandboxed to this run's workspaces, auto-cleaned when the run ends."
     ),
     when_to_use=(
         "When the task needs a local process that must keep running across tool calls: start a dev server, "
         "wait for it to become ready, then inspect or stop it later."
     ),
     tags=["mutating"],
-    hide_args=["_registry_namespace"],
+    hide_args=["_registry_namespace", "_sandbox"],
 )
 def local_helper_start(
     command: str,
@@ -281,10 +281,24 @@ def local_helper_start(
     ready_text: Optional[str] = None,
     ready_timeout: float = 20.0,
     _registry_namespace: str = "",
+    _sandbox: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     argv, error = _parse_command(command)
     if error:
         return {"success": False, "error": error}
+    # Round 12: the helper runs inside the OS sandbox built from the run's workspace stamp
+    # (AbstractCore); no sandbox on this host = refused (the run continues).
+    from .workspace_scoped_tools import core_sandbox_module
+
+    try:
+        core_sb = core_sandbox_module()
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    KIND_UNSANDBOXED, refusal_result = core_sb.KIND_UNSANDBOXED, core_sb.refusal_result
+    sandbox = core_sb.sandbox_for_tool_call(_sandbox)
+    if sandbox.refuses:
+        return refusal_result(sandbox, helper_id=str(helper_id or "").strip() or _DEFAULT_HELPER_ID)
+    report_sandbox = sandbox.spec is not None or sandbox.kind != KIND_UNSANDBOXED
     hid = str(helper_id or "").strip() or _DEFAULT_HELPER_ID
     key = namespaced_helper_id(_registry_namespace, hid)
     registry = get_local_helper_registry()
@@ -306,10 +320,17 @@ def local_helper_start(
         encoding="utf-8",
         delete=False,
     )
+    popen_env = None
+    if sandbox.kind == KIND_UNSANDBOXED:
+        if sandbox.spec is not None:
+            popen_env = sandbox.env_for()
+    else:
+        argv, popen_env = sandbox.wrap(list(argv or []), wd)
     try:
         proc = subprocess.Popen(
             argv or [],
             cwd=wd,
+            env=popen_env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -351,10 +372,14 @@ def local_helper_start(
         created_at=time.time(),
     )
     registry.put(helper)
-    return _start_result(
+    result = _start_result(
         helper,
         ready_timeout_s=_coerce_timeout(ready_timeout, 20.0, cap=_MAX_READY_TIMEOUT_S),
     )
+    if report_sandbox and isinstance(result, dict):
+        result["sandbox"] = sandbox.describe()
+        result["sandbox_line"] = sandbox.rendered_line()
+    return result
 
 
 @tool(

@@ -99,9 +99,9 @@ Docs: `automations.md#tool-approval`, `automations.md#waits-on-a-person`.
 
 Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as
 a read-only mount (`_runtime.workspace_read_only_paths`): file tools and VisualFlow writers that target a path inside
-the mount are refused, reads work. Commands and code (`execute_command`, `execute_python`) are allowed, because the
-shell cannot be sandboxed; a command can therefore still change files if it chooses to, so keep tool approval on for
-commands where that matters. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+the mount are refused, reads work. Commands and code (`execute_command`, `shell_exec`, `local_helper_start`,
+AbstractAgent's `execute_python`) run inside an OS sandbox built from the same workspaces (macOS `sandbox-exec`, Linux
+`bwrap`/Landlock), so they cannot write into the mount either; on a host with no sandbox they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
 the discussion never writes back into the automation's session, state or ledger.
 
 Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.

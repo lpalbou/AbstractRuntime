@@ -18,8 +18,14 @@ Key concepts:
   system prompt: it is host policy, it would disclose other users' paths, and a list that
   grows with the host's files would change the prompt (and bust the prompt cache) every turn.
 
-Important limitations:
-- `execute_command` is not a sandbox; commands can still write outside via absolute paths / `cd ..`.
+Nesting (round 12, R12 NESTING RULE): the most specific row wins — the longest real-path prefix
+among workspace_root, the allowed paths and the ignored paths decides; a refusal wins a tie; the
+host's built-in protection is absolute.
+
+Process-spawning tools (round 12): `execute_command`, `shell_exec` and `local_helper_start` get the
+run's effective workspace set stamped as the hidden `_sandbox` argument (`sandbox_stamp`, built
+from the same keys as the file-tool checks on every call); AbstractCore runs the command inside an
+OS sandbox built from it, or refuses it when the host has none (fail closed).
 """
 
 from __future__ import annotations
@@ -237,19 +243,44 @@ def _builtin_denied(*, path: Path, scope: "WorkspaceScope") -> bool:
     return not any(_under_or_equal(path, allow) for allow in scope.builtin_allow)
 
 
+def _refused_by_row(*, path: Path, scope: "WorkspaceScope") -> Optional[Path]:
+    """R12 NESTING RULE (byte-identical with the gateway and the sandbox profile): among the
+    run's rows — workspace_root (rw), workspace_allowed_paths (not under workspace_only) and
+    workspace_ignored_paths — the LONGEST real-path prefix of `path` decides; a tie between an
+    ignored entry and an allowed entry (or the root) of the same path is a refusal. Returns the
+    refusing ignored entry, or None (reachable by a row, or no row: the access mode decides)."""
+    target = resolve_no_strict(path)
+    best_len = -1
+    best: Optional[Path] = None  # the ignored entry when the winner is a refusal
+    allows = [scope.root]
+    if scope.access_mode != "workspace_only":
+        allows.extend(scope.allowed_paths)
+    for entry in allows:
+        if _under_or_equal(target, entry):
+            n = len(str(resolve_no_strict(entry)))
+            if n > best_len:
+                best_len, best = n, None
+    for entry in scope.ignored_paths:
+        if _under_or_equal(target, entry):
+            n = len(str(resolve_no_strict(entry)))
+            if n >= best_len:  # a refusal wins a tie
+                best_len, best = n, entry
+    return best
+
+
 def _is_blocked(*, path: Path, scope: "WorkspaceScope") -> bool:
-    if any(_under_or_equal(path, blocked) for blocked in scope.ignored_paths):
+    if _refused_by_row(path=path, scope=scope) is not None:
         return True
     return _builtin_denied(path=path, scope=scope)
 
 
 def _ensure_allowed(*, path: Path, scope: "WorkspaceScope") -> None:
-    for blocked in scope.ignored_paths:
-        if _under_or_equal(path, blocked):
-            raise ValueError(f"Path is blocked by workspace_ignored_paths: '{path}'")
+    # Built-in refusals are absolute (no row re-opens them), so they are checked first.
     if _builtin_denied(path=path, scope=scope):
         # Names the path the model asked for, never the host's deny list.
         raise ValueError(f"Path is not accessible (protected by the host): '{path}'")
+    if _refused_by_row(path=path, scope=scope) is not None:
+        raise ValueError(f"Path is blocked by workspace_ignored_paths: '{path}'")
 
 
 def _resolve_under_root_strict(*, root: Path, user_path: str) -> Path:
@@ -599,7 +630,10 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
     # protection (`builtin_deny_prefixes` / `builtin_allow`) is enforced by the
     # resolver and deliberately never rendered here (see the module docstring).
     if scope.ignored_paths:
-        lines.append("Excluded paths (override grants): " + json.dumps([str(p) for p in scope.ignored_paths]))
+        lines.append(
+            "Excluded paths (a more specific allowed workspace inside one stays reachable): "
+            + json.dumps([str(p) for p in scope.ignored_paths])
+        )
     if scope.read_only_paths:
         lines.append(
             "Read-only mounts (read them, never write into them; write in your own workspace): "
@@ -611,8 +645,73 @@ def describe_workspace_scope(scope: WorkspaceScope) -> str:
         lines.append(
             "This workspace is READ-ONLY: tools that write files or run commands/code are refused."
         )
-    lines.append("Stay within this scope. Shell execution is not sandboxed by this file-tool policy.")
+    lines.append("Stay within this scope. Shell commands run inside an OS sandbox limited to these workspaces.")
     return "\n".join(lines)
+
+
+SANDBOX_STAMP_ARG = "_sandbox"
+# The one sentence when the installed AbstractCore has no command sandbox (older than 2.25.0):
+# the command is refused before it runs (never run unsandboxed).
+NO_CORE_SANDBOX = (
+    "Commands are refused: the installed AbstractCore has no command sandbox "
+    "(abstractcore.tools.sandbox, AbstractCore 2.25.0 or newer)."
+)
+
+
+def core_sandbox_module() -> Any:
+    """AbstractCore's sandbox module, or ValueError(NO_CORE_SANDBOX) when it is missing."""
+    try:
+        from abstractcore.tools import sandbox as mod
+    except ImportError as exc:
+        raise ValueError(NO_CORE_SANDBOX) from exc
+    return mod
+# The process-spawning tools the runtime stamps (core's execute_command / shell_exec, the
+# runtime's local_helper_start, AbstractAgent's execute_python). Every one of them reads the stamp
+# and runs inside the sandbox; a tool that predates the stamp fails on the unknown argument
+# (closed), it never runs unsandboxed.
+SANDBOXED_TOOL_NAMES = frozenset({"execute_command", "shell_exec", "local_helper_start", "execute_python"})
+# Tools without a working_directory argument (they start in the stamp's private workspace).
+_SANDBOXED_WITHOUT_CWD = frozenset({"execute_python"})
+
+
+def sandbox_stamp(scope: WorkspaceScope) -> Dict[str, Any]:
+    """The run's effective workspace set as AbstractCore's SandboxSpec stamp (paths only — the
+    environment and the unsandboxed flag are HOST policy, never per call). Built from the same
+    scope the file tools check, so the sandbox and the file tools cannot drift apart:
+
+    - posture: `all_except_ignored` -> "any_except_denied", otherwise "allowed_only";
+    - default_mode: "ro" when "/" is a read-only root (the read-only default), else "rw";
+    - allowed: the allowed paths (not under workspace_only) and the reachable read-only roots,
+      each with its mode by `is_read_only_target` (the most specific writable exception wins);
+    - refused: the ignored paths; builtin_refused/builtin_allowed: the host's protection."""
+    root = str(resolve_no_strict(scope.root))
+    posture = "any_except_denied" if scope.access_mode == "all_except_ignored" else "allowed_only"
+    default_mode = "ro" if (scope.read_only or "/" in scope.read_only_paths) else "rw"
+    rows: Dict[str, str] = {}
+    candidates: List[Path] = list(scope.allowed_paths) if scope.access_mode != "workspace_only" else []
+    for raw in scope.read_only_paths:
+        if raw != "/":
+            p = Path(raw)
+            if not _is_blocked(path=p, scope=scope) and (
+                scope.access_mode == "all_except_ignored" or any(_under_or_equal(p, a) for a in candidates + [scope.root])
+            ):
+                candidates.append(p)
+    for p in candidates:
+        real = Path(os.path.realpath(str(p)))
+        if str(real) == root or str(real) in rows:
+            continue
+        ro = scope.read_only or is_read_only_target(real, scope.read_only_paths, scope.writable_paths)
+        rows[str(real)] = "ro" if ro else "rw"
+    return {
+        "version": 1,
+        "private_workspace": root,
+        "posture": posture,
+        "default_mode": default_mode,
+        "allowed": [{"path": p, "mode": m} for p, m in rows.items()],
+        "refused": [os.path.realpath(str(p)) for p in scope.ignored_paths],
+        "builtin_refused": [os.path.realpath(str(p)) for p in scope.builtin_deny_prefixes],
+        "builtin_allowed": [os.path.realpath(str(p)) for p in scope.builtin_allow],
+    }
 
 
 class WorkspaceScopedToolExecutor:
@@ -954,17 +1053,14 @@ def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Work
         if "file_path" not in out:
             raise ValueError("edit_file requires file_path")
         return out
-    if tool_name == "execute_command":
-        _rewrite_path_field("working_directory", default_to_root=True)
-        return out
-    if tool_name == "local_helper_start":
-        _rewrite_path_field("working_directory", default_to_root=True)
-        return out
-    if tool_name == "shell_exec":
-        # Pins the INITIAL cwd of a persistent shell session (backlog 0220). Like
-        # execute_command, this is policy for the starting point, not a sandbox: once
-        # running, the session can `cd` anywhere (stated in the tool schema).
-        _rewrite_path_field("working_directory", default_to_root=True)
+    if tool_name in SANDBOXED_TOOL_NAMES:
+        # The starting directory follows the file-tool policy; everything the process does
+        # after that (`cd`, `$(…)`, symlinks, scripts) is bound by the OS sandbox built from
+        # the stamp (round 12). A caller-supplied stamp never survives: it is replaced here.
+        core_sandbox_module()  # a core without the sandbox refuses here, before anything runs
+        if tool_name not in _SANDBOXED_WITHOUT_CWD:
+            _rewrite_path_field("working_directory", default_to_root=True)
+        out[SANDBOX_STAMP_ARG] = sandbox_stamp(scope)
         return out
     if tool_name == "skim_files":
         _alias_field("paths", ["path", "file_path", "filename", "file"])
@@ -1068,7 +1164,11 @@ __all__ = [
     "WorkspaceAccessMode",
     "WorkspaceScope",
     "WorkspaceScopedToolExecutor",
+    "NO_CORE_SANDBOX",
+    "SANDBOXED_TOOL_NAMES",
+    "core_sandbox_module",
     "rewrite_tool_arguments",
+    "sandbox_stamp",
     "resolve_workspace_base_dir",
     "resolve_user_path",
     "resolve_user_workspace_path",

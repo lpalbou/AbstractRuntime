@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Command sandbox: `execute_command`, `shell_exec`, `local_helper_start` and AbstractAgent's `execute_python` (0.3.18 or newer; an older one fails on the unknown argument and runs nothing) receive the run's effective workspace set as the hidden `_sandbox` argument (`sandbox_stamp(scope)`, built on every call from the same workspace vars the file tools read; `execute_python` starts in the stamp's private workspace; a model- or payload-supplied `_sandbox` is always replaced or dropped), and run inside AbstractCore's OS sandbox (`abstractcore.tools.sandbox`: macOS `sandbox-exec`, Linux `bwrap` or Landlock). `local_helper_start` and the entity exec tool apply it themselves (the entity's workspace and whitelisted mounts). With no sandbox on the host, or an AbstractCore without the sandbox module, the call is refused with one sentence before anything runs and the run continues.
+
+### Changed
+
+- Workspace nesting: the most specific row wins. Among `workspace_root`, `workspace_allowed_paths` and `workspace_ignored_paths`, the longest real-path prefix of a path decides (a refusal wins a tie); a refused folder no longer refuses an allowed workspace inside it, and a refused folder inside an allowed one still refuses its subtree. Built-in protection stays absolute. Same rule as AbstractGateway's validation and the sandbox profile.
+- The workspace context now says "Shell commands run inside an OS sandbox limited to these workspaces." and describes refused paths as "Excluded paths (a more specific allowed workspace inside one stays reachable)".
+- Requires AbstractCore 2.25.0 or newer (`abstractcore>=2.25.0` in the base install and the `[apple]`/`[gpu]` extras): the command sandbox and `structured_facade` use it.
+
 ### Removed
 
 - `workspace_shared_path` / `SHARED_WORKSPACE_KEY` / `shared_workspace_path` (added during 0.9.0 development, never released): AbstractGateway 0.13.0 has no shared workspace any more (round 11), so the workspace context names no "Shared workspace"; the allowed workspaces and their modes are listed as before. A stale key in a run's vars is ignored.
@@ -16,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `workspace_writable_paths`: writable exceptions inside read-only roots (`workspace_read_only_paths`), the more specific rule winning. The tool scope, `path_is_read_only` and VisualFlow writers honour them; child runs and file nodes inherit the parent's exactly and never add one. Used by AbstractGateway 0.13.0 for "Allow everything, refuse listed workspaces" with a read-only default.
-- `integrations.abstractcore.structured_facade` (also flat from `integrations.abstractcore`): `parse_response_format` and AbstractCore's own `ResponseFormatError`, so hosts check an OpenAI `response_format` without importing AbstractCore. Needs AbstractCore 2.25.0 or newer (imported on first use). Used by AbstractGateway 0.13.0's `/v1/chat/completions`.
+- `integrations.abstractcore.structured_facade` (also flat from `integrations.abstractcore`): `parse_response_format` and AbstractCore's own `ResponseFormatError`, so hosts check an OpenAI `response_format` without importing AbstractCore. Used by AbstractGateway 0.13.0's `/v1/chat/completions`.
 - Workspace context of a tool-using `LLM_CALL`: after the default working directory (the run's own workspace), `Allowed workspaces:` lists each allowed workspace outside it with its mode (`(read-only)` / `(read & write)`, from `workspace_read_only_paths` and `workspace_writable_paths`), and under `all_except_ignored` `Everything else: (…)`; refused paths are never listed as allowed. Used by AbstractGateway 0.13.0 on every run start.
 - `automation.unarchive`: an archived automation comes back paused with its history intact; a controller that ended because it was archived restarts and parks on its wake wait (observation `automation.unarchived`).
 

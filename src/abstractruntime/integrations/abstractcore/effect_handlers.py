@@ -4109,6 +4109,10 @@ def make_tool_calls_handler(
             # Absent route vars stamp NOTHING (core's graceful degradation:
             # unstamped = pre-ruling fallback behavior, byte-identical).
             arguments.pop("_session_route", None)
+            # Round 12: the OS-sandbox stamp is a TRUST BOUNDARY argument too — a payload or
+            # model `_sandbox` never survives; the workspace rewrite below stamps the run's own
+            # set (no scope = no stamp, and a host-configured core refuses the command).
+            arguments.pop("_sandbox", None)
             if name in _SESSION_ROUTE_TOOL_NAMES:
                 rv = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
                 provider = str(rv.get("provider") or "").strip() if isinstance(rv, dict) else ""

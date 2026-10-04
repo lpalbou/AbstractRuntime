@@ -315,3 +315,42 @@ def test_local_helper_and_entity_without_core_sandbox_refuse(t, no_core_sandbox)
     ws = WorkspaceRoot(t / "entity")
     assert _run_execute_command("touch should-not-exist", ws) == f"refused: {NO_CORE_SANDBOX}"
     assert not (ws.root / "should-not-exist").exists() and not (t / "data/should-not-exist").exists()
+
+
+def test_stale_execute_python_without_the_stamp_kwarg_fails_closed(t):
+    """An AbstractAgent older than 0.3.18 has an execute_python without `_sandbox`: the stamped
+    call fails on the unknown argument (TypeError surfaced as a failed tool result) and the
+    snippet never runs — it is never executed unsandboxed."""
+    from abstractcore.tools import tool
+
+    ran = t / "data/workspaces/session-1/stale-ran.txt"
+
+    @tool(name="execute_python", description="Stale execute_python without the sandbox stamp.")
+    def stale_execute_python(code: str, timeout_s: float = 0.0, max_output_chars: int = 0) -> dict:
+        ran.write_text("ran")
+        return {"stdout": "ran", "stderr": "", "exit_code": 0}
+
+    handler = make_tool_calls_handler(tools=MappingToolExecutor.from_tools([stale_execute_python]))
+    run = RunState.new(workflow_id="wf", entry_node="n", session_id="s", vars=_vars(t))
+    outcome = handler(run, _effect("execute_python", {"code": "print(1)"}), None)
+    assert str(outcome.status) == "completed"
+    res = _result(outcome)
+    assert res["success"] is False and "_sandbox" in str(res.get("error"))
+    assert not ran.exists()
+
+
+def test_model_key_never_maps_onto_the_hidden_stamp(t, monkeypatch):
+    """The executor's key normalization (`filePath` -> `file_path`) must not turn a model's
+    `sandbox` / `Sandbox` key into the host-only `_sandbox` parameter."""
+    from abstractcore.tools import tool
+
+    seen = {}
+
+    @tool(name="probe_tool", description="Records the stamp it receives.")
+    def probe_tool(command: str = "", _sandbox: dict = None) -> dict:
+        seen["stamp"] = _sandbox
+        return {"ok": True}
+
+    ex = MappingToolExecutor.from_tools([probe_tool])
+    ex.execute(tool_calls=[{"call_id": "c1", "name": "probe_tool", "arguments": {"command": "x", "sandbox": {"posture": "any_except_denied"}, "Sandbox": {}}}])
+    assert seen["stamp"] is None

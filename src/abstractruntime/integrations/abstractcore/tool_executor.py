@@ -179,6 +179,9 @@ def _call_with_timeout(func: Callable[[], Any], *, timeout_s: Optional[float]) -
     return False, None, str(result.get("error") or "Tool execution failed")
 
 
+_SANDBOX_STAMP_ARG = "_sandbox"  # see workspace_scoped_tools.SANDBOX_STAMP_ARG
+
+
 class MappingToolExecutor:
     """Executes tool calls using an explicit {tool_name -> callable} mapping.
 
@@ -278,7 +281,11 @@ class MappingToolExecutor:
             return current
 
         def _filter_kwargs(func: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-            """Best-effort filtering of unexpected kwargs for callables without **kwargs."""
+            """Best-effort filtering of unexpected kwargs for callables without **kwargs.
+
+            Round 12: the workspace sandbox stamp (`_sandbox`) is NEVER filtered away. A tool
+            that predates it (e.g. an older execute_python) would otherwise run unsandboxed;
+            it is refused instead (fail closed)."""
             try:
                 sig = inspect.signature(func)
             except Exception:
@@ -293,6 +300,11 @@ class MappingToolExecutor:
                 for p in params
                 if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
             }
+            if _SANDBOX_STAMP_ARG in kwargs and _SANDBOX_STAMP_ARG not in allowed:
+                raise TypeError(
+                    f"this tool does not accept the workspace sandbox stamp ({_SANDBOX_STAMP_ARG}); it is refused "
+                    "so it never runs unsandboxed (update the package that provides it)"
+                )
             return {k: v for k, v in kwargs.items() if k in allowed}
 
         def _normalize_key(key: str) -> str:
@@ -348,12 +360,16 @@ class MappingToolExecutor:
 
             out: Dict[str, Any] = dict(current)
 
-            # 2) Normalized (morphological) key mapping.
+            # 2) Normalized (morphological) key mapping. Never onto a hidden trust-boundary
+            # parameter (`_registry_namespace`, `_sandbox`, ...): only the host stamps those, so
+            # a model's `sandbox` / `registry_namespace` key must not become one.
             for k in list(out.keys()):
                 if k in allowed_names:
                     continue
                 nk = _normalize_key(k)
                 target = norm_to_param.get(nk)
+                if target and target.startswith("_") and not k.startswith("_"):
+                    continue
                 if target and target not in out:
                     out[target] = out.pop(k)
 
@@ -364,7 +380,7 @@ class MappingToolExecutor:
                 nk = _normalize_key(k)
                 candidates = _SYNONYM_ALIASES.get(nk, [])
                 for cand in candidates:
-                    if cand in allowed_names and cand not in out:
+                    if cand in allowed_names and cand not in out and not cand.startswith("_"):
                         out[cand] = out.pop(k)
                         break
 
@@ -468,7 +484,17 @@ class MappingToolExecutor:
                     "error": f"Tool '{name}' not found",
                 }
 
-            arguments = _canonicalize_kwargs(func, arguments)
+            try:
+                arguments = _canonicalize_kwargs(func, arguments)
+            except TypeError as stamp_error:  # a tool that cannot take the sandbox stamp: refused
+                return {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": name,
+                    "success": False,
+                    "output": None,
+                    "error": str(stamp_error),
+                }
 
             # Schema-aware type coercion (backlog 039): share the SAME coercion the AbstractCore
             # registry applies, so the runtime mapping-executor path and the registry path behave

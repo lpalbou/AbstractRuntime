@@ -263,13 +263,14 @@ def writable_paths(vars_obj: object) -> tuple:
 
 def is_read_only_target(target: Path, read_only_roots: Iterable[str], writable_roots: Iterable[str] = ()) -> bool:
     """True when `target` (already a realpath) is under a read-only root R and no writable
-    exception W with target ⊆ W ⊆ R exists (the more specific rule wins)."""
+    exception W with target ⊆ W ⊊ R exists (the more specific rule wins; a writable path equal to a
+    read-only root is no exception — read-only wins on a tie)."""
     writable = [Path(w) for w in writable_roots]
     for root in read_only_roots:
         r = Path(root)
         if not is_under_path(target, r):
             continue
-        if not any(is_under_path(target, w) and is_under_path(w, r) for w in writable):
+        if not any(is_under_path(target, w) and is_under_path(w, r) and w != r for w in writable):
             return True
     return False
 

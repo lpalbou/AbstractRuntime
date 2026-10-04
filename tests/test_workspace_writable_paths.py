@@ -34,6 +34,8 @@ def test_the_more_specific_rule_wins(tmp_path: Path) -> None:
     assert not is_read_only_target(Path(_real(rw)) / "a.txt", roots, writable)
     assert is_read_only_target(Path(_real(inner_ro)) / "a.txt", roots, writable)
     assert not is_read_only_target(Path(_real(tmp_path)) / "free.txt", roots, writable)
+    # A writable path equal to a read-only root is no exception (read-only wins on a tie).
+    assert is_read_only_target(Path(_real(ro)) / "a.txt", [_real(ro)], [_real(ro)])
     # A writable path OUTSIDE the read-only root is no exception to it.
     assert is_read_only_target(Path(_real(ro)) / "a.txt", roots, [_real(tmp_path / "elsewhere")])
 

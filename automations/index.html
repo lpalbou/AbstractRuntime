@@ -1819,7 +1819,7 @@ sources), <code>abstractruntime.automation_queries</code> (listing), <code>abstr
 </ul>
 <div class="highlight"><pre><span></span><code>flowchart LR
   Trigger["Trigger source&lt;br/&gt;schedule@1 / manual@1"] --&gt;|"due tick or run now"| Controller["Controller run&lt;br/&gt;(automation id)&lt;br/&gt;vars._meta.automation&lt;br/&gt;vars._runtime.automation"]
-  Commands["apply_automation_command&lt;br/&gt;pause / resume / run_now /&lt;br/&gt;revise / stop_current / archive"] --&gt;|"decision + wake"| Controller
+  Commands["apply_automation_command&lt;br/&gt;pause / resume / run_now /&lt;br/&gt;revise / stop_current / archive / unarchive"] --&gt;|"decision + wake"| Controller
   Controller --&gt;|"START_SUBWORKFLOW&lt;br/&gt;deterministic run_id"| Occurrence["Occurrence run&lt;br/&gt;role: occurrence&lt;br/&gt;(a session turn)"]
   Occurrence --&gt; Descendants["Descendant runs&lt;br/&gt;role: descendant"]
   Occurrence --&gt;|"output: answer, notify"| Controller
@@ -2131,6 +2131,11 @@ expected_revision=None, now=None)</code> is the only way to change an automation
 <td>Stops further admissions; the current occurrence finishes and the controller then ends. History is kept and the automation stays listed. Archiving twice is an applied no-op.</td>
 <td>—</td>
 </tr>
+<tr>
+<td><code>automation.unarchive</code></td>
+<td>Lifts the archive mark and brings the automation back <strong>paused</strong> (send <code>automation.resume</code> to re-arm its trigger). A controller that ended because it was archived restarts at <code>read_definition</code> and parks on its wake wait; occurrences, ledger and history are untouched. An exhausted or failed automation only loses the archive mark and keeps its status. Unarchiving an automation that is not archived is an applied no-op.</td>
+<td>—</td>
+</tr>
 </tbody>
 </table>
 <p>Every command can also be rejected with:</p>
@@ -2145,7 +2150,7 @@ expected_revision=None, now=None)</code> is the only way to change an automation
 <code>expected_revision</code>). The <code>automation.command_result</code> record, keyed
 <code>automation:command_result:&lt;automation_id&gt;:&lt;command_id&gt;</code>, is the decision. Sending the same command again returns the
 recorded result with <code>duplicate: true</code> and repeats only the follow-ups that are safe to repeat: the observation
-record (<code>automation.paused</code>, <code>automation.resumed</code>, <code>automation.revised</code>, <code>automation.archived</code>), waking the
+record (<code>automation.paused</code>, <code>automation.resumed</code>, <code>automation.revised</code>, <code>automation.archived</code>, <code>automation.unarchived</code>), waking the
 controller, and cancelling the stopped child. A host that fails to carry out a command itself records the failure
 with <code>record_automation_command_result(...)</code>, passing the same <code>payload</code> and <code>expected_revision</code> so a later replay is
 recognized.</p>

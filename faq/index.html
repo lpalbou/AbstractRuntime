@@ -1963,7 +1963,9 @@ Docs: <code>proposal.md</code>. Code: <code>src/abstractruntime/core/*</code>.</
 <p>Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
 occurrence) on each trigger: <code>schedule@1</code> (fixed UTC intervals such as <code>5m</code> or <code>24h</code>) or <code>manual@1</code> (run now only).
 <code>create_automation(...)</code> creates it, <code>apply_automation_command(...)</code> pauses, resumes, runs now, edits, stops the
-current occurrence or archives it, and the host drives it like any run (<code>drive_automation</code> does this in-process).</p>
+current occurrence, archives it or unarchives it (it comes back paused with its history), and the host drives it
+like any run (<code>drive_automation</code> does this in-process). Nothing is deleted: an archived automation keeps its
+occurrences and history and stays listed with status <code>archived</code>.</p>
 <p>The <code>Scheduler</code> is different: it is a driver loop that resumes due waits of existing runs. It does not create runs.</p>
 <p>Docs: <code>automations.md</code>. Code: <code>src/abstractruntime/automations/*</code>, <code>src/abstractruntime/triggers/*</code>.</p>
 <h2 id="what-happens-to-scheduled-ticks-while-the-host-is-down">What happens to scheduled ticks while the host is down?<a class="headerlink" href="#what-happens-to-scheduled-ticks-while-the-host-is-down" title="Permanent link">&para;</a></h2>
@@ -1996,9 +1998,9 @@ email-triggered automation, <code>"ask"</code> means every tool call asks except
 <h2 id="can-a-discussion-of-an-automation-run-change-my-files">Can a discussion of an automation run change my files?<a class="headerlink" href="#can-a-discussion-of-an-automation-run-change-my-files" title="Permanent link">&para;</a></h2>
 <p>Not through its file tools. A discussion works in its own writable workspace and sees the automation's workspace as
 a read-only mount (<code>_runtime.workspace_read_only_paths</code>): file tools and VisualFlow writers that target a path inside
-the mount are refused, reads work. Commands and code (<code>execute_command</code>, <code>execute_python</code>) are allowed, because the
-shell cannot be sandboxed; a command can therefore still change files if it chooses to, so keep tool approval on for
-commands where that matters. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+the mount are refused, reads work. Commands and code (<code>execute_command</code>, <code>shell_exec</code>, <code>local_helper_start</code>,
+AbstractAgent's <code>execute_python</code>) run inside an OS sandbox built from the same workspaces (macOS <code>sandbox-exec</code>, Linux
+<code>bwrap</code>/Landlock), so they cannot write into the mount either; on a host with no sandbox they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
 the discussion never writes back into the automation's session, state or ledger.</p>
 <p>Docs: <code>automations.md#discussions</code>, <code>automations.md#read-only-mounts</code>.</p>
 <h2 id="can-several-processes-share-one-run-store">Can several processes share one run store?<a class="headerlink" href="#can-several-processes-share-one-run-store" title="Permanent link">&para;</a></h2>

@@ -717,6 +717,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#structured-output-checks-for-hosts-structured-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured-output checks for hosts (structured facade)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1676,6 +1687,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#structured-output-checks-for-hosts-structured-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured-output checks for hosts (structured facade)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2135,11 +2157,11 @@ request/output summary, and effective route actually ran.</p>
 </tr>
 <tr>
 <td><code>workspace_allowed_paths</code></td>
-<td>Extra folders a <code>workspace_or_allowed</code> run may use.</td>
+<td>Additional workspaces a <code>workspace_or_allowed</code> run may use.</td>
 </tr>
 <tr>
 <td><code>workspace_ignored_paths</code></td>
-<td>The operator's exclusions; always refused.</td>
+<td>Refused workspaces. A more specific allowed workspace inside one stays reachable (see <em>Nesting</em> below).</td>
 </tr>
 <tr>
 <td><code>workspace_builtin_deny_prefixes</code></td>
@@ -2149,13 +2171,18 @@ request/output summary, and effective route actually ran.</p>
 <td><code>workspace_builtin_allow</code></td>
 <td>Exceptions inside the host's protected folders (for example the run's own folder inside the data folder). The operator's <code>workspace_ignored_paths</code> still win over them.</td>
 </tr>
+<tr>
+<td><code>workspace_read_only_paths</code> / <code>workspace_writable_paths</code></td>
+<td>Read-only roots and the writable exceptions inside them (<code>"/"</code> = a read-only default). The more specific rule wins.</td>
+</tr>
 </tbody>
 </table>
 <p>Lists accept a JSON array, a JSON array pasted as a string, or newline-separated entries.</p>
 <ul>
-<li>When an <code>LLM_CALL</code> offers tools and the run has a workspace scope, the runtime appends a short description of the scope to the system prompt: the root, the access mode, the authorized roots and the operator's <code>workspace_ignored_paths</code>. The host's built-in deny prefixes and allow entries are enforced but never described to the model, so the system prompt stays identical from turn to turn while the host's folders change, and the prompt cache stays warm. A refused path is reported as <code>Path is not accessible (protected by the host)</code> without listing the host's rules.</li>
-<li>Child runs (subworkflows and agent delegation) inherit all six vars unless they set their own; VisualFlow file and document nodes (<code>read_file</code>, <code>write_file</code>, <code>read_pdf</code>, <code>write_pdf</code>, <code>write_docx</code>, <code>write_chart</code>) apply the same scope.</li>
-<li>Shell tools are pinned to their starting folder only. A command can still reach other paths (<code>cd ..</code>, absolute paths); the workspace scope is a file-tool policy, not a sandbox.</li>
+<li>When an <code>LLM_CALL</code> offers tools and the run has a workspace scope, the runtime appends a short description of the scope to the system prompt: the root (the run's default working directory); each allowed workspace outside the root with its mode (<code>(read-only)</code> or <code>(read &amp; write)</code>, from <code>workspace_read_only_paths</code> and <code>workspace_writable_paths</code>); under <code>all_except_ignored</code> the mode of everything else (<code>Everything else: (read-only)</code>); the access mode; the authorized roots and the operator's <code>workspace_ignored_paths</code>. The host's built-in deny prefixes and allow entries are enforced but never described to the model, so the system prompt stays identical from turn to turn while the host's folders change, and the prompt cache stays warm. A refused path is reported as <code>Path is not accessible (protected by the host)</code> without listing the host's rules.</li>
+<li>Child runs (subworkflows and agent delegation) inherit the workspace vars unless they set their own; VisualFlow file and document nodes (<code>read_file</code>, <code>write_file</code>, <code>read_pdf</code>, <code>write_pdf</code>, <code>write_docx</code>, <code>write_chart</code>) apply the same scope.</li>
+<li><strong>Nesting (most specific row wins).</strong> For a path P (symlinks resolved), the candidates are <code>workspace_root</code> (read &amp; write), <code>workspace_allowed_paths</code> (not under <code>workspace_only</code>) and <code>workspace_ignored_paths</code>. The longest candidate that contains P decides: a refused entry refuses, the root or an allowed entry allows; a tie between a refused entry and an allowed one (or the root) at the same path refuses; no candidate falls back to the access mode (<code>all_except_ignored</code> allows, the others refuse). The host's built-in protection is absolute: under a <code>workspace_builtin_deny_prefixes</code> entry and not under a <code>workspace_builtin_allow</code> entry is refused whatever the rows say. So refusing <code>/Users/me</code> and allowing <code>/Users/me/project</code> makes the project reachable and the rest of <code>/Users/me</code> refused; a refused folder inside an allowed one refuses that subtree. AbstractGateway applies the same rule when it validates and computes a run's workspaces.</li>
+<li><strong>Command sandbox.</strong> <code>execute_command</code>, <code>shell_exec</code> (the whole persistent session), <code>local_helper_start</code> and AbstractAgent's <code>execute_python</code> (0.3.18 or newer) start in the workspace and run inside an OS sandbox built from the SAME scope (<code>sandbox_stamp(scope)</code>, stamped on every call as the hidden <code>_sandbox</code> argument; a model- or payload-supplied value is always replaced). AbstractCore (<code>abstractcore.tools.sandbox</code>) applies it: macOS <code>sandbox-exec</code>, Linux <code>bwrap</code>, or Linux Landlock for "Deny everything, allow listed workspaces". Mapping: <code>all_except_ignored</code> → "Allow everything, refuse listed workspaces" (<code>any_except_denied</code>), otherwise "Deny everything, allow listed workspaces" (<code>allowed_only</code>); a <code>"/"</code> read-only root → read-only default; each allowed workspace with its mode; refused paths and the built-in protection as they are. The command string is never parsed — <code>cd ..</code>, absolute paths, <code>$(…)</code>, symlinks and scripts are stopped by the kernel. With no sandbox on the host, or an AbstractCore without <code>abstractcore.tools.sandbox</code>, the command is refused with one sentence and the run continues. The entity exec tool runs inside a sandbox limited to the entity's workspace and its whitelisted mounts. The tool result carries <code>sandbox: {kind, …}</code> and a <code>Sandbox: …</code> line; the stamp rides the tool call in the run's evidence. Hosts set the host policy (the scrubbed environment commands start from, and whether unsandboxed commands are allowed on a host with no sandbox) once at boot through <code>abstractruntime.integrations.abstractcore.command_sandbox_host</code> (<code>configure_host</code>, <code>host_policy</code>, <code>host_sandbox_kind</code>), never by importing AbstractCore.</li>
 </ul>
 <h2 id="prompt-cache-control-plane-and-durable-blocs">Prompt-cache control plane and durable blocs<a class="headerlink" href="#prompt-cache-control-plane-and-durable-blocs" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime's AbstractCore integration exposes a public host-control facade for prompt-cache, durable bloc/KV prompt-cache operations, and model-residency operations:</p>
@@ -2814,6 +2841,19 @@ Provide a nonempty token even for open access: absent Authorization is allowed w
 Anonymous callers cannot use server-held cloud credentials; explicit provider
 keys use <code>X-AbstractCore-Provider-API-Key</code>. This serving facade does not create
 durable Runtime runs. The AbstractCore server dependencies must be installed.</p>
+<h2 id="structured-output-checks-for-hosts-structured-facade">Structured-output checks for hosts (structured facade)<a class="headerlink" href="#structured-output-checks-for-hosts-structured-facade" title="Permanent link">&para;</a></h2>
+<p>A host that accepts an OpenAI <code>response_format</code> checks it before any model sees it with
+<code>abstractruntime.integrations.abstractcore.structured_facade</code> (also exported flat from
+<code>abstractruntime.integrations.abstractcore</code>):</p>
+<ul>
+<li><code>parse_response_format(raw)</code> returns <code>(kind, schema, name)</code>, where kind is <code>"text"</code>,
+  <code>"json_object"</code> or <code>"json_schema"</code> and schema is <code>None</code> unless kind is <code>"json_schema"</code>.</li>
+<li><code>ResponseFormatError</code> is AbstractCore's own error class, so <code>except ResponseFormatError</code>
+  catches exactly what Core raises; <code>.param</code> names the offending field
+  (<code>"response_format"</code> or a nested name such as <code>"response_format.type"</code>).</li>
+</ul>
+<p>AbstractCore is imported on first use; it needs AbstractCore 2.25.0 or newer. AbstractGateway's
+<code>/v1/chat/completions</code> uses this facade, so the gateway never imports AbstractCore itself.</p>
 
 
 

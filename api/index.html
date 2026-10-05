@@ -564,6 +564,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#structured-output-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured-output checks
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1483,6 +1494,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#structured-output-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured-output checks
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1676,7 +1698,7 @@ Deep dive: <code>artifacts.md</code>.</p>
 <p>Implementation: <code>src/abstractruntime/automations/*</code>, <code>src/abstractruntime/triggers/*</code>, <code>src/abstractruntime/automation_queries.py</code>.
 Deep dive: <a href="../automations/">automations.md</a>.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.automations</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">apply_automation_command</span><span class="p">,</span>   <span class="c1"># pause / resume / run_now / revise / stop_current / archive</span>
+    <span class="n">apply_automation_command</span><span class="p">,</span>   <span class="c1"># pause / resume / run_now / revise / stop_current / archive / unarchive</span>
     <span class="n">create_automation</span><span class="p">,</span>          <span class="c1"># -&gt; (automation_id, revision)</span>
     <span class="n">drive_automation</span><span class="p">,</span>           <span class="c1"># standalone run loop</span>
     <span class="n">get_automation</span><span class="p">,</span>
@@ -1714,6 +1736,7 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <ul>
 <li><code>Runtime.set_email_context_resolver(fn)</code>: <code>fn(binding, *, use) -&gt; EmailContext | None</code> (<code>use</code> is <code>"agent_tool"</code> or <code>"action"</code>; <code>fn(binding)</code> also accepted), per runtime, memory only</li>
 <li><code>Runtime.set_email_binding(binding | None)</code> / <code>Runtime.email_binding</code>: the account occurrences are bound to</li>
+<li><code>Runtime.set_occurrence_input_resolver(fn | None)</code> / <code>Runtime.occurrence_input_resolver</code>: <code>fn(definition, input_data) -&gt; input_data</code>, called at each automation occurrence's admission (its run start) and frozen with the occurrence's inputs (a replayed dispatch stays identical); a non-dict answer fails the admission. The gateway re-resolves an automation's "Use my default" workspaces here. None (default): the definition's inputs as stored</li>
 <li><code>Runtime.set_event_inbox(inbox)</code> / <code>Runtime.event_inbox</code>: required by <code>email.received@1</code></li>
 <li><code>EmailInboxFeeder(inbox, account_ref=...).poll(ctx, *, now=None, force=False) -&gt; PollReport</code> and <code>.status()</code></li>
 <li>toolsets: <code>get_default_toolsets(..., email_enabled=True)</code> (also <code>list_default_tool_specs</code>, <code>build_default_tool_map</code>, <code>list_tool_catalog</code>); no env flag; <code>list_tool_catalog(email_enabled=False, email_off_reason="not_connected" | "admin_disabled" | "not_available" | "agent_tools_off")</code></li>
@@ -1721,6 +1744,7 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <li>approval: the <code>send_email_recipient@v2</code> refiner (<a href="../tool-approval/#per-call-refiners">tool-approval.md</a>)</li>
 <li><code>adopt_legacy_schedule_projection(run)</code>: read-only summary of a legacy gateway <code>scheduled:*</code> root</li>
 <li>read-only mounts: <code>_runtime.workspace_read_only_paths</code> (absolute folders; file write tools and VisualFlow writers refused inside, reads and command/code tools allowed); helpers <code>read_only_paths(vars)</code>, <code>path_is_read_only(vars, path)</code> and <code>READ_ONLY_PATHS_KEY</code> in <code>abstractruntime.utils.workspace_paths</code></li>
+<li>writable exceptions inside read-only roots: <code>workspace_writable_paths</code> (top-level or <code>_runtime</code>; absolute folders). A path is read-only when a read-only root contains it and no writable path inside that root contains it, so the more specific rule wins (a host sets <code>/</code> read-only plus the run's folder and its read &amp; write folders for a read-only default). Child runs and VisualFlow file nodes get the parent's exceptions exactly; a child never adds one. Helpers: <code>writable_paths(vars)</code>, <code>is_read_only_target(path, read_only_roots, writable_roots)</code>, <code>WRITABLE_PATHS_KEY</code>.</li>
 <li>read-only workspaces: run vars <code>workspace_read_only: true</code> (or <code>_runtime.workspace_read_only: true</code>); <code>abstractruntime.integrations.abstractcore.tool_effects.TOOL_EFFECT_CLASSES</code> classifies every exposable tool as <code>read</code>, <code>write</code>, <code>exec</code>, <code>delegate</code>, <code>comms</code> or <code>memory-write</code></li>
 </ul>
 <h2 id="sessions-and-history">Sessions and history<a class="headerlink" href="#sessions-and-history" title="Permanent link">&para;</a></h2>
@@ -1827,6 +1851,8 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 </ul>
 <h3 id="host-asgi-serving">Host ASGI serving<a class="headerlink" href="#host-asgi-serving" title="Permanent link">&para;</a></h3>
 <p><code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)</code> delegates host-admitted ASGI requests with request-scoped Core authentication. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a> for network and credential responsibilities.</p>
+<h3 id="structured-output-checks">Structured-output checks<a class="headerlink" href="#structured-output-checks" title="Permanent link">&para;</a></h3>
+<p><code>abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -&gt; (kind, schema, name)</code> checks an OpenAI <code>response_format</code> and raises <code>ResponseFormatError</code> (AbstractCore's own class, with <code>.param</code>) for an unusable one. Both are also exported flat from <code>abstractruntime.integrations.abstractcore</code>. Requires AbstractCore 2.25.0 or newer. See <a href="../integrations/abstractcore/#structured-output-checks-for-hosts-structured-facade">structured-output checks for hosts</a>.</p>
 
 
 

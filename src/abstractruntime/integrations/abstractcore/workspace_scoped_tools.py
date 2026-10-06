@@ -1153,8 +1153,15 @@ def _rewrite_tool_arguments(*, tool_name: str, args: Dict[str, Any], scope: Work
                 inner = t[len("file://"):]
                 resolved = resolve_user_path(scope=scope, user_path=inner)
                 out["target"] = f"file://{resolved}"
+                # Round 14: a local page is served to the browser from a loopback origin
+                # limited to the run's scope (never file://), so a page cannot pull refused
+                # files as subresources. The scope is the same stamp the commands get.
+                core_sandbox_module()
+                out[SANDBOX_STAMP_ARG] = sandbox_stamp(scope)
             else:
                 out["target"] = str(resolve_user_path(scope=scope, user_path=t))
+                core_sandbox_module()
+                out[SANDBOX_STAMP_ARG] = sandbox_stamp(scope)
         return out
 
     return out

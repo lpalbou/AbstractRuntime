@@ -69,3 +69,18 @@ def test_http_targets_pass_untouched(tmp_path: Path) -> None:
             tool_name="browser_probe", args={"target": url}, scope=scope
         )
         assert out["target"] == url
+
+
+def test_local_targets_carry_the_run_scope_stamp_remote_targets_do_not(tmp_path: Path) -> None:
+    """Round 14 (backlog 1002 item 3): a local page is served from a loopback origin
+    limited to the run's scope; the runtime stamps that scope (the commands' `_sandbox`
+    stamp, built from the same keys the file tools read) on every local target."""
+    from abstractruntime.integrations.abstractcore.workspace_scoped_tools import sandbox_stamp
+
+    scope = _scope(tmp_path)
+    (tmp_path / "ws" / "page.html").write_text("<p>hi</p>", encoding="utf-8")
+    for target in ("page.html", f"file://{tmp_path / 'ws' / 'page.html'}"):
+        out = rewrite_tool_arguments(tool_name="browser_probe", args={"target": target, "_sandbox": {"forged": True}}, scope=scope)
+        assert out["_sandbox"] == sandbox_stamp(scope), target
+    out = rewrite_tool_arguments(tool_name="browser_probe", args={"target": "https://example.org/"}, scope=scope)
+    assert "_sandbox" not in out

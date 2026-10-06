@@ -5,6 +5,13 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `stream_voice(...)` is never a wait (R13.1, the 2026-10-04 gateway incident). It used to start the child run parked on `WAIT_EVENT abstractcore.voice.tts.stream:<uuid>` for the whole stream: hosts folded that waiting record into the CALLER'S run (a Read aloud during a live turn read as "Waiting for an event"), and a host that died mid-stream left the child waiting forever. Now nothing durable exists while audio streams; when the stream ends (done, error, cancel or the consumer closing it) the child run is created already COMPLETED with the outcome. Its id is allocated up front: `runtime_start` carries it as `child_run_id` (schema `abstractruntime.tts_stream.start.v2`, no `wait_key`), as does the trace metadata. A stream cut by a crash leaves no run.
+- `AbstractCoreRunFacade.close_interrupted_voice_stream(child_run_id, *, reason)` finishes a legacy streamed-speech wait left by an older process (completed, `errors[0] = {"code": "interrupted", "message": reason}`); `is_interrupted_voice_stream_wait(waiting)` and `LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX` recognise one (exported from `integrations.abstractcore`). AbstractGateway calls it at startup.
+
 ## [0.9.0] - 2026-10-05
 
 ### Added
@@ -23,8 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `stream_voice(...)` is never a wait (R13.1, the 2026-10-04 gateway incident). It used to start the child run parked on `WAIT_EVENT abstractcore.voice.tts.stream:<uuid>` for the whole stream: hosts folded that waiting record into the CALLER'S run (a Read aloud during a live turn read as "Waiting for an event"), and a host that died mid-stream left the child waiting forever. Now nothing durable exists while audio streams; when the stream ends (done, error, cancel or the consumer closing it) the child run is created already COMPLETED with the outcome. Its id is allocated up front: `runtime_start` carries it as `child_run_id` (schema `abstractruntime.tts_stream.start.v2`, no `wait_key`), as does the trace metadata. A stream cut by a crash leaves no run.
-- `AbstractCoreRunFacade.close_interrupted_voice_stream(child_run_id, *, reason)` finishes a legacy streamed-speech wait left by an older process (completed, `errors[0] = {"code": "interrupted", "message": reason}`); `is_interrupted_voice_stream_wait(waiting)` and `LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX` recognise one (exported from `integrations.abstractcore`). AbstractGateway calls it at startup.
 - Workspace nesting: the most specific row wins. Among `workspace_root`, `workspace_allowed_paths` and `workspace_ignored_paths`, the longest real-path prefix of a path decides (a refusal wins a tie); a refused folder no longer refuses an allowed workspace inside it, and a refused folder inside an allowed one still refuses its subtree. Built-in protection stays absolute. Same rule as AbstractGateway's validation and the sandbox profile.
 - The workspace context now says "Shell commands run inside an OS sandbox limited to these workspaces." and describes refused paths as "Excluded paths (a more specific allowed workspace inside one stays reachable)".
 - Requires AbstractCore 2.25.0 or newer (`abstractcore>=2.25.0` in the base install and the `[apple]`/`[gpu]` extras): the command sandbox and `structured_facade` use it.

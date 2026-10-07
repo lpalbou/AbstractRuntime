@@ -66,7 +66,10 @@ def _fresh_host():
 
 @pytest.fixture
 def t(tmp_path, monkeypatch):
-    root = Path(os.path.realpath(tmp_path))
+    return _tree(Path(os.path.realpath(tmp_path)), monkeypatch)
+
+
+def _tree(root: Path, monkeypatch) -> Path:
     for d in ("data/workspaces/session-1", "data/other", "home/.ssh", "home/parent/child", "home/parent/child/deny", "ro", "rw", "refused"):
         (root / d).mkdir(parents=True, exist_ok=True)
     (root / "refused/secret.txt").write_text(MARK)
@@ -283,8 +286,39 @@ def test_e2e_fail_closed_keeps_the_run_going(t, monkeypatch):
     assert MARK not in str(res)
 
 
+@pytest.fixture(params=["temp_root", "user_data_root"])
+def t_anywhere(request, tmp_path, monkeypatch):
+    """The same tree under pytest's temp root (macOS: /private/var/folders or /private/tmp,
+    Linux: /tmp) AND under a user-data root (the real home), so the entity test cannot flip
+    on where TMPDIR points: an unlisted folder must be unreadable in both."""
+    if request.param == "temp_root":
+        yield _tree(Path(os.path.realpath(tmp_path)), monkeypatch)
+        return
+    import pwd
+    import shutil
+    import tempfile
+
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    base = real_home / ".cache" / "abstractruntime-tests"
+    base.mkdir(parents=True, exist_ok=True)
+    root = Path(os.path.realpath(tempfile.mkdtemp(prefix="r12-", dir=str(base))))
+    try:
+        yield _tree(root, monkeypatch)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_macos_allow_list_denies_the_shared_temp_roots():
+    """macOS "Deny everything, allow listed workspaces" denies the shared temp roots too
+    (where pytest's tmp tree and other processes' files live), not only /Users."""
+    roots = core_sandbox._USER_DATA_ROOTS_DARWIN
+    for r in ("/Users", "/Volumes", "/private/var/root", "/private/tmp", "/private/var/folders"):
+        assert r in roots, r
+
+
 @real_sandbox
-def test_e2e_entity_exec_is_sandboxed(t):
+def test_e2e_entity_exec_is_sandboxed(t_anywhere):
+    t = t_anywhere
     from abstractruntime.identity.tools import WorkspaceRoot, _run_execute_command
 
     home = t / "entity"

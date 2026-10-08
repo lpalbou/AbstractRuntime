@@ -33,7 +33,7 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 
 ```mermaid
 flowchart LR
-  Trigger["Trigger source<br/>schedule@1 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
+  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
   Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive / unarchive"] -->|"decision + wake"| Controller
   Controller -->|"START_SUBWORKFLOW<br/>deterministic run_id"| Occurrence["Occurrence run<br/>role: occurrence<br/>(a session turn)"]
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
@@ -171,6 +171,35 @@ Config: `{start_at?, every?, until?, count?, anchor?}`.
   missed_count}}`, and an `automation.coalesced` record is written.
 - The event id of a scheduled tick is `schedule@1:<binding_id>:<tick>`. A revision that changes the trigger gets a
   new `binding_id`, so the new schedule never reuses an old event id.
+
+### `schedule@2`
+
+`schedule@2` adds calendar rules on wall time in a time zone. `schedule@1` stays registered and unchanged: its
+configs normalize byte for byte as before and its automations keep their tick grid. Use `schedule@2` for new
+automations.
+
+Config: `{kind, at?, days?, day?, time_zone?, start_at?, every?, until?, count?}`. The normalized config always
+carries `kind`, then the rule fields, `time_zone`, `start_at`, `anchor` (= `start_at`) and the bounds.
+
+| `kind` | Rule fields | Meaning |
+| --- | --- | --- |
+| `every` | `every` (`8h`, `7d`, ...) | Exactly `schedule@1`'s fixed UTC interval from `start_at`. `time_zone` is optional and only labels the schedule. |
+| `once` | `start_at`, or `at: "YYYY-MM-DDTHH:MM"` with `time_zone` | One run. A wall time `at` is converted to `start_at` in `time_zone`. |
+| `daily` | `at: "HH:MM"` | Every day at that wall time. |
+| `weekly` | `days` (non-empty subset of `mon`..`sun`), `at` | Those weekdays at that wall time. `days` is normalized to Monday-first order without duplicates. |
+| `monthly` | `day` (1..31 or `"last"`), `at` | That day of each month; a day beyond the month's length runs on the month's last day (day 31 runs on 28 or 29 February). |
+
+- Calendar rules (`daily`, `weekly`, `monthly`) require `time_zone`, an IANA name such as `Europe/Paris`
+  (`validate_time_zone(name)`; `time_zone_names()` lists the names the host knows). They take no `every`.
+- Wall times convert to UTC with `zoneinfo`. A wall time that does not exist that day (spring forward) runs at the
+  shifted instant: a 02:30 rule runs at 03:30 on that day and at 02:30 afterwards. A wall time that happens twice
+  (fall back) runs once, at its first occurrence. A daily 08:00 stays at 08:00 local time across both transitions.
+- Tick 0 is the first rule time at or after `start_at` (default: the creation time). `count` and `until` bound the
+  ticks as in `schedule@1`.
+- Missed ticks coalesce and a resume after a pause skips the ticks that passed, exactly as in `schedule@1`. The event
+  id of a tick is `schedule@2:<binding_id>:<tick>`.
+- Every instant is computed from its tick index in constant time, so an automation that was down for years catches up
+  with one occurrence without walking the missed ticks.
 
 ### `manual@1`
 
@@ -680,9 +709,9 @@ receives its result directly.
 
 ## Limits in v1
 
-- Schedules are fixed UTC intervals (`s`, `m`, `h`, `d`, at most `366d`). There are no cron expressions, calendar
-  months, time zones or daylight-saving rules, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1`, `manual@1` and `email.received@1`. There is no generic external
+- Schedules are fixed UTC intervals (`schedule@1`, `schedule@2` `every`) or daily, weekly and monthly wall-time rules
+  in an IANA time zone (`schedule@2`). There are no cron expressions, and `anchor` must equal `start_at`.
+- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1` and `email.received@1`. There is no generic external
   event source yet.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.

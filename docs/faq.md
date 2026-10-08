@@ -49,7 +49,7 @@ Docs: `getting-started.md`. Code: `src/abstractruntime/core/runtime.py`, `src/ab
 ## How do I run a workflow on a schedule or on request?
 
 Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
-occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`) or `manual@1` (run now only).
+occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`), `schedule@2` (the same intervals plus daily, weekly and monthly rules at a wall time in an IANA time zone, daylight-saving correct) or `manual@1` (run now only).
 `create_automation(...)` creates it, `apply_automation_command(...)` pauses, resumes, runs now, edits, stops the
 current occurrence, archives it or unarchives it (it comes back paused with its history), and the host drives it
 like any run (`drive_automation` does this in-process). Nothing is deleted: an archived automation keeps its

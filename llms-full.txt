@@ -157,7 +157,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1` fixed UTC intervals; `schedule@2` adds daily, weekly and monthly rules at a wall time in an IANA time zone), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
@@ -763,7 +763,7 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, manual@1, email.received@1,<br/>entry-point sources"]
+    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, entry-point sources"]
     Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end
@@ -1106,7 +1106,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
-- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `schedule@2` (daily/weekly/monthly rules in an IANA time zone; `validate_time_zone`, `time_zone_names`), `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
 - definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
@@ -1323,7 +1323,7 @@ Docs: `getting-started.md`. Code: `src/abstractruntime/core/runtime.py`, `src/ab
 ## How do I run a workflow on a schedule or on request?
 
 Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
-occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`) or `manual@1` (run now only).
+occurrence) on each trigger: `schedule@1` (fixed UTC intervals such as `5m` or `24h`), `schedule@2` (the same intervals plus daily, weekly and monthly rules at a wall time in an IANA time zone, daylight-saving correct) or `manual@1` (run now only).
 `create_automation(...)` creates it, `apply_automation_command(...)` pauses, resumes, runs now, edits, stops the
 current occurrence, archives it or unarchives it (it comes back paused with its history), and the host drives it
 like any run (`drive_automation` does this in-process). Nothing is deleted: an archived automation keeps its
@@ -3606,7 +3606,7 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 
 ```mermaid
 flowchart LR
-  Trigger["Trigger source<br/>schedule@1 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
+  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
   Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive / unarchive"] -->|"decision + wake"| Controller
   Controller -->|"START_SUBWORKFLOW<br/>deterministic run_id"| Occurrence["Occurrence run<br/>role: occurrence<br/>(a session turn)"]
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
@@ -3744,6 +3744,35 @@ Config: `{start_at?, every?, until?, count?, anchor?}`.
   missed_count}}`, and an `automation.coalesced` record is written.
 - The event id of a scheduled tick is `schedule@1:<binding_id>:<tick>`. A revision that changes the trigger gets a
   new `binding_id`, so the new schedule never reuses an old event id.
+
+### `schedule@2`
+
+`schedule@2` adds calendar rules on wall time in a time zone. `schedule@1` stays registered and unchanged: its
+configs normalize byte for byte as before and its automations keep their tick grid. Use `schedule@2` for new
+automations.
+
+Config: `{kind, at?, days?, day?, time_zone?, start_at?, every?, until?, count?}`. The normalized config always
+carries `kind`, then the rule fields, `time_zone`, `start_at`, `anchor` (= `start_at`) and the bounds.
+
+| `kind` | Rule fields | Meaning |
+| --- | --- | --- |
+| `every` | `every` (`8h`, `7d`, ...) | Exactly `schedule@1`'s fixed UTC interval from `start_at`. `time_zone` is optional and only labels the schedule. |
+| `once` | `start_at`, or `at: "YYYY-MM-DDTHH:MM"` with `time_zone` | One run. A wall time `at` is converted to `start_at` in `time_zone`. |
+| `daily` | `at: "HH:MM"` | Every day at that wall time. |
+| `weekly` | `days` (non-empty subset of `mon`..`sun`), `at` | Those weekdays at that wall time. `days` is normalized to Monday-first order without duplicates. |
+| `monthly` | `day` (1..31 or `"last"`), `at` | That day of each month; a day beyond the month's length runs on the month's last day (day 31 runs on 28 or 29 February). |
+
+- Calendar rules (`daily`, `weekly`, `monthly`) require `time_zone`, an IANA name such as `Europe/Paris`
+  (`validate_time_zone(name)`; `time_zone_names()` lists the names the host knows). They take no `every`.
+- Wall times convert to UTC with `zoneinfo`. A wall time that does not exist that day (spring forward) runs at the
+  shifted instant: a 02:30 rule runs at 03:30 on that day and at 02:30 afterwards. A wall time that happens twice
+  (fall back) runs once, at its first occurrence. A daily 08:00 stays at 08:00 local time across both transitions.
+- Tick 0 is the first rule time at or after `start_at` (default: the creation time). `count` and `until` bound the
+  ticks as in `schedule@1`.
+- Missed ticks coalesce and a resume after a pause skips the ticks that passed, exactly as in `schedule@1`. The event
+  id of a tick is `schedule@2:<binding_id>:<tick>`.
+- Every instant is computed from its tick index in constant time, so an automation that was down for years catches up
+  with one occurrence without walking the missed ticks.
 
 ### `manual@1`
 
@@ -4253,9 +4282,9 @@ receives its result directly.
 
 ## Limits in v1
 
-- Schedules are fixed UTC intervals (`s`, `m`, `h`, `d`, at most `366d`). There are no cron expressions, calendar
-  months, time zones or daylight-saving rules, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1`, `manual@1` and `email.received@1`. There is no generic external
+- Schedules are fixed UTC intervals (`schedule@1`, `schedule@2` `every`) or daily, weekly and monthly wall-time rules
+  in an IANA time zone (`schedule@2`). There are no cron expressions, and `anchor` must equal `start_at`.
+- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1` and `email.received@1`. There is no generic external
   event source yet.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
@@ -5894,7 +5923,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Features (reference)
 
-- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `manual@1`, `email.received@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
+- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

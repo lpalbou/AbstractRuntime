@@ -108,7 +108,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1`, fixed UTC intervals), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1` fixed UTC intervals; `schedule@2` adds daily, weekly and monthly rules at a wall time in an IANA time zone), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:

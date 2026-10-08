@@ -332,7 +332,7 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, manual@1, email.received@1,<br/>entry-point sources"]
+    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, entry-point sources"]
     Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end

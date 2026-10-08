@@ -5,6 +5,16 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Trigger source `schedule@2`: `{kind: "daily", at: "HH:MM"}`, `{kind: "weekly", days: [...], at}` and `{kind: "monthly", day: 1..31 | "last", at}` evaluated on wall time in the config's `time_zone` (IANA, converted with `zoneinfo`: a skipped wall time runs at the shifted instant, a repeated one runs once; a day beyond the month's length runs on its last day), plus `{kind: "every"}` and `{kind: "once"}` with `schedule@1`'s meaning (a `once` may give a wall time `at` in `time_zone`). Same coalescing and pause policy as `schedule@1`; event ids `schedule@2:<binding_id>:<tick>`. `validate_time_zone(name)` and `time_zone_names()` are exported from `abstractruntime.triggers`. See `docs/automations.md`.
+
+### Changed
+
+- `schedule@1` is unchanged: its configs normalize byte for byte as before and existing automations keep their tick grid (`tests/test_schedule_v1_corpus.py` freezes the 0.9.1 answers on real automation configs).
+
 ## [0.9.1] - 2026-10-08
 
 ### Security

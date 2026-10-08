@@ -241,7 +241,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
-- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `schedule@2` (daily/weekly/monthly rules in an IANA time zone; `validate_time_zone`, `time_zone_names`), `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
 - definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email

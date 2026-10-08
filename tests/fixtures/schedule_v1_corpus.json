@@ -1,0 +1,6662 @@
+{
+ "cases": [
+  {
+   "binding_id": "b-automation-1",
+   "config": {
+    "anchor": "2026-09-27T10:52:52.480692+00:00",
+    "every": "5m",
+    "start_at": "2026-09-27T10:52:52.480692+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-09-27T10:52:52.480692+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-automation-1",
+     "event_id": "e1",
+     "fired_at": "2026-09-27T10:52:52.480692+00:00",
+     "payload": {
+      "scheduled_at": "2026-09-27T10:52:52.480692+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-1:0",
+       "fired_at": "2026-09-27T10:52:52.480692+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T10:52:52.480692+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-1:0",
+       "fired_at": "2026-09-27T10:52:52.480692+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T10:52:52.480692+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T10:52:53.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 12,
+        "missed_count": 12
+       },
+       "event_id": "schedule@1:b-automation-1:12",
+       "fired_at": "2026-09-27T11:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 12,
+         "missed_count": 12
+        },
+        "scheduled_at": "2026-09-27T11:52:52.480692+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T11:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 288,
+        "missed_count": 288
+       },
+       "event_id": "schedule@1:b-automation-1:288",
+       "fired_at": "2026-09-28T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 288,
+         "missed_count": 288
+        },
+        "scheduled_at": "2026-09-28T10:52:52.480692+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T10:55:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 11520,
+        "missed_count": 11520
+       },
+       "event_id": "schedule@1:b-automation-1:11520",
+       "fired_at": "2026-11-06T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 11520,
+         "missed_count": 11520
+        },
+        "scheduled_at": "2026-11-06T10:52:52.480692+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 3181,
+        "missed_count": 3181
+       },
+       "event_id": "schedule@1:b-automation-1:3181",
+       "fired_at": "2026-10-08T11:57:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 3181,
+         "missed_count": 3181
+        },
+        "scheduled_at": "2026-10-08T11:57:52.480692+00:00",
+        "tick": 3181
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 3182
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 3182
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:53.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 12,
+        "missed_count": 9
+       },
+       "event_id": "schedule@1:b-automation-1:12",
+       "fired_at": "2026-09-27T11:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 12,
+         "missed_count": 9
+        },
+        "scheduled_at": "2026-09-27T11:52:52.480692+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T11:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 288,
+        "missed_count": 285
+       },
+       "event_id": "schedule@1:b-automation-1:288",
+       "fired_at": "2026-09-28T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 288,
+         "missed_count": 285
+        },
+        "scheduled_at": "2026-09-28T10:52:52.480692+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T10:55:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 11520,
+        "missed_count": 11517
+       },
+       "event_id": "schedule@1:b-automation-1:11520",
+       "fired_at": "2026-11-06T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 11520,
+         "missed_count": 11517
+        },
+        "scheduled_at": "2026-11-06T10:52:52.480692+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 3181,
+        "missed_count": 3178
+       },
+       "event_id": "schedule@1:b-automation-1:3181",
+       "fired_at": "2026-10-08T11:57:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 3181,
+         "missed_count": 3178
+        },
+        "scheduled_at": "2026-10-08T11:57:52.480692+00:00",
+        "tick": 3181
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 3182
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:07:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3182
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:53.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 12,
+        "missed_count": 11
+       },
+       "event_id": "schedule@1:b-automation-1:12",
+       "fired_at": "2026-09-27T11:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 12,
+         "missed_count": 11
+        },
+        "scheduled_at": "2026-09-27T11:52:52.480692+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T11:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 288,
+        "missed_count": 287
+       },
+       "event_id": "schedule@1:b-automation-1:288",
+       "fired_at": "2026-09-28T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 288,
+         "missed_count": 287
+        },
+        "scheduled_at": "2026-09-28T10:52:52.480692+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T10:55:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 11520,
+        "missed_count": 11519
+       },
+       "event_id": "schedule@1:b-automation-1:11520",
+       "fired_at": "2026-11-06T10:52:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 11520,
+         "missed_count": 11519
+        },
+        "scheduled_at": "2026-11-06T10:52:52.480692+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T10:52:52.480692+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 3181,
+        "missed_count": 3180
+       },
+       "event_id": "schedule@1:b-automation-1:3181",
+       "fired_at": "2026-10-08T11:57:52.480692+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 3181,
+         "missed_count": 3180
+        },
+        "scheduled_at": "2026-10-08T11:57:52.480692+00:00",
+        "tick": 3181
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.480692+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 3182
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:57:52.480692+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 3182
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.480692+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-09-27T10:52:52.480692+00:00",
+     "every": "5m",
+     "start_at": "2026-09-27T10:52:52.480692+00:00"
+    },
+    "validated": {
+     "anchor": "2026-09-27T10:52:52.480692+00:00",
+     "every": "5m",
+     "start_at": "2026-09-27T10:52:52.480692+00:00"
+    }
+   },
+   "name": "automation-1",
+   "observed": {
+    "last_fired_at": "2026-09-27T11:37:52.480692+00:00",
+    "next_fire_at": null,
+    "occurrence_count": 10
+   }
+  },
+  {
+   "binding_id": "b-automation-2",
+   "config": {
+    "anchor": "2026-09-27T11:42:25.620776+00:00",
+    "every": "5m",
+    "start_at": "2026-09-27T11:42:25.620776+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-09-27T11:42:25.620776+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-automation-2",
+     "event_id": "e1",
+     "fired_at": "2026-09-27T11:42:25.620776+00:00",
+     "payload": {
+      "scheduled_at": "2026-09-27T11:42:25.620776+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:24.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-2:0",
+       "fired_at": "2026-09-27T11:42:25.620776+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T11:42:25.620776+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-2:0",
+       "fired_at": "2026-09-27T11:42:25.620776+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T11:42:25.620776+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T11:42:26.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 12,
+        "missed_count": 12
+       },
+       "event_id": "schedule@1:b-automation-2:12",
+       "fired_at": "2026-09-27T12:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 12,
+         "missed_count": 12
+        },
+        "scheduled_at": "2026-09-27T12:42:25.620776+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T12:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 288,
+        "missed_count": 288
+       },
+       "event_id": "schedule@1:b-automation-2:288",
+       "fired_at": "2026-09-28T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 288,
+         "missed_count": 288
+        },
+        "scheduled_at": "2026-09-28T11:42:25.620776+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T11:45:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 11520,
+        "missed_count": 11520
+       },
+       "event_id": "schedule@1:b-automation-2:11520",
+       "fired_at": "2026-11-06T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 11520,
+         "missed_count": 11520
+        },
+        "scheduled_at": "2026-11-06T11:42:25.620776+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 3171,
+        "missed_count": 3171
+       },
+       "event_id": "schedule@1:b-automation-2:3171",
+       "fired_at": "2026-10-08T11:57:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 3171,
+         "missed_count": 3171
+        },
+        "scheduled_at": "2026-10-08T11:57:25.620776+00:00",
+        "tick": 3171
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 3172
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:42:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 3172
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:24.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:26.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 12,
+        "missed_count": 9
+       },
+       "event_id": "schedule@1:b-automation-2:12",
+       "fired_at": "2026-09-27T12:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 12,
+         "missed_count": 9
+        },
+        "scheduled_at": "2026-09-27T12:42:25.620776+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T12:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 288,
+        "missed_count": 285
+       },
+       "event_id": "schedule@1:b-automation-2:288",
+       "fired_at": "2026-09-28T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 288,
+         "missed_count": 285
+        },
+        "scheduled_at": "2026-09-28T11:42:25.620776+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T11:45:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 11520,
+        "missed_count": 11517
+       },
+       "event_id": "schedule@1:b-automation-2:11520",
+       "fired_at": "2026-11-06T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 11520,
+         "missed_count": 11517
+        },
+        "scheduled_at": "2026-11-06T11:42:25.620776+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 3171,
+        "missed_count": 3168
+       },
+       "event_id": "schedule@1:b-automation-2:3171",
+       "fired_at": "2026-10-08T11:57:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 3171,
+         "missed_count": 3168
+        },
+        "scheduled_at": "2026-10-08T11:57:25.620776+00:00",
+        "tick": 3171
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 3172
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:57:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3172
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:24.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T11:42:26.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 12,
+        "missed_count": 11
+       },
+       "event_id": "schedule@1:b-automation-2:12",
+       "fired_at": "2026-09-27T12:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 12,
+         "missed_count": 11
+        },
+        "scheduled_at": "2026-09-27T12:42:25.620776+00:00",
+        "tick": 12
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 13
+       }
+      },
+      "now": "2026-09-27T12:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 13
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 288,
+        "missed_count": 287
+       },
+       "event_id": "schedule@1:b-automation-2:288",
+       "fired_at": "2026-09-28T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 288,
+         "missed_count": 287
+        },
+        "scheduled_at": "2026-09-28T11:42:25.620776+00:00",
+        "tick": 288
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 289
+       }
+      },
+      "now": "2026-09-28T11:45:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 289
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 11520,
+        "missed_count": 11519
+       },
+       "event_id": "schedule@1:b-automation-2:11520",
+       "fired_at": "2026-11-06T11:42:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 11520,
+         "missed_count": 11519
+        },
+        "scheduled_at": "2026-11-06T11:42:25.620776+00:00",
+        "tick": 11520
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 11521
+       }
+      },
+      "now": "2026-11-06T11:42:25.620776+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 11521
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 3171,
+        "missed_count": 3170
+       },
+       "event_id": "schedule@1:b-automation-2:3171",
+       "fired_at": "2026-10-08T11:57:25.620776+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 3171,
+         "missed_count": 3170
+        },
+        "scheduled_at": "2026-10-08T11:57:25.620776+00:00",
+        "tick": 3171
+       },
+       "state": {
+        "anchor": "2026-09-27T11:42:25.620776+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 3172
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T11:47:25.620776+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 3172
+      },
+      "state": {
+       "anchor": "2026-09-27T11:42:25.620776+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-09-27T11:42:25.620776+00:00",
+     "every": "5m",
+     "start_at": "2026-09-27T11:42:25.620776+00:00"
+    },
+    "validated": {
+     "anchor": "2026-09-27T11:42:25.620776+00:00",
+     "every": "5m",
+     "start_at": "2026-09-27T11:42:25.620776+00:00"
+    }
+   },
+   "name": "automation-2",
+   "observed": {
+    "last_fired_at": "2026-09-27T15:47:25.620776+00:00",
+    "next_fire_at": null,
+    "occurrence_count": 37
+   }
+  },
+  {
+   "binding_id": "b-automation-3",
+   "config": {
+    "anchor": "2026-10-02T19:53:29.622724+00:00",
+    "every": "24h",
+    "start_at": "2026-10-02T19:53:29.622724+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-02T19:53:29.622724+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-automation-3",
+     "event_id": "e1",
+     "fired_at": "2026-10-02T19:53:29.622724+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-02T19:53:29.622724+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:28.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-3:0",
+       "fired_at": "2026-10-02T19:53:29.622724+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-02T19:53:29.622724+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-02T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-3:0",
+       "fired_at": "2026-10-02T19:53:29.622724+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-02T19:53:29.622724+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-02T19:53:30.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-3:0",
+       "fired_at": "2026-10-02T19:53:29.622724+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-02T19:53:29.622724+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-02T20:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 1,
+        "missed_count": 1
+       },
+       "event_id": "schedule@1:b-automation-3:1",
+       "fired_at": "2026-10-03T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 1,
+         "missed_count": 1
+        },
+        "scheduled_at": "2026-10-03T19:53:29.622724+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-03T19:56:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 40,
+        "missed_count": 40
+       },
+       "event_id": "schedule@1:b-automation-3:40",
+       "fired_at": "2026-11-11T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 40,
+         "missed_count": 40
+        },
+        "scheduled_at": "2026-11-11T19:53:29.622724+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-11T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 5,
+        "missed_count": 5
+       },
+       "event_id": "schedule@1:b-automation-3:5",
+       "fired_at": "2026-10-07T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 5,
+         "missed_count": 5
+        },
+        "scheduled_at": "2026-10-07T19:53:29.622724+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 6
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-02T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:28.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:30.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T20:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-03T19:56:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 40,
+        "missed_count": 37
+       },
+       "event_id": "schedule@1:b-automation-3:40",
+       "fired_at": "2026-11-11T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 40,
+         "missed_count": 37
+        },
+        "scheduled_at": "2026-11-11T19:53:29.622724+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-11T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 5,
+        "missed_count": 2
+       },
+       "event_id": "schedule@1:b-automation-3:5",
+       "fired_at": "2026-10-07T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 5,
+         "missed_count": 2
+        },
+        "scheduled_at": "2026-10-07T19:53:29.622724+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 6
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-05T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:28.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T19:53:30.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-02T20:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-3:1",
+       "fired_at": "2026-10-03T19:53:29.622724+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-03T19:53:29.622724+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-03T19:56:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 40,
+        "missed_count": 39
+       },
+       "event_id": "schedule@1:b-automation-3:40",
+       "fired_at": "2026-11-11T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 40,
+         "missed_count": 39
+        },
+        "scheduled_at": "2026-11-11T19:53:29.622724+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-11T19:53:29.622724+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 5,
+        "missed_count": 4
+       },
+       "event_id": "schedule@1:b-automation-3:5",
+       "fired_at": "2026-10-07T19:53:29.622724+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 5,
+         "missed_count": 4
+        },
+        "scheduled_at": "2026-10-07T19:53:29.622724+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-02T19:53:29.622724+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 6
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-03T19:53:29.622724+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-02T19:53:29.622724+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-02T19:53:29.622724+00:00",
+     "every": "24h",
+     "start_at": "2026-10-02T19:53:29.622724+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-02T19:53:29.622724+00:00",
+     "every": "24h",
+     "start_at": "2026-10-02T19:53:29.622724+00:00"
+    }
+   },
+   "name": "automation-3",
+   "observed": {
+    "last_fired_at": "2026-10-07T19:53:29.622724+00:00",
+    "next_fire_at": "2026-10-08T19:53:29.622724+00:00",
+    "occurrence_count": 7
+   }
+  },
+  {
+   "binding_id": "b-automation-4",
+   "config": {
+    "anchor": "2026-09-27T10:52:52.512837+00:00",
+    "every": "2m",
+    "start_at": "2026-09-27T10:52:52.512837+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-09-27T10:52:52.512837+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-automation-4",
+     "event_id": "e1",
+     "fired_at": "2026-09-27T10:52:52.512837+00:00",
+     "payload": {
+      "scheduled_at": "2026-09-27T10:52:52.512837+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-4:0",
+       "fired_at": "2026-09-27T10:52:52.512837+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T10:52:52.512837+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-automation-4:0",
+       "fired_at": "2026-09-27T10:52:52.512837+00:00",
+       "payload": {
+        "scheduled_at": "2026-09-27T10:52:52.512837+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-09-27T10:52:53.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 30,
+        "missed_count": 30
+       },
+       "event_id": "schedule@1:b-automation-4:30",
+       "fired_at": "2026-09-27T11:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 30,
+         "missed_count": 30
+        },
+        "scheduled_at": "2026-09-27T11:52:52.512837+00:00",
+        "tick": 30
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 31
+       }
+      },
+      "now": "2026-09-27T11:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 31
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 721,
+        "missed_count": 721
+       },
+       "event_id": "schedule@1:b-automation-4:721",
+       "fired_at": "2026-09-28T10:54:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 721,
+         "missed_count": 721
+        },
+        "scheduled_at": "2026-09-28T10:54:52.512837+00:00",
+        "tick": 721
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 722
+       }
+      },
+      "now": "2026-09-28T10:55:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 722
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 28800,
+        "missed_count": 28800
+       },
+       "event_id": "schedule@1:b-automation-4:28800",
+       "fired_at": "2026-11-06T10:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 28800,
+         "missed_count": 28800
+        },
+        "scheduled_at": "2026-11-06T10:52:52.512837+00:00",
+        "tick": 28800
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 28801
+       }
+      },
+      "now": "2026-11-06T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 28801
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 7953,
+        "missed_count": 7953
+       },
+       "event_id": "schedule@1:b-automation-4:7953",
+       "fired_at": "2026-10-08T11:58:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 7953,
+         "missed_count": 7953
+        },
+        "scheduled_at": "2026-10-08T11:58:52.512837+00:00",
+        "tick": 7953
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 7954
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:52:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 7954
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:53.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 30,
+        "missed_count": 27
+       },
+       "event_id": "schedule@1:b-automation-4:30",
+       "fired_at": "2026-09-27T11:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 30,
+         "missed_count": 27
+        },
+        "scheduled_at": "2026-09-27T11:52:52.512837+00:00",
+        "tick": 30
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 31
+       }
+      },
+      "now": "2026-09-27T11:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 31
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 721,
+        "missed_count": 718
+       },
+       "event_id": "schedule@1:b-automation-4:721",
+       "fired_at": "2026-09-28T10:54:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 721,
+         "missed_count": 718
+        },
+        "scheduled_at": "2026-09-28T10:54:52.512837+00:00",
+        "tick": 721
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 722
+       }
+      },
+      "now": "2026-09-28T10:55:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 722
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 28800,
+        "missed_count": 28797
+       },
+       "event_id": "schedule@1:b-automation-4:28800",
+       "fired_at": "2026-11-06T10:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 28800,
+         "missed_count": 28797
+        },
+        "scheduled_at": "2026-11-06T10:52:52.512837+00:00",
+        "tick": 28800
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 28801
+       }
+      },
+      "now": "2026-11-06T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 28801
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 7953,
+        "missed_count": 7950
+       },
+       "event_id": "schedule@1:b-automation-4:7953",
+       "fired_at": "2026-10-08T11:58:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 7953,
+         "missed_count": 7950
+        },
+        "scheduled_at": "2026-10-08T11:58:52.512837+00:00",
+        "tick": 7953
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 7954
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:58:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 7954
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:51.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-27T10:52:53.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 30,
+        "missed_count": 29
+       },
+       "event_id": "schedule@1:b-automation-4:30",
+       "fired_at": "2026-09-27T11:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 30,
+         "missed_count": 29
+        },
+        "scheduled_at": "2026-09-27T11:52:52.512837+00:00",
+        "tick": 30
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 31
+       }
+      },
+      "now": "2026-09-27T11:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 31
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 721,
+        "missed_count": 720
+       },
+       "event_id": "schedule@1:b-automation-4:721",
+       "fired_at": "2026-09-28T10:54:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 721,
+         "missed_count": 720
+        },
+        "scheduled_at": "2026-09-28T10:54:52.512837+00:00",
+        "tick": 721
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 722
+       }
+      },
+      "now": "2026-09-28T10:55:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 722
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 28800,
+        "missed_count": 28799
+       },
+       "event_id": "schedule@1:b-automation-4:28800",
+       "fired_at": "2026-11-06T10:52:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 28800,
+         "missed_count": 28799
+        },
+        "scheduled_at": "2026-11-06T10:52:52.512837+00:00",
+        "tick": 28800
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 28801
+       }
+      },
+      "now": "2026-11-06T10:52:52.512837+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 28801
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 7953,
+        "missed_count": 7952
+       },
+       "event_id": "schedule@1:b-automation-4:7953",
+       "fired_at": "2026-10-08T11:58:52.512837+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 7953,
+         "missed_count": 7952
+        },
+        "scheduled_at": "2026-10-08T11:58:52.512837+00:00",
+        "tick": 7953
+       },
+       "state": {
+        "anchor": "2026-09-27T10:52:52.512837+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 7954
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-09-27T10:54:52.512837+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 7954
+      },
+      "state": {
+       "anchor": "2026-09-27T10:52:52.512837+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-09-27T10:52:52.512837+00:00",
+     "every": "2m",
+     "start_at": "2026-09-27T10:52:52.512837+00:00"
+    },
+    "validated": {
+     "anchor": "2026-09-27T10:52:52.512837+00:00",
+     "every": "2m",
+     "start_at": "2026-09-27T10:52:52.512837+00:00"
+    }
+   },
+   "name": "automation-4",
+   "observed": {
+    "last_fired_at": "2026-09-27T15:46:52.512837+00:00",
+    "next_fire_at": null,
+    "occurrence_count": 113
+   }
+  },
+  {
+   "binding_id": "b-legacy-5",
+   "config": {
+    "every": "1d"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-legacy-5",
+     "event_id": "e1",
+     "fired_at": "2026-10-08T12:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-08T12:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-legacy-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-legacy-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-legacy-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 1,
+        "missed_count": 1
+       },
+       "event_id": "schedule@1:b-legacy-5:1",
+       "fired_at": "2026-10-09T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 1,
+         "missed_count": 1
+        },
+        "scheduled_at": "2026-10-09T12:00:00+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 40,
+        "missed_count": 40
+       },
+       "event_id": "schedule@1:b-legacy-5:40",
+       "fired_at": "2026-11-17T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 40,
+         "missed_count": 40
+        },
+        "scheduled_at": "2026-11-17T12:00:00+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-legacy-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 40,
+        "missed_count": 37
+       },
+       "event_id": "schedule@1:b-legacy-5:40",
+       "fired_at": "2026-11-17T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 40,
+         "missed_count": 37
+        },
+        "scheduled_at": "2026-11-17T12:00:00+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-11T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-legacy-5:1",
+       "fired_at": "2026-10-09T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T12:00:00+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 40,
+        "missed_count": 39
+       },
+       "event_id": "schedule@1:b-legacy-5:40",
+       "fired_at": "2026-11-17T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 40,
+         "missed_count": 39
+        },
+        "scheduled_at": "2026-11-17T12:00:00+00:00",
+        "tick": 40
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 41
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 41
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "every": "1d",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "every": "1d",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    }
+   },
+   "name": "legacy-5",
+   "observed": {}
+  },
+  {
+   "binding_id": "b-synthetic-1",
+   "config": {
+    "start_at": "2026-10-09T06:00:00+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-09T06:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-synthetic-1",
+     "event_id": "e1",
+     "fired_at": "2026-10-09T06:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-09T06:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-10-09T05:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-1:0",
+       "fired_at": "2026-10-09T06:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T06:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-09T06:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-09T06:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-1:0",
+       "fired_at": "2026-10-09T06:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T06:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-09T06:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-09T06:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-1:0",
+       "fired_at": "2026-10-09T06:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T06:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-09T06:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-09T07:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-1:0",
+       "fired_at": "2026-10-09T06:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T06:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-09T06:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-10T06:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-1:0",
+       "fired_at": "2026-10-09T06:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-09T06:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-09T06:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-11-18T06:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-09T06:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T05:59:59+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T06:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T06:00:01+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T07:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-10T06:03:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-11-18T06:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T05:59:59+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T06:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T06:00:01+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T07:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-10T06:03:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-11-18T06:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-09T06:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-09T06:00:00+00:00",
+     "start_at": "2026-10-09T06:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-09T06:00:00+00:00",
+     "start_at": "2026-10-09T06:00:00+00:00"
+    }
+   },
+   "name": "synthetic-1",
+   "observed": {}
+  },
+  {
+   "binding_id": "b-synthetic-2",
+   "config": {},
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-synthetic-2",
+     "event_id": "e1",
+     "fired_at": "2026-10-08T12:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-08T12:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-2:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "exhausted"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    }
+   },
+   "name": "synthetic-2",
+   "observed": {}
+  },
+  {
+   "binding_id": "b-synthetic-3",
+   "config": {
+    "count": 5,
+    "every": "1h",
+    "start_at": "2026-10-01T00:00:00+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-synthetic-3",
+     "event_id": "e1",
+     "fired_at": "2026-10-01T00:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-01T00:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-3:0",
+       "fired_at": "2026-10-01T00:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T00:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-3:0",
+       "fired_at": "2026-10-01T00:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T00:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 1,
+        "missed_count": 1
+       },
+       "event_id": "schedule@1:b-synthetic-3:1",
+       "fired_at": "2026-10-01T01:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 1,
+         "missed_count": 1
+        },
+        "scheduled_at": "2026-10-01T01:00:00+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 24,
+        "missed_count": 24
+       },
+       "event_id": "schedule@1:b-synthetic-3:24",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 24,
+         "missed_count": 24
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 24
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 25
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 25
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 960,
+        "missed_count": 960
+       },
+       "event_id": "schedule@1:b-synthetic-3:960",
+       "fired_at": "2026-11-10T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 960,
+         "missed_count": 960
+        },
+        "scheduled_at": "2026-11-10T00:00:00+00:00",
+        "tick": 960
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 961
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 961
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 180,
+        "missed_count": 180
+       },
+       "event_id": "schedule@1:b-synthetic-3:180",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 180,
+         "missed_count": 180
+        },
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 180
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 181
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 181
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 24,
+        "missed_count": 21
+       },
+       "event_id": "schedule@1:b-synthetic-3:24",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 24,
+         "missed_count": 21
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 24
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 25
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 25
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 960,
+        "missed_count": 957
+       },
+       "event_id": "schedule@1:b-synthetic-3:960",
+       "fired_at": "2026-11-10T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 960,
+         "missed_count": 957
+        },
+        "scheduled_at": "2026-11-10T00:00:00+00:00",
+        "tick": 960
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 961
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 961
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 180,
+        "missed_count": 177
+       },
+       "event_id": "schedule@1:b-synthetic-3:180",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 180,
+         "missed_count": 177
+        },
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 180
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 181
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T03:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 181
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-3:1",
+       "fired_at": "2026-10-01T01:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T01:00:00+00:00",
+        "tick": 1
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 2
+       }
+      },
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 2
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 24,
+        "missed_count": 23
+       },
+       "event_id": "schedule@1:b-synthetic-3:24",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 24,
+         "missed_count": 23
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 24
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 25
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 25
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 960,
+        "missed_count": 959
+       },
+       "event_id": "schedule@1:b-synthetic-3:960",
+       "fired_at": "2026-11-10T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 960,
+         "missed_count": 959
+        },
+        "scheduled_at": "2026-11-10T00:00:00+00:00",
+        "tick": 960
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 961
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 961
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 180,
+        "missed_count": 179
+       },
+       "event_id": "schedule@1:b-synthetic-3:180",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 180,
+         "missed_count": 179
+        },
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 180
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 181
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 181
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "count": 5,
+     "every": "1h",
+     "start_at": "2026-10-01T00:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "count": 5,
+     "every": "1h",
+     "start_at": "2026-10-01T00:00:00+00:00"
+    }
+   },
+   "name": "synthetic-3",
+   "observed": {}
+  },
+  {
+   "binding_id": "b-synthetic-4",
+   "config": {
+    "every": "90m",
+    "start_at": "2026-10-01T00:00:00Z",
+    "until": "2026-10-03T00:00:00+00:00"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-synthetic-4",
+     "event_id": "e1",
+     "fired_at": "2026-10-01T00:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-01T00:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-4:0",
+       "fired_at": "2026-10-01T00:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T00:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-4:0",
+       "fired_at": "2026-10-01T00:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T00:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-4:0",
+       "fired_at": "2026-10-01T00:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-01T00:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 16,
+        "missed_count": 16
+       },
+       "event_id": "schedule@1:b-synthetic-4:16",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 16,
+         "missed_count": 16
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 16
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 17
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 17
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 31,
+        "missed_count": 31
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 31,
+         "missed_count": 31
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 32
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 641
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 31,
+        "missed_count": 31
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 31,
+         "missed_count": 31
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 1,
+        "tick": 32
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T00:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 0,
+       "tick": 121
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 16,
+        "missed_count": 13
+       },
+       "event_id": "schedule@1:b-synthetic-4:16",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 16,
+         "missed_count": 13
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 16
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 17
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 17
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 31,
+        "missed_count": 28
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 31,
+         "missed_count": 28
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 3,
+        "tick": 32
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 641
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 31,
+        "missed_count": 28
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 31,
+         "missed_count": 28
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 3,
+        "tick": 32
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T04:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 2,
+       "tick": 121
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-09-30T23:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T00:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-01T01:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 16,
+        "missed_count": 15
+       },
+       "event_id": "schedule@1:b-synthetic-4:16",
+       "fired_at": "2026-10-02T00:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 16,
+         "missed_count": 15
+        },
+        "scheduled_at": "2026-10-02T00:00:00+00:00",
+        "tick": 16
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 17
+       }
+      },
+      "now": "2026-10-02T00:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 17
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 31,
+        "missed_count": 30
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 31,
+         "missed_count": 30
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 2,
+        "tick": 32
+       }
+      },
+      "now": "2026-11-10T00:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 641
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 31,
+        "missed_count": 30
+       },
+       "event_id": "schedule@1:b-synthetic-4:31",
+       "fired_at": "2026-10-02T22:30:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 31,
+         "missed_count": 30
+        },
+        "scheduled_at": "2026-10-02T22:30:00+00:00",
+        "tick": 31
+       },
+       "state": {
+        "anchor": "2026-10-01T00:00:00+00:00",
+        "exhausted": true,
+        "scheduled_count": 2,
+        "tick": 32
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-01T01:30:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": true,
+       "scheduled_count": 1,
+       "tick": 121
+      },
+      "state": {
+       "anchor": "2026-10-01T00:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "every": "90m",
+     "start_at": "2026-10-01T00:00:00+00:00",
+     "until": "2026-10-03T00:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-01T00:00:00+00:00",
+     "every": "90m",
+     "start_at": "2026-10-01T00:00:00+00:00",
+     "until": "2026-10-03T00:00:00+00:00"
+    }
+   },
+   "name": "synthetic-4",
+   "observed": {}
+  },
+  {
+   "binding_id": "b-synthetic-5",
+   "config": {
+    "every": "7d"
+   },
+   "expected": {
+    "initial_state": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "exhausted": false,
+     "scheduled_count": 0,
+     "tick": 0
+    },
+    "normalize": {
+     "binding_id": "b-synthetic-5",
+     "event_id": "e1",
+     "fired_at": "2026-10-08T12:00:00+00:00",
+     "payload": {
+      "scheduled_at": "2026-10-08T12:00:00+00:00",
+      "tick": 0
+     },
+     "source_id": "schedule",
+     "source_version": 1
+    },
+    "probes": [
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 0,
+        "last_tick": 5,
+        "missed_count": 5
+       },
+       "event_id": "schedule@1:b-synthetic-5:5",
+       "fired_at": "2026-11-12T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 0,
+         "last_tick": 5,
+         "missed_count": 5
+        },
+        "scheduled_at": "2026-11-12T12:00:00+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 6
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": {
+       "event_id": "schedule@1:b-synthetic-5:0",
+       "fired_at": "2026-10-08T12:00:00+00:00",
+       "payload": {
+        "scheduled_at": "2026-10-08T12:00:00+00:00",
+        "tick": 0
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 1,
+        "tick": 1
+       }
+      },
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-08T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 0,
+       "tick": 0
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 3,
+        "last_tick": 5,
+        "missed_count": 2
+       },
+       "event_id": "schedule@1:b-synthetic-5:5",
+       "fired_at": "2026-11-12T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 3,
+         "last_tick": 5,
+         "missed_count": 2
+        },
+        "scheduled_at": "2026-11-12T12:00:00+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 3,
+        "tick": 6
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-29T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 2,
+       "tick": 3
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T11:59:59+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:01+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T13:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-09T12:03:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": {
+       "coalesced": {
+        "first_tick": 1,
+        "last_tick": 5,
+        "missed_count": 4
+       },
+       "event_id": "schedule@1:b-synthetic-5:5",
+       "fired_at": "2026-11-12T12:00:00+00:00",
+       "payload": {
+        "coalesced": {
+         "first_tick": 1,
+         "last_tick": 5,
+         "missed_count": 4
+        },
+        "scheduled_at": "2026-11-12T12:00:00+00:00",
+        "tick": 5
+       },
+       "state": {
+        "anchor": "2026-10-08T12:00:00+00:00",
+        "exhausted": false,
+        "scheduled_count": 2,
+        "tick": 6
+       }
+      },
+      "now": "2026-11-17T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 6
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     },
+     {
+      "admit": null,
+      "now": "2026-10-08T12:00:00+00:00",
+      "prepare": {
+       "kind": "until",
+       "until": "2026-10-15T12:00:00+00:00"
+      },
+      "rearm": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      },
+      "state": {
+       "anchor": "2026-10-08T12:00:00+00:00",
+       "exhausted": false,
+       "scheduled_count": 1,
+       "tick": 1
+      }
+     }
+    ],
+    "revalidated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "every": "7d",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    },
+    "validated": {
+     "anchor": "2026-10-08T12:00:00+00:00",
+     "every": "7d",
+     "start_at": "2026-10-08T12:00:00+00:00"
+    }
+   },
+   "name": "synthetic-5",
+   "observed": {}
+  }
+ ],
+ "now": "2026-10-08T12:00:00+00:00",
+ "source": "operator gateway :8080 GET /api/gateway/automations (+ archived) and /automations/{id}, read-only, 2026-10-08; anonymized (ids replaced, titles/targets dropped); expected outputs computed with the released abstractruntime 0.9.1 schedule@1 adapter"
+}

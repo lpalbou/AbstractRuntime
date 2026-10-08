@@ -26,7 +26,7 @@ from .registry import (
     reset_trigger_registry,
     trigger_sources,
 )
-from .schedule import ScheduleTriggerAdapter
+from .schedule import ScheduleTriggerAdapter, ScheduleV2TriggerAdapter, time_zone_names, validate_time_zone
 
 __all__ = [
     "BUILTIN_TRIGGER_SOURCES",
@@ -34,6 +34,9 @@ __all__ = [
     "EmailReceivedTriggerAdapter",
     "ManualTriggerAdapter",
     "ScheduleTriggerAdapter",
+    "ScheduleV2TriggerAdapter",
+    "time_zone_names",
+    "validate_time_zone",
     "TRIGGER_STATE_KEYS",
     "TriggerAdapter",
     "TriggerAdmission",

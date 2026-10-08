@@ -2,7 +2,8 @@
 
 Sources come from two places:
 
-- the built-ins `schedule@1`, `manual@1` and `email.received@1`, shipped in this package. They are
+- the built-ins `schedule@1`, `schedule@2`, `manual@1` and `email.received@1`, shipped in this
+  package (`schedule@2` is a second version of the built-in `schedule` source). They are
   a REQUIRED seam: if one cannot be loaded, or no longer describes itself as
   expected, discovery raises `TriggerRegistryError` — automations must not
   start on a runtime that silently lost its scheduler;
@@ -33,6 +34,13 @@ BUILTIN_TRIGGER_SOURCES: Dict[str, str] = {
     # framework backlog 0992 B4: new mail in the runtime's durable inbox.
     "email.received": "abstractruntime.triggers.email_received:EmailReceivedTriggerAdapter",
 }
+
+# Further versions of a built-in source (same entry-point name, one more adapter each): loaded
+# with the same required-seam rule as the built-ins above.
+BUILTIN_TRIGGER_SOURCE_VERSIONS: Tuple[Tuple[str, str], ...] = (
+    # R16.1: calendar rules (daily/weekly/monthly) in a time zone; schedule@1 stays unchanged.
+    ("schedule", "abstractruntime.triggers.schedule:ScheduleV2TriggerAdapter"),
+)
 
 _ADAPTER_METHODS = ("validate", "initial_state", "prepare", "admit", "rearm", "normalize")
 _DESCRIPTOR_KEYS = ("id", "version", "label", "config_schema", "event_schema", "capabilities")
@@ -111,7 +119,11 @@ class _Registry:
         rows: List[Dict[str, Any]] = []
         adapters: Dict[Tuple[str, int], Any] = {}
 
+        builtins = []
         for name, target in BUILTIN_TRIGGER_SOURCES.items():
+            builtins.append((name, target))
+            builtins.extend(v for v in BUILTIN_TRIGGER_SOURCE_VERSIONS if v[0] == name)
+        for name, target in builtins:
             try:
                 adapter = _instantiate(_load_target(target))
                 descriptor = _check_adapter(name, adapter)
@@ -119,7 +131,10 @@ class _Registry:
                 raise TriggerRegistryError(
                     f"built-in trigger source {name!r} ({target}) is missing or broken: {exc}"
                 ) from exc
-            adapters[(descriptor["id"], int(descriptor["version"]))] = adapter
+            key = (descriptor["id"], int(descriptor["version"]))
+            if key in adapters:
+                raise TriggerRegistryError(f"built-in trigger source {key[0]}@{key[1]} is declared twice ({target})")
+            adapters[key] = adapter
             rows.append({"descriptor": descriptor, "available": True})
 
         for name, target in _entry_points():
@@ -195,6 +210,7 @@ def reset_trigger_registry() -> None:
 
 __all__ = [
     "BUILTIN_TRIGGER_SOURCES",
+    "BUILTIN_TRIGGER_SOURCE_VERSIONS",
     "ENTRY_POINT_GROUP",
     "TriggerRegistryError",
     "UnknownTriggerSource",

@@ -10,6 +10,7 @@ from abstractruntime.triggers import registry as reg
 from abstractruntime.triggers import (
     ManualTriggerAdapter,
     ScheduleTriggerAdapter,
+    ScheduleV2TriggerAdapter,
     TriggerRegistryError,
     UnknownTriggerSource,
     get_trigger_adapter,
@@ -48,17 +49,20 @@ def _fake_entry_points(monkeypatch, pairs):
 
 
 def test_builtins_are_available_and_typed():
-    rows = {r["descriptor"]["id"]: r for r in trigger_sources() if r["available"]}
-    assert rows["schedule"]["descriptor"]["version"] == 1
-    assert rows["schedule"]["descriptor"]["capabilities"] == {"kind": "time"}
-    assert rows["manual"]["descriptor"]["capabilities"] == {"kind": "manual"}
+    listed = [(r["descriptor"]["id"], r["descriptor"]["version"]) for r in trigger_sources() if r["available"]]
+    assert listed == [("schedule", 1), ("schedule", 2), ("manual", 1), ("email.received", 1)]
+    rows = {(r["descriptor"]["id"], r["descriptor"]["version"]): r for r in trigger_sources() if r["available"]}
+    assert rows[("schedule", 1)]["descriptor"]["capabilities"] == {"kind": "time"}
+    assert rows[("schedule", 2)]["descriptor"]["capabilities"] == {"kind": "time"}
+    assert isinstance(get_trigger_adapter("schedule", 2), ScheduleV2TriggerAdapter)
+    assert rows[("manual", 1)]["descriptor"]["capabilities"] == {"kind": "manual"}
     assert isinstance(get_trigger_adapter("schedule", 1), ScheduleTriggerAdapter)
     assert isinstance(get_trigger_adapter("manual", 1), ManualTriggerAdapter)
 
 
 def test_unknown_source_and_version_are_refused():
     with pytest.raises(UnknownTriggerSource) as exc:
-        get_trigger_adapter("schedule", 2)
+        get_trigger_adapter("schedule", 3)
     assert exc.value.reason_code == "unknown_trigger_source"
     with pytest.raises(UnknownTriggerSource):
         get_trigger_adapter("cron", 1)
@@ -72,7 +76,7 @@ def test_third_party_entry_point_is_discovered_without_code_change(monkeypatch):
         ("webhook", f"{mod}:WebhookAdapter"),
     ])
     ids = [r["descriptor"]["id"] for r in trigger_sources() if r["available"]]
-    assert ids == ["schedule", "manual", "email.received", "webhook"]
+    assert ids == ["schedule", "schedule", "manual", "email.received", "webhook"]
     assert isinstance(get_trigger_adapter("webhook", 1), WebhookAdapter)
 
 

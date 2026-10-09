@@ -55,7 +55,9 @@ dependencies = [
   # unload frees the pipeline (the resident media path relies on both).
   # 2.25.1: the Linux bwrap profile binds an allowed child of a refused folder,
   # and browser_probe takes the _sandbox stamp (scoped loopback origin).
-  "abstractcore>=2.25.1",
+  # 2.26.0: `abstractcore.config.recommendations.voice_input_hint`, served through
+  # `config_facade.voice_input_hint` (the speech-input row's hint; round 16).
+  "abstractcore>=2.26.0",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -72,12 +74,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.25.1",
+  "abstractcore[apple]>=2.26.0",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.25.1",
+  "abstractcore[gpu]>=2.26.0",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]

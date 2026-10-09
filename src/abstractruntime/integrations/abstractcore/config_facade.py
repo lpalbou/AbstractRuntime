@@ -11,6 +11,7 @@ Scope:
   use scoped per-principal config files)
 - resolve the effective AbstractCore config file path
 - enumerate capability-default route specs (the catalog of known routes)
+- the served speech-input hint for a configured route (`voice_input_hint`, AbstractCore >= 2.26.0)
 - read a provider API key from a specific AbstractCore config file
 - read AbstractCore's stored mail (IMAP/SMTP) and maintenance-triage settings
 - model weights: availability probes and single downloads (`model_materializer`)
@@ -219,6 +220,30 @@ def recommended_capability_selectors() -> List[str]:
         return sorted(str(name) for name in RECOMMENDED_SELECTORS)
     except Exception:
         return []
+
+
+def voice_input_hint(
+    route: Dict[str, Any], host: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """AbstractCore's served one-line hint for a CONFIGURED speech-input route, or None.
+
+    `abstractcore.config.recommendations.voice_input_hint` (AbstractCore >= 2.26.0):
+    THE sentence clients show next to the Voice input row, verbatim -- for example
+    a faster-whisper route on Apple silicon runs on the processor while mlx-whisper
+    runs the same model on the GPU. Computed from the host and the installed
+    engines, never in a client; it never changes the route. Raises when
+    AbstractCore is too old: a host serving the speech-input row without its hint
+    would be a silent regression.
+    """
+    try:
+        from abstractcore.config.recommendations import voice_input_hint as _core_voice_input_hint
+    except Exception as exc:
+        raise RuntimeError(
+            "AbstractCore's speech-input hint is unavailable "
+            "(abstractcore.config.recommendations.voice_input_hint needs AbstractCore >= 2.26.0)."
+        ) from exc
+    answer = _core_voice_input_hint(dict(route), host)
+    return dict(answer) if answer else None
 
 
 def capability_default_specs() -> Dict[str, Dict[str, Any]]:

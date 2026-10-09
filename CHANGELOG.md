@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Trigger source `schedule@2`: `{kind: "daily", at: "HH:MM"}`, `{kind: "weekly", days: [...], at}` and `{kind: "monthly", day: 1..31 | "last", at}` evaluated on wall time in the config's `time_zone` (IANA, converted with `zoneinfo`: a skipped wall time runs at the shifted instant, a repeated one runs once; a day beyond the month's length runs on its last day), plus `{kind: "every"}` and `{kind: "once"}` with `schedule@1`'s meaning (a `once` may give a wall time `at` in `time_zone`). Same coalescing and pause policy as `schedule@1`; event ids `schedule@2:<binding_id>:<tick>`. `validate_time_zone(name)` and `time_zone_names()` are exported from `abstractruntime.triggers`. See `docs/automations.md`.
+- `integrations.abstractcore.config_facade.voice_input_hint(route, host=None)`: AbstractCore's served one-line hint for a configured speech-input route (`abstractcore.config.recommendations.voice_input_hint`, AbstractCore >= 2.26.0), so a host such as AbstractGateway serves it without importing AbstractCore itself. The AbstractCore floor is 2.26.0.
 
 ### Changed
 

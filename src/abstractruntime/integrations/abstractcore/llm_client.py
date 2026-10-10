@@ -15933,13 +15933,22 @@ class RemoteAbstractCoreLLMClient:
         text = resp.get("text") if isinstance(resp, dict) else None
         if text is None and isinstance(resp, dict):
             text = resp.get("content") or resp.get("data")
+        # Round 18 (the spoken-language setting): the server answers `language` (what the engine was
+        # told, null = it detected the language) and `detected_language` (what it reported) beside
+        # the text; both ride the result's metadata so the gateway can show "Detected: fr" and
+        # record it in the run ledger. Absent fields (an older server) are null, never guessed.
+        def _lang(key: str) -> Optional[str]:
+            value = resp.get(key) if isinstance(resp, dict) else None
+            return str(value).strip().lower() if isinstance(value, str) and value.strip() else None
+
+        language_facts = {"language": _lang("language"), "detected_language": _lang("detected_language")}
         text_resp = {
             "content": str(text or "").strip(),
             "model": data.get("model"),
-            "metadata": {"task": "transcription", "modality": "text", "_provider_request": {"url": url, "payload": data}},
+            "metadata": {"task": "transcription", "modality": "text", "_provider_request": {"url": url, "payload": data}, **language_facts},
         }
         return _normalize_multimodal_response(
-            {"text": text_resp, "metadata": {"model": data.get("model"), "provider": "abstractcore-server"}},
+            {"text": text_resp, "metadata": {"model": data.get("model"), "provider": "abstractcore-server", **language_facts}},
             artifact_store=self._artifact_store,
         )
 

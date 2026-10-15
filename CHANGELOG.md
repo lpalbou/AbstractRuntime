@@ -5,16 +5,27 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.0] - 2026-10-09
+## [0.10.0] - 2026-10-15
 
 ### Added
 
 - Trigger source `schedule@2`: `{kind: "daily", at: "HH:MM"}`, `{kind: "weekly", days: [...], at}` and `{kind: "monthly", day: 1..31 | "last", at}` evaluated on wall time in the config's `time_zone` (IANA, converted with `zoneinfo`: a skipped wall time runs at the shifted instant, a repeated one runs once; a day beyond the month's length runs on its last day), plus `{kind: "every"}` and `{kind: "once"}` with `schedule@1`'s meaning (a `once` may give a wall time `at` in `time_zone`). Same coalescing and pause policy as `schedule@1`; event ids `schedule@2:<binding_id>:<tick>`. `validate_time_zone(name)` and `time_zone_names()` are exported from `abstractruntime.triggers`. See `docs/automations.md`.
 - `integrations.abstractcore.config_facade.voice_input_hint(route, host=None)`: AbstractCore's served one-line hint for a configured speech-input route (`abstractcore.config.recommendations.voice_input_hint`, AbstractCore >= 2.26.0), so a host such as AbstractGateway serves it without importing AbstractCore itself. The AbstractCore floor is 2.26.0.
+- A limit on an execution wire: `edge.data.loopLimit = {"max": N}` (the editor's ↺N badge on a wire that makes execution repeat). Before compile, `visual/loop_limit_lowering.py` turns it into a `loop_limit` node on that wire (`again` to the wire's target; `limit_reached` to the other branch when the wire leaves an If/Else and that branch is not itself a limited wire, else nothing: the path ends at the limit), re-keying the target's per-path values and entry list. A run tree shows the lowered node as "Loop limit N". `VisualEdge` now carries `data` (older runtimes never read it, so a limited flow runs unlimited there).
+- VisualFlow `get_vars` node (Get Variables): a data node with one output per variable, its pin id the variable name (dotted paths allowed); each output reads the run variable's current value, or null when it is not set.
+- VisualFlow `loop_limit` node (Loop Limit): exec outputs `again` (taken while fewer than `max` passes were let through) and `limit_reached` (then the count starts again from 0), data output `count` (the pass number). The count lives in `run.vars._temp.loop_limits.<node id>`, so it survives pause/resume. It belongs to the current iteration of the enclosing ForEach / For / While (each item, and each new entry of that loop, starts from 0); with no enclosing loop, to the run. Its `max` comes only from its own pin, never from the previous step's output.
+- VisualFlow `add_to_list` node (Add to List Variable): `name`, `item` (added as one element), `items` (each element added); a missing or null variable starts as `[]`; a variable that holds something else, or `items` that is not a list, fails the step naming it; reads and writes in one step; output `list`.
+- String Template: a placeholder reads an input pin of its name, then the `vars` object, then the run variable (top-level names not starting with `_`). A list or object with no filter is written as JSON (it was Python's `str()`).
 
 ### Changed
 
 - `schedule@1` is unchanged: its configs normalize byte for byte as before and existing automations keep their tick grid (`tests/test_schedule_v1_corpus.py` freezes the 0.9.1 answers on real automation configs).
+
+### Fixed
+
+- Set Variables (and Add to List Variable) only take what their own pins carry (a wire, a value set on the node, an expression). Before, keys of the previous step's output were written as variables too.
+- Set Variables (`set_vars`): every data input pin besides `updates` is one variable, written under the pin's id (dotted paths nest) with its value: a wire, else the pin's default. These win over the same name in the `updates` object. AbstractFlow edits them as rows (name, type, value), so one node initialises several variables, wired or literal. A flow using such rows needs this runtime: an older one writes only `updates`. Test: `tests/test_visual_set_vars_pins.py`.
+- VisualFlow reroute ("relay") nodes: a dot in AbstractFlow that lets one output feed several inputs along a tidy path. They are visual only: before compiling, every chain `source -> reroute (-> reroute ...) -> target` is rewired `source -> target` and the reroutes are removed (`visualflow_compiler/visual/reroute_lowering.py`, run before the multi-entry lowering). A reroute with no source feeds nothing (its targets keep their defaults); per-path values that name a reroute point at its real source. Data wires only: an execution wire through a reroute, a second input into one, or a cycle of reroutes is refused with a message naming the wire. A flow with a connected reroute needs this runtime (older ones refuse the unknown node type). Test: `tests/test_visual_reroute_lowering.py`.
 
 ## [0.9.1] - 2026-10-08
 

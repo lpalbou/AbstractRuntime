@@ -53,6 +53,9 @@ class VisualEdge:
     target: str
     sourceHandle: str
     targetHandle: str
+    # Authoring data on the wire (e.g. `loopLimit`); older runtimes never read it. Not part of the
+    # wire's identity: two wires are the same wire by their four pins.
+    data: Dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
 
 @dataclass(frozen=True)
@@ -203,12 +206,14 @@ def load_visualflow_json(raw: Any) -> VisualFlow:
             sh_s = sh.strip()
             th_s = th.strip()
 
+            edge_data = e.get("data")
             edges.append(
                 VisualEdge(
                     source=src,
                     target=tgt,
                     sourceHandle=sh_s,
                     targetHandle=th_s,
+                    data=dict(edge_data) if isinstance(edge_data, dict) else {},
                 )
             )
 

@@ -2948,7 +2948,7 @@ def _create_visual_function_handler(
             if not isinstance(chosen, str) or not chosen:
                 # Blueprint-style behavior: if the chosen execution pin isn't connected,
                 # treat it as a clean completion instead of an error.
-                if branch in {"true", "false", "default"} or branch.startswith("case:"):
+                if branch in {"true", "false", "default", "again", "limit_reached"} or branch.startswith("case:"):
                     return StepPlan(
                         node_id=node_id,
                         complete_output=_to_complete_output(result),
@@ -4050,7 +4050,7 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
     control_specs: Dict[str, Dict[str, Any]] = {}
 
     def _is_supported_branch_handle(handle: str) -> bool:
-        return handle in {"true", "false", "default"} or handle.startswith("case:")
+        return handle in {"true", "false", "default", "again", "limit_reached"} or handle.startswith("case:")
 
     for node_id in flow.nodes:
         outs = outgoing.get(node_id, [])
@@ -4235,6 +4235,12 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
 
         # Minimal branching support: If/Else uses `true` / `false` execution outputs.
         if set(handles) <= {"true", "false"}:
+            branch_maps[node_id] = {e.source_handle: e.target for e in outs}  # type: ignore[arg-type]
+            next_node_map[node_id] = None
+            continue
+
+        # Loop Limit: `again` while under its limit, then `limit_reached`.
+        if set(handles) <= {"again", "limit_reached"}:
             branch_maps[node_id] = {e.source_handle: e.target for e in outs}  # type: ignore[arg-type]
             next_node_map[node_id] = None
             continue
@@ -4841,6 +4847,16 @@ def compile_flow(flow: Flow) -> "WorkflowSpec":
                 node_id=node_id,
                 next_node=next_node,
                 branch_map=branch_map,
+            )
+        elif visual_type == "add_to_list":
+            from .adapters.variable_adapter import create_add_to_list_node_handler
+
+            data_aware_handler = handler_obj if callable(handler_obj) else None
+            handlers[node_id] = create_add_to_list_node_handler(
+                node_id=node_id,
+                next_node=next_node,
+                data_aware_handler=data_aware_handler,
+                flow=flow,
             )
         elif visual_type == "set_vars":
             from .adapters.variable_adapter import create_set_vars_node_handler

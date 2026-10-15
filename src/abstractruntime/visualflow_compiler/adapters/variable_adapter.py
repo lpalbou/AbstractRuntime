@@ -236,6 +236,8 @@ def create_set_vars_node_handler(
 
     Contract:
     - Input pin: `updates` (object or JSON string), where keys are dotted paths and values are JSON-safe values.
+    - Any other data input pin is one variable: its id is the variable name (dotted paths allowed), its
+      value (a wire, else the pin's default) is written. These win over the same name in `updates`.
     - Output pin: `updates` (echoed), for observability/debugging.
     - Pass-through: must NOT clobber `_last_output` (same as `set_var`).
     """
@@ -263,6 +265,10 @@ def create_set_vars_node_handler(
         payload = resolved if isinstance(resolved, dict) else {}
 
         updates = _coerce_updates(payload.get("updates"))
+        # One input pin per variable (the editor's Set Variables rows): name = pin id.
+        for pin_id, value in payload.items():
+            if pin_id != "updates":
+                updates[pin_id] = value
         if not updates:
             # Deterministic no-op (still counts as a step, but doesn't pollute `_flow_error`).
             _persist_node_output(run.vars, node_id, {"updates": {}})
@@ -314,3 +320,76 @@ def create_set_vars_node_handler(
 
     return handler
 
+
+def create_add_to_list_node_handler(
+    *,
+    node_id: str,
+    next_node: Optional[str],
+    data_aware_handler: Optional[Callable[[Any], Any]],
+    flow: Any,
+) -> Callable:
+    """Create a handler for `add_to_list` visual nodes (Add to List Variable).
+
+    Contract:
+    - `name`: the list variable (dotted paths allowed; a leading `_` is reserved).
+    - `item`: added as ONE element, whatever its type. `items`: each of its elements is added.
+      Both may be given (`item` first). A missing or null input adds nothing.
+    - A variable that does not exist yet (or is null) starts as `[]`; one that holds something
+      other than a list fails the step, naming the variable and what it holds.
+    - Reads and writes the variable in this one step. Output pin `list`: the new list.
+    - Pass-through: must NOT clobber `_last_output` (same as `set_var`).
+    """
+    from abstractruntime.core.models import StepPlan
+    from ..compiler import _sync_effect_results_to_node_outputs
+
+    def _fail(run: Any, message: str) -> "StepPlan":
+        run.vars["_flow_error"] = message
+        run.vars["_flow_error_node"] = node_id
+        return StepPlan(node_id=node_id, complete_output={"success": False, "error": message, "node": node_id})
+
+    def handler(run: Any, ctx: Any) -> "StepPlan":
+        del ctx
+        if flow is not None and hasattr(flow, "_node_outputs") and hasattr(flow, "_data_edge_map"):
+            _sync_effect_results_to_node_outputs(run, flow)
+
+        last_output = run.vars.get("_last_output", {})
+        resolved = data_aware_handler(last_output) if callable(data_aware_handler) else {}
+        payload = resolved if isinstance(resolved, dict) else {}
+
+        raw_name = payload.get("name")
+        name = (raw_name if isinstance(raw_name, str) else str(raw_name or "")).strip()
+        if not name:
+            return _fail(run, "Add to List Variable requires a variable name.")
+        if name.startswith("_"):
+            return _fail(run, f"Invalid variable name '{name}': names starting with '_' are reserved.")
+
+        items = payload.get("items")
+        if items is not None and not isinstance(items, list):
+            return _fail(run, f"Add to List Variable '{name}': items must be a list, got {type(items).__name__}.")
+
+        current = _get_by_path(run.vars, name)
+        if current is None:
+            current = []
+        if not isinstance(current, list):
+            return _fail(run, f"Add to List Variable: '{name}' holds a {type(current).__name__}, not a list.")
+
+        new_list = list(current)
+        if payload.get("item") is not None:
+            new_list.append(payload.get("item"))
+        if items:
+            new_list.extend(items)
+
+        try:
+            _set_by_path(run.vars, name, new_list)
+        except Exception as e:
+            return _fail(run, f"Failed to set variable '{name}': {e}")
+
+        _persist_node_output(run.vars, node_id, {"list": new_list})
+        if flow is not None and hasattr(flow, "_node_outputs"):
+            flow._node_outputs[node_id] = {"list": new_list}
+
+        if next_node:
+            return StepPlan(node_id=node_id, next_node=next_node)
+        return StepPlan(node_id=node_id, complete_output={"success": True, "result": run.vars.get("_last_output")})
+
+    return handler

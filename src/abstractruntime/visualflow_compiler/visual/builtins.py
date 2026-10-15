@@ -345,6 +345,10 @@ def string_replace(inputs: Dict[str, Any]) -> str:
 def string_template(inputs: Dict[str, Any]) -> str:
     """Render a template with placeholders like `{{path.to.value}}`.
 
+    A placeholder reads, first match wins: an input pin of the same name (the editor adds one per
+    value that comes from a wire), the `vars` object, then the run variables (`_run_vars`, given
+    by the visual executor). A list or object with no filter is written as JSON.
+
     Supported filters:
     - `| json`            -> json.dumps(value)
     - `| join(", ")`      -> join array values with delimiter
@@ -353,8 +357,16 @@ def string_template(inputs: Dict[str, Any]) -> str:
     import re
 
     template = str(inputs.get("template", "") or "")
+    vars_obj: Dict[str, Any] = {}
+    run_vars = inputs.get("_run_vars")
+    if isinstance(run_vars, dict):
+        vars_obj.update({k: v for k, v in run_vars.items() if isinstance(k, str) and not k.startswith("_")})
     vars_raw = inputs.get("vars")
-    vars_obj = vars_raw if isinstance(vars_raw, dict) else {}
+    if isinstance(vars_raw, dict):
+        vars_obj.update(vars_raw)
+    for key, value in inputs.items():
+        if isinstance(key, str) and key not in ("template", "vars") and not key.startswith("_"):
+            vars_obj[key] = value
 
     pat = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 
@@ -399,6 +411,8 @@ def string_template(inputs: Dict[str, Any]) -> str:
         value = _get_path(vars_obj, path)
         if value is None:
             return ""
+        if not filters and isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False, default=str)
         value = _apply_filters(value, filters)
         return "" if value is None else str(value)
 

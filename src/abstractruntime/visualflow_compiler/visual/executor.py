@@ -263,6 +263,7 @@ COMPILER_LAYER_NODE_TYPES = frozenset({
     "memact_compose",
     "set_var_property",
     "set_vars",
+    "add_to_list",
 })
 
 
@@ -313,9 +314,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     #
     # This keeps the persisted authoring graph clean while keeping runtime
     # semantics centralized in AbstractRuntime (framework ADR-0012).
+    # - Reroute (relay) nodes are visual only: chains are rewired source -> target
+    #   and the reroutes removed, first, so everything after sees no reroute.
+    # - A limit on a wire (`edge.data.loopLimit`) becomes a loop_limit node on that
+    #   wire, before multi-entry lowering keys the entry routes.
+    from .loop_limit_lowering import lower_loop_limits
     from .multi_entry_lowering import lower_authoring_multi_entry
+    from .reroute_lowering import lower_reroutes
 
-    visual = lower_authoring_multi_entry(visual)
+    visual = lower_authoring_multi_entry(lower_loop_limits(lower_reroutes(visual)))
 
     flow = Flow(visual.id)
 
@@ -415,7 +422,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return False
         # These nodes are pure (data-only) even if the JSON document omitted template pins.
         # This keeps programmatic tests and host-built VisualFlows portable.
-        if type_str in {"get_var", "get_context", "bool_var", "var_decl"}:
+        if type_str in {"get_var", "get_vars", "get_context", "bool_var", "var_decl"}:
             return False
         if type_str == "break_object":
             return False
@@ -424,6 +431,13 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if get_builtin_handler(type_str) is not None:
             return False
         return True
+
+    def _own_input_pin_ids(node_id: str, node_data: Dict[str, Any]) -> set[str]:
+        """Declared data inputs that carry something of their own: a wire, a default or an expression."""
+        own = set(data_edge_map.get(node_id, {}).keys())
+        own |= set(pin_defaults_by_node_id.get(node_id, {}).keys())
+        own |= set((pin_expressions_by_node_id.get(node_id) or {}).keys())
+        return own & _input_pin_ids(node_data)
 
     def _input_pin_ids(node_data: Dict[str, Any]) -> set[str]:
         pins = node_data.get("inputs") if isinstance(node_data, dict) else None
@@ -1563,6 +1577,26 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _create_get_vars_handler(data: Dict[str, Any]):
+        # Pure node (Get Variables): one output per variable, its pin id the variable name (dotted
+        # paths allowed); a variable not set yet reads as null. Reads the live run vars each time.
+        pins = data.get("outputs") if isinstance(data, dict) else None
+        names = [
+            str(p.get("id"))
+            for p in (pins if isinstance(pins, list) else [])
+            if isinstance(p, dict) and p.get("type") != "execution" and isinstance(p.get("id"), str) and p.get("id")
+        ]
+
+        def handler(_input_data: Any) -> Dict[str, Any]:
+            run_vars = getattr(flow, "_run_vars", None)  # type: ignore[attr-defined]
+            out: Dict[str, Any] = {}
+            for name in names:
+                found, value = _get_by_path_with_found(run_vars, name) if isinstance(run_vars, dict) else (False, None)
+                out[name] = value if found else None
+            return out
+
+        return handler
+
     def _create_get_context_handler(_data: Dict[str, Any]):
         # Pure node: reads from the current run vars (attached onto the Flow by the compiler).
         # Mark as volatile so it is recomputed whenever requested (avoids stale cached reads).
@@ -2211,6 +2245,72 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                 return eval(expression, {"__builtins__": {}}, namespace)
             except Exception as e:
                 return {"error": str(e)}
+
+        return handler
+
+    def _create_string_template_handler(data: Dict[str, Any]):
+        # Pure node: the String Template builtin, plus the current run variables so a placeholder
+        # with no input pin of its name reads the run variable (the editor's variable chips).
+        render = _wrap_builtin(get_builtin_handler("string_template"), data)
+
+        def handler(input_data: Any) -> Any:
+            payload = dict(input_data) if isinstance(input_data, dict) else {}
+            run_vars = getattr(flow, "_run_vars", None)  # type: ignore[attr-defined]
+            if isinstance(run_vars, dict):
+                payload["_run_vars"] = run_vars
+            return render(payload)
+
+        return handler
+
+    def _create_loop_limit_handler(node_key: str):
+        # Lets execution through `again` at most `max` times, then once through `limit_reached`
+        # (and starts counting again). The count lives in run vars (`_temp.loop_limits.<node>`),
+        # so it survives pause/resume. It belongs to the current iteration of the enclosing
+        # ForEach / For / While (each new item, and each new entry of that loop, starts at 0);
+        # with no enclosing loop, to the run.
+        if not node_key:
+            raise ValueError("Loop Limit needs its node id to keep its count")
+        progress_key = {"loop": "idx", "for": "index", "while": "iters"}
+
+        def _scope(run_vars: Dict[str, Any]) -> str:
+            from ..adapters.control_adapter import _ensure_control
+
+            _ctrl, stack, frames = _ensure_control(run_vars)
+            parts: list[str] = []
+            for loop_id in stack:
+                frame = frames.get(loop_id) if isinstance(loop_id, str) else None
+                if not isinstance(frame, dict) or frame.get("kind") not in progress_key:
+                    continue
+                # A frame is a new dict for each entry of its loop: tag it once to tell entries apart.
+                entry = frame.get("limit_scope")
+                if not isinstance(entry, str):
+                    import uuid
+
+                    entry = uuid.uuid4().hex[:12]
+                    frame["limit_scope"] = entry
+                parts.append(f"{loop_id}:{entry}:{frame.get(progress_key[frame['kind']])}")
+            return "/".join(parts)
+
+        def handler(input_data: Any) -> Dict[str, Any]:
+            payload = input_data if isinstance(input_data, dict) else {}
+            raw_max = payload.get("max", 3)
+            try:
+                limit = max(0, int(raw_max))
+            except (TypeError, ValueError):
+                raise ValueError(f"Loop Limit: max must be a whole number, got {raw_max!r}")
+            run_vars = getattr(flow, "_run_vars", None)  # type: ignore[attr-defined]
+            if not isinstance(run_vars, dict):
+                raise ValueError("Loop Limit needs the run variables to keep its count")
+            scope = _scope(run_vars)
+            temp = run_vars.setdefault("_temp", {})
+            counts = temp.setdefault("loop_limits", {})
+            state = counts.get(node_key)
+            count = int(state.get("count", 0) or 0) if isinstance(state, dict) and state.get("scope") == scope else 0
+            if count < limit:
+                counts[node_key] = {"scope": scope, "count": count + 1}
+                return {"branch": "again", "count": count + 1}
+            counts[node_key] = {"scope": scope, "count": 0}
+            return {"branch": "limit_reached", "count": limit}
 
         return handler
 
@@ -4513,11 +4613,17 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
-    def _create_handler(node_type: NodeType, data: Dict[str, Any]) -> Any:
+    def _create_handler(node_type: NodeType, data: Dict[str, Any], node_id: str = "") -> Any:
         type_str = node_type.value if isinstance(node_type, NodeType) else str(node_type)
+
+        if type_str == "string_template":
+            return _create_string_template_handler(data)
 
         if type_str == "get_var":
             return _create_get_var_handler(data)
+
+        if type_str == "get_vars":
+            return _create_get_vars_handler(data)
 
         if type_str == "get_context":
             return _create_get_context_handler(data)
@@ -4640,6 +4746,16 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             # is input passthrough only.
             return lambda x: x
 
+        if type_str in ("set_vars", "add_to_list", "loop_limit"):
+            # These read their own pins only (a wire, a value set on the node, an expression),
+            # never keys of the previous step's output that happen to share a pin's name.
+            if type_str == "loop_limit":
+                own_limit_pins = _own_input_pin_ids(node_id, data)
+                count = _create_loop_limit_handler(node_id)
+                return lambda x: count({k: v for k, v in x.items() if k in own_limit_pins} if isinstance(x, dict) else {})
+            own = _own_input_pin_ids(node_id, data)
+            return lambda x: {k: v for k, v in x.items() if k in own} if isinstance(x, dict) else {}
+
         if type_str in COMPILER_LAYER_NODE_TYPES:
             # Semantics live in compiler-layer adapters (dispatched by
             # `_visual_type`); the adapters call this base handler for input
@@ -4669,7 +4785,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         if type_str in LITERAL_NODE_TYPES:
             continue
 
-        base_handler = _create_handler(node.type, node.data)
+        base_handler = _create_handler(node.type, node.data, node.id)
 
         # Compile-time refusal for CONNECTED unknown node types (c5166): an
         # edge into or out of an unknown node means the graph would bind it to

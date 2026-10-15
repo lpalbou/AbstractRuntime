@@ -654,6 +654,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#schedule2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule@2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#manual1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1470,6 +1481,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#schedule2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule@2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#manual1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1818,7 +1840,7 @@ sources), <code>abstractruntime.automation_queries</code> (listing), <code>abstr
   the controller's ledger. A crash at any point never loses an occurrence and never starts one twice.</li>
 </ul>
 <div class="highlight"><pre><span></span><code>flowchart LR
-  Trigger["Trigger source&lt;br/&gt;schedule@1 / manual@1"] --&gt;|"due tick or run now"| Controller["Controller run&lt;br/&gt;(automation id)&lt;br/&gt;vars._meta.automation&lt;br/&gt;vars._runtime.automation"]
+  Trigger["Trigger source&lt;br/&gt;schedule@1 / schedule@2 / manual@1"] --&gt;|"due tick or run now"| Controller["Controller run&lt;br/&gt;(automation id)&lt;br/&gt;vars._meta.automation&lt;br/&gt;vars._runtime.automation"]
   Commands["apply_automation_command&lt;br/&gt;pause / resume / run_now /&lt;br/&gt;revise / stop_current / archive / unarchive"] --&gt;|"decision + wake"| Controller
   Controller --&gt;|"START_SUBWORKFLOW&lt;br/&gt;deterministic run_id"| Occurrence["Occurrence run&lt;br/&gt;role: occurrence&lt;br/&gt;(a session turn)"]
   Occurrence --&gt; Descendants["Descendant runs&lt;br/&gt;role: descendant"]
@@ -1981,6 +2003,61 @@ descriptor carries <code>id</code>, <code>version</code>, <code>label</code>, <c
   missed_count}}</code>, and an <code>automation.coalesced</code> record is written.</li>
 <li>The event id of a scheduled tick is <code>schedule@1:&lt;binding_id&gt;:&lt;tick&gt;</code>. A revision that changes the trigger gets a
   new <code>binding_id</code>, so the new schedule never reuses an old event id.</li>
+</ul>
+<h3 id="schedule2"><code>schedule@2</code><a class="headerlink" href="#schedule2" title="Permanent link">&para;</a></h3>
+<p><code>schedule@2</code> adds calendar rules on wall time in a time zone. <code>schedule@1</code> stays registered and unchanged: its
+configs normalize byte for byte as before and its automations keep their tick grid. Use <code>schedule@2</code> for new
+automations.</p>
+<p>Config: <code>{kind, at?, days?, day?, time_zone?, start_at?, every?, until?, count?}</code>. The normalized config always
+carries <code>kind</code>, then the rule fields, <code>time_zone</code>, <code>start_at</code>, <code>anchor</code> (= <code>start_at</code>) and the bounds.</p>
+<table>
+<thead>
+<tr>
+<th><code>kind</code></th>
+<th>Rule fields</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>every</code></td>
+<td><code>every</code> (<code>8h</code>, <code>7d</code>, ...)</td>
+<td>Exactly <code>schedule@1</code>'s fixed UTC interval from <code>start_at</code>. <code>time_zone</code> is optional and only labels the schedule.</td>
+</tr>
+<tr>
+<td><code>once</code></td>
+<td><code>start_at</code>, or <code>at: "YYYY-MM-DDTHH:MM"</code> with <code>time_zone</code></td>
+<td>One run. A wall time <code>at</code> is converted to <code>start_at</code> in <code>time_zone</code>.</td>
+</tr>
+<tr>
+<td><code>daily</code></td>
+<td><code>at: "HH:MM"</code></td>
+<td>Every day at that wall time.</td>
+</tr>
+<tr>
+<td><code>weekly</code></td>
+<td><code>days</code> (non-empty subset of <code>mon</code>..<code>sun</code>), <code>at</code></td>
+<td>Those weekdays at that wall time. <code>days</code> is normalized to Monday-first order without duplicates.</td>
+</tr>
+<tr>
+<td><code>monthly</code></td>
+<td><code>day</code> (1..31 or <code>"last"</code>), <code>at</code></td>
+<td>That day of each month; a day beyond the month's length runs on the month's last day (day 31 runs on 28 or 29 February).</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Calendar rules (<code>daily</code>, <code>weekly</code>, <code>monthly</code>) require <code>time_zone</code>, an IANA name such as <code>Europe/Paris</code>
+  (<code>validate_time_zone(name)</code>; <code>time_zone_names()</code> lists the names the host knows). They take no <code>every</code>.</li>
+<li>Wall times convert to UTC with <code>zoneinfo</code>. A wall time that does not exist that day (spring forward) runs at the
+  shifted instant: a 02:30 rule runs at 03:30 on that day and at 02:30 afterwards. A wall time that happens twice
+  (fall back) runs once, at its first occurrence. A daily 08:00 stays at 08:00 local time across both transitions.</li>
+<li>Tick 0 is the first rule time at or after <code>start_at</code> (default: the creation time). <code>count</code> and <code>until</code> bound the
+  ticks as in <code>schedule@1</code>.</li>
+<li>Missed ticks coalesce and a resume after a pause skips the ticks that passed, exactly as in <code>schedule@1</code>. The event
+  id of a tick is <code>schedule@2:&lt;binding_id&gt;:&lt;tick&gt;</code>.</li>
+<li>Every instant is computed from its tick index in constant time, so an automation that was down for years catches up
+  with one occurrence without walking the missed ticks.</li>
 </ul>
 <h3 id="manual1"><code>manual@1</code><a class="headerlink" href="#manual1" title="Permanent link">&para;</a></h3>
 <p>Config: <code>{}</code>. The automation runs only when asked with <code>automation.run_now</code>. A manual run of any automation, whatever
@@ -2598,9 +2675,9 @@ saving its wait, finds the same child on replay and waits on it again; if the ch
 receives its result directly.</p>
 <h2 id="limits-in-v1">Limits in v1<a class="headerlink" href="#limits-in-v1" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Schedules are fixed UTC intervals (<code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, at most <code>366d</code>). There are no cron expressions, calendar
-  months, time zones or daylight-saving rules, and <code>anchor</code> must equal <code>start_at</code>.</li>
-<li>The shipped trigger sources are <code>schedule@1</code>, <code>manual@1</code> and <code>email.received@1</code>. There is no generic external
+<li>Schedules are fixed UTC intervals (<code>schedule@1</code>, <code>schedule@2</code> <code>every</code>) or daily, weekly and monthly wall-time rules
+  in an IANA time zone (<code>schedule@2</code>). There are no cron expressions, and <code>anchor</code> must equal <code>start_at</code>.</li>
+<li>The shipped trigger sources are <code>schedule@1</code>, <code>schedule@2</code>, <code>manual@1</code> and <code>email.received@1</code>. There is no generic external
   event source yet.</li>
 <li>Occurrences run one at a time (<code>serial</code>), missed ticks coalesce, and a failed occurrence never stops the
   automation (<code>failure: "continue"</code>). These policies cannot be changed.</li>

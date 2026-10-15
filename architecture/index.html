@@ -1834,7 +1834,7 @@ involved: a host drives a controller like any other run. See <a href="../automat
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run&lt;br/&gt;(automation-controller@1.0.0)"]
-    Triggers["trigger registry&lt;br/&gt;schedule@1, manual@1, email.received@1,&lt;br/&gt;entry-point sources"]
+    Triggers["trigger registry&lt;br/&gt;schedule@1, schedule@2, manual@1,&lt;br/&gt;email.received@1, entry-point sources"]
     Inbox["event inbox&lt;br/&gt;(email/, filled by the host's watcher)"]
     Queries["get_automation / list_occurrences /&lt;br/&gt;list_attention / pending_waits /&lt;br/&gt;list_automations"]
   end
@@ -1902,6 +1902,7 @@ resolver at call time. See <a href="../email/">email.md</a>.</p>
 <h2 id="visualflow-workflowbundles">VisualFlow + WorkflowBundles<a class="headerlink" href="#visualflow-workflowbundles" title="Permanent link">&para;</a></h2>
 <p>AbstractRuntime includes a compiler and a portable bundle format:
 - VisualFlow compiler: <code>src/abstractruntime/visualflow_compiler/*</code> (VisualFlow JSON -&gt; <code>WorkflowSpec</code>)
+- Reroute (relay) nodes are lowered first and disappear: each chain <code>source -&gt; reroute (-&gt; reroute) -&gt; target</code> becomes <code>source -&gt; target</code> (<code>visualflow_compiler/visual/reroute_lowering.py</code>), so the editor's dots are visual only. Data wires only; an execution wire through a reroute, two inputs into one, or a cycle of reroutes is refused when the flow compiles. A flow with a connected reroute needs this runtime: older ones refuse the unknown node type.
 - Multi-entry VisualFlow authoring routes are lowered into internal <code>join_exec</code> and <code>path_mux</code> nodes when a target has multiple incoming <code>exec-in</code> edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See <code>workflow-bundles.md</code> for the concrete metadata shape.
 - VisualFlow document nodes include <code>read_pdf</code>, <code>write_pdf</code>, and <code>write_docx</code>.
   They use workspace-scoped paths, keep document bytes out of checkpoints, and

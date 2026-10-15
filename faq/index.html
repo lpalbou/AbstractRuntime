@@ -1961,7 +1961,7 @@ Docs: <code>proposal.md</code>. Code: <code>src/abstractruntime/core/*</code>.</
 <p>Docs: <code>getting-started.md</code>. Code: <code>src/abstractruntime/core/runtime.py</code>, <code>src/abstractruntime/scheduler/convenience.py</code>.</p>
 <h2 id="how-do-i-run-a-workflow-on-a-schedule-or-on-request">How do I run a workflow on a schedule or on request?<a class="headerlink" href="#how-do-i-run-a-workflow-on-a-schedule-or-on-request" title="Permanent link">&para;</a></h2>
 <p>Create an automation. An automation is a durable controller run that starts the target workflow as a child run (an
-occurrence) on each trigger: <code>schedule@1</code> (fixed UTC intervals such as <code>5m</code> or <code>24h</code>) or <code>manual@1</code> (run now only).
+occurrence) on each trigger: <code>schedule@1</code> (fixed UTC intervals such as <code>5m</code> or <code>24h</code>), <code>schedule@2</code> (the same intervals plus daily, weekly and monthly rules at a wall time in an IANA time zone, daylight-saving correct) or <code>manual@1</code> (run now only).
 <code>create_automation(...)</code> creates it, <code>apply_automation_command(...)</code> pauses, resumes, runs now, edits, stops the
 current occurrence, archives it or unarchives it (it comes back paused with its history), and the host drives it
 like any run (<code>drive_automation</code> does this in-process). Nothing is deleted: an archived automation keeps its

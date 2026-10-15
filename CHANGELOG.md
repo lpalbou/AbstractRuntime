@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An execution wire that loops back out of a ForEach / For / While body (from inside the body to the loop node itself or to anything before it) is refused when the flow compiles: "Wire <source>.<pin> -> <target> goes back out of <loop>'s loop body: the run would never end. A path inside a loop body can only repeat within the body; to repeat the whole loop, wire the loop-back after the loop's done." Such a wire re-entered the loop with its frame still on the control stack, so the stack grew by one frame per pass and the run never ended (a Loop Limit on it never reached its max). A loop-back that goes through the loop's `done`, or that stays inside the body, is unchanged (`visual/loop_back_check.py`).
 - `schedule@1` is unchanged: its configs normalize byte for byte as before and existing automations keep their tick grid (`tests/test_schedule_v1_corpus.py` freezes the 0.9.1 answers on real automation configs).
 
 ### Fixed

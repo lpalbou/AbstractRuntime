@@ -834,6 +834,7 @@ Invariants the design rests on:
 
 AbstractRuntime includes a compiler and a portable bundle format:
 - VisualFlow compiler: `src/abstractruntime/visualflow_compiler/*` (VisualFlow JSON -> `WorkflowSpec`)
+- Reroute (relay) nodes are lowered first and disappear: each chain `source -> reroute (-> reroute) -> target` becomes `source -> target` (`visualflow_compiler/visual/reroute_lowering.py`), so the editor's dots are visual only. Data wires only; an execution wire through a reroute, two inputs into one, or a cycle of reroutes is refused when the flow compiles. A flow with a connected reroute needs this runtime: older ones refuse the unknown node type.
 - Multi-entry VisualFlow authoring routes are lowered into internal `join_exec` and `path_mux` nodes when a target has multiple incoming `exec-in` edges plus per-route input overrides. This keeps authoring JSON clean while making runtime behavior explicit and restart-safe. See `workflow-bundles.md` for the concrete metadata shape.
 - VisualFlow document nodes include `read_pdf`, `write_pdf`, and `write_docx`.
   They use workspace-scoped paths, keep document bytes out of checkpoints, and

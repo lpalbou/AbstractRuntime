@@ -318,11 +318,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
     #   and the reroutes removed, first, so everything after sees no reroute.
     # - A limit on a wire (`edge.data.loopLimit`) becomes a loop_limit node on that
     #   wire, before multi-entry lowering keys the entry routes.
+    # - An execution wire that loops back out of a ForEach / For / While body is
+    #   refused here (the run would never end; backlog 1018), before any limit on
+    #   it is lowered.
+    from .loop_back_check import refuse_loop_backs_out_of_bodies
     from .loop_limit_lowering import lower_loop_limits
     from .multi_entry_lowering import lower_authoring_multi_entry
     from .reroute_lowering import lower_reroutes
 
-    visual = lower_authoring_multi_entry(lower_loop_limits(lower_reroutes(visual)))
+    visual = lower_authoring_multi_entry(lower_loop_limits(refuse_loop_backs_out_of_bodies(lower_reroutes(visual))))
 
     flow = Flow(visual.id)
 

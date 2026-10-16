@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work, at the top of the code and inside functions, in both the RestrictedPython lane and the fallback lane, and
   inside the function bodies of flow function libraries. The sandbox still refuses third-party packages, private
   (`_`-prefixed) modules, and the standard-library modules that reach the machine or go around the sandbox's own
-  checks: processes and the operating system (`os`, `subprocess`, `threading`, `signal`, `ctypes`…), files (`io`,
+  checks: processes and the operating system (`os`, `subprocess`, `threading`, `signal`, `ctypes`, `platform`…), files (`io`,
   `pathlib`, `shutil`, `tempfile`, `glob`, `sqlite3`, `logging`, and the parsers that read a file by path: `xml`,
   `configparser`, `argparse`…), the network (`socket`, `http`, `urllib.request`, `smtplib`…), code loading or
   interpreter internals (`sys`, `importlib`, `pickle`, `types`, `inspect`…) and attribute access by name,

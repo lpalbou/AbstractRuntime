@@ -103,6 +103,8 @@ SANDBOX_DENIED_MODULES: Dict[str, str] = {
         "winreg", "winsound", "ossaudiodev", "locale", "getpass", "readline", "rlcompleter", "cmd",
         "atexit", "faulthandler", "gc", "webbrowser", "antigravity", "this", "turtle", "turtledemo",
         "tkinter", "curses", "idlelib",
+        # runs uname/sw_vers and reads /etc/os-release to answer
+        "platform",
     )},
     # files on the machine
     **{m: "files on the machine" for m in (
@@ -113,6 +115,8 @@ SANDBOX_DENIED_MODULES: Dict[str, str] = {
         # parsers and readers that take a file PATH (xml.*.parse, configparser.read,
         # argparse's @argument-files, gettext's catalogs)
         "xml", "pyexpat", "configparser", "argparse", "optparse", "gettext",
+        # read_mime_types(path) / MimeTypes.read(path)
+        "mimetypes",
     )},
     # the network
     **{m: "the network" for m in (
@@ -157,6 +161,8 @@ def sandbox_import_reason(name: str) -> Optional[str]:
     if dotted in SANDBOX_ALLOWED_SUBMODULES:
         return None
     top = dotted.split(".", 1)[0]
+    if top == "__future__":
+        return None
     if top.startswith("_"):
         return "a private module"
     reason = SANDBOX_DENIED_MODULES.get(top)

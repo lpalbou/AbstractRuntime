@@ -67,6 +67,11 @@ def test_standard_library_imports_run_in_the_sandbox(lane) -> None:
     assert create_code_handler(STDLIB_CODE)({"input": None}) == EXPECTED
 
 
+def test_future_annotations_import_is_allowed(lane) -> None:
+    code = "from __future__ import annotations\n\ndef transform(_input: dict) -> int:\n    return len(_input)\n"
+    assert create_code_handler(code)({"a": 1, "b": 2}) == 2
+
+
 def test_the_operator_example_import_time_then_ctime(lane) -> None:
     code = "import time; os_time = time.ctime()\n\ndef transform(_input):\n    return str(_input) + ' - ' + os_time[:3]\n"
     out = create_code_handler(code)({"input": None})
@@ -154,7 +159,9 @@ def test_import_rule_reasons() -> None:
     assert sandbox_import_reason("http.client") == "it reaches the network"
     assert sandbox_import_reason("types") == "it reaches loading or running code"
     assert sandbox_import_reason("operator") == "it reaches around the sandbox's checks (attributes by name, evaluated annotations, frames)"
-    assert sandbox_import_reason("sched") is None and sandbox_import_reason("platform") is None
+    assert sandbox_import_reason("sched") is None and sandbox_import_reason("__future__") is None
+    assert sandbox_import_reason("platform") == "it reaches processes and the operating system"
+    assert sandbox_import_reason("mimetypes") == "it reaches files on the machine"
     assert "sched_h" not in SANDBOX_DENIED_MODULES and "platform_h" not in SANDBOX_DENIED_MODULES
     assert sandbox_import_reason("requests") == "only Python's own standard library is importable"
     # Every denied module names a reason, and the list is the standard library's (or a

@@ -8,8 +8,10 @@ without importing the web backend implementation.
 from __future__ import annotations
 
 import ast
+import builtins as _builtins
 import os
-from typing import Any, Callable, Dict
+import sys
+from typing import Any, Callable, Dict, Optional
 
 # Try to import RestrictedPython, fall back to basic execution if not available
 try:
@@ -83,6 +85,126 @@ if RESTRICTED_PYTHON_AVAILABLE:
             super().check_name(node, name, allow_magic_methods)
 
 
+# ---------------------------------------------------------------------------
+# Imports in the sandbox: Python's own standard library, except the modules
+# that reach outside the interpreter. One rule for the AST check at compile
+# time (validate_code) and the ``__import__`` guard at run time (the guard is
+# what actually gates: the AST check only makes the refusal early and clear).
+# ---------------------------------------------------------------------------
+
+# Top-level standard-library modules the sandbox refuses, each with the reason
+# shown to the author. Grouped by what the module reaches.
+SANDBOX_DENIED_MODULES: Dict[str, str] = {
+    # processes, the OS, the interpreter
+    **{m: "processes and the operating system" for m in (
+        "os", "posix", "nt", "posixpath", "ntpath", "genericpath", "subprocess", "multiprocessing",
+        "threading", "_thread", "concurrent", "asyncio", "signal", "ctypes", "resource", "pwd", "grp",
+        "pty", "tty", "termios", "fcntl", "pipes", "crypt", "spwd", "nis", "syslog", "mmap", "msvcrt",
+        "winreg", "winsound", "ossaudiodev", "locale", "getpass", "readline", "rlcompleter", "cmd",
+        "atexit", "faulthandler", "gc", "webbrowser", "antigravity", "this", "turtle", "turtledemo",
+        "tkinter", "curses", "idlelib",
+    )},
+    # files on the machine
+    **{m: "files on the machine" for m in (
+        "io", "pathlib", "shutil", "tempfile", "glob", "fileinput", "linecache", "filecmp", "zipfile",
+        "tarfile", "gzip", "bz2", "lzma", "dbm", "shelve", "sqlite3", "codecs", "logging", "wave", "aifc",
+        "sunau", "chunk", "sndhdr", "imghdr", "tokenize", "mailbox", "mailcap", "netrc", "uu", "cgi",
+        "cgitb", "pyclbr", "tabnanny",
+        # parsers and readers that take a file PATH (xml.*.parse, configparser.read,
+        # argparse's @argument-files, gettext's catalogs)
+        "xml", "pyexpat", "configparser", "argparse", "optparse", "gettext",
+    )},
+    # the network
+    **{m: "the network" for m in (
+        "socket", "ssl", "select", "selectors", "socketserver", "http", "ftplib", "poplib", "imaplib",
+        "smtplib", "smtpd", "nntplib", "telnetlib", "xmlrpc", "wsgiref", "asynchat", "asyncore",
+    )},
+    # loading or running code, interpreter internals
+    **{m: "loading or running code" for m in (
+        "sys", "builtins", "importlib", "pkgutil", "runpy", "zipimport", "modulefinder", "code", "codeop",
+        "compileall", "py_compile", "marshal", "pickle", "pickletools", "copyreg", "types", "inspect",
+        "dis", "site", "sysconfig", "timeit", "doctest", "unittest", "pdb", "bdb", "trace", "profile",
+        "cProfile", "pstats", "tracemalloc", "test", "lib2to3", "pydoc", "pydoc_data", "ensurepip", "venv",
+        "zipapp", "distutils", "msilib", "__main__", "opcode", "symtable",
+    )},
+    # around the sandbox's own checks: attribute access by NAME (which the dunder
+    # rule cannot see), evaluation of annotation strings, access to frames
+    **{m: "around the sandbox's checks (attributes by name, evaluated annotations, frames)" for m in (
+        "operator", "typing", "functools", "traceback",
+    )},
+}
+
+# A refused package whose one pure submodule is allowed: ``urllib.parse``
+# (URL parsing) is fine, ``urllib.request`` is the network.
+SANDBOX_ALLOWED_SUBMODULES: frozenset = frozenset({"urllib.parse"})
+
+_STDLIB_MODULE_NAMES: frozenset = frozenset(getattr(sys, "stdlib_module_names", ()))
+
+
+def sandbox_import_reason(name: str) -> Optional[str]:
+    """Why the sandbox refuses importing ``name`` — or None when it is allowed.
+
+    Allowed: a module of Python's own standard library whose top-level package
+    is not in SANDBOX_DENIED_MODULES (plus the listed pure submodules of a
+    refused package). Refused: everything else — third-party packages, private
+    (``_``-prefixed) modules, and the standard-library modules that reach
+    processes, files, the network or code loading. ``full_access`` (host
+    policy) lifts every limit.
+    """
+    dotted = str(name or "").strip()
+    if not dotted:
+        return "an empty module name"
+    if dotted in SANDBOX_ALLOWED_SUBMODULES:
+        return None
+    top = dotted.split(".", 1)[0]
+    if top.startswith("_"):
+        return "a private module"
+    reason = SANDBOX_DENIED_MODULES.get(top)
+    if reason is not None:
+        return f"it reaches {reason}"
+    if top == "urllib":
+        return "it reaches the network; only urllib.parse is importable"
+    if top not in _STDLIB_MODULE_NAMES:
+        return "only Python's own standard library is importable"
+    return None
+
+
+def sandbox_import_check(name: str, fromlist: Any = ()) -> None:
+    """Raise CodeExecutionError when the sandbox refuses importing ``name``.
+
+    ``fromlist`` are the names of a ``from name import a, b`` statement: a
+    refused package is still fine when every one of them is an allowed
+    submodule (``from urllib import parse``).
+    """
+    reason = sandbox_import_reason(name)
+    if reason is not None and fromlist and all(
+        isinstance(item, str) and f"{name}.{item}" in SANDBOX_ALLOWED_SUBMODULES for item in fromlist
+    ):
+        reason = None
+    if reason is not None:
+        raise CodeExecutionError(
+            f"import of '{name}' is not allowed in the sandbox: {reason} "
+            "(full_access lifts this limit)"
+        )
+
+
+def _sandbox_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
+    """The sandbox's ``__import__``: the same rule as validate_code, applied
+    to the name that is actually imported at run time (relative imports are
+    refused: there is no package for them to be relative to)."""
+    if level:
+        raise CodeExecutionError("relative imports are not allowed in the sandbox")
+    sandbox_import_check(name, tuple(fromlist or ()))
+    return _builtins.__import__(name, globals, locals, fromlist or (), 0)
+
+
+def sandbox_builtins(base: Any) -> Dict[str, Any]:
+    """A copy of ``base`` builtins with the sandbox's ``__import__`` bound."""
+    out: Dict[str, Any] = dict(base)
+    out["__import__"] = _sandbox_import
+    return out
+
+
 def normalize_code_permissions(permissions: Any = "sandbox") -> str:
     """Return the canonical Code node execution permission mode."""
     raw = str(permissions or "sandbox").strip().lower().replace("-", "_")
@@ -129,8 +251,17 @@ def get_code_execution_policy() -> Dict[str, Any]:
                 "label": "Sandbox",
                 "available": True,
                 "default": True,
-                "safety": "restricted_python",
-                "description": "Protected Python execution with imports and unsafe constructs disabled.",
+                "safety": "restricted_python" if RESTRICTED_PYTHON_AVAILABLE else "basic",
+                "description": (
+                    "Protected Python execution: Python's standard library is importable, except the "
+                    "modules that reach processes, files, the network or code loading; exec/eval, "
+                    "dunder access and third-party packages are refused."
+                ),
+                "imports": {
+                    "allowed": "python standard library",
+                    "denied_modules": sorted(SANDBOX_DENIED_MODULES),
+                    "allowed_submodules": sorted(SANDBOX_ALLOWED_SUBMODULES),
+                },
             },
             {
                 "id": "full_access",
@@ -163,13 +294,24 @@ def validate_code(code: str) -> None:
         raise CodeExecutionError(f"Syntax error: {e}") from e
 
     for node in ast.walk(tree):
-        # Disallow imports
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            raise CodeExecutionError("Imports are not allowed")
+        # Imports: Python's own standard library, minus the modules that reach
+        # the machine (sandbox_import_check); the run-time __import__ guard
+        # applies the same rule to whatever is actually imported.
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                sandbox_import_check(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                raise CodeExecutionError("relative imports are not allowed in the sandbox")
+            if any(alias.name == "*" for alias in node.names):
+                raise CodeExecutionError(f"'from {node.module} import *' is not allowed in the sandbox")
+            sandbox_import_check(node.module or "", tuple(alias.name for alias in node.names))
 
-        # Disallow exec/eval
+        # Disallow exec/eval/compile and the dynamic import call (write `import x`)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in ("exec", "eval", "compile", "__import__"):
+            if node.func.id == "__import__":
+                raise CodeExecutionError("'__import__' is not allowed in the sandbox: write `import <module>` instead")
+            if node.func.id in ("exec", "eval", "compile"):
                 raise CodeExecutionError(f"'{node.func.id}' is not allowed")
 
         # Disallow dunder attributes
@@ -259,10 +401,11 @@ def _apply(func: Any, *args: Any, **kwargs: Any) -> Any:
 def _sandbox_parse_json(text: Any) -> Any:
     """``parse_json(text)`` — the sandbox's JSON reader.
 
-    The sandbox has no imports, so JSON parsing was impossible in code nodes
-    and would have been impossible in pin expressions (the design verdict's
-    amendment 4: "parser" helpers were unbuildable inline). Errors stay in
-    the CodeExecutionError family so they surface loudly with attribution.
+    Pin expressions have no imports, and code nodes had none when this helper
+    was added (the design verdict's amendment 4: "parser" helpers were
+    unbuildable inline); it stays the one-call JSON reader of both sandboxes.
+    Errors stay in the CodeExecutionError family so they surface loudly with
+    attribution.
     """
     import json
 
@@ -433,7 +576,7 @@ def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any],
 
     def handler(input_data: Any) -> Any:
         restricted_globals = {
-            "__builtins__": safe_builtins,
+            "__builtins__": sandbox_builtins(safe_builtins),
             "_getiter_": default_guarded_getiter,
             "_getitem_": default_guarded_getitem,
             "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
@@ -494,11 +637,13 @@ def _create_basic_handler(code: str, function_name: str) -> Callable[[Any], Any]
         limited_globals = {
             "__builtins__": {
                 # Same convenience set as the restricted lane (one source),
-                # plus the literal names bare exec needs.
+                # plus the literal names bare exec needs and the sandbox's
+                # __import__ (standard library only, see sandbox_import_check).
                 **sandbox_helper_globals(),
                 "True": True,
                 "False": False,
                 "None": None,
+                "__import__": _sandbox_import,
             }
         }
 

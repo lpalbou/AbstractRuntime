@@ -5,6 +5,24 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-10-16
+
+### Changed
+
+- **Code nodes can import Python's standard library.** In the `sandbox` permission mode, `import json`, `re`,
+  `datetime`, `math`, `collections`, `itertools`, `statistics`, `textwrap`, `hashlib`, `urllib.parse`… now
+  work, at the top of the code and inside functions, in both the RestrictedPython lane and the fallback lane, and
+  inside the function bodies of flow function libraries. The sandbox still refuses third-party packages, private
+  (`_`-prefixed) modules, and the standard-library modules that reach the machine or go around the sandbox's own
+  checks: processes and the operating system (`os`, `subprocess`, `threading`, `signal`, `ctypes`…), files (`io`,
+  `pathlib`, `shutil`, `tempfile`, `glob`, `sqlite3`, `logging`, and the parsers that read a file by path: `xml`,
+  `configparser`, `argparse`…), the network (`socket`, `http`, `urllib.request`, `smtplib`…), code loading or
+  interpreter internals (`sys`, `importlib`, `pickle`, `types`, `inspect`…) and attribute access by name,
+  evaluated annotations or frames (`operator`, `typing`, `functools`, `traceback`). A refusal names the module
+  and the reason; `from x import *`, relative imports and the `__import__` call stay refused. `full_access` (host policy) imports anything, as before.
+  The rule is applied twice: at compile time by `validate_code`, and at run time by the `__import__` bound into
+  the sandbox builtins. `get_code_execution_policy()` now lists `imports.denied_modules` for thin clients.
+
 ## [0.10.1] - 2026-10-16
 
 ### Changed

@@ -70,6 +70,7 @@ from .code_executor import (
     CodeExecutionError,
     _apply,
     _inplacevar,
+    sandbox_builtins,
     sandbox_helper_globals,
     validate_code,
 )
@@ -152,11 +153,12 @@ def _validate_library_purity(name: str, code: str) -> None:
     construction, so the process-lifetime shared namespace can never leak
     state across runs/tenants. Build-time, loud, attributed by function name.
 
-    FIRST runs the SAME ``validate_code`` the code-node lane uses (imports,
-    exec/eval/compile/__import__, dunder-attribute access) — one source, no
-    drift ("one sandbox, one rule"). The library lane previously skipped it
-    and let in-body imports fail only at CALL time; now it refuses at build
-    exactly like a code node. The purity rules below are the tier-2 ADDITION
+    FIRST runs the SAME ``validate_code`` the code-node lane uses (imports
+    outside Python's standard library or of the modules that reach the
+    machine, exec/eval/compile/__import__, dunder-attribute access) — one
+    source, no drift ("one sandbox, one rule"). The library lane previously
+    skipped it and let in-body imports fail only at CALL time; now it refuses
+    at build exactly like a code node. The purity rules below are the tier-2 ADDITION
     on top of that shared baseline.
     """
     try:
@@ -232,7 +234,7 @@ def compile_function_library(
     # mirrors the code-node sandbox EXACTLY (one sandbox, one rule) or bodies
     # die at call time with bare sandbox-internal NameErrors.
     shared_ns: Dict[str, Any] = {
-        "__builtins__": safe_builtins,
+        "__builtins__": sandbox_builtins(safe_builtins),  # + the sandbox __import__ (standard library)
         "_getiter_": default_guarded_getiter,
         "_getitem_": default_guarded_getitem,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,

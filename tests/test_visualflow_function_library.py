@@ -337,7 +337,7 @@ def test_top_level_import_refused() -> None:
     # A top-level import is refused — validate_code (shared with code nodes)
     # catches imports first; the top-level-defs-only purity rule is a further
     # backstop (see test_purity_refuses_top_level_mutable_container).
-    with pytest.raises(FunctionLibraryError, match="Imports are not allowed"):
+    with pytest.raises(FunctionLibraryError, match="import of 'os' is not allowed in the sandbox"):
         compile_function_library(
             [{"name": "evil", "code": "import os\ndef evil():\n    return os.getcwd()\n"}]
         )
@@ -347,7 +347,7 @@ def test_import_inside_body_refused() -> None:
     # An import INSIDE a function body is structurally legal (a def) but the
     # shared validate_code (same lane as code nodes) refuses imports at BUILD —
     # one sandbox, one rule (the library lane must not be weaker).
-    with pytest.raises(FunctionLibraryError, match="Imports are not allowed"):
+    with pytest.raises(FunctionLibraryError, match="import of 'os' is not allowed in the sandbox"):
         compile_function_library(
             [{"name": "evil", "code": "def evil():\n    import os\n    return os.getcwd()\n"}]
         )

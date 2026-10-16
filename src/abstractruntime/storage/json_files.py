@@ -14,6 +14,7 @@ import logging
 import json
 import os
 import threading
+from dataclasses import dataclass
 import time
 import uuid
 from pathlib import Path
@@ -34,6 +35,24 @@ logger = logging.getLogger(__name__)
 # `session_kind`; 3 (2026-09-27): rows gained `workspace_root`. An older
 # sidecar is ignored so every file is re-read once.
 _SCAN_SIDECAR_VERSION = 3
+
+
+@dataclass
+class _ActiveEntry:
+    """What the ACTIVE index knows about one run id (see `JsonFileRunStore`)."""
+
+    active: bool = False
+    # Bumped by every note/drop: a listing that read the file as terminal drops
+    # the member only if nothing noted it in between (a per-store sequence).
+    gen: int = 0
+    # The file's identity token after THIS store's last save of it as active
+    # (`None` when the last save was terminal, or never by this store): a save
+    # that finds the file unchanged since then is the common per-tick save and
+    # announces nothing; any other active save announces `~id`.
+    saved_token: Optional[tuple] = None
+    # This store's writes of an active file in flight: the id is a candidate
+    # before the note lands and is never dropped for a failed stat meanwhile.
+    publishing: int = 0
 
 
 class JsonFileRunStore(RunStore):
@@ -152,24 +171,17 @@ class JsonFileRunStore(RunStore):
         # (daemon thread, never on a caller's path). `use_active_index=False`
         # keeps the plain scan (the proof's reference).
         self._use_active_index = bool(use_active_index)
-        self._active_index_lock = threading.Lock()
-        self._active_index: Optional[set[str]] = None
-        self._active_index_built_at: float = 0.0
+        self._active_lock = threading.Lock()
+        # run id -> _ActiveEntry: membership, generation, this store's last
+        # active-save token, in-flight writes. One record per run this store
+        # has heard of; inactive records with nothing else to say are pruned
+        # at every rescan.
+        self._active: Dict[str, _ActiveEntry] = {}
+        self._active_seq = 0
+        self._active_built = False
+        self._active_building = False
+        self._active_built_at: float = 0.0
         self._active_rescan_inflight = False
-        # rid -> was ACTIVE at its last save through THIS store (the RunState
-        # cache cannot tell: load() hands out the cached instance, which the
-        # caller mutates before save()). Drives the `~id` announcement.
-        self._active_saved: Dict[str, bool] = {}
-        # rid -> generation, bumped by every note: a listing that read a
-        # member's file as terminal drops it ONLY if no save noted it active in
-        # between (harness 2026-10-16, 200 rounds: a verify racing a save lost
-        # the save's add until the next rescan).
-        self._active_gen: Dict[str, int] = {}
-        # ids whose active file THIS store is writing right now: listed as
-        # candidates before the note lands (harness 2026-10-16: a listing
-        # between `tmp.replace` and `_note_active_status` missed a brand-new
-        # run for one call) and never dropped for a failed stat meanwhile.
-        self._active_publishing: set[str] = set()
         self._run_cache_lock = threading.Lock()
         # run_id -> (mtime_ns, RunState), LRU-BOUNDED (flow's 2026-07-11
         # incident finding: the unbounded cache retained every RunState a
@@ -558,8 +570,8 @@ class JsonFileRunStore(RunStore):
                     self._children_index = None
                 with self._session_index_lock:
                     self._session_index = None
-                with self._active_index_lock:
-                    self._active_index = None
+                with self._active_lock:
+                    self._active_built = False
                 self._journal_offset = None
                 return
             try:
@@ -571,8 +583,8 @@ class JsonFileRunStore(RunStore):
                     self._children_index = None
                 with self._session_index_lock:
                     self._session_index = None
-                with self._active_index_lock:
-                    self._active_index = None
+                with self._active_lock:
+                    self._active_built = False
                 self._journal_offset = None
                 return
             complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next sync
@@ -601,7 +613,7 @@ class JsonFileRunStore(RunStore):
             elif op == "-" and not exists:
                 self._drop_from_children_index(rid)
                 self._drop_from_session_index(rid)
-                self._drop_from_active_index(rid)
+                self._forget_active(rid)
                 resolved = True
             else:
                 resolved = since < cutoff  # the announced change never happened: drop it
@@ -631,6 +643,8 @@ class JsonFileRunStore(RunStore):
         one-time scan (~0.75 s at 20k runs) is not paid by the first chat."""
         self._ensure_session_index()
         self._ensure_children_index()
+        if self._use_active_index:
+            self._ensure_active_index()
 
     def _ensure_session_index(self) -> None:
         if self._session_index is not None:
@@ -831,43 +845,48 @@ class JsonFileRunStore(RunStore):
     def _is_active_status(cls, status: Any) -> bool:
         return str(getattr(status, "value", status)) in cls._ACTIVE_STATUSES
 
+    @property
+    def _active_index(self) -> Optional[set[str]]:
+        """The active ids as a set (a snapshot; None before the first build)."""
+        with self._active_lock:
+            if not self._active_built:
+                return None
+            return {rid for rid, e in self._active.items() if e.active}
+
+    def _active_entry(self, rid: str) -> _ActiveEntry:
+        e = self._active.get(rid)
+        if e is None:
+            e = self._active[rid] = _ActiveEntry()
+        return e
+
     def _note_active_status(self, rid: str, status: Any) -> None:
-        """Record a run's membership from its (new) status; a no-op before the
-        index is built (the lazy build reads disk truth)."""
+        """Record what a save, a journal line or a verified read says about a
+        run. Always recorded (before the first build too): a scan in progress
+        merges by generation, a build not yet started reads disk truth and
+        reconciles these notes with it."""
         if not rid:
             return
-        with self._active_index_lock:
-            if self._active_index is None:
-                return
-            self._active_gen[rid] = self._active_gen.get(rid, 0) + 1
-            if self._is_active_status(status):
-                self._active_index.add(rid)
-            else:
-                self._active_index.discard(rid)
-            if len(self._active_gen) > 100_000:
-                self._active_gen = {k: v for k, v in self._active_gen.items() if k in self._active_index}
+        with self._active_lock:
+            e = self._active_entry(rid)
+            self._active_seq += 1
+            e.gen = self._active_seq
+            e.active = self._is_active_status(status)
 
-    def _drop_from_active_index(self, rid: str) -> None:
-        with self._active_index_lock:
-            if self._active_index is not None:
-                self._active_gen[rid] = self._active_gen.get(rid, 0) + 1
-                self._active_index.discard(rid)
+    def _forget_active(self, rid: str) -> None:
+        """The run is gone (deleted here, or a `-id` line): drop its record."""
+        with self._active_lock:
+            self._active.pop(rid, None)
 
-    def _drop_if_unchanged(self, rid: str) -> None:
-        """Drop a member whose file could not be stat()ed — unless it is there
-        now, this store is publishing it, or a save noted it in the meantime."""
-        with self._active_index_lock:
-            if rid in self._active_publishing:
+    def _drop_active_if_unchanged(self, rid: str, gen0: int) -> None:
+        """A verified read said "not active": drop the member unless something
+        noted it since the read began, or this store is publishing it."""
+        with self._active_lock:
+            e = self._active.get(rid)
+            if e is None or e.publishing > 0 or e.gen != gen0:
                 return
-            gen0 = self._active_gen.get(rid, 0)
-        try:
-            self._path(rid).stat()
-            return
-        except Exception:
-            pass
-        with self._active_index_lock:
-            if self._active_index is not None and self._active_gen.get(rid, 0) == gen0:
-                self._active_index.discard(rid)
+            self._active_seq += 1
+            e.gen = self._active_seq
+            e.active = False
 
     def _scan_active_ids(self) -> set[str]:
         """ONE directory scan: the ids whose memo/scan fields say RUNNING or
@@ -887,126 +906,187 @@ class JsonFileRunStore(RunStore):
         self._scan_memo_prune(seen)
         return found
 
+    def _build_active_index(self) -> bool:
+        """Reconcile the records with ONE directory scan, taken OUTSIDE the
+        lock so saves never wait behind it. Records noted while the scan ran
+        keep their note; every other record takes the scan's verdict (adds
+        AND removes); inactive records with nothing else to say are pruned.
+        Returns False when another scan was already in flight."""
+        with self._active_lock:
+            if self._active_building:
+                return False
+            self._active_building = True
+            start = self._active_seq
+        try:
+            found = self._scan_active_ids()
+        except Exception:
+            with self._active_lock:
+                self._active_building = False
+            raise
+        with self._active_lock:
+            for rid in found:
+                e = self._active_entry(rid)
+                if e.gen <= start:
+                    e.active = True
+            for rid, e in list(self._active.items()):
+                if rid not in found and e.gen <= start:
+                    e.active = False
+                if not e.active and e.publishing == 0 and e.saved_token is None and e.gen <= start:
+                    self._active.pop(rid, None)
+            self._active_built = True
+            self._active_built_at = time.monotonic()
+            self._active_building = False
+        self._maybe_persist_scan_memo()
+        return True
+
     def _ensure_active_index(self) -> None:
-        """Build the set once (then the journal keeps it current), and kick the
-        periodic background rescan when it is due."""
-        if self._active_index is not None:
+        """Build once (the journal keeps it current afterwards) and kick the
+        periodic background rescan when due. `warm_session_index()` builds it
+        at host boot so the first poll does not pay the scan."""
+        if self._active_built:
             self._sync_indexes()
-            if self._active_index is not None:
+            if self._active_built:
                 self._maybe_rescan_active_index()
                 return
         self._mark_journal_start()
-        with self._active_index_lock:
-            if self._active_index is not None:
-                return
-            self._active_index = self._scan_active_ids()
-            self._active_index_built_at = time.monotonic()
-        self._maybe_persist_scan_memo()
+        if not self._build_active_index():
+            # Another thread is building: wait for it rather than serve nothing.
+            deadline = time.monotonic() + 300.0
+            while time.monotonic() < deadline:
+                with self._active_lock:
+                    if self._active_built and not self._active_building:
+                        return
+                time.sleep(0.005)
 
-    def rescan_active_index(self) -> int:
-        """Reconcile the active index with disk NOW, in the caller's thread:
-        one full scan, its ids unioned with the live set. Returns the size."""
-        fresh = self._scan_active_ids()
-        with self._active_index_lock:
-            if self._active_index is None:
-                self._active_index = fresh
-            else:
-                self._active_index |= fresh
-            self._active_index_built_at = time.monotonic()
-            return len(self._active_index)
+    def rescan_active_index(self) -> None:
+        """Reconcile the active index with the directory NOW, in the caller's
+        thread (the proof harness; a host that wants disk truth before a
+        decision). Builds the index when it is not built yet."""
+        self._mark_journal_start()
+        self._build_active_index()
 
     def _maybe_rescan_active_index(self) -> None:
         """Reconcile with disk in a daemon thread at most every
-        ACTIVE_INDEX_RESCAN_S: catches a foreign writer that flipped a file to
-        RUNNING/WAITING without a journal line. Never blocks a caller; the
-        rescan's set is UNIONED with what the journal/saves added meanwhile
-        (a member that is not active any more costs one stat at the next
-        listing and is dropped there)."""
-        with self._active_index_lock:
-            if self._active_rescan_inflight:
+        ACTIVE_INDEX_RESCAN_S: catches a writer that touched a file without a
+        journal line. Never blocks a caller."""
+        with self._active_lock:
+            if self._active_rescan_inflight or self._active_building:
                 return
-            if time.monotonic() - self._active_index_built_at < float(self.ACTIVE_INDEX_RESCAN_S):
+            if time.monotonic() - self._active_built_at < float(self.ACTIVE_INDEX_RESCAN_S):
                 return
             self._active_rescan_inflight = True
 
         def _rescan() -> None:
             try:
-                fresh = self._scan_active_ids()
-                with self._active_index_lock:
-                    if self._active_index is not None:
-                        self._active_index |= fresh
-                    self._active_index_built_at = time.monotonic()
+                self._build_active_index()
             except Exception:  # noqa: BLE001 - a failed rescan is retried next time
                 logger.warning("JsonFileRunStore: active-index rescan failed", exc_info=True)
             finally:
-                with self._active_index_lock:
+                with self._active_lock:
                     self._active_rescan_inflight = False
 
         threading.Thread(target=_rescan, name="runstore-active-rescan", daemon=True).start()
 
-    def _active_candidates(self, status: Any) -> Optional[List[Path]]:
-        """The paths to rank for an active-status listing, or None when the
-        plain scan must run (index off, or a non-active status)."""
-        if not self._use_active_index or status is None or not self._is_active_status(status):
+    def _active_candidate_ids(self, *, status: Any = None) -> Optional[List[str]]:
+        """The ids to rank for an active-status listing (members plus the ids
+        this store is publishing), or None when the plain scan must run (index
+        off, or a non-active status)."""
+        if not self._use_active_index:
+            return None
+        if status is not None and not self._is_active_status(status):
             return None
         self._ensure_active_index()
-        with self._active_index_lock:
-            ids = set(self._active_index or ())
-            ids |= self._active_publishing
-        return [self._base / f"run_{rid}.json" for rid in ids]
+        with self._active_lock:
+            return [rid for rid, e in self._active.items() if e.active or e.publishing > 0]
+
+    def _active_candidates(self, status: Any) -> Optional[List[Path]]:
+        if status is None:
+            return None
+        ids = self._active_candidate_ids(status=status)
+        return None if ids is None else [self._base / f"run_{rid}.json" for rid in ids]
 
     def _verify_active_fields(self, p: Path, status: Any) -> Optional[Dict[str, Any]]:
         """A candidate's current fields; a member whose file is gone or no
         longer has the asked status is dropped from the set (self-heal) —
-        unless a save noted it active while the file was being read (the
-        generation moved): then the read was stale and the member stays."""
+        unless a save noted it while the file was being read (the generation
+        moved) or this store is publishing it: then the read was stale."""
         rid = self._run_id_from_path(p)
-        with self._active_index_lock:
-            gen0 = self._active_gen.get(rid, 0)
+        with self._active_lock:
+            e = self._active.get(rid)
+            gen0 = e.gen if e is not None else 0
         fields = self._scan_fields(p)
         want = str(getattr(status, "value", status))
         if fields is None or fields.get("status") != want:
             if fields is None or not self._is_active_status(fields.get("status")):
-                with self._active_index_lock:
-                    if self._active_index is not None and self._active_gen.get(rid, 0) == gen0:
-                        self._active_index.discard(rid)
+                self._drop_active_if_unchanged(rid, gen0)
             return None
         return fields
 
+    def _drop_if_unchanged(self, rid: str) -> None:
+        """A candidate's file could not be stat()ed: drop the member unless it
+        is there now, this store is publishing it, or something noted it since."""
+        with self._active_lock:
+            e = self._active.get(rid)
+            if e is None or e.publishing > 0:
+                return
+            gen0 = e.gen
+        try:
+            self._path(rid).stat()
+            return
+        except Exception:
+            pass
+        self._drop_active_if_unchanged(rid, gen0)
+
+    def _active_publish_begin(self, rid: str) -> None:
+        with self._active_lock:
+            self._active_entry(rid).publishing += 1
+
+    def _active_publish_end(self, rid: str, *, status: Any, token: Optional[tuple]) -> None:
+        """The write is over (published or failed): note the status when it
+        was published (`token` is the file's identity), and remember the token
+        of an active save so the next save can tell "unchanged since"."""
+        with self._active_lock:
+            e = self._active_entry(rid)
+            e.publishing = max(0, e.publishing - 1)
+            if token is not None:
+                self._active_seq += 1
+                e.gen = self._active_seq
+                e.active = self._is_active_status(status)
+                e.saved_token = token if e.active else None
+
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)
-        is_new = not p.exists()
+        rid = str(run.run_id)
+        try:
+            token_before: Optional[tuple] = self._stat_token(p.stat())
+        except FileNotFoundError:
+            token_before = None
+        except Exception:
+            token_before = (0, 0, 0)
+        is_new = token_before is None
+        now_active = self._is_active_status(run.status)
         if is_new:
             self._journal_append(f"+{run.run_id}")  # before publication (J53-1)
-        now_active = self._is_active_status(run.status)
-        rid = str(run.run_id)
-        # "This store saved it active last" holds only while nobody else wrote
-        # the file since: another process that ended the run (no journal line
-        # for that) and this one re-opening it must announce. One stat tells
-        # (harness 2026-10-16: two writers on one run, the flip went unannounced).
-        prev_active = self._active_saved.get(rid) is True and not is_new
-        if prev_active:
-            with self._run_cache_lock:
-                cached = self._run_cache.get(rid)
-            try:
-                prev_active = cached is not None and tuple(cached[0]) == self._stat_token(p.stat())
-            except Exception:
-                prev_active = False
-        if not is_new and now_active and not prev_active:
-            # A run that BECOMES active (resumed, re-opened, first save after a
-            # restart) is announced as `~id` BEFORE publication, like `+id`:
-            # another store object keeps the entry pending until the file
-            # reads active, so it can neither read stale content behind the
-            # line nor miss a file that landed before the line. The common
-            # per-tick save of a run this store already saved as active adds
-            # no line.
-            self._journal_append(f"~{rid}")
+        elif now_active:
+            with self._active_lock:
+                e = self._active.get(rid)
+                unchanged_since_my_active_save = e is not None and e.saved_token is not None and e.saved_token == token_before
+            if not unchanged_since_my_active_save:
+                # A run that BECOMES active through this store (resumed,
+                # re-opened, first save after a restart, or re-saved after
+                # another writer touched the file) is announced as `~id`
+                # BEFORE publication, like `+id`: a reader keeps the entry
+                # pending until the file reads active, so it can neither read
+                # stale content behind the line nor miss a file that landed
+                # before the line. The common per-tick save of a run this
+                # store itself saved as active adds no line.
+                self._journal_append(f"~{rid}")
         if now_active:
-            with self._active_index_lock:
-                self._active_publishing.add(rid)
+            self._active_publish_begin(rid)
         # Atomic write to prevent corrupted/partial JSON when multiple threads/processes
         # (e.g. WS tick loop + UI pause/cancel) write the same run file concurrently.
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+        published = False
         try:
             with tmp.open("w", encoding="utf-8") as f:
                 # Compact + by-reference serialization (backlog 0067): this is
@@ -1016,6 +1096,7 @@ class JsonFileRunStore(RunStore):
                 # the single-writer contract documented on this class.
                 f.write(dumps_compact(runstate_to_dict(run)))
             tmp.replace(p)
+            published = True
         finally:
             # Best-effort cleanup if replace() failed.
             try:
@@ -1023,19 +1104,23 @@ class JsonFileRunStore(RunStore):
                     tmp.unlink()
             except Exception:
                 pass
+            if not published and now_active:
+                self._active_publish_end(rid, status=run.status, token=None)
         self._update_children_index_on_save(run)
         self._update_event_wait_index_on_save(run)
         self._update_session_index_on_save(run)
-        self._note_active_status(rid, run.status)
-        with self._active_index_lock:
-            self._active_publishing.discard(rid)
-        if len(self._active_saved) > 50_000:
-            self._active_saved.clear()
-        self._active_saved[rid] = now_active
         try:
             token = self._stat_token(p.stat())
         except Exception:
             token = (0, 0, 0)
+        if now_active:
+            self._active_publish_end(rid, status=run.status, token=token)
+        else:
+            self._note_active_status(rid, run.status)
+            with self._active_lock:
+                e = self._active.get(rid)
+                if e is not None:
+                    e.saved_token = None
         if token[0] > 0:
             self._cache_put(str(run.run_id), token, run)
 
@@ -1057,9 +1142,9 @@ class JsonFileRunStore(RunStore):
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
         created = False
         rid = str(run.run_id)
-        if self._is_active_status(run.status):
-            with self._active_index_lock:
-                self._active_publishing.add(rid)
+        now_active = self._is_active_status(run.status)
+        if now_active:
+            self._active_publish_begin(rid)
         try:
             with tmp.open("w", encoding="utf-8") as f:
                 f.write(dumps_compact(runstate_to_dict(run)))
@@ -1073,21 +1158,20 @@ class JsonFileRunStore(RunStore):
         finally:
             with contextlib.suppress(FileNotFoundError):
                 tmp.unlink()
-            if not created:
-                with self._active_index_lock:
-                    self._active_publishing.discard(rid)
+            if not created and now_active:
+                self._active_publish_end(rid, status=run.status, token=None)
         if created:
             self._update_children_index_on_save(run)
             self._update_event_wait_index_on_save(run)
             self._update_session_index_on_save(run)
-            self._note_active_status(rid, run.status)
-            with self._active_index_lock:
-                self._active_publishing.discard(rid)
-            self._active_saved[rid] = self._is_active_status(run.status)
             try:
                 token = self._stat_token(p.stat())
             except Exception:
                 token = (0, 0, 0)
+            if now_active:
+                self._active_publish_end(rid, status=run.status, token=token)
+            else:
+                self._note_active_status(rid, run.status)
             if token[0] > 0:
                 self._cache_put(str(run.run_id), token, run)
             return run, True
@@ -1121,7 +1205,7 @@ class JsonFileRunStore(RunStore):
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)
             self._drop_from_session_index(rid)
-            self._drop_from_active_index(rid)
+            self._forget_active(rid)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
             with self._scan_memo_lock:
@@ -1228,7 +1312,9 @@ class JsonFileRunStore(RunStore):
           mtime only ages — it can be starved indefinitely. The gateway polls
           this with limit=run_scan_limit (default 200); raise the limit or add
           a status index before hosting >200 concurrent RUNNING runs.
-        - COST: every call globs+stats the whole directory (~31 ms warm at 3k
+        - COST: a RUNNING/WAITING listing (no session scope) ranks only the
+          ACTIVE index's members, one stat each (see the class notes); any
+          other call globs+stats the whole directory (~31 ms warm at 3k
           files; ~2.2 s cold because scarce matches force parsing every file).
           The gateway runner issues 3 such scans per 0.25 s poll. Linear in
           total run files, including terminal ones — archive/prune terminal
@@ -1400,10 +1486,16 @@ class JsonFileRunStore(RunStore):
         # a poll loop too — filter on stat-validated fields, parse only runs
         # that are actually due.
         self._load_scan_sidecar_once()
-        paths = list(self._base.glob("run_*.json"))
-        self._scan_memo_prune({self._run_id_from_path(p) for p in paths})
+        # The runner asks this on every poll: WAITING members of the active
+        # index are the only candidates (each re-verified), else the scan.
+        ids = self._active_candidate_ids(status=RunStatus.WAITING)
+        if ids is None:
+            paths = list(self._base.glob("run_*.json"))
+            self._scan_memo_prune({self._run_id_from_path(p) for p in paths})
+        else:
+            paths = [self._base / f"run_{rid}.json" for rid in ids]
         for p in paths:
-            fields = self._scan_fields(p)
+            fields = self._verify_active_fields(p, RunStatus.WAITING) if ids is not None else self._scan_fields(p)
             if fields is None:
                 continue
             if fields.get("status") != RunStatus.WAITING.value:

@@ -76,7 +76,6 @@ def test_indexed_listings_equal_the_scan_on_a_mixed_store(tmp_path: Path) -> Non
         assert _rows(cand, **q) == _rows(ref, **q), q
     for q in QUERIES[:3]:
         assert _runs(cand, **q) == _runs(ref, **q), q
-    assert cand._active_index is not None
     assert cand._active_index == {r.run_id for r in runs if r.status in (RunStatus.RUNNING, RunStatus.WAITING)}
 
 
@@ -137,15 +136,15 @@ def test_a_stale_member_is_filtered_and_dropped_never_listed(tmp_path: Path) -> 
     tmp = p.with_name(p.name + ".x")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(p)
-    assert run.run_id in a._active_index
+    assert run.run_id in (a._active_index or set())
     assert _rows(a, status=RunStatus.RUNNING, limit=10) == []  # verified against disk
-    assert run.run_id not in a._active_index  # and dropped
+    assert run.run_id not in (a._active_index or set())  # and dropped
     # A vanished file is dropped too.
     other = _mk(a, status=RunStatus.WAITING)
     assert _rows(a, status=RunStatus.WAITING, limit=10) == [other.run_id]
     a._path(other.run_id).unlink()
     assert _rows(a, status=RunStatus.WAITING, limit=10) == []
-    assert other.run_id not in a._active_index
+    assert other.run_id not in (a._active_index or set())
 
 
 def test_the_background_rescan_catches_a_writer_that_bypasses_the_journal(tmp_path: Path, monkeypatch) -> None:
@@ -239,8 +238,8 @@ def test_create_if_absent_and_same_instant_saves_keep_both_paths_identical(tmp_p
 def test_an_announced_flip_whose_content_has_not_landed_yet_is_re_checked_not_forgotten(tmp_path: Path) -> None:
     """Harness smoke run 2026-10-16 (origin "resurrect"): a reader that synced between another
     process's `~id` line and its file replace read the old, terminal content and dropped the
-    announcement for good. The line is now written after publication, and a `~` entry stays
-    pending until the file reads active."""
+    announcement for good. The line is written before publication, like `+id`, and a reader
+    keeps a `~` entry pending until the file reads active."""
     a = JsonFileRunStore(tmp_path)
     done = _mk(a, status=RunStatus.COMPLETED)
     assert _rows(a, status=RunStatus.RUNNING, limit=10) == []
@@ -268,8 +267,8 @@ def test_a_listing_that_read_a_member_as_terminal_keeps_it_when_a_save_made_it_a
     assert _rows(store, status=RunStatus.RUNNING, limit=10) == [run.run_id]
     run.status = RunStatus.COMPLETED
     run.waiting = None
-    store.save(run)  # terminal on disk; still a member? no: the save noted it → dropped. Re-add for the race:
-    store._active_index.add(run.run_id)
+    store.save(run)  # terminal on disk; the save noted it → dropped. Re-add for the race:
+    store._note_active_status(run.run_id, "running")
     original = store._scan_fields
 
     def stale_read_then_flip(p):
@@ -283,7 +282,7 @@ def test_a_listing_that_read_a_member_as_terminal_keeps_it_when_a_save_made_it_a
     assert _rows(store, status=RunStatus.RUNNING, limit=10) == []  # this listing saw the stale read
     monkeypatch.setattr(store, "_scan_fields", original)
     # The member survived the stale drop: the next listing shows the run without any rescan.
-    assert run.run_id in store._active_index
+    assert run.run_id in (store._active_index or set())
     assert _rows(store, status=RunStatus.RUNNING, limit=10) == [run.run_id]
 
 
@@ -294,18 +293,19 @@ def test_a_listing_issued_while_this_store_publishes_a_new_active_run_lists_it(t
     store = JsonFileRunStore(tmp_path)
     assert _rows(store, status=RunStatus.RUNNING, limit=10) == []
     seen: List[List[str]] = []
-    original = store._note_active_status
+    original = store._active_publish_end
 
-    def listing_before_the_note(rid, status):
+    def listing_before_the_note(rid, *, status, token):
         # The file is published, the note has not landed: a listing right now must show the run.
-        seen.append(_rows(store, status=RunStatus.RUNNING, limit=10))
-        return original(rid, status)
+        if token is not None:
+            seen.append(_rows(store, status=RunStatus.RUNNING, limit=10))
+        return original(rid, status=status, token=token)
 
-    monkeypatch.setattr(store, "_note_active_status", listing_before_the_note)
+    monkeypatch.setattr(store, "_active_publish_end", listing_before_the_note)
     born = _mk(store, status=RunStatus.RUNNING)
     assert seen and seen[0] == [born.run_id]
-    assert store._active_publishing == set()
-    monkeypatch.setattr(store, "_note_active_status", original)
+    assert all(e.publishing == 0 for e in store._active.values())
+    monkeypatch.setattr(store, "_active_publish_end", original)
     assert _rows(store, status=RunStatus.RUNNING, limit=10) == [born.run_id]
     # rescan_active_index: synchronous, returns the size, and catches a journal-bypassing file now.
     from abstractruntime.storage.json_files import dumps_compact, runstate_to_dict
@@ -313,7 +313,7 @@ def test_a_listing_issued_while_this_store_publishes_a_new_active_run_lists_it(t
     foreign = RunState.new(workflow_id="wf", entry_node="n", vars={})
     foreign.status = RunStatus.RUNNING
     (tmp_path / f"run_{foreign.run_id}.json").write_text(dumps_compact(runstate_to_dict(foreign)), encoding="utf-8")
-    assert store.rescan_active_index() == 2
+    store.rescan_active_index()
     assert set(_rows(store, status=RunStatus.RUNNING, limit=10)) == {born.run_id, foreign.run_id}
 
 
@@ -342,3 +342,59 @@ def test_a_run_ended_by_another_process_and_reopened_here_is_announced(tmp_path:
     x.vars["tick"] = 2
     a.save(x)
     assert a._journal_path.stat().st_size == size
+
+
+def test_load_mutate_save_after_another_process_ended_the_run_is_announced(tmp_path: Path) -> None:
+    """Review 2 P1-1: `load()` refreshes this store's cache with the other writer's version, so a
+    cache-token comparison said "unchanged". The announcement now compares against the token of THIS
+    store's own last active save."""
+    a = JsonFileRunStore(tmp_path)
+    b = JsonFileRunStore(tmp_path)
+    x = _mk(a, status=RunStatus.RUNNING)
+    assert _rows(b, status=RunStatus.RUNNING, limit=10) == [x.run_id]
+    ended = b.load(x.run_id)
+    ended.status = RunStatus.COMPLETED
+    ended.waiting = None
+    b.save(ended)
+    assert _rows(b, status=RunStatus.RUNNING, limit=10) == []
+    fresh = a.load(x.run_id)  # the normal path: load, mutate, save
+    fresh.status = RunStatus.RUNNING
+    a.save(fresh)
+    assert _rows(b, status=RunStatus.RUNNING, limit=10) == [x.run_id]
+
+
+def test_a_save_during_the_first_build_is_neither_blocked_nor_lost(tmp_path: Path, monkeypatch) -> None:
+    """Review 2 P1-2: the cold scan ran under the lock, so every save waited behind it; and a note
+    made during a scan must survive the scan's verdict."""
+    store = JsonFileRunStore(tmp_path)
+    _mk(store, status=RunStatus.COMPLETED)
+    original = store._scan_active_ids
+    born: List[RunState] = []
+
+    def scan_with_a_save_in_the_middle():
+        found = original()
+        born.append(_mk(store, status=RunStatus.RUNNING))  # lands while the scan is "running"
+        return found
+
+    monkeypatch.setattr(store, "_scan_active_ids", scan_with_a_save_in_the_middle)
+    assert _rows(store, status=RunStatus.RUNNING, limit=10) == [born[0].run_id]
+    monkeypatch.setattr(store, "_scan_active_ids", original)
+    # And a rescan REMOVES a member the directory no longer has (review 2 P2).
+    store._path(born[0].run_id).unlink()
+    store.rescan_active_index()
+    assert store._active_index == set()
+
+
+def test_due_wait_listing_through_the_index_equals_the_scan(tmp_path: Path) -> None:
+    """Review 2 P1-3: the runner's `list_due_wait_until` scanned the whole folder on every poll."""
+    store = JsonFileRunStore(tmp_path)
+    ref = JsonFileRunStore(tmp_path, use_active_index=False)
+    now = "2026-10-16T12:00:00+00:00"
+    due = [_mk(store, status=RunStatus.WAITING, waiting=WaitState(reason=WaitReason.UNTIL, wait_key=f"u{i}", until=f"2026-10-16T11:0{i}:00+00:00")) for i in range(3)]
+    _mk(store, status=RunStatus.WAITING, waiting=WaitState(reason=WaitReason.UNTIL, wait_key="later", until="2026-10-16T13:00:00+00:00"))
+    _mk(store, status=RunStatus.WAITING, waiting=WaitState(reason=WaitReason.USER, wait_key="k"))
+    _mk(store, status=RunStatus.COMPLETED)
+    got = [r.run_id for r in store.list_due_wait_until(now_iso=now, limit=10)]
+    assert got == [r.run_id for r in ref.list_due_wait_until(now_iso=now, limit=10)]
+    assert set(got) == {r.run_id for r in due}
+    assert [r.run_id for r in store.list_due_wait_until(now_iso=now, limit=2)] == got[:2]

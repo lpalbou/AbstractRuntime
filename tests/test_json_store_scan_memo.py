@@ -287,7 +287,7 @@ def test_externally_removed_runs_are_pruned_from_the_memo(tmp_path: Path) -> Non
     indexed.list_runs(status=RunStatus.RUNNING, limit=10)  # candidates only: no prune yet
     with indexed._scan_memo_lock:
         assert {r.run_id for r in more} <= set(indexed._scan_memo)
-    indexed._scan_active_ids()  # what the rescan thread runs
+    indexed.rescan_active_index()  # what the rescan thread runs
     with indexed._scan_memo_lock:
         assert set(indexed._scan_memo) == {keep.run_id}, "the rescan prunes vanished files"
 

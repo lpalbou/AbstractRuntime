@@ -1881,6 +1881,10 @@ resolver at call time. See <a href="../email/">email.md</a>.</p>
 <li><strong>Turns are defined once.</strong> <code>select_session_turns</code> decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and <code>list_run_index(root_only=True)</code> returns the same turn roots.</li>
+<li><strong>Active listings are indexed.</strong> The JSON run store keeps the set of running and waiting run ids in memory
+  (one scan to build, then maintained by every save, create and delete and by the creation journal) and verifies each
+  candidate against its file when listing, so the gateway's polls read a few files instead of the whole folder while
+  returning exactly the scan's rows. See <code>docs/api.md</code> → "Run index and creation".</li>
 <li><strong>Attribution is indexed.</strong> Each run index row carries <code>automation_id</code>, <code>role</code>, <code>occurrence_index</code> and
   <code>session_kind</code>, derived from inline <code>vars._meta</code> that the offloading store never moves. <code>Runtime.start</code> uses
   <code>session_attribution</code> to anchor every root run in a discussion session to the discussion's validated root and its

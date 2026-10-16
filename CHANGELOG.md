@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `configparser`, `argparse`…), the network (`socket`, `http`, `urllib.request`, `smtplib`…), code loading or
   interpreter internals (`sys`, `importlib`, `pickle`, `types`, `inspect`…) and attribute access by name,
   evaluated annotations or frames (`operator`, `typing`, `functools`, `traceback`). A refusal names the module
-  and the reason; `from x import *`, relative imports and the `__import__` call stay refused. `full_access` (host policy) imports anything, as before.
+  and the reason; `from x import *`, relative imports and the `__import__` call stay refused.
+- **A Code node's return value must be JSON data.** `transform` returning a module, a function, a set, bytes or
+  any other value JSON cannot carry now fails with a sandbox error naming the value and where it sits
+  (`transform returned a value that cannot be sent as JSON: module 'time' at output[2]`), in every permission
+  mode, instead of a serializer crash later in the gateway's simulate reply or the run's persisted state. `full_access` (host policy) imports anything, as before.
   The rule is applied twice: at compile time by `validate_code`, and at run time by the `__import__` bound into
   the sandbox builtins. `get_code_execution_policy()` now lists `imports.denied_modules` for thin clients.
 

@@ -211,6 +211,47 @@ def sandbox_builtins(base: Any) -> Dict[str, Any]:
     return out
 
 
+def _json_offender(value: Any, path: str = "output") -> Optional[tuple]:
+    """The first value inside ``value`` that JSON cannot carry, as (path, type name)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return None
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            found = _json_offender(item, f"{path}[{i}]")
+            if found:
+                return found
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, (str, int, float, bool)) and key is not None:
+                return (f"{path} (key {key!r})", type(key).__name__)
+            found = _json_offender(item, f"{path}[{key!r}]")
+            if found:
+                return found
+        return None
+    name = type(value).__name__
+    if name == "module":
+        name = f"module '{getattr(value, '__name__', '?')}'"
+    elif name in ("function", "builtin_function_or_method", "method"):
+        name = f"function '{getattr(value, '__name__', '?')}'"
+    return (path, name)
+
+
+def ensure_json_result(value: Any, function_name: str = "transform") -> Any:
+    """Return ``value`` when JSON can carry it; otherwise raise a CodeExecutionError
+    that names the offending value and where it sits, so the author sees
+    "return os_time, not the module" instead of a serializer crash later
+    (the gateway's simulate reply, or the run's persisted state)."""
+    found = _json_offender(value)
+    if found is None:
+        return value
+    path, name = found
+    raise CodeExecutionError(
+        f"{function_name} returned a value that cannot be sent as JSON: {name} at {path}. "
+        "Return data: str, int, float, bool, None, lists and dicts of those."
+    )
+
+
 def normalize_code_permissions(permissions: Any = "sandbox") -> str:
     """Return the canonical Code node execution permission mode."""
     raw = str(permissions or "sandbox").strip().lower().replace("-", "_")
@@ -362,9 +403,10 @@ def _create_full_access_handler(code: str, function_name: str) -> Callable[[Any]
             raise CodeExecutionError(f"'{function_name}' is not a callable function")
 
         try:
-            return func(input_data)
+            result = func(input_data)
         except Exception as e:
             raise CodeExecutionError(f"Runtime error: {e}") from e
+        return ensure_json_result(result, function_name)
 
     return handler
 
@@ -622,9 +664,10 @@ def _create_restricted_handler(code: str, function_name: str) -> Callable[[Any],
             raise CodeExecutionError(f"'{function_name}' is not a callable function")
 
         try:
-            return func(input_data)
+            result = func(input_data)
         except Exception as e:
             raise CodeExecutionError(f"Runtime error: {e}") from e
+        return ensure_json_result(result, function_name)
 
     return handler
 
@@ -679,8 +722,9 @@ def _create_basic_handler(code: str, function_name: str) -> Callable[[Any], Any]
             raise CodeExecutionError(f"'{function_name}' is not a callable function")
 
         try:
-            return func(input_data)
+            result = func(input_data)
         except Exception as e:
             raise CodeExecutionError(f"Runtime error: {e}") from e
+        return ensure_json_result(result, function_name)
 
     return handler

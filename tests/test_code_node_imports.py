@@ -183,3 +183,30 @@ def test_function_library_shares_the_rule() -> None:
     assert lib["slug"]("Hello World") == "hello-world"
     with pytest.raises(FunctionLibraryError, match="import of 'os' is not allowed in the sandbox"):
         compile_function_library([{"name": "evil", "code": "def evil():\n    import os\n    return os.getcwd()\n"}])
+
+
+# --- the returned value must be JSON data (operator 2026-10-16 14:37: HTTP 500
+# "Unable to serialize unknown type: <class 'module'>" after `return _input, "...", time`)
+
+def test_returning_a_module_is_a_clear_error_not_a_serializer_crash(lane) -> None:
+    code = "import time; os_time = time.ctime()\n\ndef transform(_input):\n    return _input, ' - deterministic code: ', time\n"
+    with pytest.raises(CodeExecutionError, match=r"transform returned a value that cannot be sent as JSON: module 'time' at output\[2\]\. Return data"):
+        create_code_handler(code)({"input": None})
+    fixed = "import time; os_time = time.ctime()\n\ndef transform(_input):\n    return _input, ' - deterministic code: ', os_time\n"
+    out = create_code_handler(fixed)({"input": None})
+    assert out[0] == {"input": None} and out[1] == " - deterministic code: " and isinstance(out[2], str)
+
+
+def test_json_offender_paths(lane) -> None:
+    code = "def transform(_input):\n    return {'a': [1, {'b': set([1])}]}\n"
+    with pytest.raises(CodeExecutionError, match=r"set at output\['a'\]\[1\]\['b'\]"):
+        create_code_handler(code)({})
+    code = "def transform(_input):\n    return {'ok': [1, 2.5, 'x', None, True], 'nested': {'k': (1, 2)}}\n"
+    assert create_code_handler(code)({}) == {"ok": [1, 2.5, "x", None, True], "nested": {"k": (1, 2)}}
+
+
+def test_full_access_results_must_be_json_too(monkeypatch) -> None:
+    monkeypatch.setenv("ABSTRACTRUNTIME_CODE_FULL_ACCESS", "1")
+    code = "import os\n\ndef transform(_input):\n    return os\n"
+    with pytest.raises(CodeExecutionError, match="cannot be sent as JSON: module 'os' at output"):
+        create_code_handler(code, permissions="full_access")({})

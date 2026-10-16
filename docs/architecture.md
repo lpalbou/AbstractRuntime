@@ -381,6 +381,10 @@ Invariants the design rests on:
 - **Turns are defined once.** `select_session_turns` decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and `list_run_index(root_only=True)` returns the same turn roots.
+- **Active listings are indexed.** The JSON run store keeps the set of running and waiting run ids in memory
+  (one scan to build, then maintained by every save, create and delete and by the creation journal) and verifies each
+  candidate against its file when listing, so the gateway's polls read a few files instead of the whole folder while
+  returning exactly the scan's rows. See `docs/api.md` → "Run index and creation".
 - **Attribution is indexed.** Each run index row carries `automation_id`, `role`, `occurrence_index` and
   `session_kind`, derived from inline `vars._meta` that the offloading store never moves. `Runtime.start` uses
   `session_attribution` to anchor every root run in a discussion session to the discussion's validated root and its

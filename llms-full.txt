@@ -812,6 +812,10 @@ Invariants the design rests on:
 - **Turns are defined once.** `select_session_turns` decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and `list_run_index(root_only=True)` returns the same turn roots.
+- **Active listings are indexed.** The JSON run store keeps the set of running and waiting run ids in memory
+  (one scan to build, then maintained by every save, create and delete and by the creation journal) and verifies each
+  candidate against its file when listing, so the gateway's polls read a few files instead of the whole folder while
+  returning exactly the scan's rows. See `docs/api.md` → "Run index and creation".
 - **Attribution is indexed.** Each run index row carries `automation_id`, `role`, `occurrence_index` and
   `session_kind`, derived from inline `vars._meta` that the offloading store never moves. `Runtime.start` uses
   `session_attribution` to anchor every root run in a discussion session to the discussion's validated root and its
@@ -991,6 +995,8 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)`: lightweight rows carrying `automation_id`, `role`, `occurrence_index`, `session_kind` and `workspace_root` (the run's top-level `vars["workspace_root"]` as stored, stripped; `None` when absent); the three attribution filters take a value, a comma-separated string or a list; `root_only=True` returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
 - `session_kinds(session_id) -> frozenset` and `latest_occurrence_row(automation_id)`: indexed lookups used by session attribution and automation listings
 - `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup. Store objects and processes sharing one JSON run folder see each other's created and deleted runs through the creation journal `.runs_created.log`; v1 supports one writer process per store
+- `JsonFileRunStore` answers `list_runs` / `list_run_index` for `status=running` or `status=waiting` (without `session_id`) from an in-memory **active index**: the set of active run ids, built from one directory scan on first use and kept current by `save`, `create_if_absent`, `delete` and the creation journal. Every candidate is re-verified against its file at listing time, so a run that ended or vanished is never listed. Rows, order (file mtime, then file name, then the final `updated_at` sort), filters and limits are the same as the directory scan's; a listing of a 10,000-run store costs milliseconds instead of a full scan. `JsonFileRunStore(..., use_active_index=False)` keeps the plain scan. `rescan_active_index()` reconciles the index with the directory in the caller's thread; a background rescan runs at most every `JsonFileRunStore.ACTIVE_INDEX_RESCAN_S` (60 s) to pick up writers that bypass the store. Other listings (a terminal status, no status, a session scope) scan as before.
+- The creation journal (`.runs_created.log` in the run folder) carries one line per change another store object or process must learn about: `+<run_id>` created, `-<run_id>` deleted, `~<run_id>` became active again (resumed, re-opened, first save after a restart). Readers apply the lines they have not seen at their next lookup; a line whose file has not landed yet is re-checked until it does. Readers from AbstractRuntime 0.10.0 ignore `~` lines.
 
 Common decorators:
 - `ObservableLedgerStore` for subscriptions (`src/abstractruntime/storage/observable.py`)

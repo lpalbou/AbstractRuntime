@@ -264,7 +264,8 @@ def test_bogus_status_enum_is_tombstoned_for_scans(tmp_path: Path) -> None:
 def test_externally_removed_runs_are_pruned_from_the_memo(tmp_path: Path) -> None:
     """P2-4: external pruning (the class's own recommended maintenance)
     must not leave memo entries behind for the process lifetime."""
-    store = JsonFileRunStore(tmp_path)
+    # The scan contract (the active index's reference path): a scan prunes.
+    store = JsonFileRunStore(tmp_path, use_active_index=False)
     runs = [_mk_run(store, status=RunStatus.COMPLETED) for _ in range(5)]
     keep = _mk_run(store, status=RunStatus.RUNNING)
     store.list_runs(status=RunStatus.RUNNING, limit=10)  # memo warm
@@ -275,6 +276,20 @@ def test_externally_removed_runs_are_pruned_from_the_memo(tmp_path: Path) -> Non
     with store._scan_memo_lock:
         remaining = set(store._scan_memo)
     assert remaining == {keep.run_id}, "vanished files must leave the memo"
+
+    # With the ACTIVE index (2026-10-16) an active listing visits only its candidates, so the
+    # memo is pruned by the full scans the index itself runs: the build and the periodic rescan.
+    indexed = JsonFileRunStore(tmp_path)
+    more = [_mk_run(indexed, status=RunStatus.COMPLETED) for _ in range(3)]
+    indexed.list_runs(status=RunStatus.RUNNING, limit=10)  # builds the index: one full scan
+    for r in more:
+        (tmp_path / f"run_{r.run_id}.json").unlink()
+    indexed.list_runs(status=RunStatus.RUNNING, limit=10)  # candidates only: no prune yet
+    with indexed._scan_memo_lock:
+        assert {r.run_id for r in more} <= set(indexed._scan_memo)
+    indexed._scan_active_ids()  # what the rescan thread runs
+    with indexed._scan_memo_lock:
+        assert set(indexed._scan_memo) == {keep.run_id}, "the rescan prunes vanished files"
 
 
 # --- Persistent sidecar (2026-08-19, operator's session-reload investigation) ---

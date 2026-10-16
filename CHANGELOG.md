@@ -5,6 +5,13 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-10-16
+
+### Changed
+
+- **The JSON run store answers "which runs are running or waiting" from an in-memory index.** Every such listing (`list_runs` / `list_run_index` with status running or waiting) used to glob and `stat()` every run file in the store on every call — 10,678 files on a long-lived store — and each `stat` releases the GIL, so the scan queued behind any busy thread: 0.2 s alone, 3 s with two concurrent, 67–147 s beside a generating model. The store now keeps the set of active run ids, built from one scan, maintained by `save()`, `delete()` and the creation journal, and re-verifies every candidate against disk at listing time, so a run that ended or vanished is never listed and a stale entry heals itself; a background rescan at most every 60 s catches a writer that bypasses the journal. The rows, their order, filters, limits and the `updated_at` sort are exactly the scan's — proven by a differential harness against a copy of a live store under concurrent writers and a busy thread, and by `tests/test_active_index.py`. `JsonFileRunStore(..., use_active_index=False)` keeps the plain scan.
+- The creation journal gains a `~<run_id>` line: a run that becomes active through one store object (resumed, re-opened, first save after a restart) is announced to every other store object on the same folder, like `+` for creation and `-` for deletion. Older readers ignore the line.
+
 ## [0.10.0] - 2026-10-15
 
 ### Added

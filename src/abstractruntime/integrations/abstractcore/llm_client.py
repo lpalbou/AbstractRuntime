@@ -2141,6 +2141,20 @@ def _decode_subprocess_media_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _spec_routes_to_endpoint_profile(spec: Any) -> bool:
+    """True when a media spec names an `endpoint:<id>` provider.
+
+    Such a spec is an HTTP call to a named endpoint connection, not a local
+    pipeline: the one-shot media subprocess has nothing to isolate for it, and
+    it cannot resolve the profile -- the host's endpoint-profile resolver
+    (`set_provider_endpoint_profile_resolver`) lives on THIS process's
+    clients, and a per-user gateway profile has no AbstractCore config row
+    the subprocess could read. So it runs in process, where AbstractVision
+    resolves the profile through the owning provider's resolver.
+    """
+    return isinstance(spec, dict) and str(spec.get("provider") or "").strip().lower().startswith("endpoint:")
+
+
 def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional[List[Any]]) -> bool:
     if not _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS", default=True):
         return False
@@ -2148,7 +2162,7 @@ def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional
         return False
     normalized_media = list(media or [])
     for spec in specs:
-        if not isinstance(spec, dict):
+        if not isinstance(spec, dict) or _spec_routes_to_endpoint_profile(spec):
             return False
         modality = str(spec.get("modality") or "").strip().lower()
         task = str(spec.get("task") or "").strip().lower()
@@ -2202,6 +2216,8 @@ def _is_subprocess_safe_video_specs(specs: List[Dict[str, Any]], media: Optional
     if len(specs) != 1 or not isinstance(specs[0], dict):
         return False
     spec = specs[0]
+    if _spec_routes_to_endpoint_profile(spec):
+        return False
     modality = str(spec.get("modality") or "").strip().lower()
     task = str(spec.get("task") or "").strip().lower()
     if modality != "video":

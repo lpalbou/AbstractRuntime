@@ -5,6 +5,17 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Image and video specs whose provider is an endpoint profile (`endpoint:<id>`) run in process instead of in
+  the one-shot local media subprocess. The subprocess isolates local pipelines and has no host
+  endpoint-profile resolver, so a gateway profile (for example an OpenAI-compatible relay serving
+  `gpt-image-2` selected on the gateway's image route) could not be resolved there; in process,
+  AbstractVision resolves it through the resolver the host attached to the client. Tests:
+  `tests/test_endpoint_profile_media_in_process.py`.
+
 ## [0.10.2] - 2026-10-16
 
 ### Changed

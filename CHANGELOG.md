@@ -5,6 +5,18 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-10-18
+
+### Changed
+
+- The pooled client wires every client it builds in one place (`_adopt_client`): the residency core, the
+  Core execution context, the host's endpoint-profile resolver and the pool-wide token callback reach the
+  text clients, the per-call override clients and the media host through the same path, and a setting
+  applied later reaches all of them through `_owned_clients`. No behaviour change. Tests:
+  `tests/test_endpoint_profile_media_end_to_end.py` (an image spec on an `endpoint:<id>` profile reaches
+  that endpoint through the `LLM_CALL` handler, the pooled client and AbstractCore's capability host, with
+  and without a text provider on the call).
+
 ## [0.10.4] - 2026-10-18
 
 ### Fixed

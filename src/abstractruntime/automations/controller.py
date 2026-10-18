@@ -458,6 +458,28 @@ def grant_tool_approval(
     }
 
 
+def apply_named_tool_policy(input_data: Dict[str, Any], named_policy: Dict[str, Any], *, untrusted_input: bool = False) -> None:
+    """Compile an explicit named snapshot without weakening automation safeguards.
+
+    Unmentioned candidates require approval. Named Auto is individual consent for
+    untrusted-input tools. Existing messaging safeguards remain in force;
+    untrusted-input occurrences never receive MCP grants.
+    """
+    requested_auto = set(named_policy.get("auto_approve_tools", []))
+    requested_require = set(named_policy.get("require_approval_tools", []))
+    # The validated definition owns this policy, not a workflow-supplied grant.
+    runtime_ns = dict(input_data.get("_runtime") or {})
+    runtime_ns.pop("tool_policy", None)
+    input_data["_runtime"] = runtime_ns
+    grant_tool_approval(input_data, untrusted_input=untrusted_input,
+                        named_tools=sorted(requested_auto - requested_require), approval="ask" if untrusted_input else "auto")
+    policy = input_data["_runtime"]["tool_policy"]
+    candidates = set(policy["auto_approve_tools"]) | set(policy["withheld_tools"])
+    auto = set(policy["auto_approve_tools"]) & requested_auto - requested_require
+    policy["auto_approve_tools"] = sorted(auto)
+    policy["require_approval_tools"] = sorted(candidates - auto)
+
+
 # The flow input that makes an agent read `context.messages` (basic-agent's
 # `use_context` pin defaults to False; `include_context` is its alias, and
 # wins when present, so both are set).
@@ -540,7 +562,10 @@ def build_prepared(
     if isinstance(emails, list):
         resolve_vars = _freeze_email_inputs(turn, input_data, emails)
     approval = definition["policy"].get("tool_approval", "auto")
-    if approval == "auto" or untrusted:
+    named_policy = definition["policy"].get("tool_policy")
+    if isinstance(named_policy, dict):
+        apply_named_tool_policy(input_data, named_policy, untrusted_input=untrusted)
+    elif approval == "auto" or untrusted:
         # Untrusted input ALWAYS gets a per-run policy, under "ask" too: without one the
         # executor's static defaults decide, and they auto-run network and sending tools.
         grant_tool_approval(

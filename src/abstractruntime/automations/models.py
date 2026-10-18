@@ -354,11 +354,25 @@ def validate_notify(value: Any) -> Dict[str, Any]:
     return result
 
 
+def validate_named_tool_policy(value: Any) -> Dict[str, Any]:
+    """Named approval snapshot; the target's allowed_tools remains the ceiling."""
+    policy = _require_mapping(value, "policy.tool_policy")
+    keys = ("auto_approve_tools", "require_approval_tools")
+    _reject_unknown(policy, keys, "policy.tool_policy")
+    result = {}
+    for key in keys:
+        names = policy.get(key, [])
+        if not isinstance(names, list) or any(not isinstance(n, str) or not n.strip() for n in names):
+            raise _invalid(f"policy.tool_policy.{key} must be a list of nonempty tool names", f"policy.tool_policy.{key}")
+        result[key] = sorted({n.strip() for n in names})
+    return result
+
+
 def validate_policy(value: Any) -> Dict[str, Any]:
     policy = _require_mapping(value if value is not None else {}, "policy")
     _reject_unknown(
         policy,
-        ("serial", "misfire", "failure", "retry", "tool_approval", "email_allowed_recipients", "untrusted_input_tools"),
+        ("serial", "misfire", "failure", "retry", "tool_approval", "email_allowed_recipients", "untrusted_input_tools", "tool_policy"),
         "policy",
     )
     tool_approval = policy.get("tool_approval", "auto")
@@ -389,6 +403,7 @@ def validate_policy(value: Any) -> Dict[str, Any]:
                 "max": _duration(backoff.get("max", DEFAULT_RETRY["backoff"]["max"]), "policy.retry.backoff.max"),
             },
         },
+        **({"tool_policy": validate_named_tool_policy(policy["tool_policy"])} if policy.get("tool_policy") is not None else {}),
         "tool_approval": tool_approval,
         "email_allowed_recipients": validate_email_allowed_recipients(
             policy.get("email_allowed_recipients", list(DEFAULT_EMAIL_ALLOWED_RECIPIENTS))

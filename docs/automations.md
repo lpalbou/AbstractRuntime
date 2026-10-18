@@ -104,7 +104,7 @@ unknown fields are rejected at every level.
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |
 | `context` | `{mode: "independent" \| "growing", growing: {}}` |
-| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients, untrusted_input_tools}` |
+| `policy` | `{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, tool_policy?, email_allowed_recipients, untrusted_input_tools}` |
 | `notify` | `{channels: ["console"] \| ["console", "email"]}`: where attention items are delivered (default `["console"]`) |
 | `session_id` | `automation:<automation_id>` |
 | `workspace_root` | absolute path given to every occurrence |
@@ -457,7 +457,25 @@ returns the refusal message for a tool, or `None` when it is allowed.
 
 ## Tool approval
 
-`policy.tool_approval` decides whether the target's tools may run without asking.
+Optional `policy.tool_policy` stores a complete named snapshot:
+
+```json
+{"auto_approve_tools": ["read_file"], "require_approval_tools": ["execute_command"]}
+```
+
+When present it takes precedence over `tool_approval`. Require-approval wins if a tool
+appears in both lists; unmentioned candidate tools require approval. Tool availability
+still comes from `target.input_data.tools` and `_runtime.allowed_tools`; explicit `[]`
+denies all tools. The controller compiles this policy into the occurrence's runtime inputs
+at admission. Edits affect subsequent occurrences, preserving the current run's grant.
+
+Named Auto is individual consent for untrusted-input tools. For untrusted triggers,
+message-sending tools remain withheld and MCP tools remain unavailable. Trusted triggers
+retain their existing messaging and recipient restrictions. Source restrictions remain in force.
+Omit the field for legacy behavior, or revise it to `null` to restore that behavior.
+Older runtimes that lack this field reject it rather than silently discarding the policy.
+
+Without a named snapshot, `policy.tool_approval` decides whether the target's tools may run without asking.
 
 - **`"auto"` (default).** An automation runs unattended and cannot ask a person before every tool call, so creating
   the automation is the consent; client forms state that its tools run without asking and list them. At admission,

@@ -5,6 +5,12 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Automation definitions accept a named `policy.tool_policy` snapshot for per-tool Auto and Approve choices. The target tool ceiling remains authoritative; unspecified tools ask for approval. Messaging and untrusted-input restrictions remain enforced. See [Tool approval](docs/automations.md#tool-approval).
+
 ## [0.10.2] - 2026-10-16
 
 ### Changed

@@ -1929,7 +1929,7 @@ unknown fields are rejected at every level.</p>
 </tr>
 <tr>
 <td><code>policy</code></td>
-<td><code>{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, email_allowed_recipients, untrusted_input_tools}</code></td>
+<td><code>{serial: true, misfire: "coalesce", failure: "continue", retry, tool_approval, tool_policy?, email_allowed_recipients, untrusted_input_tools}</code></td>
 </tr>
 <tr>
 <td><code>notify</code></td>
@@ -2358,7 +2358,20 @@ workspace:</p>
 runtime can expose to <code>read</code>, <code>write</code>, <code>exec</code>, <code>delegate</code>, <code>comms</code> or <code>memory-write</code>, and <code>read_only_refusal(name)</code>
 returns the refusal message for a tool, or <code>None</code> when it is allowed.</p>
 <h2 id="tool-approval">Tool approval<a class="headerlink" href="#tool-approval" title="Permanent link">&para;</a></h2>
-<p><code>policy.tool_approval</code> decides whether the target's tools may run without asking.</p>
+<p>Optional <code>policy.tool_policy</code> stores a complete named snapshot:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"auto_approve_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"read_file"</span><span class="p">],</span><span class="w"> </span><span class="nt">"require_approval_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"execute_command"</span><span class="p">]}</span>
+</code></pre></div>
+<p>When present it takes precedence over <code>tool_approval</code>. Require-approval wins if a tool
+appears in both lists; unmentioned candidate tools require approval. Tool availability
+still comes from <code>target.input_data.tools</code> and <code>_runtime.allowed_tools</code>; explicit <code>[]</code>
+denies all tools. The controller compiles this policy into the occurrence's runtime inputs
+at admission. Edits affect subsequent occurrences, preserving the current run's grant.</p>
+<p>Named Auto is individual consent for untrusted-input tools. For untrusted triggers,
+message-sending tools remain withheld and MCP tools remain unavailable. Trusted triggers
+retain their existing messaging and recipient restrictions. Source restrictions remain in force.
+Omit the field for legacy behavior, or revise it to <code>null</code> to restore that behavior.
+Older runtimes that lack this field reject it rather than silently discarding the policy.</p>
+<p>Without a named snapshot, <code>policy.tool_approval</code> decides whether the target's tools may run without asking.</p>
 <ul>
 <li><strong><code>"auto"</code> (default).</strong> An automation runs unattended and cannot ask a person before every tool call, so creating
   the automation is the consent; client forms state that its tools run without asking and list them. At admission,

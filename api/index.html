@@ -481,6 +481,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#conversation-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation search
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-history-bundle-export-portable-replay-artifact" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1411,6 +1422,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#conversation-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation search
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-history-bundle-export-portable-replay-artifact" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1763,6 +1785,15 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <li><code>is_draft_lifecycle(run_lifecycle)</code> (package root): whether a run's lifecycle value marks a draft test run</li>
 </ul>
 <p>History bundles (<code>export_run_history_bundle</code>) and session replay use the same turn selection, so automation occurrences appear as turns (kind <code>occurrence</code>, with <code>automation_id</code> and <code>occurrence_index</code>) in both.</p>
+<h2 id="conversation-search">Conversation search<a class="headerlink" href="#conversation-search" title="Permanent link">&para;</a></h2>
+<p>Implementation: <code>src/abstractruntime/conversation_search.py</code>.</p>
+<ul>
+<li><code>ConversationSearch(db_path, *, run_store, ledger_store, artifact_store=None, kinds=None)</code>: the keyword search index of one runtime plane. <code>db_path</code> is its own SQLite file in that plane's data folder (one index per plane, so a principal's search can only ever read the plane it was opened on; the file is disposable and is rebuilt when the schema changes). Each turn root (a question and its answer, as the session replay builds them) is one row, together with the turn's media: the artifacts its run generated (image, voice, video, music, by their generation prompt) and the attachments it was sent with (by their file name), each with its kind. Read-aloud audio, media saved without a prompt and internal artifacts are not indexed. <code>kinds</code> defaults to <code>INDEXED_KINDS</code> (<code>chat</code>, <code>discussion</code>): automation sessions are not indexed</li>
+<li><code>sync(*, budget_s=3.0) -&gt; SyncReport</code>: indexes what changed since the last call (turn roots whose <code>updated_at</code> moved, re-read by session, newest sessions first) within the time budget. <code>SyncReport</code>: <code>{indexed_turns, reindexed_sessions, pending_sessions, total_turns, seconds, complete, errors}</code>; <code>complete</code> is <code>False</code> while older conversations are still waiting, so a first search on a large plane can say it is still indexing</li>
+<li><code>search(query, *, limit=20, sessions=None, exclude=None, session_kinds=None) -&gt; list[SearchHit]</code>: one hit per session, best first. Text is indexed and queried lowercased and without accents (<code>normalize</code>) with the FTS5 <code>trigram</code> tokenizer: every query word of three or more characters must appear in the turn, as a word or part of one ("surviv" finds "overall survival"); words of one or two characters are matched as whole words; ranked by bm25, the question weighing more than the answer. When exact matches are fewer than <code>limit</code>, a fuzzy pass keeps turns holding at least <code>FUZZY_MIN</code> (60%) of each word's trigrams, so a typo still finds its turn (<code>fuzzy: true</code> on those hits). <code>sessions</code>, <code>exclude</code> and <code>session_kinds</code> filter inside the query, so a filter never empties a page that had matches further down. <code>limit</code> is clamped to 1–100</li>
+<li><code>SearchHit</code> (<code>as_dict()</code>): <code>session_id</code>, <code>run_id</code> (the best turn), <code>prompt</code>, <code>snippet</code> (around the first match), <code>matched_in</code> (<code>question</code>, <code>answer</code> or <code>artifact</code>), <code>highlights</code> (<code>[start, length]</code> pairs in the snippet), <code>score</code>, <code>created_at</code>, <code>updated_at</code>, <code>session_kind</code>, <code>fuzzy</code>, and <code>artifact</code> when the match is an artifact: <code>{artifact_id, run_id, kind, content_type, name, prompt}</code>, <code>run_id</code> being the run that owns it (a host's artifact content route is scoped to that run)</li>
+<li>Without the <code>trigram</code> tokenizer (SQLite before 3.34) the index falls back to whole words with prefix matching. Tool usage, tool outputs and intermediate thinking are not indexed: <a href="../backlog/proposed/0849_conversation_search_tool_usage_outputs_and_thinking/">backlog 0849</a></li>
+</ul>
 <h2 id="run-history-bundle-export-portable-replay-artifact">Run history bundle export (portable replay artifact)<a class="headerlink" href="#run-history-bundle-export-portable-replay-artifact" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/history_bundle.py</code>.</p>
 <ul>
@@ -1815,6 +1846,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 - remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
+- streamed TTS playback artifacts carry <code>purpose=voice_playback</code>, <code>artifact_space=voice</code> and a logical <code>voice/tts-&lt;id&gt;.wav</code> path in their tags; hosts can separate read-aloud recordings from user attachments while retaining their artifact refs and provenance
 - with the pooled local client (<code>MultiLocalAbstractCoreLLMClient</code>), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (<code>CapabilityHostProvider</code>, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose <code>runtime_provider</code> / <code>runtime_model</code> separately from <code>media_provider</code> / <code>media_model</code>
 - local image/video generation runs in a one-shot subprocess (<code>execution_mode="local_one_shot_subprocess"</code>) unless every requested media model is resident (explicitly loaded with <code>load_model_residency</code>), in which case it runs in-process on the loaded pipeline (<code>execution_mode="resident_in_process"</code>, <code>resident_load_ids</code>)

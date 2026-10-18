@@ -5,13 +5,14 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.6] - 2026-10-18
 
 ### Added
 
 - `abstractruntime.conversation_search.ConversationSearch`: keyword search over a plane's conversations: each turn's question and answer (as the session replay builds them) and its media, the artifacts it generated (kind and generation prompt, attributed to the turn whose run made them) and the attachments it was sent with (kind and file name); read-aloud audio and internal artifacts are not media. A hit on an artifact names it (`artifact`: id, owning run, kind, content type), so a client can show it. Its own SQLite file per plane, an FTS5 `trigram` index over text lowercased and without accents: words and parts of words, every word required, words of one or two letters as whole words, and a fuzzy pass that keeps a turn holding at least 60% of each word's trigrams (a typo still finds it). One hit per session (its best turn, a snippet, the match positions, where it matched: question, artifact or answer). Tool usage, tool outputs and intermediate thinking are not indexed: [backlog 0849](docs/backlog/proposed/0849_conversation_search_tool_usage_outputs_and_thinking.md). `sync(budget_s=…)` indexes what changed since the last call, newest sessions first, and reports what is left. Works with the file and the SQLite run stores; without the `trigram` tokenizer (SQLite < 3.34) it indexes whole words with prefixes.
 
 - Automation definitions accept a named `policy.tool_policy` snapshot for per-tool Auto and Approve choices. The target tool ceiling remains authoritative; unspecified tools ask for approval. Messaging and untrusted-input restrictions remain enforced. See [Tool approval](docs/automations.md#tool-approval).
+- Streamed read-aloud recordings (`_finalize_tts_stream_artifact`, the streamed-voice path of the AbstractCore integration) are stored under the voice namespace: their artifact tags carry `purpose=voice_playback`, `artifact_space=voice`, a `filename` and a logical `path` of `voice/tts-<id>.wav`, so a host can list a user's generated documents and attachments without the playback audio while playback and replay keep the same artifact ref and provenance. Test: `tests/test_streamed_voice_namespace.py`.
 
 ## [0.10.5] - 2026-10-18
 

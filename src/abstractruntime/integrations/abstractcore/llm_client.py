@@ -2141,6 +2141,11 @@ def _decode_subprocess_media_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _spec_routes_to_endpoint_profile(spec: Any) -> bool:
+    """Named HTTP endpoints need the in-process host resolver, not a worker."""
+    return isinstance(spec, dict) and str(spec.get("provider") or "").strip().lower().startswith("endpoint:")
+
+
 def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional[List[Any]]) -> bool:
     if not _env_flag_enabled("ABSTRACTRUNTIME_LOCAL_IMAGE_SUBPROCESS", default=True):
         return False
@@ -2148,7 +2153,7 @@ def _is_subprocess_safe_image_specs(specs: List[Dict[str, Any]], media: Optional
         return False
     normalized_media = list(media or [])
     for spec in specs:
-        if not isinstance(spec, dict):
+        if not isinstance(spec, dict) or _spec_routes_to_endpoint_profile(spec):
             return False
         modality = str(spec.get("modality") or "").strip().lower()
         task = str(spec.get("task") or "").strip().lower()
@@ -10753,6 +10758,12 @@ class MultiLocalAbstractCoreLLMClient:
                     core_config_file=self._core_config_file,
                     capability_defaults=self._capability_defaults if explicit else None,
                 )
+            # Capability plugins resolve endpoint:<id> after merging media
+            # defaults. Their owner needs the same host-scoped resolver as text
+            # clients; the profile may not exist in the Core config file.
+            resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
+            if callable(resolver):
+                _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
             self._media_host = client
             return client
 
@@ -10828,6 +10839,9 @@ class MultiLocalAbstractCoreLLMClient:
         default_client = getattr(self, "_default_client", None)
         if default_client is not None:
             _attach_provider_endpoint_profile_resolver_to_client(default_client, resolver)
+        media_client = getattr(self, "_media_host", None)
+        if media_client is not None:
+            _attach_provider_endpoint_profile_resolver_to_client(media_client, resolver)
         self._llm = getattr(default_client, "_llm", None)
 
     def get_provider_instance(self, *, provider: str, model: str) -> Any:

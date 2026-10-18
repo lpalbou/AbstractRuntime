@@ -12850,6 +12850,12 @@ def _finalize_tts_stream_artifact(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     audio_bytes = _combine_wav_segments(segments)
+    # Read-aloud playback belongs to the voice namespace, rather than the
+    # user's generated documents and attachments. Keep the durable artifact
+    # and its provenance: playback/replay still use the same artifact ref.
+    filename = f"tts-{uuid.uuid4().hex}.wav"
+    voice_tags = {**tags, "purpose": "voice_playback", "artifact_space": "voice",
+                  "filename": filename, "path": f"voice/{filename}"}
     result = _normalize_multimodal_response(
         {
             "outputs": {
@@ -12870,7 +12876,7 @@ def _finalize_tts_stream_artifact(
         },
         artifact_store=artifact_store,
         run_id=run_id,
-        default_tags=tags,
+        default_tags=voice_tags,
         generation_context=_generated_artifact_context(prompt=text, media=None, output_request=spec),
     )
     voice_items = result.get("outputs", {}).get("voice") if isinstance(result, dict) else None

@@ -10769,6 +10769,11 @@ class MultiLocalAbstractCoreLLMClient:
                     core_config_file=self._core_config_file,
                     capability_defaults=self._capability_defaults if explicit else None,
                 )
+            # A media spec naming an `endpoint:<id>` provider is resolved by the
+            # media plugin through the resolver on ITS owner -- this client.
+            resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
+            if resolver is not None:
+                _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
             self._media_host = client
             return client
 
@@ -10844,6 +10849,9 @@ class MultiLocalAbstractCoreLLMClient:
         default_client = getattr(self, "_default_client", None)
         if default_client is not None:
             _attach_provider_endpoint_profile_resolver_to_client(default_client, resolver)
+        media_host = self.__dict__.get("_media_host")
+        if media_host is not None:
+            _attach_provider_endpoint_profile_resolver_to_client(media_host, resolver)
         self._llm = getattr(default_client, "_llm", None)
 
     def get_provider_instance(self, *, provider: str, model: str) -> Any:

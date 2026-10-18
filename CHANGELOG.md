@@ -5,6 +5,24 @@ All notable changes to AbstractRuntime will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-10-18
+
+### Fixed
+
+- An image, video or voice spec whose provider is an endpoint profile (`endpoint:<id>`) keeps that provider
+  all the way to the media plugin. The `LLM_CALL` handler resolved the first output spec's endpoint as if it
+  were the call's text provider: it rewrote the spec to the bare provider family and put the endpoint's URL
+  and key into text-client routing params that the media path never reads, so an image generation routed to
+  a gateway endpoint profile (the web console's sandbox, an image route set to an OpenAI-compatible relay
+  serving `gpt-image-2`) reached AbstractVision as a keyless `openai-compatible` request with no base URL
+  and failed with "Missing vision_base_url / OPENAI_BASE_URL" -- in the one-shot media subprocess, since
+  the spec no longer said `endpoint:`. Only the call's own `provider` (`_provider`) is resolved now; the
+  spec's endpoint is resolved by the media plugin through the host's resolver, in process. The pooled
+  client's media host (the client every media-only call runs on) now carries the host's endpoint-profile
+  resolver, whether it is built before or after `set_provider_endpoint_profile_resolver`. Affects every
+  host that attaches an endpoint-profile resolver (AbstractGateway). Tests:
+  `tests/test_endpoint_profile_media_specs_keep_provider.py`.
+
 ## [0.10.3] - 2026-10-18
 
 ### Fixed

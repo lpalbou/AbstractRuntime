@@ -13,7 +13,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 ## Counts
 
 - Planned: 29
-- Proposed: 13
+- Proposed: 14
 - Completed: 35
 - Deprecated: 13
 - Recurrent: 0
@@ -172,6 +172,7 @@ four-digit space rather than the completed records.
 |----|------|
 | 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
 | 0849 | [Conversation search: tool usage, tool outputs and intermediate thinking](proposed/0849_conversation_search_tool_usage_outputs_and_thinking.md): proposed 2026-10-18; the sources left out of `ConversationSearch` on purpose, with costs and risks. |
+| 0850 | [Growing automations: keep the replayed history out of the controller ledger](proposed/0850_growing_automation_history_out_of_the_controller_ledger.md): proposed 2026-10-19; each occurrence copies its up-to-50k-token history into ~5 controller records (29.5 MB for 44 runs), so every automation read parses it (2.5 s for one result). Freeze it once as an artifact ref, like email bodies. |
 | 0036 | `proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0038 | `proposed/0038_core_server_pool_residency_affinity.md` |
 | 0056 | `proposed/runtime_systemic_reliability/0056_schema_version_and_quarantine_loading.md` |

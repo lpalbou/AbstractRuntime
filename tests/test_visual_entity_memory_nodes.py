@@ -70,6 +70,8 @@ def test_all_entity_memory_node_types_dispatch_the_right_effect():
         # query + one-batch execution — the loop stays in the flow graph.
         "entity_tools_query": EffectType.ENTITY_TOOLS_QUERY,
         "entity_tools_execute": EffectType.ENTITY_TOOLS_EXECUTE,
+        # Publish to channel rides the same fixed-effect-type mechanism (not an entity effect).
+        "publish_event": EffectType.PUBLISH_EVENT,
     }
     assert set(expected) == set(ENTITY_MEMORY_EFFECT_PINS)
     for node_type, eff in expected.items():

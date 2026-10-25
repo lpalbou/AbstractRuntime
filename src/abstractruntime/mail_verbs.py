@@ -4,7 +4,7 @@ A flow node of a `mail_*` type compiles to ONE `EffectType.TOOL_INVOKE` whose ve
 node TYPE (the camera-node rule: never from a pin, never mintable by a model), and the TOOL_INVOKE
 handler runs it here, without the approval gate (the person authored the node):
 
-    mail.search     {query?, folder?, limit?}                   -> {emails: Email[]}   (no bodies)
+    mail.search     {query?, folder?, limit?}                   -> {emails: Email[], has_more}   (no bodies)
     mail.get        {ids}                                       -> {emails: Email[]}   (with bodies)
     mail.mark       {ids, seen?, flagged?}                      -> {ids, changed}
     mail.label      {ids, add?, remove?}                        -> {ids, changed}
@@ -12,7 +12,7 @@ handler runs it here, without the approval gate (the person authored the node):
     mail.delete     {ids, permanent?=false}                     -> {ids, deleted}
     mail.send       {to, cc?, bcc?, subject, text, html?, attachments?: [artifact refs]} -> {message_id, accepted}
     mail.reply      {id, text, html?, reply_all?=false}         -> {message_id, accepted}
-    mail.forward    {id, to, note?}                             -> {message_id, accepted}
+    mail.forward    {id, to, note?, include_attachments?=true}  -> {message_id, accepted}
     mail.attachment {id, index}                                 -> {artifact, name, size, type}
 
 Every verb takes `mailbox` (optional): a mailbox id of the user (`"self"` / `"default"` = the
@@ -23,11 +23,11 @@ never reach vars or results. Messages are named by the `Email` record's `id`
 (`"<uidvalidity>:<uid>:<folder>"`, `triggers.email_received.email_id`); a stale id (the server
 rebuilt the folder) is refused, never guessed.
 
-Writes (`mark`, `label`, `move`, `delete`, `send`, `reply`, `forward`) are refused on a read-only
-mailbox (one without sending settings: `email_read_only`). Sends go through AbstractCore's
-`guarded_send` (the account's recipient policy and rate limits apply). `mark`, `label`, `move`,
-`delete` and `forward` call AbstractCore's `EmailClient` verbs of the same names; a client without
-them answers `mail_verb_unavailable` (typed, never a silent no-op).
+Built on AbstractCore >= 2.28.0: `EmailClient.search` (typed query), `get_many`, `mark`, `label`,
+`move`, `delete`, `download_attachment`, `session(write=...)`, and `EmailContext.send` / `reply` /
+`forward` (through `guarded_send`: the account's recipient policy and rate limits apply). Mailbox
+changes (`mark`, `label`, `move`, `delete`) need a writable mailbox (`EmailAccount.can_write`: IMAP
+and SMTP); sends need sending settings; otherwise `email_mailbox_read_only`, refused before connecting.
 
 Results use the TOOL_CALLS envelope (`{mode: "executed", results: [{call_id, name, success, output,
 error}]}`); a failure is `success: false` with `error = "<code>: <cause>"` and `error_detail =
@@ -45,11 +45,15 @@ MAIL_VERBS = (
     "mail.search", "mail.get", "mail.mark", "mail.label", "mail.move", "mail.delete",
     "mail.send", "mail.reply", "mail.forward", "mail.attachment",
 )
-WRITE_VERBS = frozenset({"mail.mark", "mail.label", "mail.move", "mail.delete", "mail.send", "mail.reply", "mail.forward"})
+CHANGE_VERBS = frozenset({"mail.mark", "mail.label", "mail.move", "mail.delete"})  # change the mailbox: can_write
+SEND_VERBS = frozenset({"mail.send", "mail.reply", "mail.forward"})  # send mail: can_send
+WRITE_VERBS = CHANGE_VERBS | SEND_VERBS
 PRIMARY_MAILBOXES = ("", "self", "default", "primary")
 DEFAULT_SEARCH_LIMIT = 50
 MAX_SEARCH_LIMIT = 500
-_QUERY_KEYS = ("from_address", "from_domain", "to_address", "subject_contains", "since", "before", "unseen", "has_attachment")
+# The typed query of `mail.search` -> AbstractCore's `EmailClient.search` keywords.
+_QUERY_KEYS = {"from": "from_", "to": "to", "subject": "subject", "text": "text", "since": "since", "until": "until",
+               "unseen": "unseen", "flagged": "flagged", "labels": "labels"}
 
 
 class MailVerbError(Exception):
@@ -155,24 +159,15 @@ def _record(detail_or_summary: Any, mailbox: str) -> Dict[str, Any]:
     return email_record(data, mailbox=mailbox)
 
 
-def _require_send(ctx: Any) -> None:
-    if not getattr(getattr(ctx, "account", None), "can_send", False):
-        raise MailVerbError("email_read_only", "This mailbox is read-only (it has no sending settings).",
-                            "Connect the mailbox with its SMTP settings to change or send mail.")
+def _require_writable(ctx: Any, name: str) -> None:
+    account = getattr(ctx, "account", None)
+    allowed = getattr(account, "can_write", False) if name in CHANGE_VERBS else getattr(account, "can_send", False)
+    if not allowed:
+        raise MailVerbError("email_mailbox_read_only", "This mailbox is read-only: it is watched, never changed or sent from.",
+                            "Connect the mailbox with its sending (SMTP) settings to change or send mail.")
 
 
-def _client_verb(client: Any, name: str) -> Callable[..., Any]:
-    fn = getattr(client, name, None)
-    if not callable(fn):
-        raise MailVerbError("mail_verb_unavailable", f"This AbstractCore mail client has no {name!r} verb.",
-                            "Upgrade AbstractCore to the release that adds EmailClient mailbox-changing verbs.")
-    return fn
-
-
-def _send(ctx: Any, message: Any) -> Dict[str, Any]:
-    from .integrations.abstractcore.email_facade import guarded_send
-
-    result = guarded_send(ctx, message)
+def _sent(result: Any) -> Dict[str, Any]:
     return {"message_id": result.message_id, "accepted": list(result.accepted), "refused": dict(result.refused)}
 
 
@@ -212,19 +207,17 @@ def _addresses(value: Any, field: str, *, required: bool = False) -> tuple:
 
 
 def _search(run: Any, args: Mapping[str, Any], client: Any, ctx: Any, mailbox: str) -> Dict[str, Any]:
-    from .integrations.abstractcore.email_facade import SearchCriteria
-
     query = args.get("query") or {}
     if not isinstance(query, Mapping):
-        raise MailVerbError("invalid_arguments", "query must be an object.", f"Use the fields {list(_QUERY_KEYS)}.")
+        raise MailVerbError("invalid_arguments", "query must be an object.", f"Use the fields {sorted(_QUERY_KEYS)}.")
     unknown = sorted(k for k in query if k not in _QUERY_KEYS)
     if unknown:
-        raise MailVerbError("invalid_arguments", f"unknown query field(s) {unknown}.", f"Use the fields {list(_QUERY_KEYS)}.")
+        raise MailVerbError("invalid_arguments", f"unknown query field(s) {unknown}.", f"Use the fields {sorted(_QUERY_KEYS)}.")
     limit = args.get("limit", DEFAULT_SEARCH_LIMIT)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_LIMIT:
         raise MailVerbError("invalid_arguments", f"limit must be 1..{MAX_SEARCH_LIMIT}.", "")
-    criteria = SearchCriteria.build(**dict(query))
-    page = client.search(criteria, folder=args.get("folder") or None, limit=limit)
+    keywords = {_QUERY_KEYS[k]: v for k, v in query.items() if v is not None}
+    page = client.search(folder=args.get("folder") or None, limit=limit, **keywords)
     return {"emails": [_record(m, mailbox) for m in page.get("messages") or []], "has_more": bool(page.get("has_more"))}
 
 
@@ -252,19 +245,19 @@ def _imap_write(verb: str) -> Callable[..., Dict[str, Any]]:
             if verb == "mark":
                 if args.get("seen") is None and args.get("flagged") is None:
                     raise MailVerbError("invalid_arguments", "give seen and/or flagged.", "")
-                _client_verb(client, "mark")(uids, folder=folder, seen=args.get("seen"), flagged=args.get("flagged"))
+                client.mark(uids, seen=args.get("seen"), flagged=args.get("flagged"), folder=folder)
             elif verb == "label":
                 add, remove = list(args.get("add") or []), list(args.get("remove") or [])
                 if not add and not remove:
                     raise MailVerbError("invalid_arguments", "give labels to add and/or remove.", "")
-                _client_verb(client, "label")(uids, folder=folder, add=add, remove=remove)
+                client.label(uids, add=add, remove=remove, folder=folder)
             elif verb == "move":
                 target = str(args.get("folder") or "").strip()
                 if not target:
                     raise MailVerbError("invalid_arguments", "folder (the destination) is required.", "")
-                _client_verb(client, "move")(uids, folder=folder, to_folder=target)
+                client.move(uids, target, folder=folder)
             elif verb == "delete":
-                _client_verb(client, "delete")(uids, folder=folder, permanent=bool(args.get("permanent", False)))
+                client.delete(uids, permanent=bool(args.get("permanent", False)), folder=folder)
             done.extend(f"{uv}:{uid}:{folder}" for uv, uid in wanted)
         key = {"mark": "changed", "label": "changed", "move": "moved", "delete": "deleted"}[verb]
         return {"ids": done, key: len(done)}
@@ -283,7 +276,7 @@ def _send_verb(run: Any, args: Mapping[str, Any], client: Any, ctx: Any, mailbox
         subject=subject.strip(), text=str(args.get("text") or ""), html=str(args.get("html") or ""),
         attachments=_attachments_from_refs(run, args.get("attachments")),
     )
-    return _send(ctx, message)
+    return _sent(ctx.send(message))
 
 
 def _one_id(args: Mapping[str, Any]) -> Tuple[str, int, int]:
@@ -296,17 +289,15 @@ def _one_id(args: Mapping[str, Any]) -> Tuple[str, int, int]:
 def _reply(run: Any, args: Mapping[str, Any], client: Any, ctx: Any, mailbox: str) -> Dict[str, Any]:
     folder, uidvalidity, uid = _one_id(args)
     _check_uidvalidity(client, folder, [(uidvalidity, uid)])
-    message, _original = client.build_reply(uid, text=str(args.get("text") or ""), html=str(args.get("html") or ""),
-                                            reply_all=bool(args.get("reply_all", False)), folder=folder)
-    return _send(ctx, message)
+    return _sent(ctx.reply(uid, str(args.get("text") or ""), html=str(args.get("html") or ""),
+                           reply_all=bool(args.get("reply_all", False)), folder=folder))
 
 
 def _forward(run: Any, args: Mapping[str, Any], client: Any, ctx: Any, mailbox: str) -> Dict[str, Any]:
     folder, uidvalidity, uid = _one_id(args)
     _check_uidvalidity(client, folder, [(uidvalidity, uid)])
-    message = _client_verb(client, "forward")(uid, folder=folder, to=list(_addresses(args.get("to"), "to", required=True)),
-                                              note=str(args.get("note") or ""))
-    return _send(ctx, message)
+    return _sent(ctx.forward(uid, list(_addresses(args.get("to"), "to", required=True)), note=str(args.get("note") or ""),
+                             include_attachments=bool(args.get("include_attachments", True)), folder=folder))
 
 
 def _attachment(run: Any, args: Mapping[str, Any], client: Any, ctx: Any, mailbox: str) -> Dict[str, Any]:
@@ -355,12 +346,13 @@ def run_mail_verb(run: Any, name: str, arguments: Mapping[str, Any]) -> Dict[str
     args = dict(arguments or {})
     _binding, ctx, mailbox = resolve_mailbox(run, args.pop("mailbox", None))
     if name in WRITE_VERBS:
-        _require_send(ctx)
+        _require_writable(ctx, name)
     try:
         client = ctx.client()
-        if name in ("mail.send",):
+        if name == "mail.send":
             return _VERBS[name](run, args, client, ctx, mailbox)
-        with client.session():
+        # One connection for the whole verb; a writable one for mailbox changes.
+        with client.session(write=name in CHANGE_VERBS):
             return _VERBS[name](run, args, client, ctx, mailbox)
     except MailVerbError:
         raise
@@ -383,7 +375,9 @@ def mail_verb_outcome(run: Any, name: str, arguments: Mapping[str, Any], *, call
 
 
 __all__ = [
+    "CHANGE_VERBS",
     "MAIL_VERBS",
+    "SEND_VERBS",
     "MailVerbError",
     "WRITE_VERBS",
     "is_mail_verb",

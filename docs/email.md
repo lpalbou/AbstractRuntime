@@ -280,15 +280,15 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
 
 | Node type | Verb | Arguments | Output |
 | --- | --- | --- | --- |
-| `mail_search` | `mail.search` | `query` (`from_address`, `from_domain`, `to_address`, `subject_contains`, `since`, `before`, `unseen`, `has_attachment`), `folder`, `limit` (1..500, default 50) | `{emails, has_more}`: Email records without bodies, newest first |
+| `mail_search` | `mail.search` | `query` (`from`: an address or a domain, `to`, `subject`: a substring, `text`: anywhere in the message, `since` / `until`: days, `until` exclusive, `unseen`, `flagged`, `labels`: all of them), `folder`, `limit` (1..500, default 50) | `{emails, has_more}`: Email records without bodies, newest first |
 | `mail_get` | `mail.get` | `ids` | `{emails, missing}`: Email records with bodies |
 | `mail_mark` | `mail.mark` | `ids`, `seen?`, `flagged?` | `{ids, changed}` |
-| `mail_label` | `mail.label` | `ids`, `add?`, `remove?` | `{ids, changed}` |
+| `mail_label` | `mail.label` | `ids`, `add?`, `remove?` (Gmail labels, else IMAP keywords) | `{ids, changed}` |
 | `mail_move` | `mail.move` | `ids`, `folder` (destination) | `{ids, moved}` |
-| `mail_delete` | `mail.delete` | `ids`, `permanent` (default false) | `{ids, deleted}` |
+| `mail_delete` | `mail.delete` | `ids`, `permanent` (default false: to the Trash folder) | `{ids, deleted}` |
 | `mail_send` | `mail.send` | `to`, `cc?`, `bcc?`, `subject`, `text`, `html?`, `attachments?` (artifact refs) | `{message_id, accepted, refused}` |
 | `mail_reply` | `mail.reply` | `id`, `text`, `html?`, `reply_all` (default false) | `{message_id, accepted, refused}` |
-| `mail_forward` | `mail.forward` | `id`, `to`, `note?` | `{message_id, accepted, refused}` |
+| `mail_forward` | `mail.forward` | `id`, `to`, `note?`, `include_attachments` (default true) | `{message_id, accepted, refused}` |
 | `mail_attachment` | `mail.attachment` | `id`, `index` | `{artifact, name, size, type}` |
 
 - **Mailbox.** Every verb takes `mailbox`: a mailbox id of the user (`"self"` or `"default"` for the primary). Without
@@ -297,15 +297,17 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
   reach vars or results.
 - **Reading never changes the mailbox.** `mail.search`, `mail.get` and `mail.attachment` read on one connection,
   read-only; nothing is marked read.
-- **Writes and read-only mailboxes.** `mark`, `label`, `move`, `delete`, `send`, `reply` and `forward` are refused
-  with `email_read_only` on a mailbox without sending settings.
+- **Read-only mailboxes.** A mailbox connected without sending (SMTP) settings is watched, never changed: `mark`,
+  `label`, `move` and `delete` need a writable mailbox (IMAP and SMTP), and `send`, `reply` and `forward` need sending
+  settings; otherwise the verb answers `email_mailbox_read_only` before connecting.
 - **Sending.** `send`, `reply` and `forward` go through AbstractCore's `guarded_send`: the account's recipient policy
   and rate limits apply, and the framework marks automatic mail as such.
-- **Mailbox-changing verbs.** `mark`, `label`, `move`, `delete` and `forward` call the AbstractCore mail client's verbs
-  of the same names; with an AbstractCore whose client does not have them, the verb answers `mail_verb_unavailable`.
-- **Errors.** `invalid_arguments`, `invalid_mailbox`, `email_not_configured`, `email_read_only`,
-  `email_message_not_found`, `mail_verb_unavailable`, `artifact_store_missing`, and AbstractCore's own `email_*` codes
-  (sign-in, policy, rate limits).
+- **One connection per verb.** Each verb holds one IMAP connection (a writable one for `mark`, `label`, `move` and
+  `delete`), whatever the number of ids.
+- **Errors.** `invalid_arguments`, `invalid_mailbox`, `email_not_configured`, `email_mailbox_read_only`,
+  `email_message_not_found`, `artifact_store_missing`, and AbstractCore's own `email_*` codes (sign-in, policy, rate
+  limits).
+- Requires AbstractCore 2.28.0 or newer (its `EmailClient` mailbox verbs).
 
 ## Sending from an automation without a model
 

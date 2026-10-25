@@ -52,7 +52,7 @@ def ca(tmp_path_factory):
 def imap(ca):
     from abstractcore.testing.mailserver import FakeImapServer
 
-    server = FakeImapServer(ca, users={ALICE_ADDR: ALICE_PW}, security="ssl")
+    server = FakeImapServer(ca, users={ALICE_ADDR: ALICE_PW}, security="ssl", folders=("INBOX", "Sent", "Archive", "Trash"))
     yield server
     server.close()
 
@@ -131,7 +131,7 @@ def _fill(imap, n):
 def test_search_get_and_attachment_on_the_runs_mailbox(tmp_path, ca, imap):
     _fill(imap, 3)
     rt, seen = _runtime(tmp_path, {"t:alice:default": _context(tmp_path, ca, imap)})
-    found = _call(rt, "mail.search", {"query": {"from_address": "bob@x.test"}, "limit": 10})
+    found = _call(rt, "mail.search", {"query": {"from": "bob@x.test"}, "limit": 10})
     assert found["success"], found
     emails = found["output"]["emails"]
     assert [e["subject"] for e in emails] == ["mail 3", "mail 1"] and emails[0]["body_text"] is None
@@ -139,7 +139,7 @@ def test_search_get_and_attachment_on_the_runs_mailbox(tmp_path, ca, imap):
     assert seen[-1] == ("t:alice:default", "action")
     got = _call(rt, "mail.get", {"ids": [emails[0]["id"]]})
     assert got["output"]["emails"][0]["body_text"] == "body 3"
-    second = _call(rt, "mail.search", {"query": {"subject_contains": "mail 2"}})["output"]["emails"][0]
+    second = _call(rt, "mail.search", {"query": {"subject": "mail 2"}})["output"]["emails"][0]
     att = _call(rt, "mail.attachment", {"id": second["id"], "index": 0})["output"]
     assert is_artifact_ref(att["artifact"]) and att["name"] == "note.txt" and att["size"] == len(b"attached 2")
     assert rt.artifact_store.load(att["artifact"]["$artifact"]).content == b"attached 2"
@@ -164,7 +164,7 @@ def test_writes_are_refused_on_a_read_only_mailbox(tmp_path, ca, imap):
                        ("mail.delete", {"ids": ["1000:1:INBOX"]}), ("mail.send", {"to": "bob@x.test", "subject": "s", "text": "t"}),
                        ("mail.reply", {"id": "1000:1:INBOX", "text": "t"})):
         out = _call(rt, name, args)
-        assert out["error_detail"]["code"] == "email_read_only", name
+        assert out["error_detail"]["code"] == "email_mailbox_read_only", name
 
 
 def test_the_mailbox_argument_and_the_triggers_mailbox(tmp_path, ca, imap):
@@ -182,25 +182,38 @@ def test_the_mailbox_argument_and_the_triggers_mailbox(tmp_path, ca, imap):
     assert out["error_detail"]["code"] == "email_not_configured"
 
 
-def test_mailbox_changing_verbs_need_the_core_client_verbs(tmp_path, ca, imap, monkeypatch):
-    """With sending settings the mailbox is writable; until AbstractCore's client has `mark`, the verb
-    says so (typed), never a silent no-op."""
-    from abstractcore.comms.email import EmailClient
+def _writable_context(tmp_path, ca, imap):
+    """IMAP + SMTP settings: a writable mailbox (`EmailAccount.can_write`). Mailbox changes use IMAP only."""
+    from abstractcore.comms.email import EmailAccount, EmailContext, EmailSecret, ImapSettings, RecipientPolicy, SmtpSettings
+    from abstractcore.comms.email.limits import SendLimits, SendRateLimiter
 
-    _fill(imap, 1)
-    from types import SimpleNamespace
+    account = EmailAccount.build(address=ALICE_ADDR, imap=ImapSettings.build("localhost", port=imap.port, security="ssl", ca_file=str(ca.ca_pem)),
+                                 smtp=SmtpSettings.build("localhost", port=1, security="starttls", ca_file=str(ca.ca_pem)))
+    limits = SendLimits()
+    return EmailContext(account=account, secret=EmailSecret(ALICE_PW), policy=RecipientPolicy.build("allowlist", [ALICE_ADDR]),
+                        limits=limits, limiter=SendRateLimiter(tmp_path / "sends.json", limits), registered_address=ALICE_ADDR)
 
-    ctx = _context(tmp_path, ca, imap)
-    ctx = SimpleNamespace(account=SimpleNamespace(can_send=True), client=ctx.client)
-    rt, _ = _runtime(tmp_path, {"t:alice:default": ctx})
-    if not hasattr(EmailClient, "mark"):
-        out = _call(rt, "mail.mark", {"ids": ["1000:1:INBOX"], "seen": True})
-        assert out["error_detail"]["code"] == "mail_verb_unavailable"
-    calls = []
-    monkeypatch.setattr(EmailClient, "mark", lambda self, uids, *, folder, seen=None, flagged=None: calls.append((uids, folder, seen, flagged)),
-                        raising=False)
-    out = _call(rt, "mail.mark", {"ids": ["1000:1:INBOX"], "seen": True})
-    assert out["success"] and out["output"] == {"ids": ["1000:1:INBOX"], "changed": 1} and calls == [([1], "INBOX", True, None)]
+
+def test_mark_label_move_and_delete_change_the_mailbox(tmp_path, ca, imap):
+    _fill(imap, 4)
+    rt, _ = _runtime(tmp_path, {"t:alice:default": _writable_context(tmp_path, ca, imap)})
+    inbox = imap.folders["INBOX"].messages
+    emails = _call(rt, "mail.search", {})["output"]["emails"]
+    by = {e["subject"]: e["id"] for e in emails}
+    out = _call(rt, "mail.mark", {"ids": [by["mail 1"]], "seen": True, "flagged": True})
+    assert out["success"] and out["output"] == {"ids": [by["mail 1"]], "changed": 1}, out
+    flags = next(m.flags for m in inbox if m.uid == 1)
+    assert "\\Seen" in flags and "\\Flagged" in flags
+    assert _call(rt, "mail.label", {"ids": [by["mail 2"]], "add": ["Work"]})["success"]
+    got = _call(rt, "mail.get", {"ids": [by["mail 1"], by["mail 2"]]})["output"]["emails"]
+    assert {e["subject"]: (e["seen"], e["flagged"], e["labels"]) for e in got} == {
+        "mail 1": (True, True, []), "mail 2": (False, False, ["Work"])}
+    moved = _call(rt, "mail.move", {"ids": [by["mail 3"]], "folder": "Archive"})
+    assert moved["success"] and moved["output"]["moved"] == 1
+    assert [m.uid for m in imap.folders["Archive"].messages] and 3 not in [m.uid for m in imap.folders["INBOX"].messages]
+    deleted = _call(rt, "mail.delete", {"ids": [by["mail 4"]]})
+    assert deleted["success"] and 4 not in [m.uid for m in imap.folders["INBOX"].messages]
+    assert len(imap.folders["Trash"].messages) == 1  # to Trash, not gone
 
 
 def test_send_goes_through_guarded_send(tmp_path, ca, imap):

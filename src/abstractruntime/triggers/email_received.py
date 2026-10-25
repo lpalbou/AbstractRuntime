@@ -145,13 +145,22 @@ def thread_id_of(message: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _labels(flags: List[str], labels: Any) -> List[str]:
+    out: List[str] = []
+    for name in [f for f in flags if not f.startswith("\\")] + [str(x) for x in (labels if isinstance(labels, (list, tuple)) else [])]:
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def email_record(message: Mapping[str, Any], *, mailbox: Optional[str]) -> Dict[str, Any]:
     """The `Email` record of one message (an inbox payload or an AbstractCore detail/summary dict):
 
     `{id, message_id, mailbox, folder, thread_id, from, to, cc, subject, date, body_text, body_html,
     attachments: [{index, name, size, type, artifact}], seen, flagged, labels}`.
 
-    `seen` / `flagged` / `labels` (the IMAP keywords that are not system flags) come from the
+    `labels` merges the IMAP keywords that are not system flags with the message's own `labels`
+    (Gmail labels, AbstractCore >= 2.29.0), without duplicates. `seen` / `flagged` / `labels` come from the
     message's flags; they are null when the source did not keep them (the watcher stores new mail
     without its flags). `body_text` / `body_html` are null when not read (`mail.search`) or over the
     reading limit. `artifact` is null until `mail.attachment` saves the part."""
@@ -185,7 +194,7 @@ def email_record(message: Mapping[str, Any], *, mailbox: Optional[str]) -> Dict[
         "attachments": attachments,
         "seen": ("seen" in lowered) if known else None,
         "flagged": ("flagged" in lowered) if known else None,
-        "labels": [f for f in fl if not f.startswith("\\")] if known else None,
+        "labels": _labels(fl, message.get("labels")) if (known or isinstance(message.get("labels"), (list, tuple))) else None,
     }
 
 

@@ -247,3 +247,11 @@ def test_mail_nodes_bake_the_verb():
     plan = handler(_Run(), None)
     assert plan.effect.type == EffectType.TOOL_INVOKE and plan.effect.payload["name"] == "mail.move"
     assert plan.effect.payload["arguments"] == {"ids": ["1000:1:INBOX"], "folder": "Archive"}
+
+
+def test_email_record_merges_gmail_labels_with_keywords():
+    rec = email_record({"uid": 1, "uidvalidity": 1, "folder": "INBOX", "flags": ["\\Seen", "Work", "Urgent"],
+                        "labels": ["Work", "Clients/ACME"]}, mailbox="m")
+    assert rec["labels"] == ["Work", "Urgent", "Clients/ACME"]  # keywords first, no duplicates
+    only_gmail = email_record({"uid": 1, "uidvalidity": 1, "folder": "INBOX", "labels": ["Clients/ACME"]}, mailbox="m")
+    assert only_gmail["labels"] == ["Clients/ACME"] and only_gmail["seen"] is None

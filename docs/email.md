@@ -269,7 +269,7 @@ verbs below (`triggers.email_received.email_record`).
 | `from`, `to`, `cc`, `subject`, `date` | the headers as written |
 | `body_text`, `body_html` | the bodies; null when not read (`mail.search`) or over the reading limit |
 | `attachments` | `[{index, name, size, type, artifact}]`: `artifact` is null until `mail.attachment` saves the part |
-| `seen`, `flagged`, `labels` | from the message's flags (`labels`: the keywords that are not system flags); null when the source did not keep the flags (a trigger's messages) |
+| `seen`, `flagged`, `labels` | from the message's flags; `labels` merges the keywords that are not system flags with the message's Gmail labels; null when the source did not keep them |
 
 ## Mail verbs for flows
 
@@ -307,7 +307,7 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
 - **Errors.** `invalid_arguments`, `invalid_mailbox`, `email_not_configured`, `email_mailbox_read_only`,
   `email_message_not_found`, `artifact_store_missing`, and AbstractCore's own `email_*` codes (sign-in, policy, rate
   limits).
-- Requires AbstractCore 2.28.0 or newer (its `EmailClient` mailbox verbs).
+- Requires AbstractCore 2.29.0 or newer (its `EmailClient` mailbox verbs and Gmail labels).
 
 ## Sending from an automation without a model
 

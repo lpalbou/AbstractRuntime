@@ -184,7 +184,9 @@ def test_catch_up_policy_is_the_same_for_v1_and_v2():
     for now in ["2026-10-01T00:00:00Z", "2026-10-02T01:00:00Z", "2026-10-02T09:00:00Z", "2026-10-05T00:00:00Z"]:
         a1, a2 = V1.admit(b1, state=s1, now=now), V2.admit(b2, state=s2, now=now)
         assert a2["event_id"] == a1["event_id"].replace("schedule@1", "schedule@2")
-        a2 = {**a2, "event_id": a1["event_id"]}
+        payload2 = dict(a2["payload"])
+        assert payload2.pop("series")["scheduled_at"] == a1["payload"]["scheduled_at"]  # backlog 1039: v2 adds data.series
+        a2 = {**a2, "event_id": a1["event_id"], "payload": payload2}
         assert a1 == a2
         s1, s2 = a1["state"], a2["state"]
         assert V1.rearm(b1, state=s1, now=now) == V2.rearm(b2, state=s2, now=now)

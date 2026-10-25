@@ -232,13 +232,16 @@ def append_webhook_event(
     store: Any = None,
     now: Optional[Any] = None,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    runtime: Any = None,
 ) -> Dict[str, Any]:
     """Verify one webhook request and append it to the connection's stream.
 
     `secret`: the connection's signing secret (default: read from `store.secrets(...)`). Returns
     `{status, http_status, reason?, event_id?, seq?, webhook_id?}`: `appended` (202), `duplicate`
     (409, the `webhook-id` was already received), `refused` (401 `missing_headers` / `bad_timestamp` /
-    `stale` / `bad_signature`; 413 `too_large`; 415 `unsupported_body`; 409 `connection_disabled`).
+    `stale` / `bad_signature`; 413 `too_large`; 415 `unsupported_body`; 409 `connection_disabled` for a
+    disabled or paused connection; 409 `not_listening` when `runtime` is given and no active automation
+    uses the connection and it is not `always_listen`).
     Refusals are recorded on the connection (`last_error`) when `store` is given."""
     if connection.source_id != SOURCE_ID:
         raise ValueError(f"connection {connection.connection_id} is not a {SOURCE_REF} connection")
@@ -255,8 +258,15 @@ def append_webhook_event(
             out["webhook_id"] = webhook_id
         return out
 
-    if connection.status == "disabled":
+    if connection.status == "disabled" or connection.paused:
         return refused(409, "connection_disabled")
+    if runtime is not None:
+        from .connections import connection_usage
+
+        if connection_usage(runtime, connection)["listening"] != "listening":
+            # Idle: no active automation uses the endpoint (and it is not `always_listen`):
+            # nothing is stored.
+            return refused(409, "not_listening")
     if len(body) > int(max_body_bytes):
         return refused(413, "too_large")
     if secret is None:

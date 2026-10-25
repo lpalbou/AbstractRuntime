@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Trigger connections are fed only while something listens.** `TriggerConnection` gains `paused` (default false) and `always_listen` (default false), set through `TriggerConnectionStore.create(...)` / `update(...)`; `status` keeps its meaning. `connection_usage(runtime, connection)` derives `{listening: "paused" | "listening" | "idle", used_by: <active automations reading the stream>}`, and `connection.to_dict(usage=...)` adds both fields. `poll_feed_connections` fetches only listening feed connections (an idle one is not fetched and stores nothing; its first poll after an automation binds again is a baseline) and its reports carry `listening` and `used_by`. `append_webhook_event` refuses a paused connection like a disabled one (409 `connection_disabled`) and, given `runtime=`, refuses an idle one (409 `not_listening`). See [Trigger connections](docs/automations.md#trigger-connections).
+
 ## [0.11.0] - 2026-10-25
 
 ### Added

@@ -229,10 +229,13 @@ the feed: `{url, every (default 15m, never below 60s), max_items (1..200, defaul
   entities; documents above 5 MB are refused).
 - The poller belongs to the host's plane, not to the runtime: the host calls
   `poll_feed_connections(runtime, store, fetch=None, now=None)` from its own worker loop (every ~30 s is enough).
-  Each call polls the active feed connections whose interval elapsed with a conditional GET (`If-None-Match` /
+  Each call polls the listening feed connections (`connection_usage`: used by an active automation, or
+  `always_listen`; never a paused or disabled one) whose interval elapsed with a conditional GET (`If-None-Match` /
   `If-Modified-Since`; a 304 adds nothing), appends one event per new item to `trigger:<connection_id>`, and wakes
   the automations bound to connections that got items. It returns one report per connection (`ok`, `skipped`,
-  `baseline`, `not_modified`, `appended`, `error`, `next_poll_at`, `woken`). Nothing is started at import.
+  `baseline`, `not_modified`, `appended`, `error`, `next_poll_at`, `listening`, `used_by`, `woken`). An idle
+  connection is not fetched and stores nothing; when an automation binds to it again its first poll is a baseline
+  (per `initial_items`). Nothing is started at import.
 - The first poll is a baseline by default (`initial_items: "skip"`): items already in the feed are history.
   `"deliver"` appends them too. A poll appends at most `max_items` (the newest); older new items are marked seen.
 - Item identity is the Atom `id` or RSS `guid`, else the link, else a digest of title and date. It is the event's
@@ -263,7 +266,9 @@ the sender.
   max_body_bytes=1 MiB)` verifies and appends ONE event to `trigger:<connection_id>`, and returns what the route
   answers: `appended` (202), `duplicate` (409 `replayed_id`: the `webhook-id` is the event's `dedupekey`, so a replay
   never appends twice), or `refused` (401 for the verification reasons, 413 `too_large`, 415 `unsupported_body`, 409
-  `connection_disabled`). Refusals are recorded on the connection's `last_error` when `store` is given. The host
+  `connection_disabled`, also for a paused connection; 409 `not_listening` when you pass `runtime=` and no active
+  automation uses the connection and it is not `always_listen`, so nothing is stored). Refusals are recorded on the
+  connection's `last_error` when `store` is given. The host
   then wakes the bound automations (`wake_connection_automations`).
 - Each event's `data` is `{webhook_id, content_type, body}` (the parsed JSON, any JSON value) or `{webhook_id,
   content_type, body_text}` (UTF-8 text). Its `subject` is the value at `subject_path` in a JSON body, else the
@@ -290,6 +295,13 @@ URL", "this webhook endpoint and its secret"), registered once and reused by any
   (AES-256-GCM, the mailbox credentials' sealing) under
   `<plane_dir>/triggers/connections/secrets/<connection_id>/secret.enc`; the JSON never holds them. Hosts pass their
   sealing key file (the gateway: `<data_dir>/secrets/sealing.key`).
+- A connection is fed only while something listens. `connection_usage(runtime, connection)` derives
+  `{listening, used_by}`: `used_by` counts the ACTIVE automations reading its stream, and `listening` is `"paused"`
+  (the connection's `paused` switch is on, or its `status` is `disabled`: nothing is fetched or accepted),
+  `"listening"` (used by at least one active automation, or `always_listen: true`: polled or accepting now) or
+  `"idle"` (nothing uses it: nothing is fetched or stored). `create(..., paused=, always_listen=)` and
+  `update(..., paused=, always_listen=)` set the two switches; `status` keeps its own meaning.
+  `connection.to_dict(usage=connection_usage(runtime, connection))` adds `listening` and `used_by` to the record.
 - The owner is a principal string, `"<tenant>:<user>"` (`connection_principal(tenant, user)`). Reads given a
   principal answer only that principal's connections, and a foreign id reads exactly like an unknown one.
 - Each connection has one inbox stream, `trigger:<connection_id>` (`connection_stream`). Feeders append to it with

@@ -9,8 +9,10 @@ Two halves, like `email.received@1`:
 - the POLLER (`FeedPoller`, I/O): owned by the host's plane. The host calls
   `poll_feed_connections(runtime, store, fetch=..., now=...)` from its own worker loop (the
   gateway: next to its mail watcher, every ~30 s); nothing starts a thread here. Each call polls
-  the feed connections whose interval elapsed, appends the new items, and wakes the automations
-  bound to the connections that got items.
+  the LISTENING feed connections (`connection_usage`: used by at least one active automation, or
+  `always_listen`; never a paused or disabled one) whose interval elapsed, appends the new items,
+  and wakes the automations bound to the connections that got items. An idle connection is not
+  fetched and stores nothing; when an automation binds to it again, its first poll is a baseline.
 
 Connection config (validated by `validate_connection`):
 
@@ -308,7 +310,11 @@ class FeedPoller:
         self.fetch = fetch or urllib_fetch
 
     def connections(self) -> List[TriggerConnection]:
-        return [c for c in self.store.list(source_id=SOURCE_ID) if c.source_version == SOURCE_VERSION and c.status != "disabled"]
+        """Feed connections that may be polled: not paused, not disabled."""
+        return [
+            c for c in self.store.list(source_id=SOURCE_ID)
+            if c.source_version == SOURCE_VERSION and c.status != "disabled" and not c.paused
+        ]
 
     def poll_due(self, *, now: Optional[str] = None) -> List[FeedPollReport]:
         at = now or format_timestamp(datetime.now(timezone.utc))
@@ -316,7 +322,14 @@ class FeedPoller:
 
     def poll(self, conn: TriggerConnection, *, now: str, force: bool = False) -> FeedPollReport:
         stream = connection_stream(conn.connection_id)
+        if conn.paused or conn.status == "disabled":
+            return FeedPollReport(conn.connection_id, ok=True, skipped=True)
         state = dict(self.inbox.stream_state(stream) or {})
+        if state.get("idle"):
+            # Listening again after an idle spell: the items published meanwhile are history (the
+            # first poll is a baseline again, per `initial_items`), and it polls at once.
+            state.update({"idle": False, "baselined": False, "next_poll_at": None})
+            force = True
         now_dt = parse_timestamp(now, field="now")
         due = state.get("next_poll_at")
         if not force and due and parse_timestamp(due, field="next_poll_at") > now_dt:
@@ -402,10 +415,25 @@ def poll_feed_connections(
     inbox = getattr(runtime, "event_inbox", None)
     if inbox is None:
         raise RuntimeError("This runtime has no event inbox; call runtime.set_event_inbox(...) first.")
+    from .connections import connection_usage
+
     poller = FeedPoller(store, inbox, fetch=fetch)
+    at = now or format_timestamp(datetime.now(timezone.utc))
     out: List[Dict[str, Any]] = []
-    for report in poller.poll_due(now=now):
-        row = report.to_dict()
+    for conn in poller.connections():
+        usage = connection_usage(runtime, conn)
+        if usage["listening"] != "listening":
+            # Idle: nothing uses it, so nothing is fetched or stored. Mark it, so the first poll
+            # after an automation binds to it is a fresh baseline.
+            stream = connection_stream(conn.connection_id)
+            state = dict(inbox.stream_state(stream) or {})
+            if not state.get("idle"):
+                state["idle"] = True
+                inbox.set_stream_state(stream, state)
+            out.append({**FeedPollReport(conn.connection_id, ok=True, skipped=True).to_dict(), **usage, "woken": []})
+            continue
+        report = poller.poll(conn, now=at)
+        row = {**report.to_dict(), **usage}
         row["woken"] = wake_connection_automations(runtime, report.connection_id) if report.appended else []
         out.append(row)
     return out

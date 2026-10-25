@@ -175,6 +175,10 @@ class TriggerConnection:
     updated_at: str = ""
     last_event_at: Optional[str] = None
     last_error: Optional[Dict[str, Any]] = None
+    # The person's switches (independent of `status`): `paused` stops every feeder (nothing is
+    # fetched or accepted); `always_listen` keeps a connection fed while no automation uses it.
+    paused: bool = False
+    always_listen: bool = False
 
     @property
     def stream(self) -> str:
@@ -184,9 +188,14 @@ class TriggerConnection:
     def source_ref(self) -> str:
         return f"{self.source_id}@{self.source_version}"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, *, usage: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """The record (no secret values). `usage` (`connection_usage(runtime, conn)`) adds the
+        derived `listening` and `used_by` fields."""
         out = asdict(self)
         out["stream"] = self.stream
+        if usage is not None:
+            out["listening"] = str(usage["listening"])
+            out["used_by"] = int(usage["used_by"])
         return out
 
     @classmethod
@@ -195,6 +204,35 @@ class TriggerConnection:
         data = {k: copy.deepcopy(v) for k, v in raw.items() if k in known}
         data["source_version"] = int(data.get("source_version") or 0)
         return cls(**data)
+
+
+def _flag(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise TriggerConnectionError(f"{field} must be true or false", reason_code="invalid_connection", field=field)
+    return value
+
+
+LISTENING_STATES = ("paused", "listening", "idle")
+
+
+def connection_usage(runtime: Any, conn: TriggerConnection) -> Dict[str, Any]:
+    """The derived listening state of a connection (for APIs and feeders):
+
+    - `used_by`: how many ACTIVE automations read its stream (`stream_consumers`);
+    - `listening`: `"paused"` (the connection is paused or its status is `disabled`: nothing is
+      fetched or accepted), `"listening"` (polled / accepting now: used by an active automation, or
+      `always_listen`), `"idle"` (nothing uses it: nothing is fetched or stored).
+    """
+    from ..email.automations import stream_consumers
+
+    used_by = len(stream_consumers(runtime, conn.stream)) if runtime is not None else 0
+    if conn.paused or conn.status == "disabled":
+        state = "paused"
+    elif used_by > 0 or conn.always_listen:
+        state = "listening"
+    else:
+        state = "idle"
+    return {"listening": state, "used_by": used_by}
 
 
 def _default_adapter_lookup(source_id: str, source_version: int) -> Any:
@@ -329,6 +367,8 @@ class TriggerConnectionStore:
         label: Optional[str] = None,
         connection_id: Optional[str] = None,
         now: Optional[str] = None,
+        paused: bool = False,
+        always_listen: bool = False,
     ) -> TriggerConnection:
         """Validate and store a new connection; secret fields (and secrets the source generates,
         `adapter.connection_secrets`) are sealed. Returns the record (no secret values: read
@@ -356,6 +396,8 @@ class TriggerConnectionStore:
             secret_fields=sorted(secret),
             created_at=at,
             updated_at=at,
+            paused=_flag(paused, "paused"),
+            always_listen=_flag(always_listen, "always_listen"),
         )
         with self._Locked(self):
             if self._path(cid).exists():
@@ -410,9 +452,11 @@ class TriggerConnectionStore:
         label: Optional[str] = None,
         status: Optional[str] = None,
         now: Optional[str] = None,
+        paused: Optional[bool] = None,
+        always_listen: Optional[bool] = None,
     ) -> TriggerConnection:
         """Replace the config (validated whole; secret fields left out keep their sealed value),
-        the label and/or the status (`active` / `disabled` / `error`)."""
+        the label, the status (`active` / `disabled` / `error`), `paused` and/or `always_listen`."""
         at = now or _now_iso()
         with self._Locked(self):
             conn = self._read(connection_id) if CONNECTION_ID_RE.match(str(connection_id)) else None
@@ -442,6 +486,10 @@ class TriggerConnectionStore:
                         f"status must be one of {list(CONNECTION_STATUSES)}", reason_code="invalid_connection", field="status"
                     )
                 conn.status = status
+            if paused is not None:
+                conn.paused = _flag(paused, "paused")
+            if always_listen is not None:
+                conn.always_listen = _flag(always_listen, "always_listen")
             conn.updated_at = at
             self._write(conn)
         return conn
@@ -709,8 +757,10 @@ __all__ = [
     "TriggerConnectionStore",
     "append_connection_event",
     "binding_connection_id",
+    "LISTENING_STATES",
     "check_connection_id",
     "connection_event",
+    "connection_usage",
     "connection_event_type",
     "connection_principal",
     "connection_source_uri",

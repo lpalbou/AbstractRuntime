@@ -7,7 +7,7 @@ I/O: the controller reads the inbox events after the automation's cursor and pas
 
 Config (validated strictly; equality / membership and one literal substring, no expressions):
 
-    {"account": "self", "folder": "INBOX", "uses_model": true, "every": "1h", "max_batch": 100,
+    {"account": "self" | "<mailbox id>", "folder": "INBOX", "uses_model": true, "every": "1h", "max_batch": 100,
      "start_at": <RFC3339, default now>, "auto_submitted": "skip",
      "filter": {"from_in": [addr], "from_domain_in": [domain], "to_in": [addr],
                 "subject_contains": str, "has_attachment": bool}}
@@ -34,6 +34,7 @@ Config (validated strictly; equality / membership and one literal substring, no 
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import getaddresses
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -75,6 +76,36 @@ ENVELOPE_FIELDS = (
     "uid", "uidvalidity", "folder", "message_id", "from", "from_address", "to", "cc", "subject", "date",
     "internaldate",
 )
+
+
+# Framework backlog 1044: `account` names one of the user's mailboxes by id ("self", the default, and
+# "default" are the primary). The id is the last segment of the mailbox's `<tenant>:<user>:<id>`
+# reference, so it never holds ':' or whitespace. The HOST checks the id names a readable mailbox of
+# the automation's owner; the adapter only checks its shape.
+SELF_ACCOUNT = "self"
+PRIMARY_ACCOUNTS = ("self", "default")
+ACCOUNT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.@+-]{0,127}$"
+_ACCOUNT_RE = re.compile(ACCOUNT_PATTERN)
+
+
+def validate_account(value: Any) -> str:
+    if not isinstance(value, str) or not _ACCOUNT_RE.match(value.strip()):
+        raise TriggerConfigError(
+            "account must be a mailbox id ('self' for the primary mailbox; letters, digits, '_', '.', '@', '+' or '-')",
+            field="config.account",
+        )
+    return value.strip()
+
+
+def account_reads_ref(account: Any, account_ref: Any) -> bool:
+    """Does a binding's `account` read mail of the mailbox `account_ref` (`<tenant>:<user>:<id>`)?
+    The primary (`self` / `default` / unset) accepts any reference (the runtime's own inbox filter
+    applies); a named mailbox only its own id."""
+    acct = str(account or "").strip()
+    if acct in ("",) + PRIMARY_ACCOUNTS:
+        return True
+    ref = str(account_ref or "").strip()
+    return ref.split(":")[-1] == acct if ref.count(":") >= 2 else False
 
 
 def _address(value: Any, field: str) -> str:
@@ -161,6 +192,8 @@ def message_matches(config: Mapping[str, Any], payload: Mapping[str, Any]) -> bo
     """Does one inbox email payload pass the binding's folder and typed filter? (pure)"""
     if not isinstance(payload, Mapping) or payload.get("kind") != "email":
         return False
+    if not account_reads_ref(config.get("account"), payload.get("account_ref")):
+        return False  # another mailbox of the user
     if str(payload.get("folder") or "") != str(config.get("folder") or "INBOX"):
         return False
     if config.get("auto_submitted", AUTO_SUBMITTED_SKIP) != AUTO_SUBMITTED_ADMIT and is_auto_submitted(payload):
@@ -229,7 +262,7 @@ class EmailReceivedTriggerAdapter:
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "account": {"type": "string", "enum": ["self"]},
+                "account": {"type": "string", "default": SELF_ACCOUNT, "pattern": ACCOUNT_PATTERN},
                 "folder": {"type": "string", "minLength": 1},
                 "uses_model": {"type": "boolean"},
                 "every": {"type": "string", "format": "duration", "pattern": "^[1-9][0-9]*[smhd]$"},
@@ -268,7 +301,14 @@ class EmailReceivedTriggerAdapter:
         "connection_provider": "email_accounts",
         "connection_schema": {
             "type": "object",
-            "properties": {"account": {"type": "string", "description": "the mailbox (a mail account id; 'self': the plane's mailbox)"}},
+            "properties": {
+                "account": {
+                    "type": "string",
+                    "pattern": ACCOUNT_PATTERN,
+                    "default": SELF_ACCOUNT,
+                    "description": "the mailbox: a mail account id of the user ('self': the primary mailbox)",
+                }
+            },
         },
     }
 
@@ -280,13 +320,7 @@ class EmailReceivedTriggerAdapter:
         unknown = sorted(k for k in config if k not in _CONFIG_KEYS)
         if unknown:
             raise TriggerConfigError(f"unknown email.received field(s): {unknown}", field=f"config.{unknown[0]}")
-        account = config.get("account", "self")
-        if account != "self":
-            raise TriggerConfigError(
-                "account must be 'self' (a runtime reads its own user's mailbox)",
-                field="config.account",
-                reason_code="unsupported_feature",
-            )
+        account = validate_account(config.get("account", SELF_ACCOUNT))
         folder = config.get("folder", "INBOX")
         if not isinstance(folder, str) or not folder.strip() or any(c in folder for c in "\r\n"):
             raise TriggerConfigError("folder must be a one-line folder name", field="config.folder")
@@ -313,7 +347,7 @@ class EmailReceivedTriggerAdapter:
             else parse_timestamp(now, field="now")
         )
         return {
-            "account": "self",
+            "account": account,
             "folder": folder.strip(),
             "uses_model": uses_model,
             "every": every,
@@ -463,7 +497,12 @@ class EmailReceivedTriggerAdapter:
 
 
 __all__ = [
+    "ACCOUNT_PATTERN",
     "AUTO_SUBMITTED_ADMIT",
+    "PRIMARY_ACCOUNTS",
+    "SELF_ACCOUNT",
+    "account_reads_ref",
+    "validate_account",
     "AUTO_SUBMITTED_OPTIONS",
     "AUTO_SUBMITTED_SKIP",
     "EmailReceivedTriggerAdapter",

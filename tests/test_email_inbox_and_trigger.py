@@ -265,7 +265,8 @@ def test_trigger_defaults_follow_model_use():
     "config, field",
     [
         ({"every": "30s"}, "config.every"),
-        ({"account": "bob"}, "config.account"),
+        ({"account": "t:bob:second"}, "config.account"),  # a mailbox id, never a reference (backlog 1044)
+        ({"account": ""}, "config.account"),
         ({"surprise": 1}, "config.surprise"),
         ({"filter": {"from_regex": ".*"}}, "config.filter.from_regex"),
         ({"filter": {"from_in": ["Boss <boss@example.test>"]}}, "config.filter.from_in[0]"),

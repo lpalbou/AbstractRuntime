@@ -185,6 +185,7 @@ is never appended again (its id stays recorded).
 trigger = {
     "source_id": "email.received", "source_version": 1,
     "config": {
+        "account": "self",           # default: the primary mailbox; or a mailbox id of the user ("second")
         "uses_model": True,          # default; "every" then defaults to "1h" (false: "60s")
         "every": "1h",               # batch interval, at least "60s"
         "folder": "INBOX",
@@ -195,6 +196,11 @@ trigger = {
 }
 ```
 
+- **Mailbox** (framework backlog 1044): `account` is `"self"` (the default; `"default"` too) for the user's primary
+  mailbox, or the id of another of the user's mailboxes (letters, digits, `_ . @ + -`; never a `tenant:user:id`
+  reference). The automation then reads only that mailbox's streams (`email:<tenant>:<user>:<id>:<folder>`) and its
+  occurrences act for it (`_runtime.email_account` = `<tenant>:<user>:<id>`, `email_binding_for_trigger`). The host
+  checks that the id names a readable mailbox of the automation's owner; the trigger only checks its shape.
 - **Filters** are typed: `from_in` (addresses), `from_domain_in` (exact domains; list a subdomain to match it),
   `to_in` (any To or Cc address), `subject_contains` (one literal, case-insensitive substring) and `has_attachment`.
   There are no patterns or expressions.

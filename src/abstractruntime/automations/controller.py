@@ -177,7 +177,10 @@ def source_events(turn: Turn, adapter: Any, state: Dict[str, Any]) -> Optional[l
             raise ControllerSeamError("this automation's trigger needs config.connection_id (creation refuses a binding without one)")
         return inbox.read(after_seq=int(src.get("cursor_seq") or 0), stream=connection_stream(cid))
     records = inbox.read(after_seq=int(src.get("cursor_seq") or 0))
-    binding = turn.email_binding
+    # Backlog 1044: an email.received@1 binding on a further mailbox reads THAT mailbox's streams.
+    from ..email.binding import email_binding_for_trigger
+
+    binding = email_binding_for_trigger(turn.email_binding, turn.definition["trigger"])
     if binding is None:
         return records
     prefix = f"email:{binding.account_ref}:"
@@ -662,8 +665,12 @@ def build_prepared(
         session_id = first_run_id
     runtime_ns = dict(input_data.get("_runtime")) if isinstance(input_data.get("_runtime"), dict) else {}
     runtime_ns[EMAIL_ALLOWED_RECIPIENTS_KEY] = definition_email_allowed_recipients(definition)
-    if turn.email_binding is not None:
-        runtime_ns[EMAIL_ACCOUNT_KEY] = turn.email_binding.to_dict()
+    # Backlog 1044: the occurrence acts for the mailbox its trigger reads (the primary otherwise).
+    from ..email.binding import email_binding_for_trigger
+
+    occurrence_binding = email_binding_for_trigger(turn.email_binding, trigger_binding)
+    if occurrence_binding is not None:
+        runtime_ns[EMAIL_ACCOUNT_KEY] = occurrence_binding.to_dict()
     input_data["_runtime"] = runtime_ns
     # The automation's title for templates (the send-email action's {automation_title}).
     meta_ns = dict(input_data.get("_meta")) if isinstance(input_data.get("_meta"), dict) else {}

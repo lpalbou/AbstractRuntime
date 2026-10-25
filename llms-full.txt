@@ -717,6 +717,9 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
+- `PUBLISH_EVENT` ("Publish to channel"): the kernel validates the payload; the host's
+  `Runtime.set_publish_event_handler(...)` appends the event to the user's stream (see
+  [automations.md](automations.md#publish-to-channel))
 - `SCHEDULE_RUN`: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never `schedule_run` itself); the host's `Runtime.set_schedule_run_handler(...)` creates it, because only the host knows the target workflow, the owner and the workspace (see [automations.md](automations.md#wakes-schedule_run))
 - `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
@@ -1161,6 +1164,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - wakes (`abstractruntime.automations.wakes`): `EffectType.SCHEDULE_RUN`, `Runtime.set_schedule_run_handler(handler)` (`handler(run, plan) -> {automation_id}`), `plan_schedule_run(run, payload, *, now, run_store=None, request_id=None)`, `create_scheduled_run(runtime, plan, *, target, tenant, user, workspace_root, notify=None)`, `wake_scheduled_event`, `wake_cancelled_event`; creation requests accept `session_id` (growing only), `origin_run_id`, `one_shot`, `untrusted_origin`
 - sample inputs (`abstractruntime.automations.samples`): `sample_occurrence_inputs(runtime, source_id, source_version, config, *, count=100, principal=None, email_context=None, fetch=None)` -> `{inputs, resolve_vars, truncated, source, count}` (the named inputs + `event` with `abstracttest: true`, from real data, read only), `resolved_sample_inputs(sample, artifact_store=)`, `SampleError`
 - mail verbs for flows (`abstractruntime.mail_verbs`): fixed verbs `mail.search`, `mail.get`, `mail.mark`, `mail.label`, `mail.move`, `mail.delete`, `mail.send`, `mail.reply`, `mail.forward`, `mail.attachment` run by the `TOOL_INVOKE` handler (node types `mail_*`); `run_mail_verb(run, name, arguments)`, `mail_verb_outcome(...)`, `MailVerbError`; the Email record `triggers.email_received.email_record(message, mailbox=)`, `email_id`, `parse_email_id`, `thread_id_of`. See [email.md](email.md#mail-verbs-for-flows)
+- publish to channel (`abstractruntime.core.publish`): `EffectType.PUBLISH_EVENT` (node type `publish_event`), payload `{channel, type?, title, body?, subject?, data?, alert?}`, `validate_publish(payload)`, `Runtime.set_publish_event_handler(handler)` with `handler(run, payload, step_id) -> {event_id, sequence, alerted}`. See [automations.md](automations.md#publish-to-channel)
 - definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
@@ -4241,7 +4245,27 @@ The host appends to the user's event stream (helpers `wake_scheduled_event(plan,
 
 Cancelling a wake is archiving its automation (`automation.archive`) before it fires: nothing runs.
 
-## Commands
+## Publish to channel
+
+A flow tells applications that something happened with the "Publish to channel" node (node type `publish_event`,
+`EffectType.PUBLISH_EVENT`; `abstractruntime.core.publish`):
+
+```json
+{"channel": "kitchen", "type": "kitchen.order.ready", "title": "Order 12 is ready", "body": "Table 4",
+ "subject": "order-12", "data": {"order": 12}, "alert": false}
+```
+
+- `channel` is a free name you choose: `kitchen`, `ops`, an application's id (letters, digits, `.`, `_`, `-`;
+  1..64). Applications subscribe to the user's event stream filtered by channel; nothing has to be registered first.
+- `type` is the event's CloudEvents type (no spaces; the host defaults it to `<channel>.message`); `title` is
+  required; `body`, `subject` and `data` (a JSON object, at most 64 KB) are optional.
+- `alert: true` also raises an attention item, so the tray, the Assistant and the watch show it.
+- The runtime validates the payload and hands it to the host: `Runtime.set_publish_event_handler(handler)`, called
+  as `handler(run, payload, step_id)`. `step_id` is the effect's idempotency key, the same on a replayed step, so the
+  event is appended once. The host appends a CloudEvents event (extension `channel`, `data = {...data, title,
+  body?}`) to the user's stream and returns `{event_id, sequence, alerted}`, which is the node's result. A payload the
+  host refuses fails the step with the host's sentence; without a handler the step fails.
+
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,
 expected_revision=None, now=None)` is the only way to change an automation. It returns `{status: "applied" |

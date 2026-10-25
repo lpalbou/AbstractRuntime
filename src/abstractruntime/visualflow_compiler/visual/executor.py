@@ -248,6 +248,9 @@ ENTITY_MEMORY_EFFECT_PINS: Dict[str, tuple[str, tuple[str, ...]]] = {
         "entity_tools_execute",
         ("tool_calls", "phase", "max_calls"),
     ),
+    # Publish to channel (`core/publish.py`): not an entity effect, but the same fixed-type
+    # mechanism (the EffectType is baked from the node type; pins mirror the payload).
+    "publish_event": ("publish_event", ("channel", "type", "title", "body", "subject", "data", "alert")),
 }
 
 # Pins whose values are structured (arrays/objects). Authors often supply

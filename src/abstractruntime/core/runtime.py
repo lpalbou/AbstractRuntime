@@ -1059,6 +1059,7 @@ class Runtime:
         self._event_inbox: Optional[Any] = None
         self._trigger_connection_store: Optional[Any] = None
         self._schedule_run_handler: Optional[Callable[[RunState, Dict[str, Any]], Any]] = None
+        self._publish_event_handler: Optional[Callable[..., Any]] = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
@@ -1352,6 +1353,20 @@ class Runtime:
     @property
     def schedule_run_handler(self) -> Optional[Callable[[RunState, Dict[str, Any]], Any]]:
         return self._schedule_run_handler
+
+    def set_publish_event_handler(self, handler: Optional[Callable[..., Any]]) -> None:
+        """Host hook for `EffectType.PUBLISH_EVENT` ("Publish to channel", `core/publish.py`):
+        `handler(run, payload, step_id) -> {"event_id", "sequence", "alerted"}` appends the event to the
+        user's stream (and the attention item when `payload["alert"]`). `step_id` is the effect's
+        idempotency key: the same on a replayed step. A refused payload raises ValueError. Without a
+        handler the effect fails loudly."""
+        if handler is not None and not callable(handler):
+            raise TypeError("set_publish_event_handler expects a callable or None")
+        self._publish_event_handler = handler
+
+    @property
+    def publish_event_handler(self) -> Optional[Callable[..., Any]]:
+        return self._publish_event_handler
 
     @property
     def effect_policy(self) -> EffectPolicy:
@@ -3489,6 +3504,7 @@ class Runtime:
         self._handlers[EffectType.ANSWER_USER] = self._handle_answer_user
         self._handlers[EffectType.EMIT_EVENT] = self._handle_emit_event
         self._handlers[EffectType.SCHEDULE_RUN] = self._handle_schedule_run
+        self._handlers[EffectType.PUBLISH_EVENT] = self._handle_publish_event
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
@@ -4168,6 +4184,33 @@ class Runtime:
             if suffix and suffix not in names and len(names) < 15:
                 names.append(suffix)
         return names
+
+    def _handle_publish_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle PUBLISH_EVENT ("Publish to channel"; see `core/publish.py`)."""
+        from .publish import PublishError, validate_publish
+
+        handler = self._publish_event_handler
+        if handler is None:
+            return EffectOutcome.failed("publish_event is not available on this host (no publish_event handler is registered)", retryable=False)
+        try:
+            payload = validate_publish(dict(effect.payload or {}))
+        except PublishError as exc:
+            return EffectOutcome.failed(f"invalid publish request: {exc}", retryable=False)
+        try:
+            step_id = str(self._effect_policy.idempotency_key(run=run, node_id=run.current_node, effect=effect))
+        except Exception:
+            step_id = f"{run.current_node}"
+        try:
+            published = handler(run, payload, step_id)
+        except ValueError as exc:  # the host refused the payload: a sentence
+            return EffectOutcome.failed(f"the event was refused: {exc}", retryable=False)
+        if not isinstance(published, dict) or not published.get("event_id"):
+            return EffectOutcome.failed("the host's publish_event handler returned no event_id", retryable=False)
+        return EffectOutcome.completed(result={
+            "event_id": str(published["event_id"]),
+            "sequence": published.get("sequence"),
+            "alerted": bool(published.get("alerted")),
+        })
 
     def _handle_schedule_run(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle SCHEDULE_RUN (framework backlog 1045): plan a wake, let the host create it.

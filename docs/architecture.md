@@ -286,6 +286,9 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
+- `PUBLISH_EVENT` ("Publish to channel"): the kernel validates the payload; the host's
+  `Runtime.set_publish_event_handler(...)` appends the event to the user's stream (see
+  [automations.md](automations.md#publish-to-channel))
 - `SCHEDULE_RUN`: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never `schedule_run` itself); the host's `Runtime.set_schedule_run_handler(...)` creates it, because only the host knows the target workflow, the owner and the workspace (see [automations.md](automations.md#wakes-schedule_run))
 - `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)

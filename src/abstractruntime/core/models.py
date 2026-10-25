@@ -53,6 +53,9 @@ class EffectType(str, Enum):
     # Wakes (framework backlog 1045): schedule a run for later (a one-shot automation the host
     # creates through `Runtime.set_schedule_run_handler`; see `automations.wakes`).
     SCHEDULE_RUN = "schedule_run"
+    # Publish to channel: a CloudEvents event on the user's stream (and an attention item when
+    # `alert`), appended by the host (`Runtime.set_publish_event_handler`; see `core/publish.py`).
+    PUBLISH_EVENT = "publish_event"
 
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"

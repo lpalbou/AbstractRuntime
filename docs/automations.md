@@ -549,7 +549,27 @@ The host appends to the user's event stream (helpers `wake_scheduled_event(plan,
 
 Cancelling a wake is archiving its automation (`automation.archive`) before it fires: nothing runs.
 
-## Commands
+## Publish to channel
+
+A flow tells applications that something happened with the "Publish to channel" node (node type `publish_event`,
+`EffectType.PUBLISH_EVENT`; `abstractruntime.core.publish`):
+
+```json
+{"channel": "kitchen", "type": "kitchen.order.ready", "title": "Order 12 is ready", "body": "Table 4",
+ "subject": "order-12", "data": {"order": 12}, "alert": false}
+```
+
+- `channel` is a free name you choose: `kitchen`, `ops`, an application's id (letters, digits, `.`, `_`, `-`;
+  1..64). Applications subscribe to the user's event stream filtered by channel; nothing has to be registered first.
+- `type` is the event's CloudEvents type (no spaces; the host defaults it to `<channel>.message`); `title` is
+  required; `body`, `subject` and `data` (a JSON object, at most 64 KB) are optional.
+- `alert: true` also raises an attention item, so the tray, the Assistant and the watch show it.
+- The runtime validates the payload and hands it to the host: `Runtime.set_publish_event_handler(handler)`, called
+  as `handler(run, payload, step_id)`. `step_id` is the effect's idempotency key, the same on a replayed step, so the
+  event is appended once. The host appends a CloudEvents event (extension `channel`, `data = {...data, title,
+  body?}`) to the user's stream and returns `{event_id, sequence, alerted}`, which is the node's result. A payload the
+  host refuses fails the step with the host's sentence; without a handler the step fails.
+
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,
 expected_revision=None, now=None)` is the only way to change an automation. It returns `{status: "applied" |

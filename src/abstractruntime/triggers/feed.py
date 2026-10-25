@@ -97,10 +97,37 @@ class FeedItemTriggerAdapter(ConnectionEventAdapter):
             "additionalProperties": False,
             "required": ["url"],
             "properties": {
-                "url": {"type": "string", "format": "uri", "description": "the RSS 2.0 or Atom feed address (http or https)"},
-                "every": {"type": "string", "format": "duration", "pattern": "^[1-9][0-9]*[smhd]$", "default": DEFAULT_EVERY},
-                "max_items": {"type": "integer", "minimum": 1, "maximum": MAX_ITEMS, "default": DEFAULT_MAX_ITEMS},
-                "initial_items": {"type": "string", "enum": list(INITIAL_ITEMS), "default": "skip"},
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "title": "Feed address",
+                    "description": "The address of the RSS or Atom feed (starts with http:// or https://).",
+                },
+                "every": {
+                    "type": "string",
+                    "format": "duration",
+                    "pattern": "^[1-9][0-9]*[smhd]$",
+                    "default": DEFAULT_EVERY,
+                    "title": "Check every",
+                    "description": "How often to check the feed: a number and a unit (s, m, h or d), for example 15m. At least 60s.",
+                },
+                "max_items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_ITEMS,
+                    "default": DEFAULT_MAX_ITEMS,
+                    "title": "Most new items per check",
+                    "description": "The most new items one check delivers; older new items are skipped.",
+                },
+                "initial_items": {
+                    "type": "string",
+                    "enum": list(INITIAL_ITEMS),
+                    "enumNames": ["Ignore what is already there", "Also deliver the latest items"],
+                    "default": "skip",
+                    "title": "When added",
+                    "description": "What to do with the items already in the feed when it is first checked: "
+                                   "ignore what is already there (skip), or also deliver the latest items (deliver).",
+                },
             },
         },
     }

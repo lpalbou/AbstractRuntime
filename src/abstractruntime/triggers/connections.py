@@ -221,7 +221,7 @@ def connection_usage(runtime: Any, conn: TriggerConnection) -> Dict[str, Any]:
     - `used_by`: how many ACTIVE automations read its stream (`stream_consumers`);
     - `listening`: `"paused"` (the connection is paused or its status is `disabled`: nothing is
       fetched or accepted), `"listening"` (polled / accepting now: used by an active automation, or
-      `always_listen`), `"idle"` (nothing uses it: nothing is fetched or stored).
+      `always_listen`), `"idle"` (nothing uses it: a feed is not fetched; a webhook still accepts calls).
     """
     from ..email.automations import stream_consumers
 

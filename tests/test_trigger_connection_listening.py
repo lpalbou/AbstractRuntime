@@ -1,4 +1,4 @@
-"""A connection is fed only while something listens (framework backlog 1041/1043 follow-up):
+"""A feed connection is polled only while something listens (framework backlog 1041/1043 follow-up):
 `paused`, `always_listen`, the derived `listening` / `used_by`, and the feed poller and webhook
 ingress honouring them."""
 
@@ -129,13 +129,16 @@ def _signed(secret, wid, body=b'{"n": 1}'):
                   "webhook-signature": sign_standard_webhook(secret, webhook_id=wid, timestamp=NOW_S, body=body)}
 
 
-def test_webhook_paused_and_idle_store_nothing(env):
+def test_webhook_idle_accepts_and_stores_paused_refuses(env):
+    """UX ruling: a call to an idle webhook connection is accepted and stored (a first test right after
+    creating the connection works); only a paused or disabled connection refuses."""
     runtime, store, clock = env
     conn = store.create(principal=ALICE, source_id="webhook.received", source_version=1, config={})
     secret = store.secrets(conn.connection_id, principal=ALICE)["secret"]
     inbox = runtime.event_inbox
+    assert connection_usage(runtime, conn)["listening"] == "idle"
     idle = append_webhook_event(inbox, conn, *_signed(secret, "w1"), store=store, now=NOW_S, runtime=runtime)
-    assert (idle["status"], idle["http_status"], idle["reason"]) == ("refused", 409, "not_listening")
+    assert (idle["status"], idle["http_status"]) == ("appended", 202)
     _bind(runtime, clock, conn, source="webhook.received")
     ok = append_webhook_event(inbox, conn, *_signed(secret, "w2"), store=store, now=NOW_S, runtime=runtime)
     assert ok["status"] == "appended"
@@ -144,4 +147,18 @@ def test_webhook_paused_and_idle_store_nothing(env):
     assert (out["http_status"], out["reason"]) == (409, "connection_disabled")
     out = append_webhook_event(inbox, paused, *_signed(secret, "w4"), secret=secret, now=NOW_S)  # without runtime too
     assert out["reason"] == "connection_disabled"
-    assert [e["payload"]["subject"] for e in inbox.read(stream=conn.stream)] == ["w2"]
+    assert [e["payload"]["subject"] for e in inbox.read(stream=conn.stream)] == ["w1", "w2"]
+    disabled = store.update(conn.connection_id, principal=ALICE, paused=False, status="disabled")
+    assert append_webhook_event(inbox, disabled, *_signed(secret, "w5"), secret=secret, now=NOW_S)["reason"] == "connection_disabled"
+
+
+def test_feed_connection_schema_reads_as_plain_language():
+    from abstractruntime.triggers.feed import FeedItemTriggerAdapter
+
+    props = FeedItemTriggerAdapter.descriptor["connection_schema"]["properties"]
+    assert set(props) == {"url", "every", "max_items", "initial_items"}  # field names unchanged
+    assert props["every"]["title"] == "Check every" and "number and a unit" in props["every"]["description"]
+    assert props["initial_items"]["title"] == "When added"
+    assert dict(zip(props["initial_items"]["enum"], props["initial_items"]["enumNames"])) == {
+        "skip": "Ignore what is already there", "deliver": "Also deliver the latest items"}
+    assert all(p.get("title") and p.get("description") for p in props.values())

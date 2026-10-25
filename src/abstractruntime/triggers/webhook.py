@@ -240,8 +240,10 @@ def append_webhook_event(
     `{status, http_status, reason?, event_id?, seq?, webhook_id?}`: `appended` (202), `duplicate`
     (409, the `webhook-id` was already received), `refused` (401 `missing_headers` / `bad_timestamp` /
     `stale` / `bad_signature`; 413 `too_large`; 415 `unsupported_body`; 409 `connection_disabled` for a
-    disabled or paused connection; 409 `not_listening` when `runtime` is given and no active automation
-    uses the connection and it is not `always_listen`).
+    disabled or paused connection). A connection nothing uses yet (idle) still ACCEPTS and stores the
+    call: the sender has delivered it, the person sees it among the connection's events, and a first
+    test right after creating the connection works. `runtime` is accepted for callers written against
+    0.11.0 and is not used.
     Refusals are recorded on the connection (`last_error`) when `store` is given."""
     if connection.source_id != SOURCE_ID:
         raise ValueError(f"connection {connection.connection_id} is not a {SOURCE_REF} connection")
@@ -260,13 +262,7 @@ def append_webhook_event(
 
     if connection.status == "disabled" or connection.paused:
         return refused(409, "connection_disabled")
-    if runtime is not None:
-        from .connections import connection_usage
-
-        if connection_usage(runtime, connection)["listening"] != "listening":
-            # Idle: no active automation uses the endpoint (and it is not `always_listen`):
-            # nothing is stored.
-            return refused(409, "not_listening")
+    del runtime  # idle connections accept calls; only paused / disabled refuse
     if len(body) > int(max_body_bytes):
         return refused(413, "too_large")
     if secret is None:

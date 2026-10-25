@@ -590,6 +590,7 @@ def build_prepared(
     resolve_vars: list = []
     if isinstance(emails, list):
         resolve_vars = _freeze_email_inputs(turn, input_data, emails)
+    _frame_connection_events(input_data, trigger_binding, envelope)
     approval = definition["policy"].get("tool_approval", "auto")
     named_policy = definition["policy"].get("tool_policy")
     if isinstance(named_policy, dict):
@@ -649,6 +650,25 @@ def build_prepared(
     if resolve_vars:
         prepared[PREPARED_RESOLVE_VARS] = resolve_vars
     return prepared
+
+
+def _frame_connection_events(input_data: Dict[str, Any], binding: Dict[str, Any], envelope: Dict[str, Any]) -> None:
+    """A connection-bound source's events (feed items, webhook calls) reach a string `prompt`
+    inside the fixed untrusted frame (`triggers.event_frame`); a target that reads structured
+    input has them in `input_data.event.data.events` too."""
+    from ..triggers.connections import uses_connection_store
+    from ..triggers.event_frame import connection_events_frame
+
+    try:
+        adapter = get_trigger_adapter(binding["source_id"], binding["source_version"])
+    except Exception:  # noqa: BLE001 - an unknown source never reaches admission
+        return
+    if not uses_connection_store(getattr(adapter, "descriptor", None) or {}):
+        return
+    events = (envelope.get("payload") or {}).get("events")
+    if isinstance(input_data.get("prompt"), str) and isinstance(events, list) and events:
+        ref = f"{binding['source_id']}@{binding['source_version']}"
+        input_data["prompt"] = f"{input_data['prompt']}\n\n{connection_events_frame(ref, events)}"
 
 
 # `prepared[PREPARED_RESOLVE_VARS]`: top-level input keys whose values hold artifact refs that

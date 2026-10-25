@@ -50,7 +50,7 @@ def _fake_entry_points(monkeypatch, pairs):
 
 def test_builtins_are_available_and_typed():
     listed = [(r["descriptor"]["id"], r["descriptor"]["version"]) for r in trigger_sources() if r["available"]]
-    assert listed == [("schedule", 1), ("schedule", 2), ("manual", 1), ("email.received", 1)]
+    assert listed == [("schedule", 1), ("schedule", 2), ("manual", 1), ("email.received", 1), ("feed.item", 1)]
     rows = {(r["descriptor"]["id"], r["descriptor"]["version"]): r for r in trigger_sources() if r["available"]}
     assert rows[("schedule", 1)]["descriptor"]["capabilities"] == {"kind": "time"}
     assert rows[("schedule", 2)]["descriptor"]["capabilities"] == {"kind": "time"}
@@ -76,7 +76,7 @@ def test_third_party_entry_point_is_discovered_without_code_change(monkeypatch):
         ("webhook", f"{mod}:WebhookAdapter"),
     ])
     ids = [r["descriptor"]["id"] for r in trigger_sources() if r["available"]]
-    assert ids == ["schedule", "schedule", "manual", "email.received", "webhook"]
+    assert ids == ["schedule", "schedule", "manual", "email.received", "feed.item", "webhook"]
     assert isinstance(get_trigger_adapter("webhook", 1), WebhookAdapter)
 
 

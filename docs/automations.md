@@ -216,6 +216,33 @@ string `prompt`, inside a fixed untrusted frame (both stored as artifacts; the c
 their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
 or delegation. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
 
+### `feed.item@1`
+
+Runs the automation when a feed connection has new items (framework backlog 1043). The binding names the connection:
+`{connection_id, max_batch?, start_at?}` (see [Trigger connections](#trigger-connections)); the connection holds
+the feed: `{url, every (default 15m, never below 60s), max_items (1..200, default 50), initial_items: "skip" |
+"deliver"}`.
+
+- RSS 2.0 and Atom 1.0, parsed with the standard library (`parse_feed`; `xml.etree` never resolves external
+  entities; documents above 5 MB are refused).
+- The poller belongs to the host's plane, not to the runtime: the host calls
+  `poll_feed_connections(runtime, store, fetch=None, now=None)` from its own worker loop (every ~30 s is enough).
+  Each call polls the active feed connections whose interval elapsed with a conditional GET (`If-None-Match` /
+  `If-Modified-Since`; a 304 adds nothing), appends one event per new item to `trigger:<connection_id>`, and wakes
+  the automations bound to connections that got items. It returns one report per connection (`ok`, `skipped`,
+  `baseline`, `not_modified`, `appended`, `error`, `next_poll_at`, `woken`). Nothing is started at import.
+- The first poll is a baseline by default (`initial_items: "skip"`): items already in the feed are history.
+  `"deliver"` appends them too. A poll appends at most `max_items` (the newest); older new items are marked seen.
+- Item identity is the Atom `id` or RSS `guid`, else the link, else a digest of title and date. It is the event's
+  `subject` and `dedupekey`, so an item is appended once, whatever the feed serves again. The cursor (validators,
+  seen ids, next poll time, failures) is the stream state of the connection's stream.
+- Each event's `data` is `{id, title, link, published, updated, summary, author, feed: {title, url}}`. The items of
+  one poll become ONE occurrence (up to the binding's `max_batch`): `input_data.event.data.events[i].data`, and
+  for a string `prompt` a fixed untrusted frame listing every event (`triggers.event_frame`). Feed text is
+  untrusted input: the unattended grant is the email trigger's (allow by kind).
+- A failure (unreachable, HTTP error, not a feed) is a typed `{code, cause, fix}` on the connection's
+  `last_error`; the next poll waits a doubling backoff (at most 6 hours); a later success clears it. Nothing raises.
+
 ### Trigger connections
 
 A source is a type ("a feed item", "a webhook call"); a **connection** is one user's instance of it ("this feed

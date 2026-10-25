@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Blog</title>
+  <id>urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6</id>
+  <updated>2026-01-06T18:30:02Z</updated>
+  <entry>
+    <title>Atom entry two</title>
+    <link rel="alternate" href="https://blog.example.test/two"/>
+    <id>urn:uuid:entry-2</id>
+    <updated>2026-01-06T18:30:02Z</updated>
+    <published>2026-01-06T18:00:00Z</published>
+    <author><name>Grace</name></author>
+    <summary>Entry two summary.</summary>
+  </entry>
+  <entry>
+    <title>Atom entry one</title>
+    <link rel="alternate" href="https://blog.example.test/one"/>
+    <id>urn:uuid:entry-1</id>
+    <updated>2026-01-05T08:00:00Z</updated>
+    <content type="html">&lt;p&gt;Entry one content.&lt;/p&gt;</content>
+  </entry>
+</feed>

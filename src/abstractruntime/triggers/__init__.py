@@ -14,6 +14,7 @@ from .connections import (
     wake_connection_automations,
 )
 from .email_received import EmailReceivedTriggerAdapter
+from .feed import FeedItemTriggerAdapter, FeedPoller, parse_feed, poll_feed_connections
 from .manual import ManualTriggerAdapter, manual_event_id
 from .protocol import (
     TRIGGER_STATE_KEYS,
@@ -54,6 +55,10 @@ __all__ = [
     "wake_connection_automations",
     "ENTRY_POINT_GROUP",
     "EmailReceivedTriggerAdapter",
+    "FeedItemTriggerAdapter",
+    "FeedPoller",
+    "parse_feed",
+    "poll_feed_connections",
     "ManualTriggerAdapter",
     "ScheduleTriggerAdapter",
     "ScheduleV2TriggerAdapter",

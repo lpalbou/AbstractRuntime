@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Example News</title>
+    <link>https://news.example.test/</link>
+    <description>Fixture feed</description>
+    <item>
+      <title>Second story</title>
+      <link>https://news.example.test/2</link>
+      <guid isPermaLink="false">story-2</guid>
+      <pubDate>Mon, 05 Jan 2026 10:00:00 GMT</pubDate>
+      <description>The second &lt;b&gt;story&lt;/b&gt;.</description>
+      <dc:creator>Ada</dc:creator>
+    </item>
+    <item>
+      <title>First story</title>
+      <link>https://news.example.test/1</link>
+      <guid>story-1</guid>
+      <pubDate>Sun, 04 Jan 2026 09:30:00 +0100</pubDate>
+      <description>The first story.</description>
+      <author>bob@example.test (Bob)</author>
+    </item>
+  </channel>
+</rss>

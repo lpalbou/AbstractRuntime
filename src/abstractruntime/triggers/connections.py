@@ -483,6 +483,16 @@ class TriggerConnectionStore:
             self._write(conn)
 
 
+    def clear_error(self, connection_id: str) -> None:
+        """Feeder bookkeeping: a poll succeeded, so the last failure no longer stands."""
+        with self._Locked(self):
+            conn = self._read(connection_id)
+            if conn is None or conn.last_error is None:
+                return
+            conn.last_error = None
+            self._write(conn)
+
+
 # --- binding validation (host side; adapters stay pure) ---------------------------------------
 
 

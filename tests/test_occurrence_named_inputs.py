@@ -118,9 +118,14 @@ def test_email_gives_messages_and_mailbox(env, account, mailbox):
     drive(runtime, aid)
     (kid,) = children(runtime, aid)
     assert kid.vars["mailbox"] == mailbox
-    assert kid.vars["messages"] == [{"id": "<1@x.test>", "from": "Bob <bob@x.test>", "to": "alice@example.test", "subject": "Hello",
-                                     "date": "Thu, 01 Jan 2026 00:04:00 +0000", "body_text": "Hello body",
-                                     "attachments": [{"name": "a.pdf", "size": 12, "artifact": None, "index": 0}]}]
+    # The Email record (one shape for trigger inputs, samples and the mail verbs). The watcher stores
+    # new mail without its flags: seen / flagged / labels are null here.
+    assert kid.vars["messages"] == [{"id": "1:1:INBOX", "message_id": "<1@x.test>", "mailbox": mailbox, "folder": "INBOX",
+                                     "thread_id": "<1@x.test>", "from": "Bob <bob@x.test>", "to": "alice@example.test", "cc": None,
+                                     "subject": "Hello", "date": "Thu, 01 Jan 2026 00:04:00 +0000", "body_text": "Hello body",
+                                     "body_html": None,
+                                     "attachments": [{"index": 0, "name": "a.pdf", "size": 12, "type": "application/pdf", "artifact": None}],
+                                     "seen": None, "flagged": None, "labels": None}]
     # The controller's own record keeps a ref, never the bodies; the old keys stay for one release.
     assert kid.vars["trigger"]["emails"][0]["subject"] == "Hello" and kid.vars["event"]["data"]["messages"][0]["subject"] == "Hello"
     prepared = [r for r in runtime.ledger_store.list(aid) if "automation.admitted" in str(r.get("effect"))]

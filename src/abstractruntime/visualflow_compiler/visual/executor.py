@@ -53,6 +53,17 @@ CAMERA_TOOL_INVOKE_VERBS: Dict[str, str] = {
     "camera_capture_video": "camera_capture_video",
     "camera_analyze_media": "analyze_media",
     "camera_close": "camera_close",
+    # Mail verbs for flows (`abstractruntime.mail_verbs`): run by the runtime on the run's mailbox.
+    "mail_search": "mail.search",
+    "mail_get": "mail.get",
+    "mail_mark": "mail.mark",
+    "mail_label": "mail.label",
+    "mail_move": "mail.move",
+    "mail_delete": "mail.delete",
+    "mail_send": "mail.send",
+    "mail_reply": "mail.reply",
+    "mail_forward": "mail.forward",
+    "mail_attachment": "mail.attachment",
 }
 
 # Argument pins forwarded per camera node type. Only these pins reach the
@@ -65,6 +76,16 @@ CAMERA_TOOL_INVOKE_ARG_PINS: Dict[str, tuple[str, ...]] = {
     "camera_capture_video": ("camera", "duration_s", "timeout_s"),
     "camera_analyze_media": ("file_path", "question"),
     "camera_close": ("camera",),
+    "mail_search": ("mailbox", "query", "folder", "limit"),
+    "mail_get": ("mailbox", "ids"),
+    "mail_mark": ("mailbox", "ids", "seen", "flagged"),
+    "mail_label": ("mailbox", "ids", "add", "remove"),
+    "mail_move": ("mailbox", "ids", "folder"),
+    "mail_delete": ("mailbox", "ids", "permanent"),
+    "mail_send": ("mailbox", "to", "cc", "bcc", "subject", "text", "html", "attachments"),
+    "mail_reply": ("mailbox", "id", "text", "html", "reply_all"),
+    "mail_forward": ("mailbox", "id", "to", "note"),
+    "mail_attachment": ("mailbox", "id", "index"),
 }
 
 # ---------------------------------------------------------------------------

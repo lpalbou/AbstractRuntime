@@ -253,6 +253,60 @@ Inbound mail is data, never instructions:
   `send_email` to the user's own address included. The executor's own defaults never decide for an email-triggered
   run or its child runs (`_runtime.untrusted_input`); see [automations.md](automations.md#tool-approval).
 
+## The Email record
+
+One shape describes a message everywhere a flow meets mail: the `messages` of an `email.received@1`
+occurrence, a [sample](automations.md#testing-a-triggered-flow-with-sample-inputs), and the results of the mail
+verbs below (`triggers.email_received.email_record`).
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `"<uidvalidity>:<uid>:<folder>"`: names the message for the mail verbs. A folder the server rebuilds gets a new UIDVALIDITY, and its old ids are refused (`email_message_not_found`), never guessed |
+| `message_id` | the Message-ID header |
+| `mailbox` | the mailbox's address, or its id when the host bound it without one |
+| `folder` | the folder holding the message |
+| `thread_id` | the conversation: the first Message-ID of `References`, else `In-Reply-To`, else the message's own Message-ID |
+| `from`, `to`, `cc`, `subject`, `date` | the headers as written |
+| `body_text`, `body_html` | the bodies; null when not read (`mail.search`) or over the reading limit |
+| `attachments` | `[{index, name, size, type, artifact}]`: `artifact` is null until `mail.attachment` saves the part |
+| `seen`, `flagged`, `labels` | from the message's flags (`labels`: the keywords that are not system flags); null when the source did not keep the flags (a trigger's messages) |
+
+## Mail verbs for flows
+
+Flows handle mail deterministically with fixed-verb nodes. Each node type compiles to one `TOOL_INVOKE` effect
+whose verb is baked from the node type (it never comes from a pin, and a model cannot author it); the runtime runs
+it on the run's mailbox without an approval prompt, because the person authored the node. Results use the tool
+envelope (`results[0].output`); a refusal is `success: false` with `error_detail = {code, cause, fix}`.
+
+| Node type | Verb | Arguments | Output |
+| --- | --- | --- | --- |
+| `mail_search` | `mail.search` | `query` (`from_address`, `from_domain`, `to_address`, `subject_contains`, `since`, `before`, `unseen`, `has_attachment`), `folder`, `limit` (1..500, default 50) | `{emails, has_more}`: Email records without bodies, newest first |
+| `mail_get` | `mail.get` | `ids` | `{emails, missing}`: Email records with bodies |
+| `mail_mark` | `mail.mark` | `ids`, `seen?`, `flagged?` | `{ids, changed}` |
+| `mail_label` | `mail.label` | `ids`, `add?`, `remove?` | `{ids, changed}` |
+| `mail_move` | `mail.move` | `ids`, `folder` (destination) | `{ids, moved}` |
+| `mail_delete` | `mail.delete` | `ids`, `permanent` (default false) | `{ids, deleted}` |
+| `mail_send` | `mail.send` | `to`, `cc?`, `bcc?`, `subject`, `text`, `html?`, `attachments?` (artifact refs) | `{message_id, accepted, refused}` |
+| `mail_reply` | `mail.reply` | `id`, `text`, `html?`, `reply_all` (default false) | `{message_id, accepted, refused}` |
+| `mail_forward` | `mail.forward` | `id`, `to`, `note?` | `{message_id, accepted, refused}` |
+| `mail_attachment` | `mail.attachment` | `id`, `index` | `{artifact, name, size, type}` |
+
+- **Mailbox.** Every verb takes `mailbox`: a mailbox id of the user (`"self"` or `"default"` for the primary). Without
+  it the verb uses the run's own mailbox (an email-triggered occurrence is bound to its trigger's mailbox), else the
+  primary. The host's resolver opens it (`Runtime.set_email_context_resolver`, `use="action"`); credentials never
+  reach vars or results.
+- **Reading never changes the mailbox.** `mail.search`, `mail.get` and `mail.attachment` read on one connection,
+  read-only; nothing is marked read.
+- **Writes and read-only mailboxes.** `mark`, `label`, `move`, `delete`, `send`, `reply` and `forward` are refused
+  with `email_read_only` on a mailbox without sending settings.
+- **Sending.** `send`, `reply` and `forward` go through AbstractCore's `guarded_send`: the account's recipient policy
+  and rate limits apply, and the framework marks automatic mail as such.
+- **Mailbox-changing verbs.** `mark`, `label`, `move`, `delete` and `forward` call the AbstractCore mail client's verbs
+  of the same names; with an AbstractCore whose client does not have them, the verb answers `mail_verb_unavailable`.
+- **Errors.** `invalid_arguments`, `invalid_mailbox`, `email_not_configured`, `email_read_only`,
+  `email_message_not_found`, `mail_verb_unavailable`, `artifact_store_missing`, and AbstractCore's own `email_*` codes
+  (sign-in, policy, rate limits).
+
 ## Sending from an automation without a model
 
 The send-email action is a target for automations whose steps need no model ("forward invoices to me"):

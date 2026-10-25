@@ -5190,6 +5190,12 @@ def make_tool_invoke_handler(
             arguments = {}
         if not isinstance(arguments, dict):
             return EffectOutcome.failed("tool_invoke payload.arguments must be an object", retryable=False)
+        from ...mail_verbs import is_mail_verb, mail_verb_outcome
+
+        if is_mail_verb(name):
+            # Mail verbs for flows (`mail.*`): run by the runtime against the run's mailbox, with the
+            # same TOOL_CALLS envelope; typed refusals are tool results, never run failures.
+            return EffectOutcome.completed(mail_verb_outcome(run, name, arguments, call_id=str(payload.get("call_id") or "")))
         inner_payload: Dict[str, Any] = {
             "tool_calls": [{"name": name, "arguments": arguments}],
         }

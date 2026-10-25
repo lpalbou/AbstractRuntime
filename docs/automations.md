@@ -445,7 +445,7 @@ occurrence:
 | --- | --- | --- |
 | `schedule@1`, `schedule@2` | `scheduled_at`, `occurrence` | `scheduled_at`: the tick's ISO 8601 time; `occurrence`: the occurrence number (1, 2, ...) |
 | `manual@1` (any automation's run now) | none | |
-| `email.received@1` | `messages`, `mailbox` | `messages`: list of `{id, from, to, subject, date, body_text, attachments: [{name, size, artifact, index}]}` (`id` is the Message-ID; `artifact` is null, read an attachment with `get_email_attachment` and its `index`); `mailbox`: the mailbox's address, or its id when the host bound it without one |
+| `email.received@1` | `messages`, `mailbox` | `messages`: list of [Email records](email.md#the-email-record) (`id` names the message for the [mail verbs](email.md#mail-verbs-for-flows), `message_id` is its Message-ID; `seen`, `flagged` and `labels` are null because the watcher stores new mail without its flags); `mailbox`: the mailbox's address, or its id when the host bound it without one |
 | `feed.item@1` | `items`, `feed` | `items`: list of `{id, title, link, published, summary, author}`; `feed`: `{title, url}` |
 | `webhook.received@1` | `calls` | list of `{id, received_at, headers, body}`: `id` is the `webhook-id`, `received_at` its signed timestamp (ISO), `headers` the call's headers in lower case without the signature and credentials, `body` the parsed JSON (or the text of a non-JSON body) |
 

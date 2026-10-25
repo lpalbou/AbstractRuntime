@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mail verbs for flows**: fixed-verb nodes `mail_search`, `mail_get`, `mail_mark`, `mail_label`, `mail_move`, `mail_delete`, `mail_send`, `mail_reply`, `mail_forward` and `mail_attachment` compile to `TOOL_INVOKE` effects (`mail.*`) the runtime runs on the run's mailbox (default: the trigger's, else the primary; `mailbox` names another), without an approval prompt and never mintable by a model. Reads are read-only on one connection; writes are refused on a read-only mailbox (`email_read_only`); sends go through `guarded_send`. `mark`, `label`, `move`, `delete` and `forward` use the AbstractCore mail client's verbs of those names (`mail_verb_unavailable` without them). See [Mail verbs for flows](docs/email.md#mail-verbs-for-flows).
+- **The Email record**: one message shape for trigger inputs, samples and the mail verbs: `{id, message_id, mailbox, folder, thread_id, from, to, cc, subject, date, body_text, body_html, attachments: [{index, name, size, type, artifact}], seen, flagged, labels}`. The trigger's `messages` use it: their `id` is now the message's locator (`"<uidvalidity>:<uid>:<folder>"`) and the Message-ID moves to `message_id`.
+
 ## [0.11.1] - 2026-10-25
 
 Requires AbstractCore 2.27.0 or newer (`EmailClient.session()` / `get_many()`).

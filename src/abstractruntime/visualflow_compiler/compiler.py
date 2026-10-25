@@ -3461,7 +3461,8 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                     current["result"] = first.get("output") if ok else (first.get("error") or "Tool execution failed")
                     output = first.get("output")
                     if isinstance(output, dict):
-                        for pin in ("path", "media", "camera"):
+                        # camera nodes: path/media/camera; mail nodes: emails/artifact/message_id
+                        for pin in ("path", "media", "camera", "emails", "artifact", "message_id"):
                             if pin in output:
                                 current[pin] = output.get(pin)
                     elif isinstance(output, str):

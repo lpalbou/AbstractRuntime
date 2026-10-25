@@ -108,6 +108,87 @@ def account_reads_ref(account: Any, account_ref: Any) -> bool:
     return ref.split(":")[-1] == acct if ref.count(":") >= 2 else False
 
 
+# --- the Email record (one shape for trigger inputs, samples and the mail verbs) -------------------
+
+
+def email_id(folder: Any, uidvalidity: Any, uid: Any) -> Optional[str]:
+    """The record's `id`: `"<uidvalidity>:<uid>:<folder>"`, enough for a mail verb to find the message
+    again in its mailbox (a folder rebuilt by the server changes UIDVALIDITY: the id goes stale)."""
+    try:
+        return f"{int(uidvalidity)}:{int(uid)}:{folder or 'INBOX'}"
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_email_id(value: Any) -> Optional[tuple]:
+    """`(folder, uidvalidity, uid)` of an `email_id`, or None."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":", 2)
+    if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or not parts[2]:
+        return None
+    return parts[2], int(parts[0]), int(parts[1])
+
+
+def thread_id_of(message: Mapping[str, Any]) -> Optional[str]:
+    """The conversation a message belongs to: the first Message-ID of `References`, else
+    `In-Reply-To`, else its own Message-ID (structural, RFC 5322 threading headers only)."""
+    refs = message.get("references")
+    if isinstance(refs, str):
+        refs = refs.split()
+    if isinstance(refs, (list, tuple)) and refs and str(refs[0]).strip():
+        return str(refs[0]).strip()
+    for key in ("in_reply_to", "message_id"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def email_record(message: Mapping[str, Any], *, mailbox: Optional[str]) -> Dict[str, Any]:
+    """The `Email` record of one message (an inbox payload or an AbstractCore detail/summary dict):
+
+    `{id, message_id, mailbox, folder, thread_id, from, to, cc, subject, date, body_text, body_html,
+    attachments: [{index, name, size, type, artifact}], seen, flagged, labels}`.
+
+    `seen` / `flagged` / `labels` (the IMAP keywords that are not system flags) come from the
+    message's flags; they are null when the source did not keep them (the watcher stores new mail
+    without its flags). `body_text` / `body_html` are null when not read (`mail.search`) or over the
+    reading limit. `artifact` is null until `mail.attachment` saves the part."""
+    flags = message.get("flags")
+    known = isinstance(flags, (list, tuple))
+    fl = [str(f) for f in flags] if known else []
+    attachments = []
+    for a in message.get("attachments") or []:
+        if isinstance(a, Mapping):
+            attachments.append({
+                "index": a.get("index"),
+                "name": a.get("filename") or a.get("name"),
+                "size": a.get("size"),
+                "type": a.get("content_type") or a.get("type"),
+                "artifact": a.get("artifact"),
+            })
+    lowered = {f.lstrip("\\").lower() for f in fl}
+    return {
+        "id": email_id(message.get("folder"), message.get("uidvalidity"), message.get("uid")),
+        "message_id": message.get("message_id"),
+        "mailbox": mailbox,
+        "folder": message.get("folder"),
+        "thread_id": thread_id_of(message),
+        "from": message.get("from"),
+        "to": message.get("to"),
+        "cc": message.get("cc"),
+        "subject": message.get("subject"),
+        "date": message.get("date"),
+        "body_text": message.get("body_text"),
+        "body_html": message.get("body_html"),
+        "attachments": attachments,
+        "seen": ("seen" in lowered) if known else None,
+        "flagged": ("flagged" in lowered) if known else None,
+        "labels": [f for f in fl if not f.startswith("\\")] if known else None,
+    }
+
+
 def _address(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise TriggerConfigError(f"{field} must be an email address string", field=field)
@@ -474,31 +555,10 @@ class EmailReceivedTriggerAdapter:
 
     def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
                           index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
-        """Named occurrence inputs (the Flow contract): `messages` and `mailbox`.
-
-        `messages[i] = {id, from, to, subject, date, body_text, attachments: [{name, size, artifact}]}`
-        from the whole messages of the admission (`inputs.emails`); `artifact` is null (an
-        attachment is read on demand with `get_email_attachment`, by `index`). `mailbox` is the
-        mailbox's address when the host bound it, else its id."""
+        """Named occurrence inputs (the Flow contract): `messages` (a list of `Email` records,
+        `email_record`) and `mailbox` (the mailbox's address when the host bound it, else its id)."""
         emails = (inputs or {}).get("emails")
-        messages = []
-        for e in emails if isinstance(emails, list) else []:
-            if not isinstance(e, Mapping):
-                continue
-            attachments = []
-            for a in e.get("attachments") or []:
-                if isinstance(a, Mapping):
-                    attachments.append({"name": a.get("filename") or a.get("name"), "size": a.get("size"),
-                                        "artifact": a.get("artifact"), "index": a.get("index")})
-            messages.append({
-                "id": e.get("message_id"),
-                "from": e.get("from"),
-                "to": e.get("to"),
-                "subject": e.get("subject"),
-                "date": e.get("date"),
-                "body_text": e.get("body_text"),
-                "attachments": attachments,
-            })
+        messages = [email_record(e, mailbox=mailbox) for e in (emails if isinstance(emails, list) else []) if isinstance(e, Mapping)]
         return {"messages": messages, "mailbox": mailbox}
 
     def normalize(self, binding: TriggerBinding, *, event_id: str, fired_at: str, payload: Mapping[str, Any]) -> TriggerEnvelope:
@@ -527,6 +587,10 @@ class EmailReceivedTriggerAdapter:
 
 __all__ = [
     "ACCOUNT_PATTERN",
+    "email_id",
+    "email_record",
+    "parse_email_id",
+    "thread_id_of",
     "AUTO_SUBMITTED_ADMIT",
     "PRIMARY_ACCOUNTS",
     "SELF_ACCOUNT",

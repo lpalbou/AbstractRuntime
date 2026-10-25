@@ -139,6 +139,8 @@ def _email_sample(runtime: Any, adapter: Any, config: Dict[str, Any], binding: D
         )
         for detail in details:
             payload = email_event_payload(account_ref, detail)
+            # Read live: keep the flags (seen / flagged / labels of the Email record).
+            payload["flags"] = list(getattr(getattr(detail, "summary", None), "flags", ()) or ())
             if message_matches(config, payload):
                 emails.append(payload)
                 if len(emails) >= count:

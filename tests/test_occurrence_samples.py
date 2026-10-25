@@ -104,6 +104,7 @@ def test_email_sample_reads_100_messages_on_one_connection_in_a_few_batched_fetc
     assert runtime.event_inbox.head_seq() == head_before
     msgs = resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["messages"]
     assert [m["subject"] for m in msgs[:3]] == ["mail 130", "mail 129", "mail 128"] and len(msgs) == 100
+    assert msgs[0]["seen"] is False and msgs[0]["labels"] == [] and msgs[0]["id"].endswith(":130:INBOX")  # read live: flags known
     by = {m["subject"]: m for m in msgs}
     assert by["mail 129"]["body_text"] == "body of mail 129"
     assert by["mail 120"]["attachments"] and by["mail 120"]["attachments"][0]["name"] == "report.pdf"

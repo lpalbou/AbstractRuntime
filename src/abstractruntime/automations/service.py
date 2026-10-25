@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..core.models import RunState, RunStatus, WaitReason
 from ..session_history import HISTORY_REPLAY_MAX_TOKENS, ReplayedHistory, fold_history_window
+from ..triggers.connections import connection_principal
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
 from ..utils.workspace_paths import READ_ONLY_KEY
@@ -75,8 +76,27 @@ def _load_automation(run_store: Any, automation_id: str) -> RunState:
 # --- creation -----------------------------------------------------------------
 
 
+def check_trigger_connection(runtime: Any, binding: Mapping[str, Any], *, principal: str, adapter: Any = None) -> Any:
+    """Framework backlog 1040: a binding's `config.connection_id` must name an active connection of
+    `principal` for the same source (`validate_binding_connection` against the runtime's
+    `trigger_connection_store`). Raises AutomationError; returns the connection or None."""
+    from ..triggers.connections import TriggerConnectionError, validate_binding_connection
+
+    try:
+        return validate_binding_connection(
+            principal, binding, getattr(runtime, "trigger_connection_store", None), adapter=adapter
+        )
+    except TriggerConnectionError as exc:
+        raise AutomationError(str(exc), reason_code=exc.reason_code, field=exc.field) from exc
+
+
 def create_automation(
-    runtime: Any, request: Mapping[str, Any], *, now: Optional[str] = None, actor_id: Optional[str] = None
+    runtime: Any,
+    request: Mapping[str, Any],
+    *,
+    now: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    principal: Optional[str] = None,
 ) -> Tuple[str, int]:
     """Validate `request` and create (or re-find) the automation; returns `(automation_id, revision)`.
 
@@ -87,6 +107,10 @@ def create_automation(
     `identity_conflict`). `actor_id` is stamped on the controller root in the
     same create-if-absent step (hosts pass the owning principal). The host
     ticks the controller afterwards like any run.
+
+    `principal` (default `"<tenant>:<user>"` of the request) owns the trigger connection a
+    connection-bound source names (`connection_not_found` / `connection_source_mismatch` /
+    `connection_disabled` / `connection_required` otherwise).
     """
     from ..core.run_identity import RunIdentityConflict
 
@@ -115,6 +139,7 @@ def create_automation(
             reason_code="unsupported_feature",
             field="trigger.source_id",
         )
+    check_trigger_connection(runtime, binding, principal=principal or connection_principal(tenant, user), adapter=adapter)
     state = initial_state(definition, trigger_state=adapter.initial_state(binding["config"]))
     controller = controller_workflow_spec()
     try:

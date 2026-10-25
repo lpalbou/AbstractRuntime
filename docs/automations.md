@@ -216,6 +216,45 @@ string `prompt`, inside a fixed untrusted frame (both stored as artifacts; the c
 their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
 or delegation. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
 
+### Trigger connections
+
+A source is a type ("a feed item", "a webhook call"); a **connection** is one user's instance of it ("this feed
+URL", "this webhook endpoint and its secret"), registered once and reused by any number of automations
+(`abstractruntime.triggers.connections`).
+
+- A descriptor says whether a binding needs one: `needs_connection` (`false` for `schedule@1/2` and `manual@1`),
+  `connection_schema` (the JSON schema of a connection's config; properties marked `"x-secret": true` are sealed)
+  and `connection_provider`: `trigger_connections` (the binding's `config.connection_id` names a
+  `TriggerConnectionStore` record) or `email_accounts` (`email.received@1`: the binding's `account` names a mailbox
+  of the mail accounts, not a trigger connection).
+- `TriggerConnectionStore(plane_dir, *, sealing_key_file=None)` keeps one JSON file per connection under
+  `<plane_dir>/triggers/connections/<connection_id>.json` (atomic replace, 0600), with `create`, `get`, `require`,
+  `list`, `update`, `delete`, `secrets` and `record_event`. Each connection has `{connection_id, principal,
+  source_id, source_version, config, label, status: active|disabled|error, secret_ref, secret_fields, created_at,
+  updated_at, last_event_at, last_error}`. Secret fields, and secrets the source generates
+  (`adapter.connection_secrets`, e.g. a webhook signing secret), are sealed with AbstractCore's `SecretVault`
+  (AES-256-GCM, the mailbox credentials' sealing) under
+  `<plane_dir>/triggers/connections/secrets/<connection_id>/secret.enc`; the JSON never holds them. Hosts pass their
+  sealing key file (the gateway: `<data_dir>/secrets/sealing.key`).
+- The owner is a principal string, `"<tenant>:<user>"` (`connection_principal(tenant, user)`). Reads given a
+  principal answer only that principal's connections, and a foreign id reads exactly like an unknown one.
+- Each connection has one inbox stream, `trigger:<connection_id>` (`connection_stream`). Feeders append to it with
+  `append_connection_event(inbox, connection, event_id=, data=, subject=, dedupekey=, time=)` (CloudEvents
+  attribute names; deduplicated on `dedupekey`); recent events are `inbox.read(stream=connection_stream(id),
+  after_seq=n)`. `test_fire(store, inbox, connection_id, principal=)` appends a synthetic `{data: {test: true}}`
+  event exactly like a real one; `wake_connection_automations(runtime, connection_id)` then wakes the idle
+  automations bound to it.
+- Automations: `create_automation` and the `automation.revise` command check a connection-bound binding with
+  `validate_binding_connection(principal, binding, runtime.trigger_connection_store)`: the id must name an active
+  connection of the same principal and the same source (`connection_required`, `connection_not_found`,
+  `connection_source_mismatch`, `connection_disabled`). The principal defaults to the request's
+  `"<tenant>:<user>"` (`create_automation(..., principal=)` and `apply_automation_command(..., principal=)` override
+  it). Hosts call `Runtime.set_trigger_connection_store(store)`. Adapters stay pure: they only check the id's shape.
+- Connection-bound sources share `ConnectionEventAdapter`: binding config `{connection_id, max_batch (1..200,
+  default 20), start_at?}`; the controller reads only the connection's stream; every pending event (up to
+  `max_batch`) is admitted in ONE occurrence whose envelope payload is `{count, event_ids, events, first_seq,
+  last_seq, content_trust, connection_id}`; events before `start_at` or during a pause are never admitted.
+
 ### Adding a source
 
 Declare the adapter in the entry-point group `abstractruntime.trigger_sources`:
@@ -234,6 +273,9 @@ my_source = "my_package.triggers:MySourceAdapter"
 - The controller waits on deadlines (`prepare` returning `until`), without a deadline (`idle`: commands, or a
   watcher's wake for event sources), or ends (`exhausted`). A source whose `prepare` returns an `event` wait fails
   the controller step.
+- A source that needs a per-user connection sets `needs_connection: true`, a `connection_schema` and implements
+  `validate_connection(config, *, now)` (and optionally `connection_secrets(config)`); discovery refuses it
+  otherwise. See [Trigger connections](#trigger-connections).
 - A source whose `capabilities.kind` is `event` receives `events=` (the inbox records after its cursor, read by the
   controller) in `prepare` and `admit`, may keep its own state in `source_state`, and may return `inputs` with an
   admission (data for the occurrence's inputs that stays out of the recorded envelope).

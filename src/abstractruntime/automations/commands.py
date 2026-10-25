@@ -84,6 +84,7 @@ def _decide(
     now: str,
     expected_revision: Optional[int],
     has_event_inbox: bool = True,
+    connection_check: Any = None,
 ) -> Dict[str, Any]:
     """`{"delta": ...}` (the state change to apply) or a rejection."""
     definition, state = definition_of(run), state_of(run)
@@ -162,6 +163,12 @@ def _decide(
                     "and this runtime has none (the host must call Runtime.set_event_inbox)",
                     field="changes.trigger.source_id",
                 )
+            if connection_check is not None:
+                # Framework backlog 1040: a connection-bound source must name the owner's connection.
+                try:
+                    connection_check(binding, adapter, definition["trigger"])
+                except AutomationError as exc:
+                    return _reject(exc.reason_code, str(exc), field=f"changes.{exc.field}" if exc.field else "changes.trigger")
             fresh = adapter.initial_state(binding["config"])
             delta["state"] = dict(adapter.rearm(binding, state=fresh, now=now))
         return {"delta": delta}
@@ -262,6 +269,30 @@ def _revive_unarchived(runtime: Any, run: Any, state: Dict[str, Any]) -> None:
     runtime.run_store.save(run)
 
 
+def _connection_check(runtime: Any, principal: Optional[str]):
+    def check(binding: Dict[str, Any], adapter: Any, old_binding: Dict[str, Any]) -> None:
+        from ..triggers.connections import binding_connection_id, uses_connection_store
+        from .service import check_trigger_connection
+
+        if not uses_connection_store(getattr(adapter, "descriptor", None) or {}):
+            return
+        owner = principal
+        if owner is None:
+            store = getattr(runtime, "trigger_connection_store", None)
+            old_cid = binding_connection_id(old_binding)
+            old_conn = store.get(old_cid) if (store is not None and old_cid) else None
+            owner = old_conn.principal if old_conn is not None else None
+        if owner is None:
+            raise AutomationError(
+                "a revision onto a trigger connection needs the owner (the host passes principal=)",
+                reason_code="connection_required",
+                field="trigger.config.connection_id",
+            )
+        check_trigger_connection(runtime, binding, principal=owner, adapter=adapter)
+
+    return check
+
+
 def apply_automation_command(
     runtime: Any,
     *,
@@ -272,11 +303,17 @@ def apply_automation_command(
     actor: Optional[str] = None,
     expected_revision: Optional[int] = None,
     now: Optional[str] = None,
+    principal: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply one automation command; returns `{status, error?, duplicate}`.
 
     The controller is woken with `max_steps=0` (its wait is committed, not
     ticked): the host drives it like any other resumed run.
+
+    `principal` (`"<tenant>:<user>"`, framework backlog 1040): the owner a revised trigger's
+    `config.connection_id` must belong to. When omitted, the owner of the connection the
+    current binding names is used; a revision onto a connection with neither is refused
+    (`connection_required`).
     """
     from ..core.runtime import run_mutation_lock
 
@@ -323,6 +360,7 @@ def apply_automation_command(
                 now=at,
                 expected_revision=expected_revision,
                 has_event_inbox=getattr(runtime, "event_inbox", None) is not None,
+                connection_check=_connection_check(runtime, principal),
             )
             fields: Dict[str, Any] = {"command_id": command_id, "type": type, "actor": actor, "command_digest": digest}
             if decision.get("status") == "rejected":

@@ -237,6 +237,8 @@ class ScheduleTriggerAdapter:
             },
         },
         "capabilities": {"kind": "time"},
+        "needs_connection": False,
+        "connection_schema": None,
     }
 
     # --- validation -------------------------------------------------------

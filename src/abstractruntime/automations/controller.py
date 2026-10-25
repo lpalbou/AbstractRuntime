@@ -166,6 +166,14 @@ def source_events(turn: Turn, adapter: Any, state: Dict[str, Any]) -> Optional[l
             "(the host must call Runtime.set_event_inbox before ticking email-triggered automations)"
         )
     src = state.get("source_state") if isinstance(state.get("source_state"), dict) else {}
+    from ..triggers.connections import binding_connection_id, connection_stream, uses_connection_store
+
+    if uses_connection_store(getattr(adapter, "descriptor", None) or {}):
+        # Framework backlog 1040: a connection-bound source reads ONLY its connection's stream.
+        cid = binding_connection_id(turn.definition["trigger"])
+        if not cid:
+            raise ControllerSeamError("this automation's trigger needs config.connection_id (creation refuses a binding without one)")
+        return inbox.read(after_seq=int(src.get("cursor_seq") or 0), stream=connection_stream(cid))
     records = inbox.read(after_seq=int(src.get("cursor_seq") or 0))
     binding = turn.email_binding
     if binding is None:

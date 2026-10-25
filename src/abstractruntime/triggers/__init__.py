@@ -1,6 +1,18 @@
 """Trigger sources for automations (contract C): protocol, registry, built-ins
-(`schedule@1`, `manual@1`, `email.received@1`)."""
+(`schedule@1`, `manual@1`, `email.received@1`), and per-user connections (`connections`)."""
 
+from .connection_events import ConnectionEventAdapter
+from .connections import (
+    TriggerConnection,
+    TriggerConnectionError,
+    TriggerConnectionStore,
+    append_connection_event,
+    connection_principal,
+    connection_stream,
+    test_fire,
+    validate_binding_connection,
+    wake_connection_automations,
+)
 from .email_received import EmailReceivedTriggerAdapter
 from .manual import ManualTriggerAdapter, manual_event_id
 from .protocol import (
@@ -30,6 +42,16 @@ from .schedule import ScheduleTriggerAdapter, ScheduleV2TriggerAdapter, time_zon
 
 __all__ = [
     "BUILTIN_TRIGGER_SOURCES",
+    "ConnectionEventAdapter",
+    "TriggerConnection",
+    "TriggerConnectionError",
+    "TriggerConnectionStore",
+    "append_connection_event",
+    "connection_principal",
+    "connection_stream",
+    "test_fire",
+    "validate_binding_connection",
+    "wake_connection_automations",
     "ENTRY_POINT_GROUP",
     "EmailReceivedTriggerAdapter",
     "ManualTriggerAdapter",

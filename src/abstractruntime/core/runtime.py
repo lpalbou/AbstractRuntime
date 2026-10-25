@@ -1057,6 +1057,7 @@ class Runtime:
         self._email_binding: Optional[Any] = None
         self._occurrence_input_resolver: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]] = None
         self._event_inbox: Optional[Any] = None
+        self._trigger_connection_store: Optional[Any] = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
@@ -1324,6 +1325,18 @@ class Runtime:
     @property
     def event_inbox(self) -> Optional[Any]:
         return self._event_inbox
+
+    def set_trigger_connection_store(self, store: Optional[Any]) -> None:
+        """The plane's trigger connections (`abstractruntime.triggers.connections.TriggerConnectionStore`).
+
+        Automation creation and revision check a binding's `config.connection_id` against it
+        (framework backlog 1040); a source that needs a trigger connection is refused on a
+        runtime without one."""
+        self._trigger_connection_store = store
+
+    @property
+    def trigger_connection_store(self) -> Optional[Any]:
+        return self._trigger_connection_store
 
     @property
     def effect_policy(self) -> EffectPolicy:

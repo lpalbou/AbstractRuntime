@@ -27,15 +27,30 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping, Optional, Protocol, TypedDict, runtime_checkable
 
 
-class TriggerSource(TypedDict):
-    """Descriptor of a trigger source, as listed to hosts and apps."""
-
+class _TriggerSourceBase(TypedDict):
     id: str
     version: int
     label: str
     config_schema: Dict[str, Any]
     event_schema: Dict[str, Any]
     capabilities: Dict[str, Any]  # {"kind": "time" | "manual" | "event"}
+
+
+class TriggerSource(_TriggerSourceBase, total=False):
+    """Descriptor of a trigger source, as listed to hosts and apps.
+
+    Connections (framework backlog 1040): `needs_connection` (a binding must name a per-user
+    connection: a feed URL, a webhook endpoint, a mailbox), `connection_schema` (the JSON schema
+    of a connection's config; properties marked `"x-secret": true` are sealed, never stored in
+    clear) and `connection_provider` (`trigger_connections`, the default: the binding's
+    `config.connection_id` names a `TriggerConnectionStore` record; `email_accounts`: the
+    binding's `account` names a mailbox of the mail accounts). A source without the keys takes
+    no connection.
+    """
+
+    needs_connection: bool
+    connection_schema: Optional[Dict[str, Any]]
+    connection_provider: str
 
 
 class TriggerBinding(TypedDict):

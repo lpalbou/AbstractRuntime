@@ -38,6 +38,8 @@ class ManualTriggerAdapter:
             "properties": {"command_id": {"type": "string"}},
         },
         "capabilities": {"kind": "manual"},
+        "needs_connection": False,
+        "connection_schema": None,
     }
 
     def validate(self, config: Mapping[str, Any], *, now: str) -> Dict[str, Any]:

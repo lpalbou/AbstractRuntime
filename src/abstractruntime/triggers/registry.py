@@ -95,6 +95,17 @@ def _check_adapter(name: str, adapter: Any) -> Dict[str, Any]:
     kind = (descriptor.get("capabilities") or {}).get("kind") if isinstance(descriptor.get("capabilities"), dict) else None
     if kind not in ("time", "manual", "event"):
         raise ValueError(f"descriptor.capabilities.kind must be time|manual|event, got {kind!r}")
+    if "needs_connection" in descriptor and not isinstance(descriptor["needs_connection"], bool):
+        raise ValueError("descriptor.needs_connection must be true or false")
+    if descriptor.get("needs_connection"):
+        provider = descriptor.get("connection_provider", "trigger_connections")
+        if provider not in ("trigger_connections", "email_accounts"):
+            raise ValueError(f"descriptor.connection_provider must be trigger_connections|email_accounts, got {provider!r}")
+        if provider == "trigger_connections":
+            if not isinstance(descriptor.get("connection_schema"), dict):
+                raise ValueError("a source that needs a trigger connection must describe it (connection_schema)")
+            if not callable(getattr(adapter, "validate_connection", None)):
+                raise ValueError("a source that needs a trigger connection must implement validate_connection")
     return descriptor
 
 

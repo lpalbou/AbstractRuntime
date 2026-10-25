@@ -261,6 +261,14 @@ class EmailReceivedTriggerAdapter:
             },
         },
         "capabilities": {"kind": "event", "inbox": "email", "content_trust": "untrusted"},
+        # Framework backlog 1040: the connection of an email trigger is a MAILBOX, owned by the
+        # mail accounts (the binding's `account` names it), not the trigger connection store.
+        "needs_connection": True,
+        "connection_provider": "email_accounts",
+        "connection_schema": {
+            "type": "object",
+            "properties": {"account": {"type": "string", "description": "the mailbox (a mail account id; 'self': the plane's mailbox)"}},
+        },
     }
 
     # --- validation ---------------------------------------------------------------------

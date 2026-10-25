@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel rdf:about="https://journal.example.test/rss">
+    <title>Example Journal</title>
+    <link>https://journal.example.test/</link>
+    <description>Fixture RSS 1.0 feed</description>
+    <dc:date>2026-01-06T12:00:00Z</dc:date>
+    <items>
+      <rdf:Seq>
+        <rdf:li rdf:resource="https://journal.example.test/doi/10.1/three"/>
+        <rdf:li rdf:resource="https://journal.example.test/doi/10.1/two"/>
+        <rdf:li rdf:resource="https://journal.example.test/articles/one"/>
+      </rdf:Seq>
+    </items>
+  </channel>
+  <image rdf:about="https://journal.example.test/logo.png">
+    <title>Example Journal</title>
+    <url>https://journal.example.test/logo.png</url>
+    <link>https://journal.example.test/</link>
+  </image>
+  <item rdf:about="https://journal.example.test/doi/10.1/three">
+    <title><![CDATA[Third paper]]></title>
+    <link>https://journal.example.test/articles/three</link>
+    <description>The third &lt;b&gt;paper&lt;/b&gt;.</description>
+    <dc:date>2026-01-06T09:15:00Z</dc:date>
+    <dc:creator>Ada Lovelace</dc:creator>
+    <dc:creator>Grace Hopper</dc:creator>
+  </item>
+  <item rdf:about="https://journal.example.test/doi/10.1/two">
+    <link>https://journal.example.test/articles/two</link>
+    <dc:title>Second paper</dc:title>
+    <content:encoded><![CDATA[<p>Second paper content.</p>]]></content:encoded>
+    <dc:date>2026-01-05</dc:date>
+  </item>
+  <item>
+    <title>First paper</title>
+    <link>https://journal.example.test/articles/one</link>
+    <description>No rdf:about and no date.</description>
+  </item>
+</rdf:RDF>

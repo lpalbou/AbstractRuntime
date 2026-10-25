@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RSS 1.0 (RDF) feeds** for `feed.item@1`: `parse_feed` reads `<rdf:RDF>` documents with the RSS 1.0 channel and items (namespace `http://purl.org/rss/1.0/`), stdlib only, into the same item record as RSS 2.0 and Atom: `id` = the item's `rdf:about` (else the link), `published` = Dublin Core `dc:date` (else none), `summary` = `description` (else `content:encoded`), `author` = every `dc:creator`, joined with commas; `title` falls back to `dc:title`. The parsed feed's `kind` is `rss1`. An RDF document without an RSS 1.0 channel is refused (`FeedParseError`, so `feed_unreadable` on the connection). The fetcher also accepts `application/rdf+xml`. Nature (`https://www.nature.com/nature.rss`), Science (`https://www.science.org/rss/news_current.xml`, the journal's table of contents) and Deutsche Welle's RDF feed were refused before and now read.
+
 ### Changed
 
 - **Mail verbs refuse in two plain ways.** A mailbox the person keeps Read only (AbstractCore's explicit `EmailAccount.access`, no longer "has SMTP") refuses `mark`, `label`, `move`, `delete`, `send`, `reply` and `forward` with `email_mailbox_read_only`: "This mailbox is read-only: automations only read it." / "In My email, turn on Read and write for <address> to change it or send from it." A Read and write mailbox without an outgoing server refuses `send`, `reply` and `forward` with the new `email_mailbox_cannot_send`: "This mailbox can't send: it has no outgoing server." / "In My email, add the outgoing server (SMTP) for <address>." Both before connecting.

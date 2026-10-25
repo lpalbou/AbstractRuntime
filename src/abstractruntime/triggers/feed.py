@@ -1,4 +1,4 @@
-"""`feed.item@1`: run an automation on new items of an RSS 2.0 or Atom feed (framework backlog 1043).
+"""`feed.item@1`: run an automation on new items of an RSS 2.0, RSS 1.0 (RDF) or Atom feed (framework backlog 1043).
 
 Two halves, like `email.received@1`:
 
@@ -26,8 +26,11 @@ Connection config (validated by `validate_connection`):
 
 Polling: conditional GET (`If-None-Match` / `If-Modified-Since` from the previous response's
 `ETag` / `Last-Modified`; a 304 adds nothing), stdlib parsing only (`xml.etree.ElementTree`, which
-never resolves external entities), bodies capped at `MAX_FEED_BYTES`. Item identity: Atom `id`, RSS
-`guid`, else the link, else a digest of title + date; it is the event's `subject` and `dedupekey`
+never resolves external entities), bodies capped at `MAX_FEED_BYTES`. Formats: RSS 2.0 (`<rss>`),
+RSS 1.0 (`<rdf:RDF>` with the `http://purl.org/rss/1.0/` channel and items; Dublin Core `dc:date` /
+`dc:creator`) and Atom 1.0 (`<feed>`); every format yields the same item record. Item identity: Atom
+`id`, RSS 2.0 `guid`, RSS 1.0 `rdf:about`, else the link, else a digest of title + date; it is the
+event's `subject` and `dedupekey`
 (the inbox never appends it twice). The per-connection cursor (validators, the seen ids, the next
 poll time, consecutive failures) is the stream state of `trigger:<connection_id>` in the inbox. A
 failure is a typed `{code, cause, fix}` on the connection (`last_error`) and the next poll waits a
@@ -77,6 +80,8 @@ USER_AGENT = "AbstractRuntime-feed/1 (+https://github.com/lpalbou/abstractruntim
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _CONTENT = "{http://purl.org/rss/1.0/modules/content/}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
+_RDF = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+_RSS1 = "{http://purl.org/rss/1.0/}"
 
 
 # --- the source ---------------------------------------------------------------------------------
@@ -196,7 +201,7 @@ class FeedItem:
 
 @dataclass
 class ParsedFeed:
-    kind: str  # "rss" | "atom"
+    kind: str  # "rss" (2.0) | "rss1" (1.0, RDF) | "atom"
     title: str
     items: List[FeedItem] = field(default_factory=list)
 
@@ -233,7 +238,7 @@ def _identity(guid: str, link: str, title: str, date: Optional[str]) -> str:
 
 
 def parse_feed(body: bytes) -> ParsedFeed:
-    """Parse an RSS 2.0 or Atom 1.0 document; raises FeedParseError."""
+    """Parse an RSS 2.0, RSS 1.0 (RDF) or Atom 1.0 document; raises FeedParseError."""
     if len(body) > MAX_FEED_BYTES:
         raise FeedParseError(f"the feed is larger than {MAX_FEED_BYTES} bytes")
     try:
@@ -258,9 +263,11 @@ def parse_feed(body: bytes) -> ParsedFeed:
                 title=title, link=link, published=published or updated, updated=updated, summary=summary, author=author,
             ))
         return feed
+    if root.tag == f"{_RDF}RDF":
+        return _parse_rss1(root)
     channel = root.find("channel") if root.tag == "rss" else None
     if channel is None:
-        raise FeedParseError(f"not an RSS 2.0 or Atom feed (root element {root.tag!r})")
+        raise FeedParseError(f"not an RSS 2.0, RSS 1.0 or Atom feed (root element {root.tag!r})")
     feed = ParsedFeed(kind="rss", title=_text(channel.find("title")))
     for item in channel.findall("item"):
         title = _text(item.find("title"))
@@ -270,6 +277,27 @@ def parse_feed(body: bytes) -> ParsedFeed:
         author = _text(item.find("author")) or _text(item.find(f"{_DC}creator"))
         feed.items.append(FeedItem(
             id=_identity(_text(item.find("guid")), link, title, published),
+            title=title, link=link, published=published, summary=summary, author=author,
+        ))
+    return feed
+
+
+def _parse_rss1(root: ET.Element) -> ParsedFeed:
+    """RSS 1.0: `<rdf:RDF>` holding one `<channel>` and the `<item>`s as its siblings, all in the RSS 1.0
+    namespace. Identity is the item's `rdf:about` (the URI the channel's `<items><rdf:Seq>` lists), else
+    the link; the date is Dublin Core `dc:date` (W3CDTF), the author every `dc:creator`, joined."""
+    channel = root.find(f"{_RSS1}channel")
+    if channel is None:
+        raise FeedParseError("an RDF document without an RSS 1.0 channel (namespace http://purl.org/rss/1.0/) is not a feed")
+    feed = ParsedFeed(kind="rss1", title=_text(channel.find(f"{_RSS1}title")) or _text(channel.find(f"{_DC}title")))
+    for item in root.findall(f"{_RSS1}item"):
+        title = _text(item.find(f"{_RSS1}title")) or _text(item.find(f"{_DC}title"))
+        link = _text(item.find(f"{_RSS1}link"))
+        published = _iso(_text(item.find(f"{_DC}date")))
+        summary = _text(item.find(f"{_RSS1}description")) or _text(item.find(f"{_CONTENT}encoded"))
+        author = ", ".join(a for a in (_text(c) for c in item.findall(f"{_DC}creator")) if a)
+        feed.items.append(FeedItem(
+            id=_identity((item.get(f"{_RDF}about") or "").strip(), link, title, published),
             title=title, link=link, published=published, summary=summary, author=author,
         ))
     return feed
@@ -293,7 +321,7 @@ def urllib_fetch(url: str, *, etag: Optional[str] = None, last_modified: Optiona
     """Conditional GET with the standard library (http/https only, body capped)."""
     if urlparse(url).scheme not in ("http", "https"):
         raise ValueError("only http(s) feeds are fetched")
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.5"}
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, application/rdf+xml, application/xml;q=0.9, */*;q=0.5"}
     if etag:
         headers["If-None-Match"] = etag
     if last_modified:

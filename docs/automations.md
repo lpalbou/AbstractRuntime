@@ -225,8 +225,11 @@ Runs the automation when a feed connection has new items (framework backlog 1043
 the feed: `{url, every (default 15m, never below 60s), max_items (1..200, default 50), initial_items: "skip" |
 "deliver"}`.
 
-- RSS 2.0 and Atom 1.0, parsed with the standard library (`parse_feed`; `xml.etree` never resolves external
-  entities; documents above 5 MB are refused).
+- RSS 2.0, RSS 1.0 (RDF: `<rdf:RDF>` with the `http://purl.org/rss/1.0/` channel and items) and Atom 1.0, parsed
+  with the standard library (`parse_feed`; `xml.etree` never resolves external entities; documents above 5 MB are
+  refused). Every format yields the same item: an RSS 1.0 item's identity is its `rdf:about` (else its link), its
+  date Dublin Core `dc:date`, its author every `dc:creator` (joined with commas), its summary `description` (else
+  `content:encoded`).
 - The poller belongs to the host's plane, not to the runtime: the host calls
   `poll_feed_connections(runtime, store, fetch=None, now=None)` from its own worker loop (every ~30 s is enough).
   Each call polls the listening feed connections (`connection_usage`: used by an active automation, or

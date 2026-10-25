@@ -20,6 +20,7 @@ from abstractruntime.triggers.feed import FeedPoller, FetchResult, parse_feed, p
 FIXTURES = Path(__file__).parent / "fixtures" / "feeds"
 RSS = (FIXTURES / "rss2.xml").read_bytes()
 ATOM = (FIXTURES / "atom.xml").read_bytes()
+RSS1 = (FIXTURES / "rss1.xml").read_bytes()
 ALICE = connection_principal("t", "alice")
 T0 = "2026-01-01T00:00:00+00:00"
 URL = "https://news.example.test/feed.xml"
@@ -75,6 +76,48 @@ def test_parse_refuses_what_is_not_a_feed():
     for body in (b"<html><body>no</body></html>", b"not xml at all <", b"<rss><nochannel/></rss>"):
         with pytest.raises(FeedParseError):
             parse_feed(body)
+
+
+def test_parse_rss1_rdf_gives_the_same_item_record():
+    rss1 = parse_feed(RSS1)
+    assert rss1.kind == "rss1" and rss1.title == "Example Journal"
+    assert len(rss1.items) == 3  # the channel's <image> is not an item
+    three, two, one = rss1.items
+    # Identity is rdf:about (here a DOI address, not the article link), the date is dc:date.
+    assert (three.id, three.title, three.link, three.published, three.updated) == (
+        "https://journal.example.test/doi/10.1/three", "Third paper", "https://journal.example.test/articles/three",
+        "2026-01-06T09:15:00+00:00", None)
+    assert three.summary == "The third <b>paper</b>." and three.author == "Ada Lovelace, Grace Hopper"
+    # dc:title stands in for a missing title, content:encoded for a missing description, a bare W3CDTF date reads.
+    assert (two.title, two.summary, two.published, two.author) == (
+        "Second paper", "<p>Second paper content.</p>", "2026-01-05T00:00:00+00:00", "")
+    # No rdf:about: the link is the identity; no dc:date: no date.
+    assert (one.id, one.published, one.summary) == ("https://journal.example.test/articles/one", None, "No rdf:about and no date.")
+    # The event data has exactly the RSS 2.0 / Atom keys.
+    keys = set(parse_feed(RSS).items[0].to_data(feed_title="t", feed_url=URL))
+    assert set(three.to_data(feed_title="t", feed_url=URL)) == keys == set(parse_feed(ATOM).items[0].to_data(feed_title="t", feed_url=URL))
+
+
+def test_parse_refuses_malformed_rss1_and_rdf_that_is_not_a_feed():
+    from abstractruntime.triggers.feed import FeedParseError
+
+    with pytest.raises(FeedParseError, match="not well-formed"):
+        parse_feed((FIXTURES / "rss1-malformed.xml").read_bytes())
+    with pytest.raises(FeedParseError, match="RSS 1.0 channel"):
+        parse_feed((FIXTURES / "rdf-not-a-feed.xml").read_bytes())
+
+
+def test_rss1_items_are_polled_like_any_feed(store):
+    inbox = InMemoryEventInbox()
+    conn = _feed(store, initial_items="deliver")
+    report = FeedPoller(store, inbox, fetch=FakeFeed(RSS1)).poll(conn, now=T0)
+    assert report.ok and len(report.appended) == 3
+    events = inbox.read(stream=connection_stream(conn.connection_id))
+    # Oldest first: the undated item (last in the document) first, then by dc:date.
+    assert [e["payload"]["data"]["title"] for e in events] == ["First paper", "Second paper", "Third paper"]
+    newest = events[-1]["payload"]
+    assert (newest["subject"], newest["dedupekey"]) == ("https://journal.example.test/doi/10.1/three",) * 2
+    assert newest["data"]["feed"] == {"title": "Example Journal", "url": URL}
 
 
 # --- connections ------------------------------------------------------------------------------

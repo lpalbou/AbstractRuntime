@@ -164,6 +164,36 @@ class EventWaiterQueryableRunStore(Protocol):
         ...
 
 
+def mailbox_names_of(vars_obj: Any) -> frozenset:
+    """Mailbox names a run declares in `vars.events_mailbox` (str or list of str)."""
+    if not isinstance(vars_obj, dict):
+        return frozenset()
+    declared = vars_obj.get("events_mailbox")
+    if isinstance(declared, str):
+        declared = [declared]
+    if not isinstance(declared, list):
+        return frozenset()
+    return frozenset(m.strip() for m in declared if isinstance(m, str) and m.strip())
+
+
+@runtime_checkable
+class MailboxQueryableRunStore(Protocol):
+    """Durable `emit_event` fan-out and the scheduler's sleep horizon without
+    a recency window (backlog 1046, design round-1 F3).
+
+    `list_mailbox_runs(names=N)` returns EVERY active (RUNNING/WAITING) run
+    whose `events_mailbox` names one of N, `updated_at` descending.
+    `next_wait_deadline()` returns the earliest `waiting.until` among WAITING
+    runs (UNTIL, or EVENT with a deadline), or None.
+    """
+
+    def list_mailbox_runs(self, *, names: List[str], limit: int = 10_000) -> List[RunState]:
+        ...
+
+    def next_wait_deadline(self) -> Optional[str]:
+        ...
+
+
 @runtime_checkable
 class QueryableRunIndexStore(Protocol):
     """Optional fast-path for listing run summaries without loading full RunState payloads."""

@@ -9,7 +9,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base import LedgerStore, RunStore
+from .base import LedgerStore, RunStore, mailbox_names_of
 from ..core.models import RunState, RunStatus, StepRecord, WaitReason
 from ..core.run_attribution import workspace_index_fields
 from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
@@ -170,6 +170,28 @@ class InMemoryRunStore(RunStore):
         results.sort(key=lambda r: r.waiting.until if r.waiting else "")
 
         return results[:limit]
+
+    def list_mailbox_runs(self, *, names: List[str], limit: int = 10_000) -> List[RunState]:
+        """Active runs declaring any of `names` as `events_mailbox` (MailboxQueryableRunStore)."""
+        wanted = {str(n).strip() for n in (names or []) if isinstance(n, str) and str(n).strip()}
+        out = [
+            r for r in list(self._runs.values())
+            if r.status in (RunStatus.RUNNING, RunStatus.WAITING) and (mailbox_names_of(r.vars) & wanted)
+        ]
+        out.sort(key=lambda r: r.updated_at or "", reverse=True)
+        return out[: max(1, int(limit or 10_000))]
+
+    def next_wait_deadline(self) -> Optional[str]:
+        """Earliest `waiting.until` among WAITING runs, or None (MailboxQueryableRunStore)."""
+        deadlines = [
+            str(r.waiting.until)
+            for r in list(self._runs.values())
+            if r.status == RunStatus.WAITING
+            and r.waiting is not None
+            and r.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT)
+            and r.waiting.until
+        ]
+        return min(deadlines) if deadlines else None
 
     def list_children(
         self,

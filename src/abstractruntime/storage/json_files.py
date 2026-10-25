@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore
+from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore, mailbox_names_of
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
 from ..core.run_attribution import workspace_index_fields
@@ -148,6 +148,16 @@ class JsonFileRunStore(RunStore):
         self._event_index_lock = threading.Lock()
         self._event_wait_index: Optional[Dict[str, set[str]]] = None
         self._run_event_wait_key: Dict[str, str] = {}
+        # MAILBOX INDEX (backlog 1046, design round-1 F3): mailbox name ->
+        # {run_id} for ACTIVE runs (RUNNING/WAITING) declaring `events_mailbox`.
+        # Durable emit_event used to find its mailboxes in the newest
+        # `run_scan_limit` (200) active runs only: past that, a parked
+        # automation's mailbox silently missed events. Same lifecycle and
+        # single-writer scope as the event-wait index above: built lazily from
+        # one scan of the active ids, maintained on save/delete, every lookup
+        # re-verified against disk.
+        self._mailbox_index: Optional[Dict[str, set[str]]] = None
+        self._run_mailboxes: Dict[str, frozenset] = {}
         # ACTIVE INDEX (2026-10-16, operator's "the observer is extremely slow to
         # load"): the ids of every run whose status is RUNNING or WAITING — the
         # question both listings are asked on every poll by the gateway runner
@@ -839,6 +849,75 @@ class JsonFileRunStore(RunStore):
                 self._event_wait_index.setdefault(new_key, set()).add(run_id)
                 self._run_event_wait_key[run_id] = new_key
 
+    # --- mailbox index (durable emit_event fan-out) ------------------------
+
+    @classmethod
+    def _mailboxes_of(cls, run: RunState) -> frozenset:
+        """Mailbox names an ACTIVE run declares (`vars.events_mailbox`)."""
+        if not cls._is_active_status(run.status):
+            return frozenset()
+        return mailbox_names_of(getattr(run, "vars", None))
+
+    def _ensure_mailbox_index(self) -> None:
+        if self._mailbox_index is not None:
+            return
+        with self._event_index_lock:
+            if self._mailbox_index is not None:
+                return
+            ids = self._active_candidate_ids()
+            if ids is None:
+                ids = [self._run_id_from_path(p) for p in self._base.glob("run_*.json")]
+            index: Dict[str, set[str]] = {}
+            by_run: Dict[str, frozenset] = {}
+            for rid in ids:
+                if not rid:
+                    continue
+                p = self._path(rid)
+                fields = self._scan_fields(p)
+                if fields is None or not self._is_active_status(fields.get("status")):
+                    continue
+                run = self._load_from_path(p)
+                if run is None:
+                    continue
+                names = self._mailboxes_of(run)
+                if not names:
+                    continue
+                key = str(run.run_id)
+                by_run[key] = names
+                for n in names:
+                    index.setdefault(n, set()).add(key)
+            self._mailbox_index = index
+            self._run_mailboxes = by_run
+
+    def _drop_from_mailbox_index(self, run_id: str) -> None:
+        with self._event_index_lock:
+            if self._mailbox_index is None:
+                return
+            for n in self._run_mailboxes.pop(run_id, frozenset()):
+                holders = self._mailbox_index.get(n)
+                if holders is not None:
+                    holders.discard(run_id)
+                    if not holders:
+                        self._mailbox_index.pop(n, None)
+
+    def _update_mailbox_index_on_save(self, run: RunState) -> None:
+        run_id = str(run.run_id)
+        new = self._mailboxes_of(run)
+        with self._event_index_lock:
+            if self._mailbox_index is None:
+                return  # not built yet: the lazy build reads disk truth
+            old = self._run_mailboxes.pop(run_id, frozenset())
+            for n in old - new:
+                holders = self._mailbox_index.get(n)
+                if holders is not None:
+                    holders.discard(run_id)
+                    if not holders:
+                        self._mailbox_index.pop(n, None)
+            if new:
+                for n in new:
+                    self._mailbox_index.setdefault(n, set()).add(run_id)
+                self._run_mailboxes[run_id] = new
+
     # --- active index --------------------------------------------------------
 
     @classmethod
@@ -1108,6 +1187,7 @@ class JsonFileRunStore(RunStore):
                 self._active_publish_end(rid, status=run.status, token=None)
         self._update_children_index_on_save(run)
         self._update_event_wait_index_on_save(run)
+        self._update_mailbox_index_on_save(run)
         self._update_session_index_on_save(run)
         try:
             token = self._stat_token(p.stat())
@@ -1163,6 +1243,7 @@ class JsonFileRunStore(RunStore):
         if created:
             self._update_children_index_on_save(run)
             self._update_event_wait_index_on_save(run)
+            self._update_mailbox_index_on_save(run)
             self._update_session_index_on_save(run)
             try:
                 token = self._stat_token(p.stat())
@@ -1180,6 +1261,7 @@ class JsonFileRunStore(RunStore):
             raise ValueError(f"run file {p.name} exists but is unreadable; refusing to overwrite it")
         self._update_children_index_on_save(existing)
         self._update_event_wait_index_on_save(existing)
+        self._update_mailbox_index_on_save(existing)
         self._update_session_index_on_save(existing)
         self._note_active_status(str(existing.run_id), existing.status)
         verify_run_identity(existing, run)
@@ -1204,6 +1286,7 @@ class JsonFileRunStore(RunStore):
         finally:
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)
+            self._drop_from_mailbox_index(rid)
             self._drop_from_session_index(rid)
             self._forget_active(rid)
             with self._run_cache_lock:
@@ -1607,6 +1690,56 @@ class JsonFileRunStore(RunStore):
 
         results.sort(key=lambda r: r.updated_at or "", reverse=True)
         return results[: max(1, int(limit or 100))]
+
+    def list_mailbox_runs(self, *, names: List[str], limit: int = 10_000) -> List[RunState]:
+        """ACTIVE runs (RUNNING/WAITING) declaring any of `names` as their
+        `events_mailbox` — O(mailbox holders), never capped by a recency window.
+
+        Every candidate is re-loaded and re-verified against disk (a run that
+        finished or dropped the mailbox since is re-filed and skipped)."""
+        wanted = {str(n).strip() for n in (names or []) if isinstance(n, str) and str(n).strip()}
+        if not wanted:
+            return []
+        self._ensure_mailbox_index()
+        with self._event_index_lock:
+            index = self._mailbox_index or {}
+            candidate_ids = sorted({rid for n in wanted for rid in index.get(n, set())})
+        results: List[RunState] = []
+        for rid in candidate_ids:
+            run = self.load(rid)
+            if run is None:
+                self._drop_from_mailbox_index(rid)
+                continue
+            if not (self._mailboxes_of(run) & wanted):
+                self._update_mailbox_index_on_save(run)
+                continue
+            results.append(run)
+        results.sort(key=lambda r: r.updated_at or "", reverse=True)
+        return results[: max(1, int(limit or 10_000))]
+
+    def next_wait_deadline(self) -> Optional[str]:
+        """The earliest `wait_until` among WAITING runs (UNTIL, or EVENT with
+        a deadline), or None — over EVERY waiting run, from the scan memo (one
+        stat per unchanged file, no parse). The scheduler's sleep horizon:
+        a recency-limited listing cannot answer it (design round-1 F3)."""
+        self._load_scan_sidecar_once()
+        ids = self._active_candidate_ids(status=RunStatus.WAITING)
+        if ids is None:
+            paths = list(self._base.glob("run_*.json"))
+        else:
+            paths = [self._base / f"run_{rid}.json" for rid in ids]
+        best: Optional[str] = None
+        for p in paths:
+            fields = self._verify_active_fields(p, RunStatus.WAITING) if ids is not None else self._scan_fields(p)
+            if fields is None or fields.get("status") != RunStatus.WAITING.value:
+                continue
+            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value):
+                continue
+            until = fields.get("wait_until")
+            if until and (best is None or str(until) < best):
+                best = str(until)
+        self._maybe_persist_scan_memo()
+        return best
 
     def list_children(
         self,

@@ -31,7 +31,7 @@ from ..core.run_attribution import automation_index_fields, filter_values, works
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
-from .base import LedgerStore, RunStore
+from .base import LedgerStore, RunStore, mailbox_names_of
 from .commands import CommandAppendResult, CommandCursorStore, CommandRecord, CommandStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 
@@ -1113,6 +1113,37 @@ class SqliteRunStore(RunStore):
             except Exception:
                 continue
         return out
+
+    def list_mailbox_runs(self, *, names: List[str], limit: int = 10_000) -> List[RunState]:
+        """Active runs declaring any of `names` as `events_mailbox` — every
+        RUNNING/WAITING row (status index), parsing only the rows whose
+        document mentions a mailbox; no recency window (backlog 1046)."""
+        wanted = {str(n).strip() for n in (names or []) if isinstance(n, str) and str(n).strip()}
+        if not wanted:
+            return []
+        conn = self._db.connection()
+        rows = conn.execute(
+            "SELECT run_json FROM runs WHERE status IN (?, ?) AND instr(run_json, '\"events_mailbox\"') > 0 "
+            "ORDER BY updated_at DESC;",
+            (RunStatus.RUNNING.value, RunStatus.WAITING.value),
+        ).fetchall()
+        out: List[RunState] = []
+        for row in rows or []:
+            try:
+                data = json.loads(str(row["run_json"] or "{}"))
+                run = _runstate_from_dict(data) if isinstance(data, dict) else None
+            except Exception:
+                continue
+            if run is not None and (mailbox_names_of(run.vars) & wanted):
+                out.append(run)
+        return out[: max(1, int(limit or 10_000))]
+
+    def next_wait_deadline(self) -> Optional[str]:
+        """Earliest deadline in the due index (WAITING runs with `until`), or None."""
+        conn = self._db.connection()
+        row = conn.execute("SELECT MIN(next_due_iso) AS d FROM wait_index;").fetchone()
+        value = row["d"] if row is not None else None
+        return str(value) if value else None
 
     def list_children(
         self,

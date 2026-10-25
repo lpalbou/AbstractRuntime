@@ -510,6 +510,16 @@ class OffloadingRunStore(RunStore):
             raise NotImplementedError("Inner RunStore does not support list_event_waiters_by_prefix")
         return fn(prefix=prefix, limit=limit)
 
+    # --- MailboxQueryableRunStore passthrough (backlog 1046) ---
+    # Explicit like the rest (the P1-4 lesson): an inner store without them
+    # raises AttributeError, which is what the gateway's capability check sees.
+
+    def list_mailbox_runs(self, *, names, limit: int = 10_000):
+        return self._inner.list_mailbox_runs(names=names, limit=limit)
+
+    def next_wait_deadline(self):
+        return self._inner.next_wait_deadline()
+
 
 class OffloadingLedgerStore(LedgerStore):
     """LedgerStore decorator that offloads oversized effect/result payloads to the ArtifactStore."""

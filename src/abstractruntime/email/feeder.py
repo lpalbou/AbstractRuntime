@@ -219,9 +219,23 @@ class EmailInboxFeeder:
             cursor = MailCursor.from_dict(st.get("cursor"))
             if cursor is not None and cursor.folder != folder:
                 cursor = None  # the folder setting changed: start a new baseline
-            result = client.fetch_new(cursor, folder=folder, limit=self.max_messages_per_poll)
         except EmailError as err:
             return fail(err)
+        # ONE connection (one sign-in) for the listing and the reading of the new mail
+        # (AbstractCore's `EmailClient.session` / `get_many`, >= 2.26.5): a burst of new mail is
+        # read with a few FETCHes instead of one connection per message.
+        try:
+            with client.session():
+                return self._poll_in_session(client, cursor, folder=folder, stream=stream, st=st, at=at, now_dt=now_dt,
+                                             save=save, fail=fail, ctx=ctx)
+        except EmailError as err:
+            return fail(err)
+
+    def _poll_in_session(self, client: Any, cursor: Any, *, folder: str, stream: str, st: Dict[str, Any], at: str,
+                         now_dt: Any, save: Callable[[], None], fail: Callable[[Any], "PollReport"], ctx: Any) -> "PollReport":
+        from abstractcore.comms.email import EmailError, MailCursor
+
+        result = client.fetch_new(cursor, folder=folder, limit=self.max_messages_per_poll)
 
         report = PollReport(ok=True, baseline=bool(result.baseline), reset=bool(result.reset))
         if result.reset:
@@ -262,6 +276,31 @@ class EmailInboxFeeder:
                     return False
             return False
 
+        def already_delivered(summary: Any, event_id: str) -> bool:
+            older = seen_until is not None and (_parse(summary.internaldate) or seen_until) < seen_until
+            return bool(self.inbox.get(event_id) is not None or older or (
+                result.reset and summary.message_id and self.inbox.has_dedupe_key(stream, summary.message_id)
+            ))
+
+        # The messages this poll will read, read together (one FETCH of headers per 100, one per
+        # body section). A connection failure here is the poll's failure; a message the folder no
+        # longer holds is that message's own (typed) failure below.
+        to_read = [
+            s.uid for s in result.messages
+            if not own_automatic(s) and not already_delivered(s, email_event_id(self.account_ref, folder, s.uidvalidity, s.uid))
+        ]
+        details: Dict[int, Any] = {}
+        if to_read:
+            try:
+                details = client.get_many(to_read, folder=folder)
+            except EmailError as err:
+                if err.code not in MESSAGE_LEVEL_CODES:
+                    raise
+                # One message broke the batch (a server refusing its FETCH): read them one by one
+                # below, on the same connection, so that message's failure is its own and the
+                # others are delivered.
+                details = {}
+
         for summary in result.messages:
             event_id = email_event_id(self.account_ref, folder, summary.uidvalidity, summary.uid)
             if own_automatic(summary):
@@ -271,10 +310,7 @@ class EmailInboxFeeder:
                 advance(summary)
                 save()
                 continue
-            older = seen_until is not None and (_parse(summary.internaldate) or seen_until) < seen_until
-            if self.inbox.get(event_id) is not None or older or (
-                result.reset and summary.message_id and self.inbox.has_dedupe_key(stream, summary.message_id)
-            ):
+            if already_delivered(summary, event_id):
                 # Already delivered (same id), or, after a UIDVALIDITY reset, a message older
                 # than the newest one seen before the reset (delivered then, or before the
                 # baseline) or one already in the inbox under its old UID (same Message-ID).
@@ -283,7 +319,11 @@ class EmailInboxFeeder:
                 save()
                 continue
             try:
-                detail = client.get(summary.uid, folder=folder)
+                detail = details.get(int(summary.uid))
+                if detail is None:
+                    detail = client.get(summary.uid, folder=folder)  # not read above (its state changed meanwhile)
+                if isinstance(detail, EmailError):
+                    raise detail
             except EmailError as err:
                 if err.code not in MESSAGE_LEVEL_CODES:
                     st["message_failures"] = failures_by_uid

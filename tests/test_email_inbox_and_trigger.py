@@ -230,14 +230,17 @@ def test_a_message_that_keeps_failing_is_passed_after_three_polls(tmp_path, ca, 
     feeder.poll(ctx)
     bad_uid = add_mail(imap, from_="a@example.test", subject="broken")
     add_mail(imap, from_="b@example.test", subject="fine")
-    real_get = EmailClient.get
+    real_get_many = EmailClient.get_many
 
-    def flaky_get(self, uid, **kw):
-        if int(uid) == bad_uid:
-            raise EmailMessageNotFound("The message disappeared.", "Nothing to do.")
-        return real_get(self, uid, **kw)
+    def flaky_get_many(self, uids, **kw):
+        # The watcher reads new mail with get_many: a message it cannot read is that message's
+        # own typed failure (the others are read).
+        out = real_get_many(self, [u for u in uids if int(u) != bad_uid], **kw)
+        if bad_uid in [int(u) for u in uids]:
+            out[bad_uid] = EmailMessageNotFound("The message disappeared.", "Nothing to do.")
+        return out
 
-    monkeypatch.setattr(EmailClient, "get", flaky_get)
+    monkeypatch.setattr(EmailClient, "get_many", flaky_get_many)
     assert feeder.poll(ctx).appended == [] and feeder.poll(ctx).appended == []  # order kept: "fine" waits
     third = feeder.poll(ctx)
     assert [u["uid"] for u in third.unprocessable] == [bad_uid] and third.unprocessable[0]["code"] == "email_message_not_found"

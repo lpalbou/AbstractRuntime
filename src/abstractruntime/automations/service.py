@@ -139,14 +139,16 @@ def create_automation(
             reason_code="unsupported_feature",
             field="trigger.source_id",
         )
-    check_trigger_connection(runtime, binding, principal=principal or connection_principal(tenant, user), adapter=adapter)
+    owner = principal or connection_principal(tenant, user)
+    check_trigger_connection(runtime, binding, principal=owner, adapter=adapter)
     state = initial_state(definition, trigger_state=adapter.initial_state(binding["config"]))
     controller = controller_workflow_spec()
     try:
         runtime.start(
             workflow=controller,
             vars={
-                "_meta": {"automation": definition, "creation_digest": request_digest(request)},
+                # `automation_owner` (backlog 1038): the actor of every occurrence's `_meta.origin`.
+                "_meta": {"automation": definition, "creation_digest": request_digest(request), "automation_owner": owner},
                 "_runtime": {"automation": state},
                 "workspace_root": definition["workspace_root"],
             },

@@ -699,6 +699,31 @@ with no runs, or `{"kind": ...}` with the session's most specific kind (`discuss
 (the root's workspace keys that later turns inherit). Every store exposes
 `session_kinds(session_id)`, which answers from an index without scanning runs.
 
+### Run origin
+
+Every run records who or what started it once, at start, in `vars._meta.origin`
+(`abstractruntime.core.run_origin`, framework backlog 1038):
+
+```json
+{"kind": "person | trigger | agent | system",
+ "actor": "<tenant>:<user> or null",
+ "client": "console | assistant | automation | automation.run_now | bridge:<name> | ...",
+ "ref": {"automation_id": "...", "occurrence_index": 3, "event_id": "...", "source": "schedule@2",
+         "origin_run_id": "...", "session_id": "...", "bridge": "..."}}
+```
+
+- The controller stamps every occurrence in `build_prepared` (frozen with its inputs): `trigger` for a scheduled or
+  event admission (`ref.source` is `<source_id>@<version>`), `person` with client `automation.run_now` for a manual
+  run. The actor is the automation's owner, `_meta.automation_owner` on the controller (`"<tenant>:<user>"` of the
+  creation request, or `create_automation(..., principal=)`); automations created earlier have `actor: null`.
+- Hosts stamp the runs they start: `origin_for("person", actor=..., client=...)` for a run a person starts,
+  `origin_for("system", client="bridge:<name>", bridge=...)` for a bridge, then `stamp_origin(vars, origin)` before
+  `Runtime.start` (an origin is written once; an existing one is kept).
+- The trigger envelope is never copied: `ref.automation_id` and `ref.event_id` point at the controller's
+  `automation.admitted` record that holds it.
+- `origin_of(vars)` reads it back; it returns `None` for runs started before origins existed, which keep their former
+  classification.
+
 ### Turn roots
 
 A session's **turns** are its turn roots: runs without a parent, except automation controllers, plus automation

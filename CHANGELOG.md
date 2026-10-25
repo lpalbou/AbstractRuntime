@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Run origin** (framework backlog 1038): `vars._meta.origin = {kind: person|trigger|agent|system, actor, client, ref}` records who or what started a run. `abstractruntime.core.run_origin.origin_for(...)` builds it for hosts (person and system runs), `stamp_origin` writes it once and `origin_of` reads it (None for older runs). Every automation occurrence now carries one from the controller: `trigger` with `ref {automation_id, occurrence_index, event_id, source}`, or `person` for a manual run now; the actor is the automation's owner (`_meta.automation_owner`, the `"<tenant>:<user>"` of the creation request). See [Run origin](docs/automations.md#run-origin).
+
 - `wake_stream_consumers(runtime, stream)` / `stream_consumers(runtime, stream)` (`abstractruntime.email`, framework backlog 1042/1044): wake the automations that read ONE inbox stream, decided by their binding alone (`automation_reads_stream`): `trigger:<connection_id>` for a connection-bound binding, `email:<tenant>:<user>:<account_id>:<folder>` for an `email.received@1` binding of that mailbox (`config.account`; `self` or unset is the runtime's bound mailbox). `wake_email_automations(runtime, account_id=…)` and `email_trigger_consumers(runtime, account_id=…)` take an optional mailbox; `prune_email_inbox` also keeps the events a connection-bound automation has not read yet.
 
 - `MailboxQueryableRunStore` (backlog 1046): `list_mailbox_runs(names=[…])` returns every running or waiting run

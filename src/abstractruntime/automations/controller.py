@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from ..core.models import Effect, EffectType, RunState, RunStatus
+from ..core.run_origin import ORIGIN_KEY, origin_for
 from ..triggers.manual import manual_event_id
 from ..triggers.protocol import format_timestamp, parse_timestamp
 from ..triggers.registry import get_trigger_adapter
@@ -519,6 +520,25 @@ def apply_context_mode(input_data: Dict[str, Any], *, mode: str) -> Dict[str, An
     return receipt
 
 
+def occurrence_origin(turn: Turn, *, index: int, envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """`_meta.origin` of an occurrence (`core.run_origin`): `trigger` for a scheduled or event
+    admission, `person` for a manual `run_now` (the owner asked). The actor is the automation's
+    owner principal (`_meta.automation_owner`; None for automations created before 1038)."""
+    meta = turn.run.vars.get("_meta") if isinstance(turn.run.vars.get("_meta"), dict) else {}
+    owner = meta.get("automation_owner") if isinstance(meta.get("automation_owner"), str) else None
+    source = f"{envelope['source_id']}@{envelope['source_version']}"
+    manual = envelope["source_id"] == "manual"
+    return origin_for(
+        "person" if manual else "trigger",
+        actor=owner or None,
+        client="automation.run_now" if manual else "automation",
+        automation_id=turn.automation_id,
+        occurrence_index=int(index),
+        event_id=str(envelope["event_id"]),
+        source=source,
+    )
+
+
 def build_prepared(
     turn: Turn,
     *,
@@ -613,6 +633,9 @@ def build_prepared(
     # The automation's title for templates (the send-email action's {automation_title}).
     meta_ns = dict(input_data.get("_meta")) if isinstance(input_data.get("_meta"), dict) else {}
     meta_ns["automation_title"] = definition["title"]
+    # Backlog 1038: who or what started the occurrence (frozen with the inputs; the envelope
+    # stays in the `automation.admitted` record, the origin only points at it).
+    meta_ns[ORIGIN_KEY] = occurrence_origin(turn, index=index, envelope=envelope)
     input_data["_meta"] = meta_ns
     prepared = {
         "workflow_id": definition["target"]["workflow_id"],

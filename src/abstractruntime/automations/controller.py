@@ -521,6 +521,20 @@ def apply_context_mode(input_data: Dict[str, Any], *, mode: str) -> Dict[str, An
     return receipt
 
 
+def runs_in_foreign_session(definition: Dict[str, Any], automation_id: str) -> bool:
+    """True for a growing automation whose occurrences run in another session (a wake's caller)."""
+    from .models import automation_session_id
+
+    return definition["context"]["mode"] == "growing" and definition["session_id"] != automation_session_id(automation_id)
+
+
+def occurrence_session_kind(definition: Dict[str, Any], automation_id: str) -> str:
+    """`chat` (a turn of the caller's conversation: a wake), `automation` (growing), `occurrence`."""
+    if runs_in_foreign_session(definition, automation_id):
+        return "chat"
+    return "automation" if definition["context"]["mode"] == "growing" else "occurrence"
+
+
 def occurrence_origin(turn: Turn, *, index: int, envelope: Dict[str, Any]) -> Dict[str, Any]:
     """`_meta.origin` of an occurrence (`core.run_origin`): `trigger` for a scheduled or event
     admission, `person` for a manual `run_now` (the owner asked). The actor is the automation's
@@ -529,6 +543,20 @@ def occurrence_origin(turn: Turn, *, index: int, envelope: Dict[str, Any]) -> Di
     owner = meta.get("automation_owner") if isinstance(meta.get("automation_owner"), str) else None
     source = f"{envelope['source_id']}@{envelope['source_version']}"
     manual = envelope["source_id"] == "manual"
+    origin_run_id = turn.definition.get("origin_run_id")
+    if origin_run_id and not manual:
+        # A wake (backlog 1045): an agent scheduled this run.
+        return origin_for(
+            "agent",
+            actor=owner or None,
+            client="schedule_run",
+            automation_id=turn.automation_id,
+            occurrence_index=int(index),
+            event_id=str(envelope["event_id"]),
+            source=source,
+            origin_run_id=str(origin_run_id),
+            session_id=str(turn.definition.get("session_id") or "") or None,
+        )
     return origin_for(
         "person" if manual else "trigger",
         actor=owner or None,
@@ -576,6 +604,8 @@ def build_prepared(
         untrusted = adapter_delivers_untrusted(get_trigger_adapter(trigger_binding["source_id"], trigger_binding["source_version"]))
     except Exception:  # noqa: BLE001 - an unknown source: treat its input as untrusted
         untrusted = True
+    # Backlog 1045: a wake scheduled by a run that read untrusted input stays untrusted.
+    untrusted = untrusted or bool(definition.get("untrusted_origin"))
     input_data = _render_prompt(definition["target"].get("input_data") or {}, envelope=envelope, index=index)
     if turn.occurrence_input_resolver is not None:
         # The host's per-occurrence inputs (e.g. the workspaces of a definition
@@ -613,7 +643,9 @@ def build_prepared(
             ledger_store=turn.ledger_store,
             artifact_store=turn.artifact_store,
             session_id=definition["session_id"],
-            automation_id=turn.automation_id,
+            # A wake running in its caller's session (backlog 1045) replays that whole
+            # conversation; an automation's own session holds only its occurrences.
+            automation_id=None if runs_in_foreign_session(definition, turn.automation_id) else turn.automation_id,
             max_tokens=definition["context"].get("growing", {}).get("max_tokens", HISTORY_REPLAY_MAX_TOKENS),
             strict=True,
         )
@@ -623,7 +655,8 @@ def build_prepared(
         # frozen with the inputs, so the occurrence run and its
         # `automation.admitted` record both say what was replayed and dropped.
         runtime_ns = input_data.get("_runtime") if isinstance(input_data.get("_runtime"), dict) else {}
-        input_data["_runtime"] = {**runtime_ns, "session_history": {**messages.report, "strict": True, "session_kind": "automation"}}
+        input_data["_runtime"] = {**runtime_ns, "session_history": {**messages.report, "strict": True,
+                                  "session_kind": "chat" if runs_in_foreign_session(definition, turn.automation_id) else "automation"}}
         session_id = definition["session_id"]
     else:
         session_id = first_run_id
@@ -777,7 +810,7 @@ def admit(turn: Turn) -> str:
         "command_id": command_id,
         "prepared": prepared,
         "retry": copy.deepcopy(definition["policy"]["retry"]),
-        "session_kind": "automation" if definition["context"]["mode"] == "growing" else "occurrence",
+        "session_kind": occurrence_session_kind(definition, turn.automation_id),
         "stop_requested": False,
     }
     if coalesced:
@@ -945,7 +978,9 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
             "notify": notify,
             "attention": attention,
         },
-        state={"pending_occurrence": None, "last_outcome": last_outcome, "attention_seq": seq},
+        # A one-shot automation (a wake, backlog 1045) ends after its occurrence, whatever its source.
+        state={"pending_occurrence": None, "last_outcome": last_outcome, "attention_seq": seq,
+               **({"exhausted": True} if definition.get("one_shot") else {})},
         node_id=node_id,
     )
 

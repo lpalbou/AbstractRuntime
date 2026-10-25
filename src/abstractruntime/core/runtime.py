@@ -1058,6 +1058,7 @@ class Runtime:
         self._occurrence_input_resolver: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]] = None
         self._event_inbox: Optional[Any] = None
         self._trigger_connection_store: Optional[Any] = None
+        self._schedule_run_handler: Optional[Callable[[RunState, Dict[str, Any]], Any]] = None
         self._effect_policy: EffectPolicy = effect_policy or DefaultEffectPolicy()
         self._config: RuntimeConfig = config or RuntimeConfig()
         self._chat_summarizer = chat_summarizer
@@ -1337,6 +1338,20 @@ class Runtime:
     @property
     def trigger_connection_store(self) -> Optional[Any]:
         return self._trigger_connection_store
+
+    def set_schedule_run_handler(self, handler: Optional[Callable[[RunState, Dict[str, Any]], Any]]) -> None:
+        """Host hook for `EffectType.SCHEDULE_RUN` (framework backlog 1045, `automations.wakes`):
+        `handler(run, plan) -> {"automation_id": ...}` creates the one-shot automation the runtime
+        planned (the host knows the target workflow, the owner and the workspace; most hosts call
+        `automations.wakes.create_scheduled_run`) and appends `wake.scheduled` to the user's
+        stream. Without a handler the effect fails loudly."""
+        if handler is not None and not callable(handler):
+            raise TypeError("set_schedule_run_handler expects a callable or None")
+        self._schedule_run_handler = handler
+
+    @property
+    def schedule_run_handler(self) -> Optional[Callable[[RunState, Dict[str, Any]], Any]]:
+        return self._schedule_run_handler
 
     @property
     def effect_policy(self) -> EffectPolicy:
@@ -3473,6 +3488,7 @@ class Runtime:
         self._handlers[EffectType.ASK_USER] = self._handle_ask_user
         self._handlers[EffectType.ANSWER_USER] = self._handle_answer_user
         self._handlers[EffectType.EMIT_EVENT] = self._handle_emit_event
+        self._handlers[EffectType.SCHEDULE_RUN] = self._handle_schedule_run
         self._handlers[EffectType.MEMORY_QUERY] = self._handle_memory_query
         self._handlers[EffectType.MEMORY_TAG] = self._handle_memory_tag
         self._handlers[EffectType.MEMORY_COMPACT] = self._handle_memory_compact
@@ -4152,6 +4168,64 @@ class Runtime:
             if suffix and suffix not in names and len(names) < 15:
                 names.append(suffix)
         return names
+
+    def _handle_schedule_run(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """Handle SCHEDULE_RUN (framework backlog 1045): plan a wake, let the host create it.
+
+        Payload: `{at | after_s | on: {source_id, source_version?, connection_id?, config?},
+        task | note, tools?, session_id? (the caller's), mode: same_session | independent,
+        title?}`; an agent builtin adds `tool_name` / `call_id` and gets a tool-style result.
+        Result: `{automation_id, session_id, mode, kind, at | on, allowed_tools, dropped_tools}`.
+        The plan's `request_id` derives from the effect's idempotency key, so a replayed effect
+        re-finds the same automation instead of creating a second one.
+        """
+        import hashlib
+
+        from ..automations.wakes import ScheduleRunError, plan_schedule_run
+
+        payload = dict(effect.payload or {})
+        tool_name = payload.get("tool_name")
+        call_id = str(payload.get("call_id") or "schedule_run")
+
+        def fail(message: str) -> EffectOutcome:
+            if tool_name:
+                return EffectOutcome.completed(result={"mode": "executed", "results": [
+                    {"call_id": call_id, "name": str(tool_name), "success": False, "output": None, "error": message}]})
+            return EffectOutcome.failed(message, retryable=False)
+
+        handler = self._schedule_run_handler
+        if handler is None:
+            return fail("schedule_run is not available on this host (no schedule_run handler is registered)")
+        try:
+            key = self._effect_policy.idempotency_key(run=run, node_id=run.current_node, effect=effect)
+        except Exception:
+            key = f"{run.run_id}:{run.current_node}"
+        request_id = "wake:" + hashlib.sha256(f"{run.run_id}\n{key}".encode("utf-8")).hexdigest()[:32]
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            plan = plan_schedule_run(run, payload, now=now, run_store=self._run_store, request_id=request_id)
+        except ScheduleRunError as exc:
+            return fail(str(exc))
+        try:
+            created = handler(run, plan)
+        except Exception as exc:  # noqa: BLE001 - the host's refusal is the tool's error
+            return fail(f"the wake could not be created: {exc}")
+        automation_id = (created or {}).get("automation_id") if isinstance(created, dict) else None
+        if not automation_id:
+            return fail("the host's schedule_run handler returned no automation_id")
+        out: Dict[str, Any] = {
+            "automation_id": str(automation_id),
+            "session_id": plan.get("session_id"),
+            "mode": plan["mode"],
+            "kind": plan["kind"],
+            **plan["when"],
+            "allowed_tools": list(plan["allowed_tools"]),
+            "dropped_tools": list(plan["dropped_tools"]),
+        }
+        if tool_name:
+            return EffectOutcome.completed(result={"mode": "executed", "results": [
+                {"call_id": call_id, "name": str(tool_name), "success": True, "output": out, "error": None}]})
+        return EffectOutcome.completed(result=out)
 
     def _handle_emit_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Emit a durable event and resume matching WAIT_EVENT runs.

@@ -84,10 +84,13 @@ class AutomationDefinition(TypedDict):
     context: Dict[str, Any]  # {mode, growing}
     policy: Dict[str, Any]  # {serial, misfire, failure, retry, tool_approval, email_allowed_recipients, untrusted_input_tools}
     notify: Dict[str, Any]  # {channels: ["console"] | ["console", "email"]} (schema v2)
-    session_id: str
+    session_id: str  # where growing occurrences run: `automation:<id>`, or a wake's caller session (1045)
     workspace_root: str
     created_at: str
     archived_at: Optional[str]
+    # Optional (framework backlog 1045, present only when set): origin_run_id (the run that scheduled
+    # a wake), one_shot (one occurrence, then the automation ends), untrusted_origin (the caller read
+    # untrusted input: occurrences are untrusted too).
 
 
 class AutomationState(TypedDict):
@@ -444,6 +447,9 @@ def validate_trigger_request(value: Any, *, now: str, binding_id: str) -> Dict[s
 
 CREATE_REQUEST_FIELDS = (
     "request_id", "tenant", "user", "title", "target", "trigger", "context", "policy", "notify", "workspace_root",
+    # Wakes (framework backlog 1045, `automations.wakes`): the session its occurrences run in, the run
+    # that scheduled it, one occurrence only, and an untrusted caller.
+    "session_id", "origin_run_id", "one_shot", "untrusted_origin",
 )
 
 
@@ -452,7 +458,7 @@ def build_definition(request: Mapping[str, Any], *, automation_id: str, now: str
     req = _require_mapping(request, "request")
     _reject_unknown(req, CREATE_REQUEST_FIELDS, "")
     _nonempty_str(req.get("request_id"), "request_id")
-    return {
+    definition = {
         "schema_version": DEFINITION_SCHEMA_VERSION,
         "revision": 1,
         "title": validate_title(req.get("title")),
@@ -467,6 +473,21 @@ def build_definition(request: Mapping[str, Any], *, automation_id: str, now: str
         "created_at": now,
         "archived_at": None,
     }
+    # Backlog 1045: `session_id` overrides where a growing automation's occurrences run (the
+    # caller's session for a wake); the controller itself always lives in `automation:<id>`.
+    if req.get("session_id") is not None:
+        if definition["context"]["mode"] != "growing":
+            raise _invalid("session_id is only meaningful with context.mode growing", "session_id")
+        definition["session_id"] = _nonempty_str(req["session_id"], "session_id")
+    if req.get("origin_run_id") is not None:
+        definition["origin_run_id"] = _nonempty_str(req["origin_run_id"], "origin_run_id")
+    for flag in ("one_shot", "untrusted_origin"):
+        if req.get(flag) is not None:
+            if not isinstance(req[flag], bool):
+                raise _invalid(f"{flag} must be true or false", flag)
+            if req[flag]:
+                definition[flag] = True
+    return definition
 
 
 REVISABLE_FIELDS = ("title", "target", "trigger", "context", "policy", "notify")

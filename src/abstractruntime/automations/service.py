@@ -46,6 +46,7 @@ from .ledger import (
 from .models import (
     AutomationError,
     automation_id_for,
+    automation_session_id,
     automation_status,
     build_definition,
     discussion_ids,
@@ -152,7 +153,9 @@ def create_automation(
                 "_runtime": {"automation": state},
                 "workspace_root": definition["workspace_root"],
             },
-            session_id=definition["session_id"],
+            # The controller lives in its own session even when a wake's occurrences run in the
+            # caller's (`definition.session_id` override, backlog 1045).
+            session_id=automation_session_id(automation_id),
             run_id=automation_id,
             actor_id=actor_id,
         )

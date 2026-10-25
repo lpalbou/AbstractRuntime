@@ -50,6 +50,9 @@ class EffectType(str, Enum):
 
     # Eventing
     EMIT_EVENT = "emit_event"
+    # Wakes (framework backlog 1045): schedule a run for later (a one-shot automation the host
+    # creates through `Runtime.set_schedule_run_handler`; see `automations.wakes`).
+    SCHEDULE_RUN = "schedule_run"
 
     # Integrations (implemented via pluggable handlers)
     LLM_CALL = "llm_call"

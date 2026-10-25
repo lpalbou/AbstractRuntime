@@ -14,7 +14,9 @@ Derivation, first match wins:
                                            ("automation" in growing mode: the
                                            occurrence is a turn of the
                                            automation's session; "occurrence"
-                                           in independent mode: its own session)
+                                           in independent mode: its own session;
+                                           "chat" for a wake running in its
+                                           caller's conversation)
 - `_meta.discussion`                    -> discussion
 - `_meta.schedule.kind=="scheduled_run"` -> legacy_schedule, session_kind "automation"
                                            (the gateway's pre-automation scheduled
@@ -65,7 +67,8 @@ def automation_index_fields(vars_obj: Any, *, run_id: Optional[str] = None) -> D
         role = occurrence.get("role")
         role = role if role in ("occurrence", "descendant") else "occurrence"
         kind = occurrence.get("session_kind")
-        kind = kind if kind in ("automation", "occurrence") else "occurrence"
+        # "chat": a wake's occurrence, a turn of its caller's conversation (backlog 1045).
+        kind = kind if kind in ("automation", "occurrence", "chat") else "occurrence"
         return {
             "automation_id": _text(occurrence.get("automation_id")),
             "role": role,

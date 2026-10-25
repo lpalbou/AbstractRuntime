@@ -430,6 +430,53 @@ Run ids are deterministic:
 
 `occurrence_run_id(automation_id, revision=, index=, attempt=, command_id=)` computes them.
 
+## Wakes: `SCHEDULE_RUN`
+
+A run can schedule work for later (framework backlog 1045, `abstractruntime.automations.wakes`): the effect
+`EffectType.SCHEDULE_RUN`, issued by a flow node or the agent builtin `schedule_run` (AbstractAgent), with payload
+
+```json
+{"after_s": 300 | "at": "2026-10-26T09:00:00+01:00" | "on": {"source_id": "feed.item", "connection_id": "tc_...", "config": {}},
+ "task": "work to do then" | "note": "a reminder",
+ "tools": ["read_file"], "mode": "same_session | independent", "session_id": "<the caller's>", "title": "..."}
+```
+
+A wake IS a one-shot automation:
+
+- the trigger is `schedule@2 {kind: once, start_at}` for `at` / `after_s`, or the source named in `on` (one
+  occurrence, then the automation ends: `one_shot`);
+- `mode: "same_session"` (default) runs the occurrence as a new turn of the caller's session: the definition's
+  `session_id` is overridden with it (growing context, the whole conversation replays; the occurrence's
+  `session_kind` is `chat`, so the conversation stays a chat), and the turn starts with the `[Trigger …]` header;
+  the controller itself stays in `automation:<id>`. `"independent"` runs it in a fresh session. A run schedules into
+  its own session only;
+- tools: at most the caller's. The caller's ceiling is resolved over its run tree (`resolve_tool_scope`) and
+  intersected with `tools`; `schedule_run` is never passed on, and a run whose ceiling lacks `schedule_run` cannot
+  schedule at all. The result becomes the occurrence's explicit `_runtime.allowed_tools`. A note gets no tools. A
+  caller with no recorded ceiling must name its tools;
+- approval: `policy.tool_approval: "ask"`; the caller's own `_runtime.tool_policy` is copied; a caller that read
+  untrusted input (`_runtime.untrusted_input`) makes the wake untrusted (`untrusted_origin`: the occurrence gets
+  the untrusted-input policy);
+- the definition records `origin_run_id`; the occurrence's `_meta.origin` is `{kind: "agent", client:
+  "schedule_run", ref: {origin_run_id, session_id, automation_id, occurrence_index, event_id, source}}`.
+
+The runtime plans, the host creates: `Runtime.set_schedule_run_handler(handler)` registers `handler(run, plan) ->
+{"automation_id": ...}`, which knows the target workflow (the session's agent), the owner and the workspace, and
+usually calls `create_scheduled_run(runtime, plan, target=, tenant=, user=, workspace_root=, notify=None)`. The plan's
+`request_id` derives from the effect's idempotency key, so a replayed effect finds the same automation. Without a
+handler the effect fails (`no schedule_run handler`); an agent call gets a tool error. The effect's result is
+`{automation_id, session_id, mode, kind, at | on, allowed_tools, dropped_tools}` (tool-style for the builtin).
+
+The host appends to the user's event stream (helpers `wake_scheduled_event(plan, automation_id)` and
+`wake_cancelled_event(...)`):
+
+```json
+{"type": "wake.scheduled", "data": {"automation_id": "...", "session_id": "...", "at": "..." , "origin_run_id": "..."}}
+{"type": "wake.cancelled", "data": {"automation_id": "...", "session_id": "...", "origin_run_id": "..."}}
+```
+
+Cancelling a wake is archiving its automation (`automation.archive`) before it fires: nothing runs.
+
 ## Commands
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,

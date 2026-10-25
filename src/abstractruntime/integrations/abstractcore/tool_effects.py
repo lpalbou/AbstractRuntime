@@ -105,6 +105,8 @@ TOOL_EFFECT_CLASSES: Dict[str, str] = {
     "self_improve": WRITE,
     "ask_user": COMMS,
     "delegate_agent": DELEGATE,
+    # Framework backlog 1045: schedules a run for later with at most the caller's tools.
+    "schedule_run": DELEGATE,
     "inspect_vars": READ,
     "read_skill": READ,
     "recall_memory": READ,
@@ -201,6 +203,7 @@ TOOL_NETWORK_REACH: Dict[str, str] = {
     "self_improve": NET_NONE,
     "ask_user": NET_NONE,
     "delegate_agent": NET_NONE,  # the child's own calls are judged on their own facts
+    "schedule_run": NET_NONE,  # the wake's own calls are judged on their own facts
     "inspect_vars": NET_NONE,
     "read_skill": NET_NONE,
     "recall_memory": NET_CONFIGURED,

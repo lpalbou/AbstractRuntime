@@ -300,14 +300,19 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
   reach vars or results.
 - **Reading never changes the mailbox.** `mail.search`, `mail.get` and `mail.attachment` read on one connection,
   read-only; nothing is marked read.
-- **Read-only mailboxes.** A mailbox connected without sending (SMTP) settings is watched, never changed: `mark`,
-  `label`, `move` and `delete` need a writable mailbox (IMAP and SMTP), and `send`, `reply` and `forward` need sending
-  settings; otherwise the verb answers `email_mailbox_read_only` before connecting.
+- **Read only or Read and write.** Each mailbox has an access the person chooses (AbstractCore's
+  `EmailAccount.access`). `mark`, `label`, `move`, `delete`, `send`, `reply` and `forward` need Read and write;
+  on a read-only mailbox the verb answers `email_mailbox_read_only` ("This mailbox is read-only: automations only
+  read it.", fix: turn on Read and write for that address in My email). `send`, `reply` and `forward` also need the
+  mailbox's outgoing server (SMTP); without one they answer `email_mailbox_cannot_send` ("This mailbox can't send:
+  it has no outgoing server.", fix: add the outgoing server for that address in My email). Both are refused before
+  connecting.
 - **Sending.** `send`, `reply` and `forward` go through AbstractCore's `guarded_send`: the account's recipient policy
   and rate limits apply, and the framework marks automatic mail as such.
 - **One connection per verb.** Each verb holds one IMAP connection (a writable one for `mark`, `label`, `move` and
   `delete`), whatever the number of ids.
 - **Errors.** `invalid_arguments`, `invalid_mailbox`, `email_not_configured`, `email_mailbox_read_only`,
+  `email_mailbox_cannot_send`,
   `email_message_not_found`, `artifact_store_missing`, and AbstractCore's own `email_*` codes (sign-in, policy, rate
   limits).
 - Requires AbstractCore 2.29.0 or newer (its `EmailClient` mailbox verbs and Gmail labels).

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Mail verbs refuse in two plain ways.** A mailbox the person keeps Read only (AbstractCore's explicit `EmailAccount.access`, no longer "has SMTP") refuses `mark`, `label`, `move`, `delete`, `send`, `reply` and `forward` with `email_mailbox_read_only`: "This mailbox is read-only: automations only read it." / "In My email, turn on Read and write for <address> to change it or send from it." A Read and write mailbox without an outgoing server refuses `send`, `reply` and `forward` with the new `email_mailbox_cannot_send`: "This mailbox can't send: it has no outgoing server." / "In My email, add the outgoing server (SMTP) for <address>." Both before connecting.
+
 ### Fixed
 
 - Trigger messages keep their flags: the mail watcher stores each new message with its `flags` (\\Seen, \\Flagged, IMAP keywords) and Gmail `labels` (AbstractCore 2.29's `MessageSummary.labels`, on a Gmail server) as read, so an occurrence's Email record carries `seen`, `flagged` and `labels` like a sample's (they were null). Nothing else in the payload or the cursor changes.

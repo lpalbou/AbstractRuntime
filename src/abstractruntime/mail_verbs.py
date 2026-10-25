@@ -28,8 +28,10 @@ refused, never guessed.
 Built on AbstractCore >= 2.28.0: `EmailClient.search` (typed query), `get_many`, `mark`, `label`,
 `move`, `delete`, `download_attachment`, `session(write=...)`, and `EmailContext.send` / `reply` /
 `forward` (through `guarded_send`: the account's recipient policy and rate limits apply). Mailbox
-changes (`mark`, `label`, `move`, `delete`) need a writable mailbox (`EmailAccount.can_write`: IMAP
-and SMTP); sends need sending settings; otherwise `email_mailbox_read_only`, refused before connecting.
+changes (`mark`, `label`, `move`, `delete`) and sends need a mailbox set to Read and write
+(`EmailAccount.can_write`, AbstractCore's explicit access choice), else `email_mailbox_read_only`;
+sends also need its outgoing server (`can_send`), else `email_mailbox_cannot_send`. Both are refused
+before connecting.
 
 Results use the TOOL_CALLS envelope (`{mode: "executed", results: [{call_id, name, success, output,
 error}]}`); a failure is `success: false` with `error = "<code>: <cause>"` and `error_detail =
@@ -48,7 +50,7 @@ MAIL_VERBS = (
     "mail.send", "mail.reply", "mail.forward", "mail.attachment",
 )
 CHANGE_VERBS = frozenset({"mail.mark", "mail.label", "mail.move", "mail.delete"})  # change the mailbox: can_write
-SEND_VERBS = frozenset({"mail.send", "mail.reply", "mail.forward"})  # send mail: can_send
+SEND_VERBS = frozenset({"mail.send", "mail.reply", "mail.forward"})  # send mail: can_write and can_send
 WRITE_VERBS = CHANGE_VERBS | SEND_VERBS
 PRIMARY_MAILBOXES = ("", "self", "default", "primary")
 DEFAULT_SEARCH_LIMIT = 50
@@ -191,11 +193,16 @@ def _record(detail_or_summary: Any, mailbox: str) -> Dict[str, Any]:
 
 
 def _require_writable(ctx: Any, name: str) -> None:
+    """Changes need a mailbox the person set to Read and write (`can_write`); sends also need its
+    outgoing server (`can_send`). Two refusals, before connecting."""
     account = getattr(ctx, "account", None)
-    allowed = getattr(account, "can_write", False) if name in CHANGE_VERBS else getattr(account, "can_send", False)
-    if not allowed:
-        raise MailVerbError("email_mailbox_read_only", "This mailbox is read-only: it is watched, never changed or sent from.",
-                            "Connect the mailbox with its sending (SMTP) settings to change or send mail.")
+    address = str(getattr(account, "address", "") or "") or "this mailbox"
+    if not getattr(account, "can_write", False):
+        raise MailVerbError("email_mailbox_read_only", "This mailbox is read-only: automations only read it.",
+                            f"In My email, turn on Read and write for {address} to change it or send from it.")
+    if name in SEND_VERBS and not getattr(account, "can_send", False):
+        raise MailVerbError("email_mailbox_cannot_send", "This mailbox can't send: it has no outgoing server.",
+                            f"In My email, add the outgoing server (SMTP) for {address}.")
 
 
 def _sent(result: Any) -> Dict[str, Any]:

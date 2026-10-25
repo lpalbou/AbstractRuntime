@@ -67,7 +67,7 @@ def _reset_core_resolver(tmp_path, monkeypatch):
     uninstall_core_resolver()
 
 
-def _context(tmp_path, ca, imap, *, smtp=None):
+def _context(tmp_path, ca, imap, *, smtp=None, access=""):
     from abstractcore.comms.email import EmailAccount, EmailContext, EmailSecret, ImapSettings, RecipientPolicy, SmtpSettings
     from abstractcore.comms.email.limits import SendLimits, SendRateLimiter
 
@@ -75,6 +75,7 @@ def _context(tmp_path, ca, imap, *, smtp=None):
         address=ALICE_ADDR,
         imap=ImapSettings.build("localhost", port=imap.port, security="ssl", ca_file=str(ca.ca_pem)),
         smtp=SmtpSettings.build("localhost", port=smtp.port, security="starttls", ca_file=str(ca.ca_pem)) if smtp else None,
+        access=access,
     )
     limits = SendLimits()
     return EmailContext(account=account, secret=EmailSecret(ALICE_PW), policy=RecipientPolicy.build("allowlist", [ALICE_ADDR, "bob@x.test"]),
@@ -164,7 +165,35 @@ def test_writes_are_refused_on_a_read_only_mailbox(tmp_path, ca, imap):
                        ("mail.delete", {"ids": ["1000:1:INBOX"]}), ("mail.send", {"to": "bob@x.test", "subject": "s", "text": "t"}),
                        ("mail.reply", {"id": "1000:1:INBOX", "text": "t"})):
         out = _call(rt, name, args)
-        assert out["error_detail"]["code"] == "email_mailbox_read_only", name
+        assert out["error_detail"] == {
+            "code": "email_mailbox_read_only", "cause": "This mailbox is read-only: automations only read it.",
+            "fix": f"In My email, turn on Read and write for {ALICE_ADDR} to change it or send from it."}, name
+
+
+def test_read_only_is_the_persons_choice_not_the_servers(tmp_path, ca, imap):
+    """An outgoing server set, yet Read only: every change and send is refused before connecting."""
+    from types import SimpleNamespace
+
+    _fill(imap, 1)
+    smtp = SimpleNamespace(port=1)  # never reached
+    ctx = _context(tmp_path, ca, imap, smtp=smtp, access="read")
+    assert ctx.account.smtp is not None and not ctx.account.can_write
+    rt, _ = _runtime(tmp_path, {"t:alice:default": ctx})
+    logins = len(imap.logins)
+    for name, args in (("mail.mark", {"ids": ["1000:1:INBOX"], "seen": True}), ("mail.forward", {"id": "1000:1:INBOX", "to": "bob@x.test"})):
+        assert _call(rt, name, args)["error_detail"]["code"] == "email_mailbox_read_only", name
+    assert len(imap.logins) == logins
+
+
+def test_read_and_write_without_an_outgoing_server_changes_but_cannot_send(tmp_path, ca, imap):
+    _fill(imap, 1)
+    rt, _ = _runtime(tmp_path, {"t:alice:default": _context(tmp_path, ca, imap, access="write")})  # IMAP only, Read and write
+    assert _call(rt, "mail.mark", {"ids": ["1000:1:INBOX"], "seen": True})["success"]
+    for name, args in (("mail.send", {"to": "bob@x.test", "subject": "s", "text": "t"}), ("mail.reply", {"id": "1000:1:INBOX", "text": "t"}),
+                       ("mail.forward", {"id": "1000:1:INBOX", "to": "bob@x.test"})):
+        assert _call(rt, name, args)["error_detail"] == {
+            "code": "email_mailbox_cannot_send", "cause": "This mailbox can't send: it has no outgoing server.",
+            "fix": f"In My email, add the outgoing server (SMTP) for {ALICE_ADDR}."}, name
 
 
 def test_the_mailbox_argument_and_the_triggers_mailbox(tmp_path, ca, imap):

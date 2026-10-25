@@ -317,7 +317,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.27.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.28.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 

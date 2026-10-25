@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.11.1"
+version = "0.12.0"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -59,7 +59,9 @@ dependencies = [
   # `config_facade.voice_input_hint` (the speech-input row's hint; round 16).
   # 2.27.0: `EmailClient.session()` / `get_many()` (the mail watcher and trigger samples read many
   # messages on one IMAP connection).
-  "abstractcore>=2.27.0",
+  # 2.28.0: `EmailClient` mailbox verbs (mark, label, move, delete, typed search, thread) and
+  # `EmailContext.reply` / `forward`, used by the mail verbs for flows.
+  "abstractcore>=2.28.0",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -76,12 +78,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.27.0",
+  "abstractcore[apple]>=2.28.0",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.27.0",
+  "abstractcore[gpu]>=2.28.0",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]

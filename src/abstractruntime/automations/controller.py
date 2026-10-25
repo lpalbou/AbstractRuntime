@@ -31,7 +31,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from ..core.models import Effect, EffectType, RunState, RunStatus
 from ..core.run_origin import ORIGIN_KEY, origin_for
-from ..triggers.cloudevents import to_cloudevent
+from ..triggers.cloudevents import ensure_cloudevent_attributes, to_cloudevent
 from ..triggers.manual import manual_event_id
 from ..triggers.protocol import format_timestamp, parse_timestamp
 from ..triggers.registry import get_trigger_adapter
@@ -755,6 +755,11 @@ def admit(turn: Turn) -> str:
         command_id = None
         envelope = adapter.normalize(
             binding, event_id=admission["event_id"], fired_at=admission["fired_at"], payload=admission["payload"]
+        )
+        # Backlog 1039: a source that normalizes without the CloudEvents attributes (schedule@1,
+        # frozen; third-party sources) still records them.
+        envelope = ensure_cloudevent_attributes(
+            dict(envelope), trust="untrusted" if adapter_delivers_untrusted(adapter) else "trusted"
         )
         trigger_update = dict(admission["state"])
         coalesced = admission.get("coalesced")

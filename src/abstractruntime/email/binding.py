@@ -75,6 +75,42 @@ class EmailBinding:
             return None
 
 
+def account_id_of_ref(account_ref: Any) -> Optional[str]:
+    """The mailbox id of a `<tenant>:<user>:<account_id>` reference (the last segment), else None."""
+    ref = str(account_ref or "").strip()
+    parts = ref.split(":")
+    return parts[-1] if len(parts) >= 3 and parts[-1] else None
+
+
+def account_ref_with_id(account_ref: str, account_id: str) -> str:
+    """The same user's reference for mailbox `account_id`: `<tenant>:<user>:<account_id>`
+    (framework backlog 1044: one user, several mailboxes)."""
+    ref = str(account_ref or "").strip()
+    parts = ref.split(":")
+    if len(parts) < 3 or not str(account_id or "").strip():
+        raise ValueError(f"not a <tenant>:<user>:<account_id> reference: {account_ref!r}")
+    return ":".join([*parts[:-1], str(account_id).strip()])
+
+
+def email_binding_for_trigger(binding: Optional["EmailBinding"], trigger: Mapping[str, Any]) -> Optional["EmailBinding"]:
+    """The account an automation's occurrences act for (framework backlog 1044).
+
+    `binding` is the runtime's own (`Runtime.email_binding`: the user's primary mailbox). An
+    `email.received@1` binding whose `config.account` names another mailbox of the SAME user
+    (`self`, `default` and no value are the primary) is bound to that mailbox, so its occurrences
+    read and "send from" it (a read-only mailbox refuses sends at the host). Any other trigger:
+    `binding` unchanged. None when the runtime has no binding."""
+    if binding is None:
+        return None
+    if not isinstance(trigger, Mapping) or trigger.get("source_id") != "email.received":
+        return binding
+    config = trigger.get("config") if isinstance(trigger.get("config"), Mapping) else {}
+    account = str(config.get("account") or "").strip()
+    if account in ("", "self", "default") or account == account_id_of_ref(binding.account_ref):
+        return binding
+    return EmailBinding(account_ref=account_ref_with_id(binding.account_ref, account), address="")
+
+
 def binding_of(vars_obj: Any) -> Optional[EmailBinding]:
     """The run's binding from its vars (`_runtime.email_account`), or None."""
     if not isinstance(vars_obj, Mapping):

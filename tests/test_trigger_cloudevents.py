@@ -92,3 +92,22 @@ def test_occurrence_receives_the_envelope_as_structured_input(env):
         "next_at": "2026-01-01T00:05:00+00:00", "coalesced": None,
     }
     assert kid.vars["prompt"].startswith("[Trigger schedule@2 · occurrence 1")  # the header is unchanged
+
+
+def test_schedule_v1_stays_frozen_but_its_occurrences_get_the_event(env):
+    """schedule@1's adapter answers byte for byte as released (R16.1 corpus); the controller adds the
+    CloudEvents attributes to its envelope."""
+    from abstractruntime.triggers import ScheduleTriggerAdapter
+
+    v1 = ScheduleTriggerAdapter()
+    env1 = v1.normalize(_binding("schedule", 1, {}), event_id="e", fired_at=T0, payload={"tick": 0, "scheduled_at": T0})
+    assert set(env1) == set(ORIGINAL_KEYS)
+    runtime, clock = env
+    automation_id, _ = create_automation(runtime, request(), now=clock.now)  # the harness default: schedule@1
+    drive(runtime, automation_id)
+    (kid,) = children(runtime, automation_id)
+    event = kid.vars["event"]
+    _validate(event)
+    assert (event["type"], event["subject"], event["abstracttrust"]) == ("abstract.schedule.v1", "tick:0", "trusted")
+    assert event["dedupekey"] == kid.vars["_meta"]["occurrence"]["event_id"]
+    assert "series" not in event["data"]

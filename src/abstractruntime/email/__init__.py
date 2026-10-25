@@ -38,6 +38,9 @@ from .automations import (
 )
 from .binding import (
     EMAIL_ACCOUNT_KEY,
+    account_id_of_ref,
+    account_ref_with_id,
+    email_binding_for_trigger,
     EMAIL_ALLOWED_RECIPIENTS_KEY,
     EMAIL_USE_ACTION,
     EMAIL_USE_AGENT_TOOL,
@@ -58,6 +61,9 @@ from .inbox import AppendResult, EventInbox, EventInboxRetention, InMemoryEventI
 
 __all__ = [
     "AppendResult",
+    "account_id_of_ref",
+    "account_ref_with_id",
+    "email_binding_for_trigger",
     "automation_reads_stream",
     "stream_consumers",
     "wake_stream_consumers",

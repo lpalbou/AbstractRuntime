@@ -100,6 +100,22 @@ def with_cloudevent_attributes(
     return envelope
 
 
+def ensure_cloudevent_attributes(envelope: Dict[str, Any], *, trust: str) -> Dict[str, Any]:
+    """Add the CloudEvents attributes to an envelope a source normalized without them (schedule@1,
+    frozen byte for byte; a third-party source): `subject` = `tick:<n>` / `command:<id>` / the event
+    id, `dedupekey` = the event id. An envelope that has them is returned unchanged."""
+    if envelope.get("specversion"):
+        return envelope
+    payload = envelope.get("payload") if isinstance(envelope.get("payload"), Mapping) else {}
+    if payload.get("tick") is not None:
+        subject = f"tick:{payload['tick']}"
+    elif payload.get("command_id"):
+        subject = f"command:{payload['command_id']}"
+    else:
+        subject = str(envelope["event_id"])
+    return with_cloudevent_attributes(envelope, subject=subject, dedupekey=str(envelope["event_id"]), trust=trust)
+
+
 def to_cloudevent(envelope: Mapping[str, Any]) -> Dict[str, Any]:
     """The structured CloudEvent of a trigger envelope (`data` = its payload)."""
     out: Dict[str, Any] = {
@@ -168,6 +184,7 @@ __all__ = [
     "CLOUDEVENT_JSON_SCHEMA",
     "EXTENSIONS",
     "binding_source_uri",
+    "ensure_cloudevent_attributes",
     "event_type",
     "from_cloudevent",
     "parse_event_type",

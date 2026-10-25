@@ -60,3 +60,17 @@ def test_wake_stream_consumers_wakes_only_the_readers_of_that_stream(tmp_path, m
     assert wake_stream_consumers(rt, other) == []
     assert rt.run_store.load(aid).status == RunStatus.WAITING
     assert wake_stream_consumers(rt, own) == [aid]
+
+
+def test_an_automation_on_a_further_mailbox_is_bound_to_that_mailbox():
+    from abstractruntime.email import EmailBinding, account_id_of_ref, account_ref_with_id, email_binding_for_trigger
+
+    primary = EmailBinding("t:alice:default", "alice@example.test")
+    assert account_id_of_ref("t:alice:work") == "work" and account_id_of_ref("nope") is None
+    assert account_ref_with_id("t:alice:default", "work") == "t:alice:work"
+    for config in ({}, {"account": "self"}, {"account": "default"}):
+        assert email_binding_for_trigger(primary, {**EMAIL, "config": config}) is primary
+    work = email_binding_for_trigger(primary, {**EMAIL, "config": {"account": "work"}})
+    assert work.account_ref == "t:alice:work"
+    assert email_binding_for_trigger(primary, {"source_id": "schedule", "source_version": 2, "config": {"account": "work"}}) is primary
+    assert email_binding_for_trigger(None, {**EMAIL, "config": {"account": "work"}}) is None

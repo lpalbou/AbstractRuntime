@@ -236,17 +236,6 @@ class ScheduleTriggerAdapter:
                         "missed_count": {"type": "integer", "minimum": 1},
                     },
                 },
-                # Framework backlog 1039: next_at / coalesced are null when there is none.
-                "series": {
-                    "type": "object",
-                    "properties": {
-                        "rule": {"type": "object"},
-                        "occurrence": {"type": "integer", "minimum": 1},
-                        "scheduled_at": {"type": "string", "format": "date-time"},
-                        "next_at": {"type": "string", "format": "date-time"},
-                        "coalesced": {"type": "object"},
-                    },
-                },
             },
         },
         "capabilities": {"kind": "time"},
@@ -404,6 +393,8 @@ class ScheduleTriggerAdapter:
             coalesced = {"first_tick": first, "last_tick": fired, "missed_count": fired - first}
             admission["coalesced"] = coalesced
             admission["payload"]["coalesced"] = dict(coalesced)
+        if int(self.descriptor["version"]) < 2:
+            return admission  # schedule@1 answers byte for byte as released (R16.1 A1 corpus)
         # Framework backlog 1039: the series this tick belongs to (CloudEvents `data.series`).
         next_k = None if new_state["exhausted"] else self._next_tick(config, new_state)
         admission["payload"]["series"] = {
@@ -463,6 +454,10 @@ class ScheduleTriggerAdapter:
             "payload": dict(payload),
             "binding_id": str(binding["binding_id"]),
         }
+        if int(self.descriptor["version"]) < 2:
+            # schedule@1 answers byte for byte as released (R16.1 A1 corpus); the controller adds
+            # the CloudEvents attributes to its envelopes (`ensure_cloudevent_attributes`).
+            return envelope  # type: ignore[return-value]
         tick = payload.get("tick")
         return with_cloudevent_attributes(  # type: ignore[return-value]
             envelope, subject=f"tick:{tick}" if tick is not None else "tick", dedupekey=str(event_id), trust="trusted"
@@ -479,6 +474,19 @@ _V2_PROPERTIES: Dict[str, Any] = {
 }
 
 
+_SERIES_SCHEMA = {
+    # Framework backlog 1039 (schedule@2 only): next_at / coalesced are null when there is none.
+    "type": "object",
+    "properties": {
+        "rule": {"type": "object"},
+        "occurrence": {"type": "integer", "minimum": 1},
+        "scheduled_at": {"type": "string", "format": "date-time"},
+        "next_at": {"type": "string", "format": "date-time"},
+        "coalesced": {"type": "object"},
+    },
+}
+
+
 class ScheduleV2TriggerAdapter(ScheduleTriggerAdapter):
     """`schedule@2`: schedule@1's `every`/`once` plus daily/weekly/monthly rules in a time zone."""
 
@@ -487,6 +495,10 @@ class ScheduleV2TriggerAdapter(ScheduleTriggerAdapter):
         "version": 2,
         "label": "Schedule",
         "config_schema": {"type": "object", "additionalProperties": False, "properties": _V2_PROPERTIES},
+        "event_schema": {
+            **ScheduleTriggerAdapter.descriptor["event_schema"],
+            "properties": {**ScheduleTriggerAdapter.descriptor["event_schema"]["properties"], "series": _SERIES_SCHEMA},
+        },
     }
 
     def validate(self, config: Mapping[str, Any], *, now: str) -> Dict[str, Any]:

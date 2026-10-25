@@ -699,38 +699,59 @@ def build_prepared(
 NAMED_INPUT_ARTIFACT_KEYS = ("messages",)  # hold text written by other people: stored as artifacts
 
 
-def _apply_named_inputs(turn: Turn, input_data: Dict[str, Any], envelope: Dict[str, Any], *, inputs: Optional[Dict[str, Any]],
-                        index: int, binding: Any, trigger: Dict[str, Any], resolve_vars: list) -> list:
-    """SET the source's named inputs (`adapter.occurrence_inputs`) on the occurrence's inputs.
-
-    The envelope's own source decides (a run-now of any automation is `manual@1`: nothing extra). A
-    source without `occurrence_inputs` (a third-party one) adds nothing. `messages` (mail bodies)
-    is stored as an artifact like `input_data.trigger.emails`: the controller's records keep a ref
-    and only the occurrence resolves it."""
-    try:
-        adapter = get_trigger_adapter(envelope["source_id"], envelope["source_version"])
-    except Exception:  # noqa: BLE001 - an unknown source never reaches admission
-        return resolve_vars
-    build = getattr(adapter, "occurrence_inputs", None)
-    if not callable(build):
-        return resolve_vars
-    mailbox = None
+def occurrence_mailbox(binding: Any, trigger: Dict[str, Any], source_id: str) -> Optional[str]:
+    """`mailbox` of an email occurrence: the bound mailbox's address, else its id; None otherwise."""
     if binding is not None:
         from ..email.binding import account_id_of_ref
 
-        mailbox = str(getattr(binding, "address", "") or "") or account_id_of_ref(getattr(binding, "account_ref", None))
-    elif envelope["source_id"] == "email.received":
-        mailbox = str((trigger.get("config") or {}).get("account") or "self")
-    named = dict(build(payload=envelope.get("payload") or {}, inputs=inputs or {}, index=int(index), mailbox=mailbox) or {})
+        return str(getattr(binding, "address", "") or "") or account_id_of_ref(getattr(binding, "account_ref", None))
+    if source_id == "email.received":
+        return str((trigger.get("config") or {}).get("account") or "self")
+    return None
+
+
+def occurrence_named_inputs(envelope: Dict[str, Any], *, inputs: Optional[Dict[str, Any]], index: int,
+                            mailbox: Optional[str]) -> Dict[str, Any]:
+    """The source's named inputs (`adapter.occurrence_inputs`) for `envelope`, unfrozen (pure).
+
+    The envelope's own source decides (a run-now of any automation is `manual@1`: nothing extra);
+    a source without `occurrence_inputs` (a third-party one) gives none."""
+    try:
+        adapter = get_trigger_adapter(envelope["source_id"], envelope["source_version"])
+    except Exception:  # noqa: BLE001 - an unknown source never reaches admission
+        return {}
+    build = getattr(adapter, "occurrence_inputs", None)
+    if not callable(build):
+        return {}
+    return dict(build(payload=envelope.get("payload") or {}, inputs=inputs or {}, index=int(index), mailbox=mailbox) or {})
+
+
+def freeze_named_inputs(named: Dict[str, Any], *, artifact_store: Any, run_id: Optional[str]) -> list:
+    """Store the named inputs that hold inbound text (`NAMED_INPUT_ARTIFACT_KEYS`) as artifacts, in
+    place; returns the keys to resolve in the run that receives them (`resolve_vars`)."""
+    from ..storage.artifacts import artifact_ref
+
+    keys: list = []
     for key in NAMED_INPUT_ARTIFACT_KEYS:
         if key in named:
-            from ..storage.artifacts import artifact_ref
-
-            if turn.artifact_store is None:
+            if artifact_store is None:
                 raise ControllerSeamError("named inputs holding inbound text need the runtime's artifact store")
-            meta = turn.artifact_store.store_json(named[key], run_id=turn.automation_id, tags=dict(EMAIL_ARTIFACT_TAGS))
+            meta = artifact_store.store_json(named[key], run_id=run_id, tags=dict(EMAIL_ARTIFACT_TAGS))
             named[key] = artifact_ref(meta.artifact_id)
-            resolve_vars = [*resolve_vars, key] if key not in resolve_vars else resolve_vars
+            keys.append(key)
+    return keys
+
+
+def _apply_named_inputs(turn: Turn, input_data: Dict[str, Any], envelope: Dict[str, Any], *, inputs: Optional[Dict[str, Any]],
+                        index: int, binding: Any, trigger: Dict[str, Any], resolve_vars: list) -> list:
+    """SET the source's named inputs on the occurrence's inputs (see `occurrence_named_inputs`).
+    `messages` (mail bodies) is stored as an artifact like `input_data.trigger.emails`: the
+    controller's records keep a ref and only the occurrence resolves it."""
+    named = occurrence_named_inputs(envelope, inputs=inputs, index=index,
+                                    mailbox=occurrence_mailbox(binding, trigger, envelope["source_id"]))
+    for key in freeze_named_inputs(named, artifact_store=turn.artifact_store, run_id=turn.automation_id):
+        if key not in resolve_vars:
+            resolve_vars = [*resolve_vars, key]
     input_data.update(named)
     return resolve_vars
 

@@ -29,6 +29,8 @@ CORE_ATTRIBUTES = ("specversion", "id", "type", "source", "time", "subject", "da
 EXTENSIONS = (
     "bindingid", "connectionid", "correlationid", "dedupekey", "sequence", "recordedtime", "expirytime",
     "traceparent", "abstracttrust",
+    # `true` on a SAMPLE event built for a test run (`automations.samples`), never on a real one.
+    "abstracttest",
 )
 TRUST_VALUES = ("trusted", "untrusted")
 ENVELOPE_KEYS = ("event_id", "source_id", "source_version", "fired_at", "payload", "binding_id")

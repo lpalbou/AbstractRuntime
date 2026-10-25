@@ -465,6 +465,27 @@ The flow's end outputs the controller reads:
 When the end outputs sit under a `result` object (and none of `response`, `answer`, `notify` is at the top), they are
 read from `result`.
 
+#### Testing a triggered flow with sample inputs
+
+Running a triggered flow by hand behaves as if its trigger fired, with the trigger's own configuration:
+`sample_occurrence_inputs(runtime, source_id, source_version, config, count=100, principal=...)`
+(`abstractruntime.automations.samples`) returns `{inputs, resolve_vars, truncated, source, count}`, where `inputs` holds
+exactly the named inputs above plus `event`, built from real data and read only:
+
+| Source | Sample |
+| --- | --- |
+| `email.received@1` | the newest `count` messages of the bound mailbox folder that pass the trigger's filters, fetched read-only through the mailbox the runtime resolves (or the `email_context=` you pass); no cursor or inbox change, nothing marked read; at most 20 seconds of fetching (`truncated: true` with what it has); `messages` stored as an artifact and listed in `resolve_vars` |
+| `feed.item@1` | the latest `count` items of the connection's feed, one fetch, no cursor change |
+| `webhook.received@1` | the last `count` calls stored for the connection; one documented sample call (`SAMPLE_WEBHOOK_CALL`) when none was received |
+| `schedule@1`, `schedule@2` | `scheduled_at` = now, `occurrence` = 0 |
+| `manual@1` | `event` only |
+
+Lists are newest first. The sample's `event` carries the CloudEvents extension `abstracttest: true` and an id starting
+with `test:`, so a flow or a person can tell a test run from a real occurrence. `resolved_sample_inputs(sample,
+artifact_store=...)` returns the inputs with their artifact refs resolved, for a host that starts the test run with
+`Runtime.start`. A connection that is unknown or another user's raises `SampleError` (`connection_not_found`); a mail
+trigger without a connected mailbox raises `email_not_configured`.
+
 Run ids are deterministic:
 
 | Occurrence | Run id |

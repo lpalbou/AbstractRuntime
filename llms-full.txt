@@ -1159,6 +1159,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - feed source `feed.item@1` (`abstractruntime.triggers.feed`): `parse_feed(bytes)`, `FeedPoller(store, inbox, fetch=)`, `poll_feed_connections(runtime, store, fetch=None, now=None)` (the host's poll step), `urllib_fetch` (conditional GET)
 - webhook source `webhook.received@1` (`abstractruntime.triggers.webhook`): `verify_standard_webhook(secret, headers, body, now, tolerance_s=300)`, `append_webhook_event(inbox, connection, body, headers, *, secret=None, store=None, now=None)`, `sign_standard_webhook(...)`, `new_webhook_secret()`, `webhook_event_data(...)`
 - wakes (`abstractruntime.automations.wakes`): `EffectType.SCHEDULE_RUN`, `Runtime.set_schedule_run_handler(handler)` (`handler(run, plan) -> {automation_id}`), `plan_schedule_run(run, payload, *, now, run_store=None, request_id=None)`, `create_scheduled_run(runtime, plan, *, target, tenant, user, workspace_root, notify=None)`, `wake_scheduled_event`, `wake_cancelled_event`; creation requests accept `session_id` (growing only), `origin_run_id`, `one_shot`, `untrusted_origin`
+- sample inputs (`abstractruntime.automations.samples`): `sample_occurrence_inputs(runtime, source_id, source_version, config, *, count=100, principal=None, email_context=None, fetch=None)` -> `{inputs, resolve_vars, truncated, source, count}` (the named inputs + `event` with `abstracttest: true`, from real data, read only), `resolved_sample_inputs(sample, artifact_store=)`, `SampleError`
 - definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
@@ -4154,6 +4155,27 @@ The flow's end outputs the controller reads:
 
 When the end outputs sit under a `result` object (and none of `response`, `answer`, `notify` is at the top), they are
 read from `result`.
+
+#### Testing a triggered flow with sample inputs
+
+Running a triggered flow by hand behaves as if its trigger fired, with the trigger's own configuration:
+`sample_occurrence_inputs(runtime, source_id, source_version, config, count=100, principal=...)`
+(`abstractruntime.automations.samples`) returns `{inputs, resolve_vars, truncated, source, count}`, where `inputs` holds
+exactly the named inputs above plus `event`, built from real data and read only:
+
+| Source | Sample |
+| --- | --- |
+| `email.received@1` | the newest `count` messages of the bound mailbox folder that pass the trigger's filters, fetched read-only through the mailbox the runtime resolves (or the `email_context=` you pass); no cursor or inbox change, nothing marked read; at most 20 seconds of fetching (`truncated: true` with what it has); `messages` stored as an artifact and listed in `resolve_vars` |
+| `feed.item@1` | the latest `count` items of the connection's feed, one fetch, no cursor change |
+| `webhook.received@1` | the last `count` calls stored for the connection; one documented sample call (`SAMPLE_WEBHOOK_CALL`) when none was received |
+| `schedule@1`, `schedule@2` | `scheduled_at` = now, `occurrence` = 0 |
+| `manual@1` | `event` only |
+
+Lists are newest first. The sample's `event` carries the CloudEvents extension `abstracttest: true` and an id starting
+with `test:`, so a flow or a person can tell a test run from a real occurrence. `resolved_sample_inputs(sample,
+artifact_store=...)` returns the inputs with their artifact refs resolved, for a host that starts the test run with
+`Runtime.start`. A connection that is unknown or another user's raises `SampleError` (`connection_not_found`); a mail
+trigger without a connected mailbox raises `email_not_configured`.
 
 Run ids are deterministic:
 

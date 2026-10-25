@@ -70,13 +70,14 @@ def email_event_id(account_ref: str, folder: str, uidvalidity: int, uid: int) ->
 
 
 def email_event_payload(account_ref: str, detail: Any) -> Dict[str, Any]:
-    """The inbox payload of one fetched message: every header field and the whole bodies.
+    """The inbox payload of one fetched message: every header field, the whole bodies, and the
+    message's `flags` (\\Seen, \\Flagged, IMAP keywords) and Gmail `labels` as they were when it
+    was read, so a trigger's Email record carries `seen` / `flagged` / `labels` like a sample's.
 
-    All of it was written by the sender (untrusted data); none of it is a credential.
+    The headers and bodies were written by the sender (untrusted data); none of it is a credential.
     """
     data = detail.to_dict()
-    for volatile in ("flags", "seen"):
-        data.pop(volatile, None)
+    data.pop("seen", None)  # derived from `flags` (the Email record reads the flags)
     try:
         data["uid"] = int(data.get("uid"))
     except (TypeError, ValueError):

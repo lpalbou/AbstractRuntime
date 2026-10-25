@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Trigger messages keep their flags: the mail watcher stores each new message with its `flags` (\\Seen, \\Flagged, IMAP keywords) and Gmail `labels` (AbstractCore 2.29's `MessageSummary.labels`, on a Gmail server) as read, so an occurrence's Email record carries `seen`, `flagged` and `labels` like a sample's (they were null). Nothing else in the payload or the cursor changes.
+
 ## [0.12.0] - 2026-10-25
 
 Requires AbstractCore 2.28.0 or newer (`EmailClient` mailbox verbs).

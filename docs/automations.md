@@ -1,12 +1,13 @@
 # Automations
 
 An automation runs a workflow again and again on a trigger: "check the price of ACME every 5 minutes", "report this
-machine's memory use every 2 minutes", "run this report when I ask". AbstractRuntime runs automations itself, as
+machine's memory use every 2 minutes", "summarize each new item of this feed", "handle each call of this webhook",
+"run this report when I ask". A run can also schedule work for itself later ("ping me in 5 minutes about X"): a wake. AbstractRuntime runs automations itself, as
 ordinary durable runs, so a runtime and a run store are enough to run one. A host such as AbstractGateway exposes them
 over HTTP and drives them in its run loop.
 
-This page covers the model, the definition, triggers, the controller, commands, context, discussions, tool approval,
-notifications and the storage guarantees automations rely on. For the surrounding runtime concepts see
+This page covers the model, the definition, triggers and trigger connections, the controller, wakes, commands,
+context, discussions, tool approval, notifications, run origin and the storage guarantees automations rely on. For the surrounding runtime concepts see
 [architecture.md](architecture.md); for the import surface see [api.md](api.md#automations).
 
 Code: `abstractruntime.automations` (controller, commands, service API), `abstractruntime.triggers` (trigger
@@ -33,7 +34,7 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 
 ```mermaid
 flowchart LR
-  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
+  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1 /<br/>email.received@1 / feed.item@1 / webhook.received@1"] -->|"due tick, new events or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
   Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive / unarchive"] -->|"decision + wake"| Controller
   Controller -->|"START_SUBWORKFLOW<br/>deterministic run_id"| Occurrence["Occurrence run<br/>role: occurrence<br/>(a session turn)"]
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
@@ -208,7 +209,8 @@ its trigger, carries a `manual` envelope with event id `manual:<command_id>`.
 
 ### `email.received@1`
 
-Runs the automation when mail arrives in the user's mailbox, in batches no more often than `config.every` (default
+Runs the automation when mail arrives in one of the user's mailboxes (`config.account`: `"self"`, the default, for
+the primary, or another mailbox's id; the occurrences then act for that mailbox), in batches no more often than `config.every` (default
 `1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
 durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
 `unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
@@ -930,8 +932,10 @@ receives its result directly.
 
 - Schedules are fixed UTC intervals (`schedule@1`, `schedule@2` `every`) or daily, weekly and monthly wall-time rules
   in an IANA time zone (`schedule@2`). There are no cron expressions, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1` and `email.received@1`. There is no generic external
-  event source yet.
+- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1`, `email.received@1`, `feed.item@1` and
+  `webhook.received@1`. Feeds are polled (no WebSub push); webhooks need the host to expose its ingress route.
+- One automation has one trigger binding: N connections need N automations.
+- A wake schedules one occurrence; recurring work is an automation.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
 - Growing history is the most recent whole turns within the configured token budget (50,000 tokens by default) and is not summarized automatically; older turns

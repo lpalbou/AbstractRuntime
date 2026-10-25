@@ -59,6 +59,29 @@ The `Scheduler` is different: it is a driver loop that resumes due waits of exis
 
 Docs: `automations.md`. Code: `src/abstractruntime/automations/*`, `src/abstractruntime/triggers/*`.
 
+## How do I run an automation on new mail, a feed item or a webhook call?
+
+Use an event trigger. `email.received@1` reads one of the user's mailboxes (`config.account`: `"self"` for the primary,
+or a mailbox id). `feed.item@1` and `webhook.received@1` read a **trigger connection**: register the feed URL or the
+webhook endpoint once with `TriggerConnectionStore.create(...)`, then bind any number of automations to it with
+`config.connection_id`. The host runs the feeders (mail watcher, `poll_feed_connections`, the webhook route calling
+`append_webhook_event`). Each occurrence receives the events in `input_data.event` (CloudEvents 1.0) and, for a string
+prompt, inside a fixed untrusted frame. Docs: `automations.md#trigger-connections`, `email.md`.
+
+## Can an agent schedule work for later or set a reminder?
+
+Yes, when the host registers `Runtime.set_schedule_run_handler(...)`. A run issues `SCHEDULE_RUN` (the AbstractAgent
+builtin `schedule_run`) with `after_s`, `at` or `on` a trigger event, and a `task` or a reminder `note`. The runtime
+plans a one-shot automation that runs as a new turn of the same session by default, with at most the caller's tools
+and never `schedule_run` itself; a note's answer becomes an attention item so the reminder reaches the person.
+Archiving the automation before it fires cancels it. Docs: `automations.md#wakes-schedule_run`.
+
+## How do I know who or what started a run?
+
+Read `origin_of(run.vars)` (`abstractruntime.core.run_origin`): `{kind: person | trigger | agent | system, actor,
+client, ref}`. Occurrences get it from the controller; hosts stamp the runs they start with `origin_for(...)`. Runs
+started before origins existed return `None`. Docs: `automations.md#run-origin`.
+
 ## What happens to scheduled ticks while the host is down?
 
 When the controller next runs, the missed ticks are coalesced: one occurrence runs, for the latest due tick, and its

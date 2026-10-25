@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-25
+
 ### Added
 
 - **`email.received@1` on a further mailbox** (framework backlog 1044): `config.account` accepts a mailbox id of the user (`"self"`, the default, and `"default"` stay the primary mailbox). The automation reads only that mailbox's inbox streams and its occurrences act for it (`_runtime.email_account` from `email_binding_for_trigger`); `message_matches` checks the mail's `account_ref` too. The descriptor's `account` schema is a pattern with default `"self"` (no longer `enum: ["self"]`). See [The email.received@1 trigger](docs/email.md#the-emailreceived1-trigger).

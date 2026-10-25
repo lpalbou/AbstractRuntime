@@ -286,6 +286,7 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
+- `SCHEDULE_RUN`: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never `schedule_run` itself); the host's `Runtime.set_schedule_run_handler(...)` creates it, because only the host knows the target workflow, the owner and the workspace (see [automations.md](automations.md#wakes-schedule_run))
 - `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
@@ -307,6 +308,7 @@ Decorators/helpers:
 - `HashChainedLedgerStore` for tamper-evidence (`src/abstractruntime/storage/ledger_chain.py`)
 - `ArtifactStore` + helpers (`src/abstractruntime/storage/artifacts.py`)
 - `OffloadingRunStore` / `OffloadingLedgerStore` to keep checkpoints bounded (`src/abstractruntime/storage/offloading.py`)
+- `MailboxQueryableRunStore` (`list_mailbox_runs`, `next_wait_deadline`) on every built-in run store, for event fan-out and wake scheduling without a recency window
 - snapshots/bookmarks (`src/abstractruntime/storage/snapshots.py`)
 
 ## Drivers: scheduler
@@ -320,8 +322,9 @@ The scheduler is an in-process driver loop that resumes due waits and can delive
 An automation runs a target workflow on a trigger, and is itself a durable run. The controller is a packaged
 VisualFlow bundle (`abstractframework.automation-controller@1.0.0`) whose nodes are `automation` adapters; it waits on
 one `WAIT_EVENT` with a deadline, starts each occurrence as an asynchronous `START_SUBWORKFLOW` child with a
-deterministic id, and records every transition as an `automation.*` ledger record. No new effect type or driver is
-involved: a host drives a controller like any other run. See [automations.md](automations.md).
+deterministic id, and records every transition as an `automation.*` ledger record. The controller needs no effect type or driver of its
+own: a host drives it like any other run. A run creates a one-shot automation for later through `SCHEDULE_RUN` (a
+wake). See [automations.md](automations.md).
 
 ```mermaid
 flowchart LR
@@ -332,8 +335,10 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, entry-point sources"]
-    Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
+    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, feed.item@1,<br/>webhook.received@1, entry-point sources"]
+    Conns["trigger connections<br/>(per user: feed URL, webhook secret)"]
+    Inbox["event inbox<br/>(streams email:… and trigger:…,<br/>filled by the host's feeders)"]
+    Wakes["wakes<br/>(SCHEDULE_RUN plans,<br/>the host creates)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end
   subgraph Runs["runs"]
@@ -353,6 +358,9 @@ flowchart LR
   Loop --> Occ
   Controller -->|"prepare / admit / rearm"| Triggers
   Controller -->|"events after its cursor"| Inbox
+  Commands -.->|"create / revise:<br/>connection_id check"| Conns
+  Occ -->|"SCHEDULE_RUN"| Wakes
+  Wakes -->|"one-shot automation"| Commands
   Controller -->|"START_SUBWORKFLOW run_id"| Occ
   Occ --> Desc
   Controller --> RS
@@ -362,6 +370,33 @@ flowchart LR
   Queries --> RS
   Queries --> LS
 ```
+
+### Events reaching an occurrence
+
+```mermaid
+flowchart LR
+  subgraph Sources["host-side feeders"]
+    Mail["mail watcher<br/>(EmailInboxFeeder.poll)"]
+    Feed["feed poller<br/>(poll_feed_connections)"]
+    Hook["webhook route<br/>(append_webhook_event,<br/>Standard Webhooks check)"]
+    Test["console test-fire<br/>(test_fire)"]
+  end
+  Inbox["EventInbox<br/>stream per mailbox folder / per connection<br/>dedupe on dedupekey"]
+  Ctrl["controller run<br/>admit: adapter batches events<br/>after its cursor"]
+  Occ["occurrence run<br/>prompt: [Trigger …] header (+ untrusted frame)<br/>input_data.event: CloudEvents 1.0<br/>_meta.origin: trigger / person / agent"]
+  Mail --> Inbox
+  Feed --> Inbox
+  Hook --> Inbox
+  Test --> Inbox
+  Sources -.->|"wake the bound controllers"| Ctrl
+  Inbox --> Ctrl
+  Ctrl -->|"START_SUBWORKFLOW"| Occ
+```
+
+Feeders append one event per mail, feed item or webhook call to the inbox stream of a mailbox folder
+(`email:<tenant>:<user>:<mailbox>:<folder>`) or of a trigger connection (`trigger:<connection_id>`), then wake the
+automations bound to it. The controller reads only its own streams, its adapter turns the pending events into one
+admission, and the occurrence receives the envelope as a CloudEvents 1.0 event beside its prompt header.
 
 Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
 (`abstractruntime.email.feeder`) and wakes the controller, and the `email.received@1` adapter batches the messages
@@ -378,6 +413,8 @@ Invariants the design rests on:
   application.
 - **One lock per run.** `run_mutation_lock(run_id)` serializes `tick`, `resume` commits and automation commands in a
   process. v1 supports one writer process per store.
+- **Origin is recorded once.** Every occurrence carries `_meta.origin` (`trigger`, `person` for a run-now, `agent`
+  for a wake) frozen with its inputs; hosts stamp the runs they start with `origin_for(...)`.
 - **Turns are defined once.** `select_session_turns` decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and `list_run_index(root_only=True)` returns the same turn roots.

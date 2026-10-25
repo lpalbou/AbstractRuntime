@@ -203,6 +203,47 @@ Verify:
 Docs:
 - `automations.md#the-controller`, `automations.md#commands`
 
+## An automation on a connection is refused (`connection_not_found`, `connection_required`)
+
+Symptom:
+- `create_automation(...)` or `automation.revise` raises `AutomationError` with `reason_code`
+  `connection_required`, `connection_not_found`, `connection_source_mismatch` or `connection_disabled`.
+
+Likely causes:
+- The trigger (`feed.item@1`, `webhook.received@1`) needs `config.connection_id` and the request has none.
+- The runtime has no connection store (`Runtime.set_trigger_connection_store(...)` was not called).
+- The id belongs to another user: connections are per principal (`"<tenant>:<user>"`, the request's pair), and a
+  foreign id reads exactly like an unknown one.
+- The connection is of another source, or its status is `disabled`.
+
+Fix:
+- Create the connection for the same principal and source (`TriggerConnectionStore.create(...)`), wire the store on
+  the runtime, and pass `principal=` to `apply_automation_command` when you revise onto another connection.
+
+Docs:
+- `automations.md#trigger-connections`
+
+## A webhook call is refused
+
+Symptom:
+- `append_webhook_event(...)` returns `status: "refused"` (401, 413, 415) or `status: "duplicate"` (409), and the
+  connection's `last_error` names the reason.
+
+Likely causes:
+- `missing_headers` / `bad_timestamp`: the sender does not send `webhook-id`, `webhook-timestamp` and
+  `webhook-signature`.
+- `bad_signature`: the body was changed, or the sender signs with another secret (read the connection's secret with
+  `store.secrets(connection_id, principal=...)`).
+- `stale`: the sender's clock differs from the host's by more than `tolerance_s` (default 300 s).
+- `replayed_id`: the same `webhook-id` was already received; the first call was delivered.
+
+Fix:
+- Sign `"<webhook-id>.<webhook-timestamp>.<raw body>"` with HMAC-SHA256 under the base64-decoded secret (without
+  `whsec_`) and send `v1,<base64 signature>`; send JSON with `Content-Type: application/json` or UTF-8 text.
+
+Docs:
+- `automations.md#webhookreceived1`
+
 ## A start fails with `identity_conflict`
 
 Symptom:

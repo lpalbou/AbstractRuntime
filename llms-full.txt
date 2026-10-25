@@ -157,7 +157,7 @@ Kernel (import-light):
 - Stop that reaches the running effect: `Runtime.cancel_run(...)` signals the in-flight model or tool call, which ends as a `cancelled` ledger record (never retried); a model unload stops the calls using that model first (`docs/api.md`)
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
-- automations: run a workflow on a schedule (`schedule@1` fixed UTC intervals; `schedule@2` adds daily, weekly and monthly rules at a wall time in an IANA time zone), when mail arrives (`email.received@1`, `docs/email.md`) or on request (`manual@1`) as a durable controller run whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- automations: run a workflow on a schedule (`schedule@1` fixed UTC intervals; `schedule@2` adds daily, weekly and monthly rules at a wall time in an IANA time zone), when mail arrives in one of the user's mailboxes (`email.received@1`, `docs/email.md`), on new feed items (`feed.item@1`), on a signed webhook call (`webhook.received@1`) or on request (`manual@1`) as a durable controller run; per-user trigger connections (feed URLs, webhook endpoints with sealed signing secrets) reused by any automation; every occurrence receives its trigger as a CloudEvents 1.0 event (`input_data.event`) and records who or what started it (`_meta.origin`); runs can schedule work for later with `SCHEDULE_RUN` (a one-shot wake in the same session, at most the caller's tools, reminders that reach the person), whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
@@ -237,8 +237,8 @@ sr = create_scheduled_runtime(
 | [Architecture](docs/architecture.md) | Component map + diagrams |
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
 | [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
-| [Automations](docs/automations.md) | Scheduled and on-request workflows: controller, triggers, commands, context, discussions, storage guarantees |
-| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger, the send-email action |
+| [Automations](docs/automations.md) | Scheduled, event-driven and on-request workflows: controller, triggers (schedules, mail, feeds, webhooks), trigger connections, the CloudEvents envelope, run origin, wakes (`SCHEDULE_RUN`), commands, context, discussions, storage guarantees |
+| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger on any of the user's mailboxes, the send-email action |
 | [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
 | [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
 | [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |
@@ -717,6 +717,7 @@ Registered in `Runtime._register_builtin_handlers()` (`src/abstractruntime/core/
 
 ### Host-wired effects
 The kernel defines the protocol; concrete integrations provide handlers:
+- `SCHEDULE_RUN`: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never `schedule_run` itself); the host's `Runtime.set_schedule_run_handler(...)` creates it, because only the host knows the target workflow, the owner and the workspace (see [automations.md](automations.md#wakes-schedule_run))
 - `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
@@ -738,6 +739,7 @@ Decorators/helpers:
 - `HashChainedLedgerStore` for tamper-evidence (`src/abstractruntime/storage/ledger_chain.py`)
 - `ArtifactStore` + helpers (`src/abstractruntime/storage/artifacts.py`)
 - `OffloadingRunStore` / `OffloadingLedgerStore` to keep checkpoints bounded (`src/abstractruntime/storage/offloading.py`)
+- `MailboxQueryableRunStore` (`list_mailbox_runs`, `next_wait_deadline`) on every built-in run store, for event fan-out and wake scheduling without a recency window
 - snapshots/bookmarks (`src/abstractruntime/storage/snapshots.py`)
 
 ## Drivers: scheduler
@@ -751,8 +753,9 @@ The scheduler is an in-process driver loop that resumes due waits and can delive
 An automation runs a target workflow on a trigger, and is itself a durable run. The controller is a packaged
 VisualFlow bundle (`abstractframework.automation-controller@1.0.0`) whose nodes are `automation` adapters; it waits on
 one `WAIT_EVENT` with a deadline, starts each occurrence as an asynchronous `START_SUBWORKFLOW` child with a
-deterministic id, and records every transition as an `automation.*` ledger record. No new effect type or driver is
-involved: a host drives a controller like any other run. See [automations.md](automations.md).
+deterministic id, and records every transition as an `automation.*` ledger record. The controller needs no effect type or driver of its
+own: a host drives it like any other run. A run creates a one-shot automation for later through `SCHEDULE_RUN` (a
+wake). See [automations.md](automations.md).
 
 ```mermaid
 flowchart LR
@@ -763,8 +766,10 @@ flowchart LR
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run<br/>(automation-controller@1.0.0)"]
-    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, entry-point sources"]
-    Inbox["event inbox<br/>(email/, filled by the host's watcher)"]
+    Triggers["trigger registry<br/>schedule@1, schedule@2, manual@1,<br/>email.received@1, feed.item@1,<br/>webhook.received@1, entry-point sources"]
+    Conns["trigger connections<br/>(per user: feed URL, webhook secret)"]
+    Inbox["event inbox<br/>(streams email:… and trigger:…,<br/>filled by the host's feeders)"]
+    Wakes["wakes<br/>(SCHEDULE_RUN plans,<br/>the host creates)"]
     Queries["get_automation / list_occurrences /<br/>list_attention / pending_waits /<br/>list_automations"]
   end
   subgraph Runs["runs"]
@@ -784,6 +789,9 @@ flowchart LR
   Loop --> Occ
   Controller -->|"prepare / admit / rearm"| Triggers
   Controller -->|"events after its cursor"| Inbox
+  Commands -.->|"create / revise:<br/>connection_id check"| Conns
+  Occ -->|"SCHEDULE_RUN"| Wakes
+  Wakes -->|"one-shot automation"| Commands
   Controller -->|"START_SUBWORKFLOW run_id"| Occ
   Occ --> Desc
   Controller --> RS
@@ -793,6 +801,33 @@ flowchart LR
   Queries --> RS
   Queries --> LS
 ```
+
+### Events reaching an occurrence
+
+```mermaid
+flowchart LR
+  subgraph Sources["host-side feeders"]
+    Mail["mail watcher<br/>(EmailInboxFeeder.poll)"]
+    Feed["feed poller<br/>(poll_feed_connections)"]
+    Hook["webhook route<br/>(append_webhook_event,<br/>Standard Webhooks check)"]
+    Test["console test-fire<br/>(test_fire)"]
+  end
+  Inbox["EventInbox<br/>stream per mailbox folder / per connection<br/>dedupe on dedupekey"]
+  Ctrl["controller run<br/>admit: adapter batches events<br/>after its cursor"]
+  Occ["occurrence run<br/>prompt: [Trigger …] header (+ untrusted frame)<br/>input_data.event: CloudEvents 1.0<br/>_meta.origin: trigger / person / agent"]
+  Mail --> Inbox
+  Feed --> Inbox
+  Hook --> Inbox
+  Test --> Inbox
+  Sources -.->|"wake the bound controllers"| Ctrl
+  Inbox --> Ctrl
+  Ctrl -->|"START_SUBWORKFLOW"| Occ
+```
+
+Feeders append one event per mail, feed item or webhook call to the inbox stream of a mailbox folder
+(`email:<tenant>:<user>:<mailbox>:<folder>`) or of a trigger connection (`trigger:<connection_id>`), then wake the
+automations bound to it. The controller reads only its own streams, its adapter turns the pending events into one
+admission, and the occurrence receives the envelope as a CloudEvents 1.0 event beside its prompt header.
 
 Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
 (`abstractruntime.email.feeder`) and wakes the controller, and the `email.received@1` adapter batches the messages
@@ -809,6 +844,8 @@ Invariants the design rests on:
   application.
 - **One lock per run.** `run_mutation_lock(run_id)` serializes `tick`, `resume` commits and automation commands in a
   process. v1 supports one writer process per store.
+- **Origin is recorded once.** Every occurrence carries `_meta.origin` (`trigger`, `person` for a run-now, `agent`
+  for a wake) frozen with its inputs; hosts stamp the runs they start with `origin_for(...)`.
 - **Turns are defined once.** `select_session_turns` decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and `list_run_index(root_only=True)` returns the same turn roots.
@@ -950,6 +987,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - persists `CANCELLED`, then signals every effect of that run (and its in-flight descendants) executing in this process; the running attempt is recorded as `cancelled` (`StepStatus.CANCELLED`, never retried) with `cancelled_by` and `reason`, and no further effect starts
 - `Runtime.set_default_provider_model(provider=..., model=...)`
   - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
+- `Runtime.set_event_inbox(inbox)`, `Runtime.set_trigger_connection_store(store)` and `Runtime.set_schedule_run_handler(handler)`: the host seams of event-triggered automations, trigger connections and wakes (see [automations.md](automations.md#triggers) and [automations.md](automations.md#wakes-schedule_run))
 - `Runtime.set_live_delta_sink(sink)` where `sink(event: dict) -> None`, or `None` to remove it
   - receives live token deltas (`llm.delta`, `llm.delta_end`) for LLM calls of runs started with `_runtime.stream: true` (a boolean; `start` refuses any other value); nothing is written to the ledger. See [Live token streaming](integrations/abstractcore.md#live-token-streaming)
 
@@ -994,6 +1032,7 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `create_if_absent(run) -> (run, created)`: creates a run only if its id is free and never overwrites an existing one; `store_supports_create_if_absent(store)` / `require_create_if_absent(store)` check a store first. Process-crash safe; power-loss durability is not claimed
 - `list_run_index(status=, workflow_id=, session_id=, root_only=, limit=, oldest_first=, automation_id=, role=, session_kind=)`: lightweight rows carrying `automation_id`, `role`, `occurrence_index`, `session_kind` and `workspace_root` (the run's top-level `vars["workspace_root"]` as stored, stripped; `None` when absent); the three attribution filters take a value, a comma-separated string or a list; `root_only=True` returns turn roots (parent-less runs except automation controllers, plus automation occurrences)
 - `session_kinds(session_id) -> frozenset` and `latest_occurrence_row(automation_id)`: indexed lookups used by session attribution and automation listings
+- `MailboxQueryableRunStore` (in-memory, file, SQLite and offloading stores): `list_mailbox_runs(names=[...], limit=10_000)` returns every running or waiting run whose `events_mailbox` names one of the names (newest first; the file store keeps a mailbox index maintained on save and delete and re-verifies each hit on disk), and `next_wait_deadline()` the earliest wait deadline over all waiting runs (`WAIT_UNTIL`, or `WAIT_EVENT` with a deadline), or `None`. Hosts use them to fan durable events out and to schedule wakes without reading a window of the newest runs
 - `JsonFileRunStore.warm_session_index()` builds the session and children indexes at host startup. Store objects and processes sharing one JSON run folder see each other's created and deleted runs through the creation journal `.runs_created.log`; v1 supports one writer process per store
 - `JsonFileRunStore` answers `list_runs` / `list_run_index` for `status=running` or `status=waiting` (without `session_id`) from an in-memory **active index**: the set of active run ids, built from one directory scan (at host boot through `warm_session_index()`, else on the first such listing) and kept current by `save`, `create_if_absent`, `delete` and the creation journal. Every candidate is re-verified against its file at listing time, so a run that ended or vanished is never listed. Rows, order (file mtime, then file name, then the final `updated_at` sort), filters and limits are the same as the directory scan's; a listing of a 10,000-run store costs milliseconds instead of a full scan. `JsonFileRunStore(..., use_active_index=False)` keeps the plain scan. `rescan_active_index()` reconciles the index with the directory in the caller's thread; a background rescan runs at most every `JsonFileRunStore.ACTIVE_INDEX_RESCAN_S` (60 s) to pick up writers that bypass the store. `list_due_wait_until` (the scheduler's due-wait poll) takes its candidates from the index too. Other listings (a terminal status, no status, a session scope) scan as before.
 - The creation journal (`.runs_created.log` in the run folder) carries one line per change another store object or process must learn about: `+<run_id>` created, `-<run_id>` deleted, `~<run_id>` became active again (resumed, re-opened, first save after a restart, or saved after another writer touched the file). Lines are written before the file change they announce; readers apply the lines they have not seen at their next lookup, and a line whose file has not landed yet (or does not read active yet) is re-checked until it does. Readers from AbstractRuntime 0.10.0 ignore `~` lines, and writers from 0.10.0 never write them: a re-open made by such a writer reaches other store objects through the periodic rescan.
@@ -1113,7 +1152,13 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
-- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `schedule@2` (daily/weekly/monthly rules in an IANA time zone; `validate_time_zone`, `time_zone_names`), `manual@1` and `email.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `schedule@2` (daily/weekly/monthly rules in an IANA time zone; `validate_time_zone`, `time_zone_names`), `manual@1`, `email.received@1`, `feed.item@1` and `webhook.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
+- trigger connections (`abstractruntime.triggers.connections`): `TriggerConnectionStore(plane_dir, *, sealing_key_file=None)` (per-principal CRUD, sealed secrets), `connection_principal(tenant, user)`, `connection_stream(id)` (`trigger:<id>`), `append_connection_event(...)`, `test_fire(store, inbox, id, principal=)`, `validate_binding_connection(principal, binding, store)`, `wake_connection_automations(runtime, id)`, `Runtime.set_trigger_connection_store(store)`; `create_automation(..., principal=)` and `apply_automation_command(..., principal=)` check a binding's `config.connection_id`
+- run origin (`abstractruntime.core.run_origin`): `origin_for(kind, *, actor=, client=, automation_id=, occurrence_index=, event_id=, source=, origin_run_id=, session_id=, bridge=)` builds `_meta.origin` (`person | trigger | agent | system`), `stamp_origin(vars, origin)`, `origin_of(vars)`; occurrences carry it from the controller
+- CloudEvents envelope (`abstractruntime.triggers.cloudevents`): `to_cloudevent(envelope)`, `from_cloudevent(event)`, `with_cloudevent_attributes(...)`, `event_type(source_id, version)`, `CLOUDEVENT_JSON_SCHEMA`; occurrences receive `input_data.event`
+- feed source `feed.item@1` (`abstractruntime.triggers.feed`): `parse_feed(bytes)`, `FeedPoller(store, inbox, fetch=)`, `poll_feed_connections(runtime, store, fetch=None, now=None)` (the host's poll step), `urllib_fetch` (conditional GET)
+- webhook source `webhook.received@1` (`abstractruntime.triggers.webhook`): `verify_standard_webhook(secret, headers, body, now, tolerance_s=300)`, `append_webhook_event(inbox, connection, body, headers, *, secret=None, store=None, now=None)`, `sign_standard_webhook(...)`, `new_webhook_secret()`, `webhook_event_data(...)`
+- wakes (`abstractruntime.automations.wakes`): `EffectType.SCHEDULE_RUN`, `Runtime.set_schedule_run_handler(handler)` (`handler(run, plan) -> {automation_id}`), `plan_schedule_run(run, payload, *, now, run_store=None, request_id=None)`, `create_scheduled_run(runtime, plan, *, target, tenant, user, workspace_root, notify=None)`, `wake_scheduled_event`, `wake_cancelled_event`; creation requests accept `session_id` (growing only), `origin_run_id`, `one_shot`, `untrusted_origin`
 - definition v2: `policy.email_allowed_recipients` (default `["self"]`), `policy.untrusted_input_tools` (default `[]`) and `notify.channels` (default `["console"]`); attention items carry `channels`
 
 ## Email
@@ -1340,6 +1385,29 @@ occurrences and history and stays listed with status `archived`.
 The `Scheduler` is different: it is a driver loop that resumes due waits of existing runs. It does not create runs.
 
 Docs: `automations.md`. Code: `src/abstractruntime/automations/*`, `src/abstractruntime/triggers/*`.
+
+## How do I run an automation on new mail, a feed item or a webhook call?
+
+Use an event trigger. `email.received@1` reads one of the user's mailboxes (`config.account`: `"self"` for the primary,
+or a mailbox id). `feed.item@1` and `webhook.received@1` read a **trigger connection**: register the feed URL or the
+webhook endpoint once with `TriggerConnectionStore.create(...)`, then bind any number of automations to it with
+`config.connection_id`. The host runs the feeders (mail watcher, `poll_feed_connections`, the webhook route calling
+`append_webhook_event`). Each occurrence receives the events in `input_data.event` (CloudEvents 1.0) and, for a string
+prompt, inside a fixed untrusted frame. Docs: `automations.md#trigger-connections`, `email.md`.
+
+## Can an agent schedule work for later or set a reminder?
+
+Yes, when the host registers `Runtime.set_schedule_run_handler(...)`. A run issues `SCHEDULE_RUN` (the AbstractAgent
+builtin `schedule_run`) with `after_s`, `at` or `on` a trigger event, and a `task` or a reminder `note`. The runtime
+plans a one-shot automation that runs as a new turn of the same session by default, with at most the caller's tools
+and never `schedule_run` itself; a note's answer becomes an attention item so the reminder reaches the person.
+Archiving the automation before it fires cancels it. Docs: `automations.md#wakes-schedule_run`.
+
+## How do I know who or what started a run?
+
+Read `origin_of(run.vars)` (`abstractruntime.core.run_origin`): `{kind: person | trigger | agent | system, actor,
+client, ref}`. Occurrences get it from the controller; hosts stamp the runs they start with `origin_for(...)`. Runs
+started before origins existed return `None`. Docs: `automations.md#run-origin`.
 
 ## What happens to scheduled ticks while the host is down?
 
@@ -1881,6 +1949,47 @@ Verify:
 
 Docs:
 - `automations.md#the-controller`, `automations.md#commands`
+
+## An automation on a connection is refused (`connection_not_found`, `connection_required`)
+
+Symptom:
+- `create_automation(...)` or `automation.revise` raises `AutomationError` with `reason_code`
+  `connection_required`, `connection_not_found`, `connection_source_mismatch` or `connection_disabled`.
+
+Likely causes:
+- The trigger (`feed.item@1`, `webhook.received@1`) needs `config.connection_id` and the request has none.
+- The runtime has no connection store (`Runtime.set_trigger_connection_store(...)` was not called).
+- The id belongs to another user: connections are per principal (`"<tenant>:<user>"`, the request's pair), and a
+  foreign id reads exactly like an unknown one.
+- The connection is of another source, or its status is `disabled`.
+
+Fix:
+- Create the connection for the same principal and source (`TriggerConnectionStore.create(...)`), wire the store on
+  the runtime, and pass `principal=` to `apply_automation_command` when you revise onto another connection.
+
+Docs:
+- `automations.md#trigger-connections`
+
+## A webhook call is refused
+
+Symptom:
+- `append_webhook_event(...)` returns `status: "refused"` (401, 413, 415) or `status: "duplicate"` (409), and the
+  connection's `last_error` names the reason.
+
+Likely causes:
+- `missing_headers` / `bad_timestamp`: the sender does not send `webhook-id`, `webhook-timestamp` and
+  `webhook-signature`.
+- `bad_signature`: the body was changed, or the sender signs with another secret (read the connection's secret with
+  `store.secrets(connection_id, principal=...)`).
+- `stale`: the sender's clock differs from the host's by more than `tolerance_s` (default 300 s).
+- `replayed_id`: the same `webhook-id` was already received; the first call was delivered.
+
+Fix:
+- Sign `"<webhook-id>.<webhook-timestamp>.<raw body>"` with HMAC-SHA256 under the base64-decoded secret (without
+  `whsec_`) and send `v1,<base64 signature>`; send JSON with `Content-Type: application/json` or UTF-8 text.
+
+Docs:
+- `automations.md#webhookreceived1`
 
 ## A start fails with `identity_conflict`
 
@@ -3582,12 +3691,13 @@ created through descriptor-aware paths.
 # Automations
 
 An automation runs a workflow again and again on a trigger: "check the price of ACME every 5 minutes", "report this
-machine's memory use every 2 minutes", "run this report when I ask". AbstractRuntime runs automations itself, as
+machine's memory use every 2 minutes", "summarize each new item of this feed", "handle each call of this webhook",
+"run this report when I ask". A run can also schedule work for itself later ("ping me in 5 minutes about X"): a wake. AbstractRuntime runs automations itself, as
 ordinary durable runs, so a runtime and a run store are enough to run one. A host such as AbstractGateway exposes them
 over HTTP and drives them in its run loop.
 
-This page covers the model, the definition, triggers, the controller, commands, context, discussions, tool approval,
-notifications and the storage guarantees automations rely on. For the surrounding runtime concepts see
+This page covers the model, the definition, triggers and trigger connections, the controller, wakes, commands,
+context, discussions, tool approval, notifications, run origin and the storage guarantees automations rely on. For the surrounding runtime concepts see
 [architecture.md](architecture.md); for the import surface see [api.md](api.md#automations).
 
 Code: `abstractruntime.automations` (controller, commands, service API), `abstractruntime.triggers` (trigger
@@ -3614,7 +3724,7 @@ sources), `abstractruntime.automation_queries` (listing), `abstractruntime.sessi
 
 ```mermaid
 flowchart LR
-  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1"] -->|"due tick or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
+  Trigger["Trigger source<br/>schedule@1 / schedule@2 / manual@1 /<br/>email.received@1 / feed.item@1 / webhook.received@1"] -->|"due tick, new events or run now"| Controller["Controller run<br/>(automation id)<br/>vars._meta.automation<br/>vars._runtime.automation"]
   Commands["apply_automation_command<br/>pause / resume / run_now /<br/>revise / stop_current / archive / unarchive"] -->|"decision + wake"| Controller
   Controller -->|"START_SUBWORKFLOW<br/>deterministic run_id"| Occurrence["Occurrence run<br/>role: occurrence<br/>(a session turn)"]
   Occurrence --> Descendants["Descendant runs<br/>role: descendant"]
@@ -3789,13 +3899,105 @@ its trigger, carries a `manual` envelope with event id `manual:<command_id>`.
 
 ### `email.received@1`
 
-Runs the automation when mail arrives in the user's mailbox, in batches no more often than `config.every` (default
+Runs the automation when mail arrives in one of the user's mailboxes (`config.account`: `"self"`, the default, for
+the primary, or another mailbox's id; the occurrences then act for that mailbox), in batches no more often than `config.every` (default
 `1h` when `uses_model` is true, the default, and `60s` otherwise), each message at most once. It reads the runtime's
 durable event inbox, which the host's mail watcher fills; creating it on a runtime without an inbox is refused with
 `unsupported_feature`. Its occurrences receive the messages as `input_data.trigger` (marked untrusted) and, for a
 string `prompt`, inside a fixed untrusted frame (both stored as artifacts; the controller's records carry refs);
 their unattended grant covers only tools with no network egress, execution, messaging, writes outside the workspace
 or delegation. See [email.md](email.md#the-emailreceived1-trigger) for the config, the filters and the guarantees.
+
+### `feed.item@1`
+
+Runs the automation when a feed connection has new items (framework backlog 1043). The binding names the connection:
+`{connection_id, max_batch?, start_at?}` (see [Trigger connections](#trigger-connections)); the connection holds
+the feed: `{url, every (default 15m, never below 60s), max_items (1..200, default 50), initial_items: "skip" |
+"deliver"}`.
+
+- RSS 2.0 and Atom 1.0, parsed with the standard library (`parse_feed`; `xml.etree` never resolves external
+  entities; documents above 5 MB are refused).
+- The poller belongs to the host's plane, not to the runtime: the host calls
+  `poll_feed_connections(runtime, store, fetch=None, now=None)` from its own worker loop (every ~30 s is enough).
+  Each call polls the active feed connections whose interval elapsed with a conditional GET (`If-None-Match` /
+  `If-Modified-Since`; a 304 adds nothing), appends one event per new item to `trigger:<connection_id>`, and wakes
+  the automations bound to connections that got items. It returns one report per connection (`ok`, `skipped`,
+  `baseline`, `not_modified`, `appended`, `error`, `next_poll_at`, `woken`). Nothing is started at import.
+- The first poll is a baseline by default (`initial_items: "skip"`): items already in the feed are history.
+  `"deliver"` appends them too. A poll appends at most `max_items` (the newest); older new items are marked seen.
+- Item identity is the Atom `id` or RSS `guid`, else the link, else a digest of title and date. It is the event's
+  `subject` and `dedupekey`, so an item is appended once, whatever the feed serves again. The cursor (validators,
+  seen ids, next poll time, failures) is the stream state of the connection's stream.
+- Each event's `data` is `{id, title, link, published, updated, summary, author, feed: {title, url}}`. The items of
+  one poll become ONE occurrence (up to the binding's `max_batch`): `input_data.event.data.events[i].data`, and
+  for a string `prompt` a fixed untrusted frame listing every event (`triggers.event_frame`). Feed text is
+  untrusted input: the unattended grant is the email trigger's (allow by kind).
+- A failure (unreachable, HTTP error, not a feed) is a typed `{code, cause, fix}` on the connection's
+  `last_error`; the next poll waits a doubling backoff (at most 6 hours); a later success clears it. Nothing raises.
+
+### `webhook.received@1`
+
+Runs the automation when an external system calls a signed webhook (framework backlog 1042; the HTTP route is the
+host's). The binding names a webhook connection (`{connection_id, max_batch?, start_at?}`); the connection holds
+`{subject_path?, tolerance_s (60..3600, default 300), secret?}`. Without a `secret`, creating the connection
+generates one (`whsec_<base64>`, sealed); the owner reads it once with `store.secrets(id, principal=)` to configure
+the sender.
+
+- Callers sign per [Standard Webhooks](https://www.standardwebhooks.com): headers `webhook-id`,
+  `webhook-timestamp` (epoch seconds) and `webhook-signature` (`v1,<base64 HMAC-SHA256>` entries, space-separated)
+  over `<webhook-id>.<webhook-timestamp>.<raw body>`, keyed with the base64-decoded secret.
+- `verify_standard_webhook(secret, headers, body, now, tolerance_s=300)` is pure: `ok`, or `reason`
+  `missing_headers`, `bad_timestamp`, `stale` (outside the window, either way) or `bad_signature` (constant-time
+  comparison; one valid `v1` entry suffices, so senders can rotate keys).
+- `append_webhook_event(inbox, connection, body, headers, *, secret=None, store=None, now=None,
+  max_body_bytes=1 MiB)` verifies and appends ONE event to `trigger:<connection_id>`, and returns what the route
+  answers: `appended` (202), `duplicate` (409 `replayed_id`: the `webhook-id` is the event's `dedupekey`, so a replay
+  never appends twice), or `refused` (401 for the verification reasons, 413 `too_large`, 415 `unsupported_body`, 409
+  `connection_disabled`). Refusals are recorded on the connection's `last_error` when `store` is given. The host
+  then wakes the bound automations (`wake_connection_automations`).
+- Each event's `data` is `{webhook_id, content_type, body}` (the parsed JSON, any JSON value) or `{webhook_id,
+  content_type, body_text}` (UTF-8 text). Its `subject` is the value at `subject_path` in a JSON body, else the
+  webhook id. The occurrence gets `input_data.event.data.events[i].data` and, for a string prompt, the fixed untrusted
+  frame. Events are admitted at once; calls that arrive together share one occurrence.
+
+### Trigger connections
+
+A source is a type ("a feed item", "a webhook call"); a **connection** is one user's instance of it ("this feed
+URL", "this webhook endpoint and its secret"), registered once and reused by any number of automations
+(`abstractruntime.triggers.connections`).
+
+- A descriptor says whether a binding needs one: `needs_connection` (`false` for `schedule@1/2` and `manual@1`),
+  `connection_schema` (the JSON schema of a connection's config; properties marked `"x-secret": true` are sealed)
+  and `connection_provider`: `trigger_connections` (the binding's `config.connection_id` names a
+  `TriggerConnectionStore` record) or `email_accounts` (`email.received@1`: the binding's `account` names a mailbox
+  of the mail accounts, not a trigger connection).
+- `TriggerConnectionStore(plane_dir, *, sealing_key_file=None)` keeps one JSON file per connection under
+  `<plane_dir>/triggers/connections/<connection_id>.json` (atomic replace, 0600), with `create`, `get`, `require`,
+  `list`, `update`, `delete`, `secrets` and `record_event`. Each connection has `{connection_id, principal,
+  source_id, source_version, config, label, status: active|disabled|error, secret_ref, secret_fields, created_at,
+  updated_at, last_event_at, last_error}`. Secret fields, and secrets the source generates
+  (`adapter.connection_secrets`, e.g. a webhook signing secret), are sealed with AbstractCore's `SecretVault`
+  (AES-256-GCM, the mailbox credentials' sealing) under
+  `<plane_dir>/triggers/connections/secrets/<connection_id>/secret.enc`; the JSON never holds them. Hosts pass their
+  sealing key file (the gateway: `<data_dir>/secrets/sealing.key`).
+- The owner is a principal string, `"<tenant>:<user>"` (`connection_principal(tenant, user)`). Reads given a
+  principal answer only that principal's connections, and a foreign id reads exactly like an unknown one.
+- Each connection has one inbox stream, `trigger:<connection_id>` (`connection_stream`). Feeders append to it with
+  `append_connection_event(inbox, connection, event_id=, data=, subject=, dedupekey=, time=)` (CloudEvents
+  attribute names; deduplicated on `dedupekey`); recent events are `inbox.read(stream=connection_stream(id),
+  after_seq=n)`. `test_fire(store, inbox, connection_id, principal=)` appends a synthetic `{data: {test: true}}`
+  event exactly like a real one; `wake_connection_automations(runtime, connection_id)` then wakes the idle
+  automations bound to it.
+- Automations: `create_automation` and the `automation.revise` command check a connection-bound binding with
+  `validate_binding_connection(principal, binding, runtime.trigger_connection_store)`: the id must name an active
+  connection of the same principal and the same source (`connection_required`, `connection_not_found`,
+  `connection_source_mismatch`, `connection_disabled`). The principal defaults to the request's
+  `"<tenant>:<user>"` (`create_automation(..., principal=)` and `apply_automation_command(..., principal=)` override
+  it). Hosts call `Runtime.set_trigger_connection_store(store)`. Adapters stay pure: they only check the id's shape.
+- Connection-bound sources share `ConnectionEventAdapter`: binding config `{connection_id, max_batch (1..200,
+  default 20), start_at?}`; the controller reads only the connection's stream; every pending event (up to
+  `max_batch`) is admitted in ONE occurrence whose envelope payload is `{count, event_ids, events, first_seq,
+  last_seq, content_trust, connection_id}`; events before `start_at` or during a pause are never admitted.
 
 ### Adding a source
 
@@ -3815,6 +4017,9 @@ my_source = "my_package.triggers:MySourceAdapter"
 - The controller waits on deadlines (`prepare` returning `until`), without a deadline (`idle`: commands, or a
   watcher's wake for event sources), or ends (`exhausted`). A source whose `prepare` returns an `event` wait fails
   the controller step.
+- A source that needs a per-user connection sets `needs_connection: true`, a `connection_schema` and implements
+  `validate_connection(config, *, now)` (and optionally `connection_secrets(config)`); discovery refuses it
+  otherwise. See [Trigger connections](#trigger-connections).
 - A source whose `capabilities.kind` is `event` receives `events=` (the inbox records after its cursor, read by the
   controller) in `prepare` and `admit`, may keep its own state in `source_state`, and may return `inputs` with an
   admission (data for the occurrence's inputs that stays out of the recorded envelope).
@@ -3878,6 +4083,35 @@ When the target's `input_data.prompt` is a string, it is prefixed on its own lin
 `[Trigger schedule@1 · occurrence 3 · fired 2026-10-01T08:06:00+00:00]`, and the result is the occurrence's user
 turn.
 
+The occurrence also receives the envelope as structured data, `input_data.event`, a CloudEvents 1.0 event
+(`abstractruntime.triggers.cloudevents.to_cloudevent`, framework backlog 1039):
+
+```json
+{"specversion": "1.0", "id": "schedule@2:<binding_id>:4", "type": "abstract.schedule.v2",
+ "source": "abstract://triggers/schedule/bindings/<binding_id>", "time": "2026-10-01T08:00:00+00:00",
+ "subject": "tick:4", "datacontenttype": "application/json",
+ "bindingid": "<binding_id>", "dedupekey": "schedule@2:<binding_id>:4", "recordedtime": "...", "abstracttrust": "trusted",
+ "data": {"tick": 4, "scheduled_at": "...",
+          "series": {"rule": {"kind": "daily", "at": "08:00", "time_zone": "Europe/Paris"}, "occurrence": 5,
+                     "scheduled_at": "...", "next_at": "...", "coalesced": null}}}
+```
+
+- `type` is `abstract.<source_id>.v<version>`; `source` is the connection (`abstract://triggers/connections/<id>`),
+  the mailbox (`abstract://email/accounts/<account>/<folder>`) or the binding.
+- `subject`: the tick (`tick:<n>`), the command (`command:<id>`), the Message-ID or the feed item / webhook id of a
+  single event, `batch:<first_seq>-<last_seq>` for a batch. `dedupekey` is the admission's event id, `sequence` the
+  last inbox sequence number of an inbox source, `connectionid` the connection, `abstracttrust` `untrusted` for text
+  written by other people (`email.received@1`, feeds, webhooks) and `trusted` otherwise (a console test-fire too).
+  `correlationid`, `expirytime`, `traceparent` and `dataschema` are reserved and set only when a source has them.
+- `data` is the envelope's payload. `schedule@2` adds `data.series` (`rule`, `occurrence`, `scheduled_at`,
+  `next_at`, `coalesced`; `null` when there is none) beside `tick`, `scheduled_at` and `coalesced`. `schedule@1`
+  stays frozen byte for byte (its adapter answers as released, no `series`); the controller adds the CloudEvents
+  attributes to its envelopes (`ensure_cloudevent_attributes`), as it does for a third-party source that does not.
+- The recorded envelope (`automation.admitted.trigger_envelope`, `_meta.occurrence.trigger_envelope`) keeps its
+  original keys (`event_id`, `source_id`, `source_version`, `fired_at`, `payload`, `binding_id`) and carries the
+  CloudEvents attributes beside them for this release. `to_cloudevent` also reads envelopes recorded before, and
+  `from_cloudevent` is its inverse. `CLOUDEVENT_JSON_SCHEMA` is the CloudEvents 1.0 JSON format as a JSON schema.
+
 Run ids are deterministic:
 
 | Occurrence | Run id |
@@ -3887,6 +4121,59 @@ Run ids are deterministic:
 | attempt n ≥ 2 | the attempt-1 name with `":a<n>"` appended |
 
 `occurrence_run_id(automation_id, revision=, index=, attempt=, command_id=)` computes them.
+
+## Wakes: `SCHEDULE_RUN`
+
+A run can schedule work for later (framework backlog 1045, `abstractruntime.automations.wakes`): the effect
+`EffectType.SCHEDULE_RUN`, issued by a flow node or the agent builtin `schedule_run` (AbstractAgent), with payload
+
+```json
+{"after_s": 300 | "at": "2026-10-26T09:00:00+01:00" | "on": {"source_id": "feed.item", "connection_id": "tc_...", "config": {}},
+ "task": "work to do then" | "note": "a reminder",
+ "tools": ["read_file"], "mode": "same_session | independent", "session_id": "<the caller's>", "title": "...",
+ "notify": true}
+```
+
+A wake IS a one-shot automation:
+
+- the trigger is `schedule@2 {kind: once, start_at}` for `at` / `after_s`, or the source named in `on` (one
+  occurrence, then the automation ends: `one_shot`);
+- `mode: "same_session"` (default) runs the occurrence as a new turn of the caller's session: the definition's
+  `session_id` is overridden with it (growing context, the whole conversation replays; the occurrence's
+  `session_kind` is `chat`, so the conversation stays a chat), and the turn starts with the `[Trigger …]` header;
+  the controller itself stays in `automation:<id>`. `"independent"` runs it in a fresh session. A run schedules into
+  its own session only;
+- tools: at most the caller's. The caller's ceiling is resolved over its run tree (`resolve_tool_scope`) and
+  intersected with `tools`; `schedule_run` is never passed on, and a run whose ceiling lacks `schedule_run` cannot
+  schedule at all. The result becomes the occurrence's explicit `_runtime.allowed_tools`. A note gets no tools. A
+  caller with no recorded ceiling must name its tools;
+- attention: a note wake reaches the person. `notify` (default `true` for a note, `false` for a task) puts
+  `notify: {always: true, title: <the note>, body: <the note>}` on the definition: every completed occurrence
+  becomes an attention item (kind `notify`, title = the note, body = the occurrence's answer, else the note),
+  whatever the answer's own `notify` says. `notify.always`, `notify.title` and `notify.body` are ordinary
+  definition fields any automation may set;
+- approval: `policy.tool_approval: "ask"`; the caller's own `_runtime.tool_policy` is copied; a caller that read
+  untrusted input (`_runtime.untrusted_input`) makes the wake untrusted (`untrusted_origin`: the occurrence gets
+  the untrusted-input policy);
+- the definition records `origin_run_id`; the occurrence's `_meta.origin` is `{kind: "agent", client:
+  "schedule_run", ref: {origin_run_id, session_id, automation_id, occurrence_index, event_id, source}}`.
+
+The runtime plans, the host creates: `Runtime.set_schedule_run_handler(handler)` registers `handler(run, plan) ->
+{"automation_id": ...}`, which knows the target workflow (the session's agent), the owner and the workspace, and
+usually calls `create_scheduled_run(runtime, plan, target=, tenant=, user=, workspace_root=, notify=None)`. The plan's
+`request_id` derives from the effect's idempotency key, so a replayed effect finds the same automation. Without a
+handler the effect fails (`no schedule_run handler`); an agent call gets a tool error. The effect's result is
+`{automation_id, session_id, mode, kind, notify, at | on, allowed_tools, dropped_tools}` (tool-style for the builtin).
+
+The host appends to the user's event stream (helpers `wake_scheduled_event(plan, automation_id)` and
+`wake_cancelled_event(...)`):
+
+```json
+{"type": "wake.scheduled", "data": {"automation_id": "...", "session_id": "...", "at": "..." , "origin_run_id": "..."}}
+{"type": "wake.cancelled", "data": {"automation_id": "...", "session_id": "...", "origin_run_id": "..."}}
+```
+
+Cancelling a wake is archiving its automation (`automation.archive`) before it fires: nothing runs.
 
 ## Commands
 
@@ -4238,6 +4525,31 @@ with no runs, or `{"kind": ...}` with the session's most specific kind (`discuss
 (the root's workspace keys that later turns inherit). Every store exposes
 `session_kinds(session_id)`, which answers from an index without scanning runs.
 
+### Run origin
+
+Every run records who or what started it once, at start, in `vars._meta.origin`
+(`abstractruntime.core.run_origin`, framework backlog 1038):
+
+```json
+{"kind": "person | trigger | agent | system",
+ "actor": "<tenant>:<user> or null",
+ "client": "console | assistant | automation | automation.run_now | bridge:<name> | ...",
+ "ref": {"automation_id": "...", "occurrence_index": 3, "event_id": "...", "source": "schedule@2",
+         "origin_run_id": "...", "session_id": "...", "bridge": "..."}}
+```
+
+- The controller stamps every occurrence in `build_prepared` (frozen with its inputs): `trigger` for a scheduled or
+  event admission (`ref.source` is `<source_id>@<version>`), `person` with client `automation.run_now` for a manual
+  run. The actor is the automation's owner, `_meta.automation_owner` on the controller (`"<tenant>:<user>"` of the
+  creation request, or `create_automation(..., principal=)`); automations created earlier have `actor: null`.
+- Hosts stamp the runs they start: `origin_for("person", actor=..., client=...)` for a run a person starts,
+  `origin_for("system", client="bridge:<name>", bridge=...)` for a bridge, then `stamp_origin(vars, origin)` before
+  `Runtime.start` (an origin is written once; an existing one is kept).
+- The trigger envelope is never copied: `ref.automation_id` and `ref.event_id` point at the controller's
+  `automation.admitted` record that holds it.
+- `origin_of(vars)` reads it back; it returns `None` for runs started before origins existed, which keep their former
+  classification.
+
 ### Turn roots
 
 A session's **turns** are its turn roots: runs without a parent, except automation controllers, plus automation
@@ -4310,8 +4622,10 @@ receives its result directly.
 
 - Schedules are fixed UTC intervals (`schedule@1`, `schedule@2` `every`) or daily, weekly and monthly wall-time rules
   in an IANA time zone (`schedule@2`). There are no cron expressions, and `anchor` must equal `start_at`.
-- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1` and `email.received@1`. There is no generic external
-  event source yet.
+- The shipped trigger sources are `schedule@1`, `schedule@2`, `manual@1`, `email.received@1`, `feed.item@1` and
+  `webhook.received@1`. Feeds are polled (no WebSub push); webhooks need the host to expose its ingress route.
+- One automation has one trigger binding: N connections need N automations.
+- A wake schedules one occurrence; recurring work is an automation.
 - Occurrences run one at a time (`serial`), missed ticks coalesce, and a failed occurrence never stops the
   automation (`failure: "continue"`). These policies cannot be changed.
 - Growing history is the most recent whole turns within the configured token budget (50,000 tokens by default) and is not summarized automatically; older turns
@@ -4763,6 +5077,7 @@ is never appended again (its id stays recorded).
 trigger = {
     "source_id": "email.received", "source_version": 1,
     "config": {
+        "account": "self",           # default: the primary mailbox; or a mailbox id of the user ("second")
         "uses_model": True,          # default; "every" then defaults to "1h" (false: "60s")
         "every": "1h",               # batch interval, at least "60s"
         "folder": "INBOX",
@@ -4773,6 +5088,11 @@ trigger = {
 }
 ```
 
+- **Mailbox** (framework backlog 1044): `account` is `"self"` (the default; `"default"` too) for the user's primary
+  mailbox, or the id of another of the user's mailboxes (letters, digits, `_ . @ + -`; never a `tenant:user:id`
+  reference). The automation then reads only that mailbox's streams (`email:<tenant>:<user>:<id>:<folder>`) and its
+  occurrences act for it (`_runtime.email_account` = `<tenant>:<user>:<id>`, `email_binding_for_trigger`). The host
+  checks that the id names a readable mailbox of the automation's owner; the trigger only checks its shape.
 - **Filters** are typed: `from_in` (addresses), `from_domain_in` (exact domains; list a subdomain to match it),
   `to_in` (any To or Cc address), `subject_contains` (one literal, case-insensitive substring) and `has_attachment`.
   There are no patterns or expressions.
@@ -5941,7 +6261,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
-- `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger, and the send-email action
+- `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, and the send-email action
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
@@ -5949,7 +6269,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Features (reference)
 
-- `automations.md` — automations: a workflow run on a schedule or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
+- `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS/Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

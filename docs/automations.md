@@ -411,8 +411,10 @@ The occurrence also receives the envelope as structured data, `input_data.event`
   last inbox sequence number of an inbox source, `connectionid` the connection, `abstracttrust` `untrusted` for text
   written by other people (`email.received@1`, feeds, webhooks) and `trusted` otherwise (a console test-fire too).
   `correlationid`, `expirytime`, `traceparent` and `dataschema` are reserved and set only when a source has them.
-- `data` is the envelope's payload. Schedules add `data.series` (`rule`, `occurrence`, `scheduled_at`, `next_at`,
-  `coalesced`; `null` when there is none) beside `tick`, `scheduled_at` and `coalesced`.
+- `data` is the envelope's payload. `schedule@2` adds `data.series` (`rule`, `occurrence`, `scheduled_at`,
+  `next_at`, `coalesced`; `null` when there is none) beside `tick`, `scheduled_at` and `coalesced`. `schedule@1`
+  stays frozen byte for byte (its adapter answers as released, no `series`); the controller adds the CloudEvents
+  attributes to its envelopes (`ensure_cloudevent_attributes`), as it does for a third-party source that does not.
 - The recorded envelope (`automation.admitted.trigger_envelope`, `_meta.occurrence.trigger_envelope`) keeps its
   original keys (`event_id`, `source_id`, `source_version`, `fired_at`, `payload`, `binding_id`) and carries the
   CloudEvents attributes beside them for this release. `to_cloudevent` also reads envelopes recorded before, and

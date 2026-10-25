@@ -2,7 +2,7 @@
 
 Sources come from two places:
 
-- the built-ins `schedule@1`, `schedule@2`, `manual@1`, `email.received@1` and `feed.item@1`, shipped in this
+- the built-ins `schedule@1`, `schedule@2`, `manual@1`, `email.received@1`, `feed.item@1` and `webhook.received@1`, shipped in this
   package (`schedule@2` is a second version of the built-in `schedule` source). They are
   a REQUIRED seam: if one cannot be loaded, or no longer describes itself as
   expected, discovery raises `TriggerRegistryError` — automations must not
@@ -35,6 +35,8 @@ BUILTIN_TRIGGER_SOURCES: Dict[str, str] = {
     "email.received": "abstractruntime.triggers.email_received:EmailReceivedTriggerAdapter",
     # framework backlog 1043: new items of an RSS / Atom feed connection.
     "feed.item": "abstractruntime.triggers.feed:FeedItemTriggerAdapter",
+    # framework backlog 1042: a signed call (Standard Webhooks) on a webhook connection.
+    "webhook.received": "abstractruntime.triggers.webhook:WebhookReceivedTriggerAdapter",
 }
 
 # Further versions of a built-in source (same entry-point name, one more adapter each): loaded

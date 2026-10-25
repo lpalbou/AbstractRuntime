@@ -15,6 +15,7 @@ from .connections import (
 )
 from .email_received import EmailReceivedTriggerAdapter
 from .feed import FeedItemTriggerAdapter, FeedPoller, parse_feed, poll_feed_connections
+from .webhook import WebhookReceivedTriggerAdapter, append_webhook_event, verify_standard_webhook
 from .manual import ManualTriggerAdapter, manual_event_id
 from .protocol import (
     TRIGGER_STATE_KEYS,
@@ -57,6 +58,9 @@ __all__ = [
     "EmailReceivedTriggerAdapter",
     "FeedItemTriggerAdapter",
     "FeedPoller",
+    "WebhookReceivedTriggerAdapter",
+    "append_webhook_event",
+    "verify_standard_webhook",
     "parse_feed",
     "poll_feed_connections",
     "ManualTriggerAdapter",

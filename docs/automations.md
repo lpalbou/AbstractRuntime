@@ -243,6 +243,31 @@ the feed: `{url, every (default 15m, never below 60s), max_items (1..200, defaul
 - A failure (unreachable, HTTP error, not a feed) is a typed `{code, cause, fix}` on the connection's
   `last_error`; the next poll waits a doubling backoff (at most 6 hours); a later success clears it. Nothing raises.
 
+### `webhook.received@1`
+
+Runs the automation when an external system calls a signed webhook (framework backlog 1042; the HTTP route is the
+host's). The binding names a webhook connection (`{connection_id, max_batch?, start_at?}`); the connection holds
+`{subject_path?, tolerance_s (60..3600, default 300), secret?}`. Without a `secret`, creating the connection
+generates one (`whsec_<base64>`, sealed); the owner reads it once with `store.secrets(id, principal=)` to configure
+the sender.
+
+- Callers sign per [Standard Webhooks](https://www.standardwebhooks.com): headers `webhook-id`,
+  `webhook-timestamp` (epoch seconds) and `webhook-signature` (`v1,<base64 HMAC-SHA256>` entries, space-separated)
+  over `<webhook-id>.<webhook-timestamp>.<raw body>`, keyed with the base64-decoded secret.
+- `verify_standard_webhook(secret, headers, body, now, tolerance_s=300)` is pure: `ok`, or `reason`
+  `missing_headers`, `bad_timestamp`, `stale` (outside the window, either way) or `bad_signature` (constant-time
+  comparison; one valid `v1` entry suffices, so senders can rotate keys).
+- `append_webhook_event(inbox, connection, body, headers, *, secret=None, store=None, now=None,
+  max_body_bytes=1 MiB)` verifies and appends ONE event to `trigger:<connection_id>`, and returns what the route
+  answers: `appended` (202), `duplicate` (409 `replayed_id`: the `webhook-id` is the event's `dedupekey`, so a replay
+  never appends twice), or `refused` (401 for the verification reasons, 413 `too_large`, 415 `unsupported_body`, 409
+  `connection_disabled`). Refusals are recorded on the connection's `last_error` when `store` is given. The host
+  then wakes the bound automations (`wake_connection_automations`).
+- Each event's `data` is `{webhook_id, content_type, body}` (the parsed JSON, any JSON value) or `{webhook_id,
+  content_type, body_text}` (UTF-8 text). Its `subject` is the value at `subject_path` in a JSON body, else the
+  webhook id. The occurrence gets `input_data.event.data.events[i].data` and, for a string prompt, the fixed untrusted
+  frame. Events are admitted at once; calls that arrive together share one occurrence.
+
 ### Trigger connections
 
 A source is a type ("a feed item", "a webhook call"); a **connection** is one user's instance of it ("this feed

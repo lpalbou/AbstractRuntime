@@ -40,59 +40,94 @@ def env(tmp_path, monkeypatch):
     return runtime, store, Clock(monkeypatch)
 
 
-# --- a fake read-only mailbox (AbstractCore's client shape: search newest first, get) -------------
+# --- AbstractCore's hermetic IMAP server (TLS, real protocol), read through the real client ------
 
-class Detail:
-    def __init__(self, uid, subject, frm="bob@x.test"):
-        self.data = {"uid": uid, "uidvalidity": 1, "folder": "INBOX", "message_id": f"<{uid}@x.test>", "from": frm,
-                     "from_address": frm, "to": "alice@example.test", "subject": subject, "date": "d", "body_text": f"{subject} body",
-                     "attachments": [], "flags": [], "seen": False}
-
-    def to_dict(self):
-        return dict(self.data)
+ALICE_ADDR, ALICE_PW = "alice@example.test", "alice-pw"
 
 
-class Mailbox:
-    def __init__(self, n):
-        self.messages = {uid: Detail(uid, f"mail {uid}", frm="boss@x.test" if uid % 2 else "bob@x.test") for uid in range(1, n + 1)}
-        self.gets, self.writes = 0, 0
+@pytest.fixture(scope="module")
+def ca(tmp_path_factory):
+    from abstractcore.testing.mailserver import TestCA
 
-    def client(self):
-        return self
-
-    def search(self, *, folder=None, limit=None, before_uid=None, criteria=None):
-        uids = sorted((u for u in self.messages if before_uid is None or u < before_uid), reverse=True)
-        page = uids[: limit or len(uids)]
-        more = len(uids) > len(page)
-        return {"messages": [SimpleNamespace(uid=u) for u in page], "has_more": more, "next_before_uid": page[-1] if more else None}
-
-    def get(self, uid, *, folder=None):
-        self.gets += 1
-        return self.messages[uid]
+    return TestCA.create(tmp_path_factory.mktemp("ca"))
 
 
-def test_email_sample_takes_the_newest_matching_messages_read_only(env):
+@pytest.fixture
+def imap(ca):
+    from abstractcore.testing.mailserver import FakeImapServer
+
+    server = FakeImapServer(ca, users={ALICE_ADDR: ALICE_PW}, security="ssl")
+    yield server
+    server.close()
+
+
+def _context(tmp_path, ca, imap):
+    from abstractcore.comms.email import EmailAccount, EmailContext, EmailSecret, ImapSettings, RecipientPolicy
+    from abstractcore.comms.email.limits import SendLimits, SendRateLimiter
+
+    account = EmailAccount.build(address=ALICE_ADDR, imap=ImapSettings.build("localhost", port=imap.port, security="ssl",
+                                                                              ca_file=str(ca.ca_pem)))
+    limits = SendLimits()
+    return EmailContext(account=account, secret=EmailSecret(ALICE_PW), policy=RecipientPolicy.build("allowlist", [ALICE_ADDR]),
+                        limits=limits, limiter=SendRateLimiter(tmp_path / "sends.json", limits), registered_address=ALICE_ADDR)
+
+
+def _fill(imap, n, *, big_uid=None):
+    from abstractcore.testing.mailserver import build_message
+
+    for i in range(1, n + 1):
+        text = ("long line " * 30_000) if i == big_uid else f"body of mail {i}"
+        attachments = [("report.pdf", "application/pdf", b"%PDF-1.4 " + b"x" * 5000)] if i % 10 == 0 else []
+        frm = "boss@x.test" if i % 2 else "bob@x.test"
+        imap.add_message("INBOX", build_message(from_=frm, to=ALICE_ADDR, subject=f"mail {i}", text=text,
+                                                html=f"<p>mail {i}</p>" if i % 3 == 0 else "", attachments=attachments))
+
+
+def test_email_sample_reads_100_messages_on_one_connection_in_a_few_batched_fetches(env, tmp_path, ca, imap):
+    import time as _time
+
     runtime, _, _ = env
-    runtime.set_email_binding({"account_ref": "t:alice:default", "address": "alice@example.test"})
-    box = Mailbox(500)
+    runtime.set_email_binding({"account_ref": "t:alice:default", "address": ALICE_ADDR})
+    _fill(imap, 130, big_uid=125)
     head_before = runtime.event_inbox.head_seq()
-    sample = sample_occurrence_inputs(runtime, "email.received", 1, {"filter": {"from_in": ["boss@x.test"]}},
-                                      count=3, email_context=box, now=NOW)
-    assert runtime.event_inbox.head_seq() == head_before  # nothing appended, no cursor anywhere
-    inputs = sample["inputs"]
-    assert sample["resolve_vars"] == ["messages"] and is_artifact_ref(inputs["messages"])  # bodies as artifacts
-    resolved = resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)
-    assert [m["subject"] for m in resolved["messages"]] == ["mail 499", "mail 497", "mail 495"]  # newest first, filtered
-    assert resolved["mailbox"] == "alice@example.test"
-    event = inputs["event"]
-    assert event["abstracttest"] is True and event["id"].startswith("test:") and event["type"] == "abstract.email.received.v1"
-    assert sample["truncated"] is False and sample["count"] == 3
+    imap.fetches.clear()
+    imap.logins.clear()
+    started = _time.monotonic()
+    sample = sample_occurrence_inputs(runtime, "email.received", 1, {}, count=100, email_context=_context(tmp_path, ca, imap), now=NOW)
+    elapsed = _time.monotonic() - started
+    assert elapsed < 5.0, elapsed
+    assert len(imap.logins) == 1  # ONE connection
+    assert len(imap.fetches) <= 4, imap.fetches  # headers + one per text section
+    assert all("BODY[" not in f.upper().replace("BODY.PEEK[", "") for f in imap.fetches)  # PEEK only
+    assert all(f"<0.{64 * 1024}>" in f for f in imap.fetches if "BODY.PEEK[HEADER]" not in f)  # capped text parts
+    assert not any("\\Seen" in m.flags for m in imap.folders["INBOX"].messages)  # nothing marked read
+    assert runtime.event_inbox.head_seq() == head_before
+    msgs = resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["messages"]
+    assert [m["subject"] for m in msgs[:3]] == ["mail 130", "mail 129", "mail 128"] and len(msgs) == 100
+    by = {m["subject"]: m for m in msgs}
+    assert by["mail 129"]["body_text"] == "body of mail 129"
+    assert by["mail 120"]["attachments"] and by["mail 120"]["attachments"][0]["name"] == "report.pdf"
+    big = by["mail 125"]["body_text"]
+    assert big.startswith("long line") and len(big) <= 64 * 1024  # capped, not the 300 KB body
+    assert sample["truncated"] is False and sample["inputs"]["event"]["abstracttest"] is True
+    assert resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["mailbox"] == ALICE_ADDR
 
 
-def test_email_sample_stops_at_its_budget(env):
+def test_email_sample_applies_the_trigger_filters(env, tmp_path, ca, imap):
     runtime, _, _ = env
-    runtime.set_email_binding({"account_ref": "t:alice:default", "address": "alice@example.test"})
-    sample = sample_occurrence_inputs(runtime, "email.received", 1, {}, count=100, email_context=Mailbox(100_000),
+    runtime.set_email_binding({"account_ref": "t:alice:default", "address": ALICE_ADDR})
+    _fill(imap, 20)
+    sample = sample_occurrence_inputs(runtime, "email.received", 1, {"filter": {"from_in": ["boss@x.test"]}},
+                                      count=3, email_context=_context(tmp_path, ca, imap), now=NOW)
+    msgs = resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["messages"]
+    assert [m["subject"] for m in msgs] == ["mail 19", "mail 17", "mail 15"]
+
+
+def test_email_sample_stops_at_its_budget(env, tmp_path, ca, imap):
+    runtime, _, _ = env
+    runtime.set_email_binding({"account_ref": "t:alice:default", "address": ALICE_ADDR})
+    _fill(imap, 5)
+    sample = sample_occurrence_inputs(runtime, "email.received", 1, {}, count=100, email_context=_context(tmp_path, ca, imap),
                                       now=NOW, email_budget_s=0.0)
     assert sample["truncated"] is True
 

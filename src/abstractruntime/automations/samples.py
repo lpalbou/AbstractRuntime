@@ -11,10 +11,14 @@ controller's `build_prepared` gives a real occurrence of that trigger (see docs/
 "Occurrence inputs and outputs"), built from real data and read only:
 
 - `email.received@1`: the newest `count` messages of the bound mailbox folder that pass the
-  trigger's filters, fetched read-only through the same mail client the watcher uses (no
-  cursor or inbox change; nothing is marked read). The fetch stops after `EMAIL_SAMPLE_BUDGET_S`
-  (20 s) with what it has (`truncated: true`). `messages` is stored as an artifact like a real
-  occurrence's, and listed in `resolve_vars`;
+  trigger's filters, read-only on ONE IMAP connection of the mailbox's own client
+  (`batched_newest_messages`): one UID SEARCH, one batched FETCH of headers and structure, then
+  one batched FETCH per distinct text-part section, each text part capped at
+  `EMAIL_SAMPLE_BODY_CAP` (64 KB, text/plain preferred, else text/html); attachments are listed
+  from the structure, never downloaded; `BODY.PEEK` only (nothing is marked read), no cursor or
+  inbox change. The fetch stops after `EMAIL_SAMPLE_BUDGET_S` (20 s) with what it has
+  (`truncated: true`). `messages` is stored as an artifact like a real occurrence's, and listed
+  in `resolve_vars`;
 - `feed.item@1`: the latest `count` items of the connection's feed, one fetch, no cursor change;
 - `webhook.received@1`: the last `count` calls stored for the connection; when none was
   received yet, ONE documented sample call (`SAMPLE_WEBHOOK_CALL`, `sample_call: true`);
@@ -45,6 +49,8 @@ from ..triggers.registry import get_trigger_adapter
 DEFAULT_SAMPLE_COUNT = 100
 MAX_SAMPLE_COUNT = 1000
 EMAIL_SAMPLE_BUDGET_S = 20.0
+EMAIL_SAMPLE_BODY_CAP = 64 * 1024
+EMAIL_SAMPLE_BATCH = 100  # messages per batched FETCH
 # The call a webhook connection that never received one is tested with.
 SAMPLE_WEBHOOK_CALL: Dict[str, Any] = {
     "webhook_id": "sample",
@@ -119,32 +125,28 @@ def _email_sample(runtime: Any, adapter: Any, config: Dict[str, Any], binding: D
     account = str(config.get("account") or "self")
     account_ref = getattr(mail_binding, "account_ref", None) or f"local:local:{'default' if account in ('self', 'default') else account}"
     folder = str(config.get("folder") or "INBOX")
-    started = time.monotonic()
-    truncated = False
+    deadline = time.monotonic() + float(budget_s)
     emails: List[Dict[str, Any]] = []
-    client = ctx.client()
+    truncated = False
     before_uid = None
+    client = ctx.client()
     while len(emails) < count:
-        if time.monotonic() - started > budget_s:
-            truncated = True
-            break
-        page = client.search(folder=folder, limit=min(200, count), before_uid=before_uid)
-        for summary in page.get("messages") or []:
-            if time.monotonic() - started > budget_s:
-                truncated = True
-                break
-            try:
-                detail = client.get(summary.uid, folder=folder)
-            except Exception:  # noqa: BLE001 - one unreadable message never blocks the sample (the watcher passes it too)
-                continue
+        details, more, before_uid, hit_deadline = batched_newest_messages(
+            client, folder=folder, before_uid=before_uid, deadline=deadline,
+            # Filters may reject messages: read a whole batch at a time then (still one connection each).
+            count=(count - len(emails)) if not config.get("filter") else max(count - len(emails), EMAIL_SAMPLE_BATCH),
+        )
+        for detail in details:
             payload = email_event_payload(account_ref, detail)
             if message_matches(config, payload):
                 emails.append(payload)
                 if len(emails) >= count:
                     break
-        if truncated or len(emails) >= count or not page.get("has_more"):
+        if hit_deadline:
+            truncated = True
             break
-        before_uid = page.get("next_before_uid")
+        if not more or len(emails) >= count:
+            break
     payload = {
         "count": len(emails),
         "event_ids": [f"test:{e.get('uid')}" for e in emails],
@@ -152,6 +154,102 @@ def _email_sample(runtime: Any, adapter: Any, config: Dict[str, Any], binding: D
         "messages": [{k: e.get(k) for k in ENVELOPE_FIELDS} for e in emails],
     }
     return payload, {"emails": emails}, mail_binding, truncated
+
+
+def batched_newest_messages(
+    client: Any,
+    *,
+    folder: str,
+    count: int,
+    before_uid: Optional[int] = None,
+    deadline: Optional[float] = None,
+    body_cap: int = EMAIL_SAMPLE_BODY_CAP,
+) -> tuple:
+    """The newest `count` messages of `folder` (UID < `before_uid` when given), newest first, as
+    AbstractCore `MessageDetail`s, read on ONE connection of AbstractCore's mail client:
+
+    1. `UID SEARCH ALL` (one command);
+    2. one `UID FETCH` of `UID FLAGS RFC822.SIZE INTERNALDATE BODYSTRUCTURE BODY.PEEK[HEADER]` for
+       up to `EMAIL_SAMPLE_BATCH` uids;
+    3. per distinct text-part section among them (text/plain preferred, else text/html; usually
+       one or two), one `UID FETCH ... BODY.PEEK[<section>]<0.body_cap>`.
+
+    Attachments are listed from BODYSTRUCTURE (never downloaded); a text part longer than
+    `body_cap` is cut there (`body_truncated` in the detail's skipped record is not used: the
+    text simply ends). Every fetch is a PEEK on a read-only EXAMINE: nothing is marked read.
+    Uses the client's connection helpers (`_imap`, `_examine`, `_uid_search`, `_fetch`,
+    `_summary`): AbstractCore >= 2.26. Returns `(details, more, next_before_uid, hit_deadline)`.
+    """
+    from ..integrations.abstractcore.email_facade import AttachmentInfo, MessageDetail
+    from abstractcore.comms.email.bodystructure import attachment_parts, body_parts, decode_text, parse_bodystructure
+
+    header_items = "(UID FLAGS RFC822.SIZE INTERNALDATE BODYSTRUCTURE BODY.PEEK[HEADER])"
+    details: List[Any] = []
+    hit_deadline = False
+    with client._imap() as conn:
+        state = client._examine(conn, folder)
+        uids = client._uid_search(conn, ["ALL"])
+        if before_uid is not None:
+            uids = [u for u in uids if u < int(before_uid)]
+        uids.sort(reverse=True)
+        wanted = uids[: max(0, int(count))]
+        more = len(uids) > len(wanted)
+        for start in range(0, len(wanted), EMAIL_SAMPLE_BATCH):
+            if deadline is not None and time.monotonic() > deadline:
+                hit_deadline = True
+                wanted = wanted[:start]
+                break
+            batch = wanted[start : start + EMAIL_SAMPLE_BATCH]
+            attrs = client._fetch(conn, batch, header_items)
+            roots: Dict[int, Any] = {}
+            by_section: Dict[str, List[Any]] = {}
+            for uid in batch:
+                a = attrs.get(uid)
+                if not a:
+                    continue
+                try:
+                    root = parse_bodystructure(a["BODYSTRUCTURE"]) if isinstance(a.get("BODYSTRUCTURE"), list) else None
+                except (ValueError, TypeError, IndexError):
+                    root = None
+                roots[uid] = root
+                parts = body_parts(root) if root is not None else []
+                chosen = next((p for p in parts if p.content_type == "text/plain"), None) or (parts[0] if parts else None)
+                if chosen is not None:
+                    by_section.setdefault(chosen.section, []).append((uid, chosen))
+            texts: Dict[int, tuple] = {}
+            for section, members in by_section.items():
+                got = client._fetch(conn, [u for u, _ in members], f"(UID BODY.PEEK[{section}]<0.{int(body_cap)}>)")
+                for uid, part in members:
+                    raw = b""
+                    for key, value in (got.get(uid) or {}).items():
+                        if key.upper().startswith(f"BODY[{section.upper()}]"):
+                            raw = bytes(value) if isinstance(value, (bytes, bytearray)) else str(value).encode("utf-8", "replace")
+                            break
+                    raw = raw[: int(body_cap)]  # also when a server ignores the partial range
+                    if part.encoding.strip().lower() == "base64":
+                        raw = b"".join(raw.split())
+                        raw = raw[: len(raw) - len(raw) % 4]
+                    texts[uid] = (part.content_type, decode_text(raw, part).strip("\r\n"))
+            for uid in batch:
+                a = attrs.get(uid)
+                if not a:
+                    continue
+                header = client._body_of(a)
+                summary = client._summary(uid, a, state["folder"], state["uidvalidity"], header=header, root=roots.get(uid))
+                kind, text = texts.get(uid, ("", ""))
+                root = roots.get(uid)
+                infos = tuple(
+                    AttachmentInfo(index=idx, filename=p.filename, content_type=p.content_type, size=p.size,
+                                   disposition=p.disposition, content_id=p.content_id, encoding=p.encoding)
+                    for idx, p in enumerate(attachment_parts(root) if root is not None else [])
+                )
+                details.append(MessageDetail(
+                    summary=summary, reply_to=summary.reply_to, in_reply_to=summary.in_reply_to, references=(),
+                    text=text if kind == "text/plain" else "", html=text if kind == "text/html" else "",
+                    attachments=infos,
+                ))
+    next_before = wanted[-1] if (more and wanted) else None
+    return details, bool(more or hit_deadline), next_before, hit_deadline
 
 
 def sample_occurrence_inputs(
@@ -274,7 +372,9 @@ def resolved_sample_inputs(sample: Mapping[str, Any], *, artifact_store: Any) ->
 
 __all__ = [
     "DEFAULT_SAMPLE_COUNT",
+    "EMAIL_SAMPLE_BODY_CAP",
     "EMAIL_SAMPLE_BUDGET_S",
+    "batched_newest_messages",
     "MAX_SAMPLE_COUNT",
     "SAMPLE_WEBHOOK_CALL",
     "SampleError",

@@ -287,12 +287,15 @@ def test_pending_occurrence_holds_refs_that_resolve(tmp_path, ca, imap, monkeypa
     # The occurrence parked: its pending_occurrence is still in the controller state.
     pending = rt.run_store.load(aid).vars["_runtime"]["automation"]["pending_occurrence"]
     prepared = pending["prepared"]
-    assert prepared["resolve_vars"] == ["trigger", "prompt"]
+    # `messages` (the named input for flows) holds the same bodies: an artifact ref too.
+    assert prepared["resolve_vars"] == ["trigger", "prompt", "messages"]
     assert is_artifact_ref(prepared["input_data"]["prompt"]) and is_artifact_ref(prepared["input_data"]["trigger"]["emails"])
+    assert is_artifact_ref(prepared["input_data"]["messages"])
     assert SENTINEL not in json.dumps(pending)
     resolved = resolve_strict(prepared, artifact_store=rt.artifact_store)
     assert SENTINEL in resolved["input_data"]["prompt"]
     assert SENTINEL in resolved["input_data"]["trigger"]["emails"][0]["body_text"]
+    assert SENTINEL in resolved["input_data"]["messages"][0]["body_text"]
 
 
 def test_an_email_automation_needs_an_artifact_store(tmp_path, monkeypatch):

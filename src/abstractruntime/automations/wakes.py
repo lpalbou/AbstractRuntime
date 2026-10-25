@@ -15,6 +15,9 @@ IS a one-shot automation:
   itself is never passed on (a wake cannot schedule wakes). The result is written as the occurrence's
   explicit `_runtime.allowed_tools` (an occurrence is a root run: no parent walk would find the
   ceiling). A note wake gets no tools. A caller without any recorded ceiling must name its tools.
+- attention: a NOTE wake defaults to `notify: true` (the definition's `notify.always`, titled with the note): its
+  answer becomes an attention item (kind notify, body = the answer or the note), so the reminder reaches the
+  person; a task wake stays quiet unless the caller passes `notify: true`;
 - approval: `policy.tool_approval = "ask"` (the person's interactive rules, never an unattended
   grant); the caller's own `_runtime.tool_policy` is copied when it has one; a caller that reads
   untrusted input (`_runtime.untrusted_input`) makes the wake untrusted too (`untrusted_origin`).
@@ -51,7 +54,7 @@ WAKE_EXCLUDED_TOOLS = frozenset({SCHEDULE_RUN_TOOL})
 MAX_AFTER_S = 366 * 86400
 MAX_TEXT = 20_000
 TITLE_MAX = 120
-_PAYLOAD_KEYS = ("at", "after_s", "on", "task", "note", "tools", "session_id", "mode", "title", "tool_name", "call_id")
+_PAYLOAD_KEYS = ("at", "after_s", "on", "task", "note", "tools", "session_id", "mode", "title", "notify", "tool_name", "call_id")
 
 
 class ScheduleRunError(ValueError):
@@ -128,7 +131,13 @@ def validate_schedule_run(payload: Mapping[str, Any], *, now: str) -> Dict[str, 
     if mode not in SCHEDULE_RUN_MODES:
         raise ScheduleRunError(f"mode must be one of {list(SCHEDULE_RUN_MODES)}", field="mode")
     title = _text(payload.get("title"), "title")
+    notify = payload.get("notify")
+    if notify is not None and not isinstance(notify, bool):
+        raise ScheduleRunError("notify must be true or false", field="notify")
+    if notify is None:
+        notify = note is not None  # a reminder reaches the person; a task stays quiet unless asked
     return {
+        "notify": notify,
         "when": when,
         "task": task,
         "note": note,
@@ -210,6 +219,10 @@ def plan_schedule_run(run: Any, payload: Mapping[str, Any], *, now: str, run_sto
         "allowed_tools": list(allowed),
         "dropped_tools": dropped,
         "when": copy.deepcopy(req["when"]),
+        # Backlog 1045 follow-up: every completed occurrence becomes an attention item (default: notes).
+        "notify": bool(req["notify"]),
+        "notify_title": (req["note"] or title)[:120],
+        "notify_body": (req["note"] or "")[:2000],
     }
     return plan
 
@@ -254,8 +267,15 @@ def create_scheduled_run(
         request["session_id"] = plan["session_id"]
     if plan.get("untrusted_origin"):
         request["untrusted_origin"] = True
-    if notify is not None:
-        request["notify"] = dict(notify)
+    notify_def: Dict[str, Any] = dict(notify) if notify is not None else {}
+    if plan.get("notify"):
+        # The occurrence's answer always becomes an attention item (kind notify) titled with the
+        # note; its body is the answer, else the note.
+        notify_def.update({"always": True, "title": plan.get("notify_title") or plan["title"]})
+        if plan.get("notify_body"):
+            notify_def["body"] = plan["notify_body"]
+    if notify_def:
+        request["notify"] = notify_def
     from .ledger import definition_of
     from .models import AutomationError, automation_id_for
 

@@ -338,7 +338,7 @@ def validate_notify(value: Any) -> Dict[str, Any]:
     dispatcher mails the owner's registered address).
     """
     notify = _require_mapping(value if value is not None else {}, "notify")
-    _reject_unknown(notify, ("channels", "recipients"), "notify")
+    _reject_unknown(notify, ("channels", "recipients", "always", "title", "body"), "notify")
     channels = notify.get("channels", DEFAULT_NOTIFY["channels"])
     if not isinstance(channels, list) or not channels:
         raise _invalid(f"notify.channels must be a non-empty list of {list(NOTIFY_CHANNELS)}", "notify.channels")
@@ -349,6 +349,20 @@ def validate_notify(value: Any) -> Dict[str, Any]:
         if ch not in out:
             out.append(ch)
     result = {"channels": [c for c in NOTIFY_CHANNELS if c in out]}
+    # Backlog 1045 follow-up: `always` makes every completed occurrence an attention item (a note wake
+    # reaches the person whatever the answer says); `title` / `body` are its title and the body used
+    # when the answer is empty.
+    if notify.get("always") is not None:
+        if not isinstance(notify["always"], bool):
+            raise _invalid("notify.always must be true or false", "notify.always")
+        if notify["always"]:
+            result["always"] = True
+    for key, limit in (("title", NOTIFY_TITLE_MAX), ("body", NOTIFY_BODY_MAX)):
+        if notify.get(key) is not None:
+            if not isinstance(notify[key], str):
+                raise _invalid(f"notify.{key} must be text", f"notify.{key}")
+            if notify[key].strip():
+                result[key] = notify[key].strip()[:limit]
     if "recipients" in notify:
         recipients = validate_email_allowed_recipients(notify["recipients"], field="notify.recipients")
         if not recipients:

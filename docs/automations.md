@@ -438,7 +438,8 @@ A run can schedule work for later (framework backlog 1045, `abstractruntime.auto
 ```json
 {"after_s": 300 | "at": "2026-10-26T09:00:00+01:00" | "on": {"source_id": "feed.item", "connection_id": "tc_...", "config": {}},
  "task": "work to do then" | "note": "a reminder",
- "tools": ["read_file"], "mode": "same_session | independent", "session_id": "<the caller's>", "title": "..."}
+ "tools": ["read_file"], "mode": "same_session | independent", "session_id": "<the caller's>", "title": "...",
+ "notify": true}
 ```
 
 A wake IS a one-shot automation:
@@ -454,6 +455,11 @@ A wake IS a one-shot automation:
   intersected with `tools`; `schedule_run` is never passed on, and a run whose ceiling lacks `schedule_run` cannot
   schedule at all. The result becomes the occurrence's explicit `_runtime.allowed_tools`. A note gets no tools. A
   caller with no recorded ceiling must name its tools;
+- attention: a note wake reaches the person. `notify` (default `true` for a note, `false` for a task) puts
+  `notify: {always: true, title: <the note>, body: <the note>}` on the definition: every completed occurrence
+  becomes an attention item (kind `notify`, title = the note, body = the occurrence's answer, else the note),
+  whatever the answer's own `notify` says. `notify.always`, `notify.title` and `notify.body` are ordinary
+  definition fields any automation may set;
 - approval: `policy.tool_approval: "ask"`; the caller's own `_runtime.tool_policy` is copied; a caller that read
   untrusted input (`_runtime.untrusted_input`) makes the wake untrusted (`untrusted_origin`: the occurrence gets
   the untrusted-input policy);
@@ -465,7 +471,7 @@ The runtime plans, the host creates: `Runtime.set_schedule_run_handler(handler)`
 usually calls `create_scheduled_run(runtime, plan, target=, tenant=, user=, workspace_root=, notify=None)`. The plan's
 `request_id` derives from the effect's idempotency key, so a replayed effect finds the same automation. Without a
 handler the effect fails (`no schedule_run handler`); an agent call gets a tool error. The effect's result is
-`{automation_id, session_id, mode, kind, at | on, allowed_tools, dropped_tools}` (tool-style for the builtin).
+`{automation_id, session_id, mode, kind, notify, at | on, allowed_tools, dropped_tools}` (tool-style for the builtin).
 
 The host appends to the user's event stream (helpers `wake_scheduled_event(plan, automation_id)` and
 `wake_cancelled_event(...)`):

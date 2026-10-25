@@ -945,6 +945,15 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
     email_result = "email" in delivery["channels"] and status == "completed"
     if status == "completed" and outcome is not None:
         notify = notify_payload(True if email_result else outcome.get("notify"), title=definition["title"], answer=outcome.get("answer") or "")
+        if notify is None and delivery.get("always"):
+            # `notify.always` (a note wake, backlog 1045): the occurrence reaches the person whatever
+            # it answered; title = the definition's notify title, body = the answer, else the note.
+            answer = str(outcome.get("answer") or "").strip()
+            notify = notify_payload(
+                {"title": delivery.get("title") or definition["title"], "body": answer or delivery.get("body") or ""},
+                title=definition["title"],
+                answer=answer,
+            )
         if notify is not None:
             seq += 1
             attention = {"kind": "notify", "seq": seq, **notify}

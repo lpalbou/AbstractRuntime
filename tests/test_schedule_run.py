@@ -224,3 +224,31 @@ def test_an_on_wake_fires_once_on_the_first_event(env, tmp_path):
         drive(runtime, automation_id)
     assert len(children(runtime, automation_id)) == 1  # one-shot: the second event runs nothing
     assert runtime.run_store.load(automation_id).status == RunStatus.COMPLETED
+
+
+def test_a_note_wake_reaches_the_person_a_task_wake_stays_quiet(env):
+    """Backlog 1045 follow-up: a note wake's definition carries notify (always, titled with the note), so its
+    answer becomes an attention item; a task wake does not unless the caller asks."""
+    from abstractruntime.automations import list_attention
+
+    runtime, host, clock = env
+    _, note_state = _call(runtime, {"after_s": 60, "note": "call the dentist"})
+    note_out = note_state.output["wake"]
+    assert note_out["notify"] is True
+    note_def = definition_of(runtime.run_store.load(note_out["automation_id"]))
+    assert note_def["notify"] == {"channels": ["console"], "always": True, "title": "call the dentist", "body": "call the dentist"}
+    _, task_state = _call(runtime, {"after_s": 60, "task": "tidy the notes", "tools": ["read_file"]})
+    task_def = definition_of(runtime.run_store.load(task_state.output["wake"]["automation_id"]))
+    assert task_state.output["wake"]["notify"] is False and "always" not in task_def["notify"]
+    _, asked = _call(runtime, {"after_s": 60, "task": "tidy", "tools": ["read_file"], "notify": True})
+    assert definition_of(runtime.run_store.load(asked.output["wake"]["automation_id"]))["notify"]["always"] is True
+    _, quiet = _call(runtime, {"after_s": 60, "note": "shh", "notify": False})
+    assert "always" not in definition_of(runtime.run_store.load(quiet.output["wake"]["automation_id"]))["notify"]
+    # Fired: the note wake raises one attention item (kind notify, title = the note, body = the answer).
+    _fire(runtime, clock, note_out["automation_id"], note_out["at"])
+    (item,) = list_attention(runtime.ledger_store, note_out["automation_id"])["items"]
+    (kid,) = children(runtime, note_out["automation_id"])
+    assert item["kind"] == "notify" and item["title"] == "call the dentist"
+    assert item["body"].startswith("echo:") and "call the dentist" in item["body"]
+    _fire(runtime, clock, task_state.output["wake"]["automation_id"], task_state.output["wake"]["at"])
+    assert list_attention(runtime.ledger_store, task_state.output["wake"]["automation_id"])["items"] == []

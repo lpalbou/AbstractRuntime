@@ -4218,6 +4218,7 @@ class Runtime:
             "session_id": plan.get("session_id"),
             "mode": plan["mode"],
             "kind": plan["kind"],
+            "notify": bool(plan.get("notify")),
             **plan["when"],
             "allowed_tools": list(plan["allowed_tools"]),
             "dropped_tools": list(plan["dropped_tools"]),

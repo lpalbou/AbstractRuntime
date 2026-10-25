@@ -28,7 +28,14 @@ from .actions import (
     render_email_template,
     validate_email_action,
 )
-from .automations import email_trigger_consumers, prune_email_inbox, wake_email_automations
+from .automations import (
+    automation_reads_stream,
+    email_trigger_consumers,
+    prune_email_inbox,
+    stream_consumers,
+    wake_email_automations,
+    wake_stream_consumers,
+)
 from .binding import (
     EMAIL_ACCOUNT_KEY,
     EMAIL_ALLOWED_RECIPIENTS_KEY,
@@ -51,6 +58,9 @@ from .inbox import AppendResult, EventInbox, EventInboxRetention, InMemoryEventI
 
 __all__ = [
     "AppendResult",
+    "automation_reads_stream",
+    "stream_consumers",
+    "wake_stream_consumers",
     "DIGEST_FIELDS",
     "EACH_FIELDS",
     "EMAIL_ACCOUNT_KEY",

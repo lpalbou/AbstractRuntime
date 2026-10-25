@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `wake_stream_consumers(runtime, stream)` / `stream_consumers(runtime, stream)` (`abstractruntime.email`, framework backlog 1042/1044): wake the automations that read ONE inbox stream, decided by their binding alone (`automation_reads_stream`): `trigger:<connection_id>` for a connection-bound binding, `email:<tenant>:<user>:<account_id>:<folder>` for an `email.received@1` binding of that mailbox (`config.account`; `self` or unset is the runtime's bound mailbox). `wake_email_automations(runtime, account_id=…)` and `email_trigger_consumers(runtime, account_id=…)` take an optional mailbox; `prune_email_inbox` also keeps the events a connection-bound automation has not read yet.
+
 - `MailboxQueryableRunStore` (backlog 1046): `list_mailbox_runs(names=[…])` returns every running or waiting run
   that declares one of the names as `events_mailbox`, and `next_wait_deadline()` the earliest wait deadline over
   every waiting run. The in-memory, file (a lazily built mailbox index maintained on save and delete, every hit

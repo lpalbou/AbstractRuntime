@@ -97,9 +97,9 @@ def test_email_sample_reads_100_messages_on_one_connection_in_a_few_batched_fetc
     elapsed = _time.monotonic() - started
     assert elapsed < 5.0, elapsed
     assert len(imap.logins) == 1  # ONE connection
-    assert len(imap.fetches) <= 4, imap.fetches  # headers + one per text section
+    # listing + headers + one per distinct text section (4 kinds of structure here): constant, not per message
+    assert len(imap.fetches) <= 8, imap.fetches
     assert all("BODY[" not in f.upper().replace("BODY.PEEK[", "") for f in imap.fetches)  # PEEK only
-    assert all(f"<0.{64 * 1024}>" in f for f in imap.fetches if "BODY.PEEK[HEADER]" not in f)  # capped text parts
     assert not any("\\Seen" in m.flags for m in imap.folders["INBOX"].messages)  # nothing marked read
     assert runtime.event_inbox.head_seq() == head_before
     msgs = resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["messages"]
@@ -107,10 +107,21 @@ def test_email_sample_reads_100_messages_on_one_connection_in_a_few_batched_fetc
     by = {m["subject"]: m for m in msgs}
     assert by["mail 129"]["body_text"] == "body of mail 129"
     assert by["mail 120"]["attachments"] and by["mail 120"]["attachments"][0]["name"] == "report.pdf"
-    big = by["mail 125"]["body_text"]
-    assert big.startswith("long line") and len(big) <= 64 * 1024  # capped, not the 300 KB body
+    assert by["mail 125"]["body_text"].startswith("long line") and len(by["mail 125"]["body_text"]) >= 299_000  # whole, never cut
     assert sample["truncated"] is False and sample["inputs"]["event"]["abstracttest"] is True
     assert resolved_sample_inputs(sample, artifact_store=runtime.artifact_store)["mailbox"] == ALICE_ADDR
+
+
+def test_a_body_over_the_cap_is_skipped_never_cut(tmp_path, ca, imap):
+    from abstractruntime.automations.samples import batched_newest_messages
+
+    _fill(imap, 3, big_uid=2)
+    details, more, _next, hit = batched_newest_messages(_context(tmp_path, ca, imap).client(), folder="INBOX", count=3,
+                                                        body_cap=10_000)
+    by = {d.summary.subject: d for d in details}
+    assert [d.summary.subject for d in details] == ["mail 3", "mail 2", "mail 1"] and not more and not hit
+    assert by["mail 2"].skipped and by["mail 2"].text == ""  # over the cap: a typed record, no cut text
+    assert by["mail 3"].text == "body of mail 3"
 
 
 def test_email_sample_applies_the_trigger_filters(env, tmp_path, ca, imap):

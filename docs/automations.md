@@ -474,7 +474,7 @@ exactly the named inputs above plus `event`, built from real data and read only:
 
 | Source | Sample |
 | --- | --- |
-| `email.received@1` | the newest `count` messages of the bound mailbox folder that pass the trigger's filters, read on one IMAP connection of the mailbox the runtime resolves (or the `email_context=` you pass): one search, one batched fetch of headers and structure, one batched fetch per text-part section, each text part capped at 64 KB (text/plain preferred), attachments listed but never downloaded; no cursor or inbox change, nothing marked read; at most 20 seconds of fetching (`truncated: true` with what it has); `messages` stored as an artifact and listed in `resolve_vars` |
+| `email.received@1` | the newest `count` messages of the bound mailbox folder that pass the trigger's filters, read on one IMAP connection of the mailbox the runtime resolves (or the `email_context=` you pass): a listing and AbstractCore's batched `get_many` (headers and structure in one fetch, one fetch per text-part section); a message whose text bodies exceed 1 MB comes with `body_skipped` instead of its bodies (never a cut body); attachments listed but never downloaded; no cursor or inbox change, nothing marked read; at most 20 seconds of fetching (`truncated: true` with what it has); `messages` stored as an artifact and listed in `resolve_vars` |
 | `feed.item@1` | the latest `count` items of the connection's feed, one fetch, no cursor change |
 | `webhook.received@1` | the last `count` calls stored for the connection; one documented sample call (`SAMPLE_WEBHOOK_CALL`) when none was received |
 | `schedule@1`, `schedule@2` | `scheduled_at` = now, `occurrence` = 0 |

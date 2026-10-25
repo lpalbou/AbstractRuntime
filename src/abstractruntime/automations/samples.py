@@ -12,11 +12,10 @@ controller's `build_prepared` gives a real occurrence of that trigger (see docs/
 
 - `email.received@1`: the newest `count` messages of the bound mailbox folder that pass the
   trigger's filters, read-only on ONE IMAP connection of the mailbox's own client
-  (`batched_newest_messages`): one UID SEARCH, one batched FETCH of headers and structure, then
-  one batched FETCH per distinct text-part section, each text part capped at
-  `EMAIL_SAMPLE_BODY_CAP` (64 KB, text/plain preferred, else text/html); attachments are listed
-  from the structure, never downloaded; `BODY.PEEK` only (nothing is marked read), no cursor or
-  inbox change. The fetch stops after `EMAIL_SAMPLE_BUDGET_S` (20 s) with what it has
+  (`batched_newest_messages`: AbstractCore's `EmailClient.session()` + `search` + `get_many`,
+  batched fetches); a message whose text bodies exceed `EMAIL_SAMPLE_BODY_CAP` (1 MB) comes with
+  `body_skipped` instead of its bodies; attachments are listed, never downloaded; nothing is
+  marked read, no cursor or inbox change. The fetch stops after `EMAIL_SAMPLE_BUDGET_S` (20 s) with what it has
   (`truncated: true`). `messages` is stored as an artifact like a real occurrence's, and listed
   in `resolve_vars`;
 - `feed.item@1`: the latest `count` items of the connection's feed, one fetch, no cursor change;
@@ -49,8 +48,10 @@ from ..triggers.registry import get_trigger_adapter
 DEFAULT_SAMPLE_COUNT = 100
 MAX_SAMPLE_COUNT = 1000
 EMAIL_SAMPLE_BUDGET_S = 20.0
-EMAIL_SAMPLE_BODY_CAP = 64 * 1024
-EMAIL_SAMPLE_BATCH = 100  # messages per batched FETCH
+# Reading limit of a sampled message's text bodies: over it, the body is skipped with a typed record
+# (never cut, ADR-0026). Normal mail is far below; the cap bounds a test's transfer.
+EMAIL_SAMPLE_BODY_CAP = 1024 * 1024
+EMAIL_SAMPLE_BATCH = 100  # messages read per round when the trigger has filters
 # The call a webhook connection that never received one is tested with.
 SAMPLE_WEBHOOK_CALL: Dict[str, Any] = {
     "webhook_id": "sample",
@@ -166,90 +167,29 @@ def batched_newest_messages(
     body_cap: int = EMAIL_SAMPLE_BODY_CAP,
 ) -> tuple:
     """The newest `count` messages of `folder` (UID < `before_uid` when given), newest first, as
-    AbstractCore `MessageDetail`s, read on ONE connection of AbstractCore's mail client:
-
-    1. `UID SEARCH ALL` (one command);
-    2. one `UID FETCH` of `UID FLAGS RFC822.SIZE INTERNALDATE BODYSTRUCTURE BODY.PEEK[HEADER]` for
-       up to `EMAIL_SAMPLE_BATCH` uids;
-    3. per distinct text-part section among them (text/plain preferred, else text/html; usually
-       one or two), one `UID FETCH ... BODY.PEEK[<section>]<0.body_cap>`.
-
-    Attachments are listed from BODYSTRUCTURE (never downloaded); a text part longer than
-    `body_cap` is cut there (`body_truncated` in the detail's skipped record is not used: the
-    text simply ends). Every fetch is a PEEK on a read-only EXAMINE: nothing is marked read.
-    Uses the client's connection helpers (`_imap`, `_examine`, `_uid_search`, `_fetch`,
-    `_summary`): AbstractCore >= 2.26. Returns `(details, more, next_before_uid, hit_deadline)`.
-    """
-    from ..integrations.abstractcore.email_facade import AttachmentInfo, MessageDetail
-    from abstractcore.comms.email.bodystructure import attachment_parts, body_parts, decode_text, parse_bodystructure
-
-    header_items = "(UID FLAGS RFC822.SIZE INTERNALDATE BODYSTRUCTURE BODY.PEEK[HEADER])"
+    AbstractCore `MessageDetail`s, read on ONE connection (`EmailClient.session()`):
+    `search(limit=count)` lists the newest UIDs, then `get_many(uids, max_message_bytes=body_cap)`
+    reads them in batched fetches (headers + structure per 100 UIDs, one PEEK fetch per text
+    section). A message whose text bodies exceed `body_cap` arrives with its headers, attachment
+    list and a typed `body_skipped` record, never a cut body. Attachments are listed, never
+    downloaded. Read-only (EXAMINE, PEEK): nothing is marked read. Needs AbstractCore >= 2.27.0.
+    Returns `(details, more, next_before_uid, hit_deadline)`."""
     details: List[Any] = []
-    hit_deadline = False
-    with client._imap() as conn:
-        state = client._examine(conn, folder)
-        uids = client._uid_search(conn, ["ALL"])
-        if before_uid is not None:
-            uids = [u for u in uids if u < int(before_uid)]
-        uids.sort(reverse=True)
-        wanted = uids[: max(0, int(count))]
-        more = len(uids) > len(wanted)
-        for start in range(0, len(wanted), EMAIL_SAMPLE_BATCH):
-            if deadline is not None and time.monotonic() > deadline:
-                hit_deadline = True
-                wanted = wanted[:start]
-                break
-            batch = wanted[start : start + EMAIL_SAMPLE_BATCH]
-            attrs = client._fetch(conn, batch, header_items)
-            roots: Dict[int, Any] = {}
-            by_section: Dict[str, List[Any]] = {}
-            for uid in batch:
-                a = attrs.get(uid)
-                if not a:
-                    continue
-                try:
-                    root = parse_bodystructure(a["BODYSTRUCTURE"]) if isinstance(a.get("BODYSTRUCTURE"), list) else None
-                except (ValueError, TypeError, IndexError):
-                    root = None
-                roots[uid] = root
-                parts = body_parts(root) if root is not None else []
-                chosen = next((p for p in parts if p.content_type == "text/plain"), None) or (parts[0] if parts else None)
-                if chosen is not None:
-                    by_section.setdefault(chosen.section, []).append((uid, chosen))
-            texts: Dict[int, tuple] = {}
-            for section, members in by_section.items():
-                got = client._fetch(conn, [u for u, _ in members], f"(UID BODY.PEEK[{section}]<0.{int(body_cap)}>)")
-                for uid, part in members:
-                    raw = b""
-                    for key, value in (got.get(uid) or {}).items():
-                        if key.upper().startswith(f"BODY[{section.upper()}]"):
-                            raw = bytes(value) if isinstance(value, (bytes, bytearray)) else str(value).encode("utf-8", "replace")
-                            break
-                    raw = raw[: int(body_cap)]  # also when a server ignores the partial range
-                    if part.encoding.strip().lower() == "base64":
-                        raw = b"".join(raw.split())
-                        raw = raw[: len(raw) - len(raw) % 4]
-                    texts[uid] = (part.content_type, decode_text(raw, part).strip("\r\n"))
-            for uid in batch:
-                a = attrs.get(uid)
-                if not a:
-                    continue
-                header = client._body_of(a)
-                summary = client._summary(uid, a, state["folder"], state["uidvalidity"], header=header, root=roots.get(uid))
-                kind, text = texts.get(uid, ("", ""))
-                root = roots.get(uid)
-                infos = tuple(
-                    AttachmentInfo(index=idx, filename=p.filename, content_type=p.content_type, size=p.size,
-                                   disposition=p.disposition, content_id=p.content_id, encoding=p.encoding)
-                    for idx, p in enumerate(attachment_parts(root) if root is not None else [])
-                )
-                details.append(MessageDetail(
-                    summary=summary, reply_to=summary.reply_to, in_reply_to=summary.in_reply_to, references=(),
-                    text=text if kind == "text/plain" else "", html=text if kind == "text/html" else "",
-                    attachments=infos,
-                ))
-    next_before = wanted[-1] if (more and wanted) else None
-    return details, bool(more or hit_deadline), next_before, hit_deadline
+    with client.session():
+        if deadline is not None and time.monotonic() > deadline:
+            return details, True, before_uid, True
+        page = client.search(folder=folder, limit=max(1, int(count)), before_uid=before_uid)
+        uids = [int(m.uid) for m in page.get("messages") or []]
+        more = bool(page.get("has_more"))
+        next_before = page.get("next_before_uid") if more else None
+        if deadline is not None and time.monotonic() > deadline:
+            return details, True, before_uid, True
+        got = client.get_many(uids, folder=folder, max_message_bytes=int(body_cap)) if uids else {}
+        for uid in uids:  # newest first
+            detail = got.get(uid)
+            if detail is not None and not isinstance(detail, Exception):
+                details.append(detail)
+    return details, more, next_before, False
 
 
 def sample_occurrence_inputs(

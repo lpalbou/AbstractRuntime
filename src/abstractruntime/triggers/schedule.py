@@ -406,6 +406,11 @@ class ScheduleTriggerAdapter:
         }
         return admission
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """Named occurrence inputs (the Flow contract): `scheduled_at` (ISO) and `occurrence` (int)."""
+        return {"scheduled_at": str(payload.get("scheduled_at") or ""), "occurrence": int(index)}
+
     @staticmethod
     def _rule(config: Mapping[str, Any]) -> Dict[str, Any]:
         """The schedule's rule, as data: `kind` plus its rule fields (`every`, `at`, `days`, `day`,

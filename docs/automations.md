@@ -435,6 +435,36 @@ The occurrence also receives the envelope as structured data, `input_data.event`
   CloudEvents attributes beside them for this release. `to_cloudevent` also reads envelopes recorded before, and
   `from_cloudevent` is its inverse. `CLOUDEVENT_JSON_SCHEMA` is the CloudEvents 1.0 JSON format as a JSON schema.
 
+### Occurrence inputs and outputs (the flow contract)
+
+An automation's target flow receives its trigger's data as flat, named inputs (its start pins), beside
+`input_data.event` (the CloudEvents envelope) and the `prompt`. The names depend on the source that admitted the
+occurrence:
+
+| Source | Named inputs | Shape |
+| --- | --- | --- |
+| `schedule@1`, `schedule@2` | `scheduled_at`, `occurrence` | `scheduled_at`: the tick's ISO 8601 time; `occurrence`: the occurrence number (1, 2, ...) |
+| `manual@1` (any automation's run now) | none | |
+| `email.received@1` | `messages`, `mailbox` | `messages`: list of `{id, from, to, subject, date, body_text, attachments: [{name, size, artifact, index}]}` (`id` is the Message-ID; `artifact` is null, read an attachment with `get_email_attachment` and its `index`); `mailbox`: the mailbox's address, or its id when the host bound it without one |
+| `feed.item@1` | `items`, `feed` | `items`: list of `{id, title, link, published, summary, author}`; `feed`: `{title, url}` |
+| `webhook.received@1` | `calls` | list of `{id, received_at, headers, body}`: `id` is the `webhook-id`, `received_at` its signed timestamp (ISO), `headers` the call's headers in lower case without the signature and credentials, `body` the parsed JSON (or the text of a non-JSON body) |
+
+The named inputs are set over target inputs of the same name. A third-party source adds named inputs by implementing
+`occurrence_inputs(*, payload, inputs, index, mailbox)` on its adapter. `messages` (mail written by other people) is
+stored as an artifact and resolved only in the occurrence, like `input_data.trigger.emails`; the earlier keys
+`input_data.trigger.emails` and `input_data.event.data.messages` are kept for one release.
+
+The flow's end outputs the controller reads:
+
+| Output | Type | Meaning |
+| --- | --- | --- |
+| `response` | string | The occurrence's result, shown as the run's answer (`answer` is read when `response` is absent) |
+| `success` | boolean | `false` marks the occurrence failed (retried per `policy.retry`, then a `failure` attention item) |
+| `notify` | `{title, body}` or `true` | Optional: raises a `notify` attention item (`true` uses the automation title and the response) |
+
+When the end outputs sit under a `result` object (and none of `response`, `answer`, `notify` is at the top), they are
+read from `result`.
+
 Run ids are deterministic:
 
 | Occurrence | Run id |

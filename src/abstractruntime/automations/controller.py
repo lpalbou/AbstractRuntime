@@ -681,6 +681,10 @@ def build_prepared(
     input_data["_meta"] = meta_ns
     # Backlog 1039: the envelope as structured input (CloudEvents form), beside the prompt header.
     input_data["event"] = to_cloudevent(envelope)
+    # The Flow contract: the trigger's data as flat, named inputs (per source; see
+    # docs/automations.md "Occurrence inputs and outputs"). Message bodies stay artifacts.
+    resolve_vars = _apply_named_inputs(turn, input_data, envelope, inputs=inputs, index=index,
+                                       binding=occurrence_binding, trigger=trigger_binding, resolve_vars=resolve_vars)
     prepared = {
         "workflow_id": definition["target"]["workflow_id"],
         "session_id": session_id,
@@ -690,6 +694,45 @@ def build_prepared(
     if resolve_vars:
         prepared[PREPARED_RESOLVE_VARS] = resolve_vars
     return prepared
+
+
+NAMED_INPUT_ARTIFACT_KEYS = ("messages",)  # hold text written by other people: stored as artifacts
+
+
+def _apply_named_inputs(turn: Turn, input_data: Dict[str, Any], envelope: Dict[str, Any], *, inputs: Optional[Dict[str, Any]],
+                        index: int, binding: Any, trigger: Dict[str, Any], resolve_vars: list) -> list:
+    """SET the source's named inputs (`adapter.occurrence_inputs`) on the occurrence's inputs.
+
+    The envelope's own source decides (a run-now of any automation is `manual@1`: nothing extra). A
+    source without `occurrence_inputs` (a third-party one) adds nothing. `messages` (mail bodies)
+    is stored as an artifact like `input_data.trigger.emails`: the controller's records keep a ref
+    and only the occurrence resolves it."""
+    try:
+        adapter = get_trigger_adapter(envelope["source_id"], envelope["source_version"])
+    except Exception:  # noqa: BLE001 - an unknown source never reaches admission
+        return resolve_vars
+    build = getattr(adapter, "occurrence_inputs", None)
+    if not callable(build):
+        return resolve_vars
+    mailbox = None
+    if binding is not None:
+        from ..email.binding import account_id_of_ref
+
+        mailbox = str(getattr(binding, "address", "") or "") or account_id_of_ref(getattr(binding, "account_ref", None))
+    elif envelope["source_id"] == "email.received":
+        mailbox = str((trigger.get("config") or {}).get("account") or "self")
+    named = dict(build(payload=envelope.get("payload") or {}, inputs=inputs or {}, index=int(index), mailbox=mailbox) or {})
+    for key in NAMED_INPUT_ARTIFACT_KEYS:
+        if key in named:
+            from ..storage.artifacts import artifact_ref
+
+            if turn.artifact_store is None:
+                raise ControllerSeamError("named inputs holding inbound text need the runtime's artifact store")
+            meta = turn.artifact_store.store_json(named[key], run_id=turn.automation_id, tags=dict(EMAIL_ARTIFACT_TAGS))
+            named[key] = artifact_ref(meta.artifact_id)
+            resolve_vars = [*resolve_vars, key] if key not in resolve_vars else resolve_vars
+    input_data.update(named)
+    return resolve_vars
 
 
 def _frame_connection_events(input_data: Dict[str, Any], binding: Dict[str, Any], envelope: Dict[str, Any]) -> None:

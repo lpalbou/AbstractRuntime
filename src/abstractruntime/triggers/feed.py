@@ -132,6 +132,18 @@ class FeedItemTriggerAdapter(ConnectionEventAdapter):
         },
     }
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """Named occurrence inputs (the Flow contract): `items` (each `{id, title, link, published,
+        summary, author}`) and `feed` (`{title, url}`, from the items; null fields for a test event)."""
+        items, feed = [], {"title": None, "url": None}
+        for ev in payload.get("events") or []:
+            data = ev.get("data") if isinstance(ev, Mapping) and isinstance(ev.get("data"), Mapping) else {}
+            items.append({k: data.get(k) for k in ("id", "title", "link", "published", "summary", "author")})
+            if isinstance(data.get("feed"), Mapping) and feed["url"] is None:
+                feed = {"title": data["feed"].get("title"), "url": data["feed"].get("url")}
+        return {"items": items, "feed": feed}
+
     def validate_connection(self, config: Mapping[str, Any], *, now: str) -> Dict[str, Any]:
         unknown = sorted(k for k in config if k not in ("url", "every", "max_items", "initial_items"))
         if unknown:

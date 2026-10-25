@@ -472,6 +472,35 @@ class EmailReceivedTriggerAdapter:
             "source_state": src,
         }
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """Named occurrence inputs (the Flow contract): `messages` and `mailbox`.
+
+        `messages[i] = {id, from, to, subject, date, body_text, attachments: [{name, size, artifact}]}`
+        from the whole messages of the admission (`inputs.emails`); `artifact` is null (an
+        attachment is read on demand with `get_email_attachment`, by `index`). `mailbox` is the
+        mailbox's address when the host bound it, else its id."""
+        emails = (inputs or {}).get("emails")
+        messages = []
+        for e in emails if isinstance(emails, list) else []:
+            if not isinstance(e, Mapping):
+                continue
+            attachments = []
+            for a in e.get("attachments") or []:
+                if isinstance(a, Mapping):
+                    attachments.append({"name": a.get("filename") or a.get("name"), "size": a.get("size"),
+                                        "artifact": a.get("artifact"), "index": a.get("index")})
+            messages.append({
+                "id": e.get("message_id"),
+                "from": e.get("from"),
+                "to": e.get("to"),
+                "subject": e.get("subject"),
+                "date": e.get("date"),
+                "body_text": e.get("body_text"),
+                "attachments": attachments,
+            })
+        return {"messages": messages, "mailbox": mailbox}
+
     def normalize(self, binding: TriggerBinding, *, event_id: str, fired_at: str, payload: Mapping[str, Any]) -> TriggerEnvelope:
         envelope: Dict[str, Any] = {
             "event_id": str(event_id),

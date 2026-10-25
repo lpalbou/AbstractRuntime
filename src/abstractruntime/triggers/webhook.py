@@ -102,6 +102,24 @@ class WebhookReceivedTriggerAdapter(ConnectionEventAdapter):
         },
     }
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """Named occurrence inputs (the Flow contract): `calls`, each `{id, received_at, headers, body}`
+        (`body`: the parsed JSON, or the text of a non-JSON body)."""
+        calls = []
+        for ev in payload.get("events") or []:
+            if not isinstance(ev, Mapping):
+                continue
+            data = ev.get("data") if isinstance(ev.get("data"), Mapping) else {}
+            is_call = "webhook_id" in data
+            calls.append({
+                "id": data.get("webhook_id") if is_call else ev.get("subject"),
+                "received_at": ev.get("time"),
+                "headers": dict(data.get("headers") or {}) if is_call else {},
+                "body": (data.get("body") if "body" in data else data.get("body_text")) if is_call else dict(data),
+            })
+        return {"calls": calls}
+
     def validate_connection(self, config: Mapping[str, Any], *, now: str) -> Dict[str, Any]:
         unknown = sorted(k for k in config if k not in ("subject_path", "tolerance_s", "secret"))
         if unknown:
@@ -206,6 +224,16 @@ def _subject_from(body_value: Any, path: Optional[str]) -> Optional[str]:
     return str(cur) if isinstance(cur, (str, int, float)) and not isinstance(cur, bool) and str(cur) else None
 
 
+# Never kept with a stored call: the signature and credentials a caller may send.
+WITHHELD_HEADERS = frozenset({"webhook-signature", "authorization", "proxy-authorization", "cookie"})
+
+
+def public_headers(headers: Mapping[str, Any]) -> Dict[str, str]:
+    """The call's headers as stored (lower-case names), without `WITHHELD_HEADERS`."""
+    items = headers.items() if hasattr(headers, "items") else []
+    return {str(k).lower(): str(v) for k, v in items if str(k).lower() not in WITHHELD_HEADERS}
+
+
 def webhook_event_data(webhook_id: str, body: bytes, content_type: Optional[str]) -> Dict[str, Any]:
     """`{webhook_id, content_type, body}` (JSON) or `{..., body_text}` (UTF-8 text); ValueError otherwise."""
     ctype = (content_type or "").split(";", 1)[0].strip().lower()
@@ -278,6 +306,7 @@ def append_webhook_event(
         data = webhook_event_data(str(verdict.webhook_id), body, _header(headers, "content-type"))
     except ValueError:
         return refused(415, "unsupported_body", verdict.webhook_id)
+    data["headers"] = public_headers(headers)
     subject = _subject_from(data.get("body"), connection.config.get("subject_path")) or str(verdict.webhook_id)
     event_time = format_timestamp(datetime.fromtimestamp(int(verdict.timestamp or 0), timezone.utc))
     digest = hashlib.sha256(str(verdict.webhook_id).encode("utf-8")).hexdigest()[:32]

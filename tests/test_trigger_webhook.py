@@ -112,7 +112,9 @@ def test_append_once_and_refuse_replays_stale_and_tampered(store):
     (event,) = inbox.read(stream=conn.stream)
     payload = event["payload"]
     assert payload["data"] == {"webhook_id": "msg_1", "content_type": "application/json",
-                               "body": {"repository": {"name": "abstractruntime"}, "ref": "main"}}
+                               "body": {"repository": {"name": "abstractruntime"}, "ref": "main"},
+                               # stored lower-cased, never the signature
+                               "headers": {"webhook-id": "msg_1", "webhook-timestamp": str(NOW), "content-type": "application/json"}}
     assert (payload["subject"], payload["dedupekey"], payload["abstracttrust"], payload["time"]) == (
         "abstractruntime", "msg_1", "untrusted", "2026-01-01T00:00:00+00:00")
     replay = append_webhook_event(inbox, conn, body, _headers(secret, body), store=store, now=NOW + 2)

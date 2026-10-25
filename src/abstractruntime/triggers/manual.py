@@ -68,6 +68,11 @@ class ManualTriggerAdapter:
             "exhausted": False,
         }
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """A manual run brings no trigger data (the Flow contract: nothing extra)."""
+        return {}
+
     def normalize(
         self,
         binding: TriggerBinding,

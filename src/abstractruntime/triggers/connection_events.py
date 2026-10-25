@@ -89,6 +89,11 @@ class ConnectionEventAdapter:
             },
         }
 
+    def occurrence_inputs(self, *, payload: Mapping[str, Any], inputs: Optional[Mapping[str, Any]] = None,
+                          index: int, mailbox: Optional[str] = None) -> Dict[str, Any]:
+        """Named occurrence inputs; each source defines its own (base: none)."""
+        return {}
+
     # --- binding validation -----------------------------------------------------------------
 
     def validate(self, config: Mapping[str, Any], *, now: str) -> Dict[str, Any]:

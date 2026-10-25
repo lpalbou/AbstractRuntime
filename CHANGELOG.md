@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Named occurrence inputs for flows**: an automation's occurrence receives its trigger's data as flat, named inputs beside `input_data.event`: `scheduled_at` and `occurrence` (schedules), `messages` and `mailbox` (`email.received@1`; `messages` stored as an artifact like the mail bodies), `items` and `feed` (`feed.item@1`), `calls` (`webhook.received@1`); a manual run adds none. Adapters implement `occurrence_inputs(...)`. A stored webhook call now keeps its headers (lower-cased, without the signature and credentials). The input and output contract (`response`, `success`, `notify`) is documented in [Occurrence inputs and outputs](docs/automations.md#occurrence-inputs-and-outputs-the-flow-contract).
+
 ### Changed
 
 - **Feed connections are polled only while something listens.** `TriggerConnection` gains `paused` (default false) and `always_listen` (default false), set through `TriggerConnectionStore.create(...)` / `update(...)`; `status` keeps its meaning. `connection_usage(runtime, connection)` derives `{listening: "paused" | "listening" | "idle", used_by: <active automations reading the stream>}`, and `connection.to_dict(usage=...)` adds both fields. `poll_feed_connections` fetches only listening feed connections (an idle one is not fetched and stores nothing; its first poll after an automation binds again is a baseline) and its reports carry `listening` and `used_by`. `append_webhook_event` refuses a paused connection like a disabled one (409 `connection_disabled`); an idle webhook connection still accepts and stores calls (its `runtime=` argument is accepted and unused). See [Trigger connections](docs/automations.md#trigger-connections).

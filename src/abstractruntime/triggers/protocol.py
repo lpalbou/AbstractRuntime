@@ -62,15 +62,40 @@ class TriggerBinding(TypedDict):
     config: Dict[str, Any]
 
 
-class TriggerEnvelope(TypedDict):
-    """The normalized event an occurrence was admitted for."""
-
+class _TriggerEnvelopeBase(TypedDict):
     event_id: str
     source_id: str
     source_version: int
     fired_at: str
     payload: Dict[str, Any]
     binding_id: str
+
+
+class TriggerEnvelope(_TriggerEnvelopeBase, total=False):
+    """The normalized event an occurrence was admitted for.
+
+    Framework backlog 1039: the CloudEvents 1.0 attributes and extensions are carried additively
+    beside the original keys (`triggers.cloudevents`; `to_cloudevent` gives the structured event
+    with `data` = `payload`). Envelopes recorded before 1039 carry only the original keys.
+    """
+
+    specversion: str
+    id: str
+    type: str
+    source: str
+    time: str
+    subject: str
+    datacontenttype: str
+    dataschema: str
+    bindingid: str
+    connectionid: str
+    correlationid: str
+    dedupekey: str
+    sequence: int
+    recordedtime: str
+    expirytime: str
+    traceparent: str
+    abstracttrust: str
 
 
 class _TriggerStateBase(TypedDict):

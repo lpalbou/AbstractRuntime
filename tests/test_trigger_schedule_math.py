@@ -72,7 +72,12 @@ def test_not_due_is_none_stale_wake():
     st = _state(b)
     assert A.admit(b, state=st, now="2026-01-01T00:59:59+00:00") is None
     adm = A.admit(b, state=st, now="2026-01-01T01:00:00+00:00")
-    assert adm is not None and adm["payload"] == {"tick": 0, "scheduled_at": "2026-01-01T01:00:00+00:00"}
+    assert adm is not None
+    assert {k: adm["payload"][k] for k in ("tick", "scheduled_at")} == {"tick": 0, "scheduled_at": "2026-01-01T01:00:00+00:00"}
+    assert adm["payload"]["series"] == {  # backlog 1039: data.series beside the original keys
+        "rule": {"kind": "every", "every": "5m"}, "occurrence": 1, "scheduled_at": "2026-01-01T01:00:00+00:00",
+        "next_at": "2026-01-01T01:05:00+00:00", "coalesced": None,
+    }
     # A second wake right after admission finds nothing due.
     assert A.admit(b, state=adm["state"], now="2026-01-01T01:00:01+00:00") is None
 
@@ -85,8 +90,11 @@ def test_missed_ticks_coalesce_into_one_admission():
     assert adm["event_id"] == "schedule@1:b-1:3"
     assert adm["fired_at"] == "2026-01-01T00:15:00+00:00"
     assert adm["coalesced"] == {"first_tick": 0, "last_tick": 3, "missed_count": 3}
+    series = adm["payload"].pop("series")
     assert adm["payload"] == {"tick": 3, "scheduled_at": "2026-01-01T00:15:00+00:00",
                               "coalesced": {"first_tick": 0, "last_tick": 3, "missed_count": 3}}
+    assert series["coalesced"] == {"first_tick": 0, "last_tick": 3, "missed_count": 3}
+    assert series["next_at"] == "2026-01-01T00:20:00+00:00" and series["occurrence"] == 1
     assert adm["state"]["tick"] == 4
     assert adm["state"]["scheduled_count"] == 1  # one coalesced firing counts once
     assert A.prepare(b, state=adm["state"], now="2026-01-01T00:17:00+00:00")["until"] == "2026-01-01T00:20:00+00:00"
@@ -175,8 +183,12 @@ def test_new_binding_id_gives_new_event_ids():
 def test_normalize_envelope():
     b = _binding({"every": "5m"})
     env = A.normalize(b, event_id="e", fired_at=T0, payload={"tick": 0, "scheduled_at": T0})
-    assert env == {"event_id": "e", "source_id": "schedule", "source_version": 1,
-                   "fired_at": T0, "payload": {"tick": 0, "scheduled_at": T0}, "binding_id": "b-1"}
+    original = {k: env[k] for k in ("event_id", "source_id", "source_version", "fired_at", "payload", "binding_id")}
+    assert original == {"event_id": "e", "source_id": "schedule", "source_version": 1,
+                        "fired_at": T0, "payload": {"tick": 0, "scheduled_at": T0}, "binding_id": "b-1"}
+    # Backlog 1039: the CloudEvents attributes ride beside the original keys.
+    assert (env["specversion"], env["id"], env["type"], env["time"], env["subject"], env["dedupekey"], env["abstracttrust"]) == (
+        "1.0", "e", "abstract.schedule.v1", T0, "tick:0", "e", "trusted")
 
 
 EDITOR_SCHEMA_KEYWORDS = {"type", "enum", "pattern", "format", "minimum", "maximum", "required",
@@ -204,4 +216,4 @@ def test_descriptor_schemas_stay_in_the_editor_subset(adapter_cls):
     if adapter_cls == "schedule":
         every = A.descriptor["config_schema"]["properties"]["every"]
         assert every["format"] == "duration" and every["pattern"] == "^[1-9][0-9]*[smhd]$"
-        assert set(A.descriptor["event_schema"]["properties"]) == {"tick", "scheduled_at", "coalesced"}
+        assert set(A.descriptor["event_schema"]["properties"]) == {"tick", "scheduled_at", "coalesced", "series"}

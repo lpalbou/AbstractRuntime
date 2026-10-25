@@ -339,6 +339,33 @@ When the target's `input_data.prompt` is a string, it is prefixed on its own lin
 `[Trigger schedule@1 · occurrence 3 · fired 2026-10-01T08:06:00+00:00]`, and the result is the occurrence's user
 turn.
 
+The occurrence also receives the envelope as structured data, `input_data.event`, a CloudEvents 1.0 event
+(`abstractruntime.triggers.cloudevents.to_cloudevent`, framework backlog 1039):
+
+```json
+{"specversion": "1.0", "id": "schedule@2:<binding_id>:4", "type": "abstract.schedule.v2",
+ "source": "abstract://triggers/schedule/bindings/<binding_id>", "time": "2026-10-01T08:00:00+00:00",
+ "subject": "tick:4", "datacontenttype": "application/json",
+ "bindingid": "<binding_id>", "dedupekey": "schedule@2:<binding_id>:4", "recordedtime": "...", "abstracttrust": "trusted",
+ "data": {"tick": 4, "scheduled_at": "...",
+          "series": {"rule": {"kind": "daily", "at": "08:00", "time_zone": "Europe/Paris"}, "occurrence": 5,
+                     "scheduled_at": "...", "next_at": "...", "coalesced": null}}}
+```
+
+- `type` is `abstract.<source_id>.v<version>`; `source` is the connection (`abstract://triggers/connections/<id>`),
+  the mailbox (`abstract://email/accounts/<account>/<folder>`) or the binding.
+- `subject`: the tick (`tick:<n>`), the command (`command:<id>`), the Message-ID or the feed item / webhook id of a
+  single event, `batch:<first_seq>-<last_seq>` for a batch. `dedupekey` is the admission's event id, `sequence` the
+  last inbox sequence number of an inbox source, `connectionid` the connection, `abstracttrust` `untrusted` for text
+  written by other people (`email.received@1`, feeds, webhooks) and `trusted` otherwise (a console test-fire too).
+  `correlationid`, `expirytime`, `traceparent` and `dataschema` are reserved and set only when a source has them.
+- `data` is the envelope's payload. Schedules add `data.series` (`rule`, `occurrence`, `scheduled_at`, `next_at`,
+  `coalesced`; `null` when there is none) beside `tick`, `scheduled_at` and `coalesced`.
+- The recorded envelope (`automation.admitted.trigger_envelope`, `_meta.occurrence.trigger_envelope`) keeps its
+  original keys (`event_id`, `source_id`, `source_version`, `fired_at`, `payload`, `binding_id`) and carries the
+  CloudEvents attributes beside them for this release. `to_cloudevent` also reads envelopes recorded before, and
+  `from_cloudevent` is its inverse. `CLOUDEVENT_JSON_SCHEMA` is the CloudEvents 1.0 JSON format as a JSON schema.
+
 Run ids are deterministic:
 
 | Occurrence | Run id |

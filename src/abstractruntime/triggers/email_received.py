@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import getaddresses
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from .cloudevents import with_cloudevent_attributes
 from .protocol import (
     TriggerAdmission,
     TriggerBinding,
@@ -438,7 +439,7 @@ class EmailReceivedTriggerAdapter:
         }
 
     def normalize(self, binding: TriggerBinding, *, event_id: str, fired_at: str, payload: Mapping[str, Any]) -> TriggerEnvelope:
-        return {
+        envelope: Dict[str, Any] = {
             "event_id": str(event_id),
             "source_id": SOURCE_ID,
             "source_version": SOURCE_VERSION,
@@ -446,6 +447,19 @@ class EmailReceivedTriggerAdapter:
             "payload": dict(payload),
             "binding_id": str(binding["binding_id"]),
         }
+        # Framework backlog 1039: one message -> its Message-ID; a batch -> its inbox range.
+        messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+        message_id = messages[0].get("message_id") if len(messages) == 1 and isinstance(messages[0], Mapping) else None
+        subject = str(message_id) if message_id else f"batch:{payload.get('first_seq')}-{payload.get('last_seq')}"
+        account = str((binding.get("config") or {}).get("account") or "self")
+        return with_cloudevent_attributes(  # type: ignore[return-value]
+            envelope,
+            subject=subject,
+            dedupekey=str(event_id),
+            trust="untrusted",
+            source=f"abstract://email/accounts/{account}/{(binding.get('config') or {}).get('folder') or 'INBOX'}",
+            sequence=payload.get("last_seq") if isinstance(payload.get("last_seq"), int) else None,
+        )
 
 
 __all__ = [

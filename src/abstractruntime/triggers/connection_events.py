@@ -22,7 +22,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .connections import check_connection_id
+from .cloudevents import with_cloudevent_attributes
+from .connections import check_connection_id, connection_source_uri
 from .protocol import (
     TriggerAdmission,
     TriggerBinding,
@@ -198,7 +199,7 @@ class ConnectionEventAdapter:
         }
 
     def normalize(self, binding: TriggerBinding, *, event_id: str, fired_at: str, payload: Mapping[str, Any]) -> TriggerEnvelope:
-        return {
+        envelope: Dict[str, Any] = {
             "event_id": str(event_id),
             "source_id": self.source_id,
             "source_version": self.source_version,
@@ -206,6 +207,21 @@ class ConnectionEventAdapter:
             "payload": dict(payload),
             "binding_id": str(binding["binding_id"]),
         }
+        # Framework backlog 1039: one event -> its own subject (feed item id, webhook id); a batch
+        # -> its inbox range. The connection is the CloudEvents `source`.
+        events = payload.get("events") if isinstance(payload.get("events"), list) else []
+        single = events[0] if len(events) == 1 and isinstance(events[0], Mapping) else None
+        subject = str(single.get("subject")) if single and single.get("subject") else f"batch:{payload.get('first_seq')}-{payload.get('last_seq')}"
+        cid = str(payload.get("connection_id") or (binding.get("config") or {}).get("connection_id") or "")
+        return with_cloudevent_attributes(  # type: ignore[return-value]
+            envelope,
+            subject=subject,
+            dedupekey=str(event_id),
+            trust="trusted" if payload.get("content_trust") == "trusted" else "untrusted",
+            source=connection_source_uri(cid) if cid else None,
+            connectionid=cid or None,
+            sequence=payload.get("last_seq") if isinstance(payload.get("last_seq"), int) else None,
+        )
 
 
 __all__ = ["ConnectionEventAdapter", "DEFAULT_MAX_BATCH", "MAX_BATCH"]

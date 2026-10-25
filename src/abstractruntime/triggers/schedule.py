@@ -43,11 +43,13 @@ Config `{kind, at?, days?, day?, time_zone?, start_at?, every?, until?, count?}`
 from __future__ import annotations
 
 import calendar
+import copy
 import functools
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from .cloudevents import with_cloudevent_attributes
 from .protocol import (
     TriggerAdmission,
     TriggerBinding,
@@ -234,6 +236,17 @@ class ScheduleTriggerAdapter:
                         "missed_count": {"type": "integer", "minimum": 1},
                     },
                 },
+                # Framework backlog 1039: next_at / coalesced are null when there is none.
+                "series": {
+                    "type": "object",
+                    "properties": {
+                        "rule": {"type": "object"},
+                        "occurrence": {"type": "integer", "minimum": 1},
+                        "scheduled_at": {"type": "string", "format": "date-time"},
+                        "next_at": {"type": "string", "format": "date-time"},
+                        "coalesced": {"type": "object"},
+                    },
+                },
             },
         },
         "capabilities": {"kind": "time"},
@@ -386,11 +399,32 @@ class ScheduleTriggerAdapter:
             "payload": {"tick": fired, "scheduled_at": fired_at},
             "state": new_state,
         }
+        coalesced = None
         if fired > first:
             coalesced = {"first_tick": first, "last_tick": fired, "missed_count": fired - first}
             admission["coalesced"] = coalesced
             admission["payload"]["coalesced"] = dict(coalesced)
+        # Framework backlog 1039: the series this tick belongs to (CloudEvents `data.series`).
+        next_k = None if new_state["exhausted"] else self._next_tick(config, new_state)
+        admission["payload"]["series"] = {
+            "rule": self._rule(config),
+            "occurrence": scheduled_count,
+            "scheduled_at": fired_at,
+            "next_at": format_timestamp(grid.time(next_k)) if next_k is not None else None,
+            "coalesced": dict(coalesced) if coalesced else None,
+        }
         return admission
+
+    @staticmethod
+    def _rule(config: Mapping[str, Any]) -> Dict[str, Any]:
+        """The schedule's rule, as data: `kind` plus its rule fields (`every`, `at`, `days`, `day`,
+        `time_zone`) and bounds (`until`, `count`)."""
+        kind = config.get("kind") or ("every" if config.get("every") else "once")
+        rule: Dict[str, Any] = {"kind": kind}
+        for key in ("every", "at", "days", "day", "time_zone", "until", "count"):
+            if config.get(key) is not None:
+                rule[key] = copy.deepcopy(config[key])
+        return rule
 
     def rearm(self, binding: TriggerBinding, *, state: TriggerState, now: str) -> TriggerState:
         config = binding["config"]
@@ -421,7 +455,7 @@ class ScheduleTriggerAdapter:
         fired_at: str,
         payload: Mapping[str, Any],
     ) -> TriggerEnvelope:
-        return {
+        envelope: Dict[str, Any] = {
             "event_id": str(event_id),
             "source_id": "schedule",
             "source_version": int(self.descriptor["version"]),
@@ -429,6 +463,10 @@ class ScheduleTriggerAdapter:
             "payload": dict(payload),
             "binding_id": str(binding["binding_id"]),
         }
+        tick = payload.get("tick")
+        return with_cloudevent_attributes(  # type: ignore[return-value]
+            envelope, subject=f"tick:{tick}" if tick is not None else "tick", dedupekey=str(event_id), trust="trusted"
+        )
 
 
 _V2_PROPERTIES: Dict[str, Any] = {

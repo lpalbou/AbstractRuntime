@@ -31,6 +31,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from ..core.models import Effect, EffectType, RunState, RunStatus
 from ..core.run_origin import ORIGIN_KEY, origin_for
+from ..triggers.cloudevents import to_cloudevent
 from ..triggers.manual import manual_event_id
 from ..triggers.protocol import format_timestamp, parse_timestamp
 from ..triggers.registry import get_trigger_adapter
@@ -637,6 +638,8 @@ def build_prepared(
     # stays in the `automation.admitted` record, the origin only points at it).
     meta_ns[ORIGIN_KEY] = occurrence_origin(turn, index=index, envelope=envelope)
     input_data["_meta"] = meta_ns
+    # Backlog 1039: the envelope as structured input (CloudEvents form), beside the prompt header.
+    input_data["event"] = to_cloudevent(envelope)
     prepared = {
         "workflow_id": definition["target"]["workflow_id"],
         "session_id": session_id,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
+from .cloudevents import with_cloudevent_attributes
 from .protocol import (
     TriggerAdmission,
     TriggerBinding,
@@ -75,7 +76,7 @@ class ManualTriggerAdapter:
         fired_at: str,
         payload: Mapping[str, Any],
     ) -> TriggerEnvelope:
-        return {
+        envelope: Dict[str, Any] = {
             "event_id": str(event_id),
             "source_id": "manual",
             "source_version": 1,
@@ -83,6 +84,10 @@ class ManualTriggerAdapter:
             "payload": dict(payload),
             "binding_id": str(binding["binding_id"]),
         }
+        command_id = payload.get("command_id")
+        return with_cloudevent_attributes(  # type: ignore[return-value]
+            envelope, subject=f"command:{command_id}" if command_id else "command", dedupekey=str(event_id), trust="trusted"
+        )
 
 
 __all__ = ["ManualTriggerAdapter", "manual_event_id"]

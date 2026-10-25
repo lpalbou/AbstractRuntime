@@ -545,7 +545,9 @@ def validate_binding_connection(
 
 def connection_event_type(source_id: str, source_version: int) -> str:
     """CloudEvents `type` of a source's events: `abstract.<source_id>.v<version>`."""
-    return f"abstract.{source_id}.v{int(source_version)}"
+    from .cloudevents import event_type
+
+    return event_type(source_id, source_version)
 
 
 def connection_source_uri(connection_id: str) -> str:

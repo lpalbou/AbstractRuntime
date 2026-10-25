@@ -255,3 +255,29 @@ def test_email_record_merges_gmail_labels_with_keywords():
     assert rec["labels"] == ["Work", "Urgent", "Clients/ACME"]  # keywords first, no duplicates
     only_gmail = email_record({"uid": 1, "uidvalidity": 1, "folder": "INBOX", "labels": ["Clients/ACME"]}, mailbox="m")
     assert only_gmail["labels"] == ["Clients/ACME"] and only_gmail["seen"] is None
+
+
+def test_ids_take_one_record_or_one_id_and_mailbox_takes_an_address(tmp_path, ca, imap):
+    """Flow's ForEach hands one Email record to Mark as read; an unconnected Mailbox input picks up the
+    trigger's `mailbox`, which is an address."""
+    from types import SimpleNamespace
+
+    _fill(imap, 2)
+    full = _writable_context(tmp_path, ca, imap)
+    second = SimpleNamespace(account=SimpleNamespace(address="box2@example.test", can_write=True, can_send=True), client=full.client)
+    rt, seen = _runtime(tmp_path, {"t:alice:default": full, "t:alice:second": second})
+    record = _call(rt, "mail.search", {"query": {"subject": "mail 1"}})["output"]["emails"][0]
+    out = _call(rt, "mail.mark", {"ids": record, "seen": True})  # one record, not a list
+    assert out["success"] and out["output"]["ids"] == [record["id"]], out
+    assert _call(rt, "mail.mark", {"ids": record["id"], "flagged": True})["success"]  # one id string
+    assert _call(rt, "mail.get", {"ids": [record]})["output"]["emails"][0]["flagged"] is True  # a list of records
+    other = _call(rt, "mail.search", {"query": {"subject": "mail 2"}})["output"]["emails"][0]
+    assert _call(rt, "mail.reply", {"id": other, "text": "x"})["error_detail"]["code"] != "invalid_arguments"  # `id` takes a record
+    # The primary's address.
+    _call(rt, "mail.search", {"mailbox": "Alice@Example.test"})
+    assert seen[-1][0] == "t:alice:default"
+    # The run's own mailbox (a trigger's further mailbox, bound without an address): matched on the resolved account.
+    own = {"_runtime": {"email_account": {"account_ref": "t:alice:second", "address": ""}}}
+    assert _call(rt, "mail.search", {"mailbox": "box2@example.test"}, vars_extra=own)["success"]
+    out = _call(rt, "mail.search", {"mailbox": "stranger@example.test"}, vars_extra=own)
+    assert out["error_detail"]["code"] == "invalid_mailbox" and "stranger@example.test" in out["error_detail"]["cause"]

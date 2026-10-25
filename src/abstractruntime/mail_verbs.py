@@ -16,12 +16,14 @@ handler runs it here, without the approval gate (the person authored the node):
     mail.attachment {id, index}                                 -> {artifact, name, size, type}
 
 Every verb takes `mailbox` (optional): a mailbox id of the user (`"self"` / `"default"` = the
-primary). The default is the run's own mailbox (`_runtime.email_account`, which an email-triggered
+primary), or the ADDRESS of the run's own mailbox or of the primary (an Email record's or a
+trigger's `mailbox` value). The default is the run's own mailbox (`_runtime.email_account`, which an email-triggered
 occurrence binds to its trigger's mailbox), else the runtime's primary. The mailbox is resolved
 through the host's resolver (`Runtime.set_email_context_resolver`, `use="action"`); credentials
 never reach vars or results. Messages are named by the `Email` record's `id`
-(`"<uidvalidity>:<uid>:<folder>"`, `triggers.email_received.email_id`); a stale id (the server
-rebuilt the folder) is refused, never guessed.
+(`"<uidvalidity>:<uid>:<folder>"`, `triggers.email_received.email_id`); `ids` / `id` take one id, one
+Email record (named by its `id`), or a list of either. A stale id (the server rebuilt the folder) is
+refused, never guessed.
 
 Built on AbstractCore >= 2.28.0: `EmailClient.search` (typed query), `get_many`, `mark`, `label`,
 `move`, `delete`, `download_attachment`, `session(write=...)`, and `EmailContext.send` / `reply` /
@@ -81,10 +83,13 @@ def resolve_mailbox(run: Any, mailbox: Any) -> Tuple[Any, Any, str]:
     primary = getattr(run, "_runtime_email_binding", None)
     own = binding_of(getattr(run, "vars", None))
     name = str(mailbox or "").strip()
+    resolver = getattr(run, "_runtime_email_resolver", None)
     if not name:
         binding = own or primary
     elif name.lower() in PRIMARY_MAILBOXES:
         binding = primary
+    elif "@" in name:
+        binding = _binding_for_address(name, [own, primary], resolver)
     else:
         base = primary or own
         if base is None:
@@ -98,19 +103,45 @@ def resolve_mailbox(run: Any, mailbox: Any) -> Tuple[Any, Any, str]:
             binding = EmailBinding(account_ref=account_ref_with_id(base.account_ref, name), address="")
     if binding is None:
         raise MailVerbError("email_not_configured", "No mailbox is connected for this user.", "Connect a mailbox in Settings -> Email.")
-    resolver = getattr(run, "_runtime_email_resolver", None)
     if resolver is None:
         raise MailVerbError("email_not_configured", "This runtime has no mailbox resolver.",
                             "The host must call Runtime.set_email_context_resolver.")
-    try:
-        ctx = resolver(binding, use="action")
-    except TypeError:
-        ctx = resolver(binding)
+    ctx = _call_resolver(resolver, binding)
     if ctx is None:
         raise MailVerbError("email_not_configured", "The mailbox is not connected or not enabled.",
                             "Connect and enable the mailbox in Settings -> Email.")
     label = str(getattr(binding, "address", "") or "") or (account_id_of_ref(binding.account_ref) or name or "self")
     return binding, ctx, label
+
+
+def _call_resolver(resolver: Any, binding: Any) -> Any:
+    try:
+        return resolver(binding, use="action")
+    except TypeError:
+        return resolver(binding)
+
+
+def _binding_for_address(address: str, candidates: List[Any], resolver: Any) -> Any:
+    """The mailbox named by its ADDRESS (what an Email record's or a trigger's `mailbox` holds): the
+    run's own mailbox or the primary, compared with the binding's address, else with the address of
+    the account the host resolves for it (case-insensitive). Another mailbox is named by its id."""
+    wanted = address.strip().lower()
+    for binding in candidates:
+        if binding is None:
+            continue
+        if str(getattr(binding, "address", "") or "").strip().lower() == wanted:
+            return binding
+    for binding in candidates:
+        if binding is None or resolver is None:
+            continue
+        try:
+            ctx = _call_resolver(resolver, binding)
+        except Exception:  # noqa: BLE001 - an unusable candidate is simply not this address
+            continue
+        if str(getattr(getattr(ctx, "account", None), "address", "") or "").strip().lower() == wanted:
+            return binding
+    raise MailVerbError("invalid_mailbox", f"{address} is not the address of this flow's mailbox or of your primary mailbox.",
+                        "Leave Mailbox empty to use the trigger's mailbox, or name another mailbox by its id (Settings -> Email).")
 
 
 # --- helpers --------------------------------------------------------------------------------------
@@ -120,8 +151,8 @@ def _ids(arguments: Mapping[str, Any], key: str = "ids") -> List[Tuple[str, int,
     from .triggers.email_received import parse_email_id
 
     raw = arguments.get(key)
-    if isinstance(raw, str):
-        raw = [raw]
+    if isinstance(raw, (str, Mapping)):
+        raw = [raw]  # one id, or one Email record (named by its `id`): a ForEach item
     if not isinstance(raw, list) or not raw:
         raise MailVerbError("invalid_arguments", f"{key} must be a non-empty list of email ids.", "Pass the `id` of Email records.")
     out = []

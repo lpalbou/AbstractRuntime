@@ -5273,9 +5273,12 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
 | `mail_forward` | `mail.forward` | `id`, `to`, `note?`, `include_attachments` (default true) | `{message_id, accepted, refused}` |
 | `mail_attachment` | `mail.attachment` | `id`, `index` | `{artifact, name, size, type}` |
 
-- **Mailbox.** Every verb takes `mailbox`: a mailbox id of the user (`"self"` or `"default"` for the primary). Without
-  it the verb uses the run's own mailbox (an email-triggered occurrence is bound to its trigger's mailbox), else the
-  primary. The host's resolver opens it (`Runtime.set_email_context_resolver`, `use="action"`); credentials never
+- **Mailbox.** Every verb takes `mailbox`: a mailbox id of the user (`"self"` or `"default"` for the primary), or the
+  address of the run's own mailbox or of the primary (what an Email record's or a trigger's `mailbox` holds; an
+  unknown address is refused with `invalid_mailbox`, in words). Without it the verb uses the run's own mailbox (an
+  email-triggered occurrence is bound to its trigger's mailbox), else the primary.
+- **Ids.** `ids` and `id` take one id, one Email record (named by its `id`, so a ForEach item can be passed as is), or
+  a list of either. The host's resolver opens it (`Runtime.set_email_context_resolver`, `use="action"`); credentials never
   reach vars or results.
 - **Reading never changes the mailbox.** `mail.search`, `mail.get` and `mail.attachment` read on one connection,
   read-only; nothing is marked read.

@@ -315,7 +315,7 @@ envelope (`results[0].output`); a refusal is `success: false` with `error_detail
   `email_mailbox_cannot_send`,
   `email_message_not_found`, `artifact_store_missing`, and AbstractCore's own `email_*` codes (sign-in, policy, rate
   limits).
-- Requires AbstractCore 2.29.0 or newer (its `EmailClient` mailbox verbs and Gmail labels).
+- Requires AbstractCore 2.30.0 or newer (its `EmailClient` mailbox verbs and Gmail labels).
 
 ## Sending from an automation without a model
 

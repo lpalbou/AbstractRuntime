@@ -46,7 +46,7 @@ dependencies = [
   # Required for the Runtime-owned MEMORY_KG_* effect contract and TripleStore
   # model types. Durable/vector backend dependencies such as LanceDB remain
   # package extras owned by AbstractMemory and selected by hosts such as Gateway.
-  "AbstractMemory>=0.3.0",
+  "AbstractMemory>=0.3.2",
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing come with AbstractCore's light
   # install (remote providers, built-in tools, media inputs, voice/vision/music
@@ -62,7 +62,9 @@ dependencies = [
   # 2.28.0: `EmailClient` mailbox verbs (mark, label, move, delete, typed search, thread) and
   # `EmailContext.reply` / `forward`, used by the mail verbs for flows.
   # 2.29.0: Gmail labels on message summaries (`MessageSummary.labels`), merged into the Email record.
-  "abstractcore>=2.29.0",
+  # 2.30.0: the first of 2.27-2.29 published on PyPI (they shipped together), with the latest
+  # AbstractVoice/Vision/Music/3D plugin floors.
+  "abstractcore>=2.30.0",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -79,12 +81,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.29.0",
+  "abstractcore[apple]>=2.30.0",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.29.0",
+  "abstractcore[gpu]>=2.30.0",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]
